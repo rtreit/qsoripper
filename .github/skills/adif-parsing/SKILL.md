@@ -1,3 +1,10 @@
+---
+name: adif-parsing
+description: >-
+  Parse, validate, and generate ADIF (Amateur Data Interchange Format) files for QSO data interchange.
+  Use when implementing ADIF import/export, mapping ADIF fields to proto QsoRecord, or debugging ADIF file issues.
+---
+
 # Skill: ADIF Parsing
 
 > Parse, validate, and generate ADIF (Amateur Data Interchange Format) files for QSO data interchange.
