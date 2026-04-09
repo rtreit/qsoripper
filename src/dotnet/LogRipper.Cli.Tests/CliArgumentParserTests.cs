@@ -32,4 +32,22 @@ public class CliArgumentParserTests
         Assert.True(arguments.ShowHelp);
         Assert.Equal("Missing value for --endpoint.", arguments.Error);
     }
+
+    [Theory]
+    [InlineData("http://localhost:50051", true)]
+    [InlineData("https://example.com:7443", true)]
+    [InlineData("localhost:50051", false)]
+    [InlineData("grpc://localhost:50051", false)]
+    [InlineData("not a uri", false)]
+    public void Endpoint_validator_accepts_only_absolute_http_uris(string endpoint, bool expected)
+    {
+        var isValid = CliEndpointValidator.TryCreateEndpointUri(endpoint, out var uri);
+
+        Assert.Equal(expected, isValid);
+
+        if (expected)
+        {
+            Assert.NotNull(uri);
+        }
+    }
 }
