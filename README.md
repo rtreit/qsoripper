@@ -1,63 +1,75 @@
 # LogRipper
 
-High-performance ham radio logging system built for speed, clean workflows, and keyboard-first operation.
+High-performance ham radio logging engine built for speed, clean workflows, and keyboard-first operation.
 
 ## Architecture
 
-LogRipper separates the **core engine** from all UI surfaces. The engine handles logging, lookups, caching, and sync — UIs are just consumers of that functionality.
+LogRipper is an **engine-first** project. The core engine handles logging, lookups, caching, and sync. It exposes all functionality through a gRPC API and has zero knowledge of any particular UI. Any number of UX implementations can be built on top of the engine: a terminal UI in Rust, a desktop GUI in .NET or Electron, a web frontend, a mobile app, or a voice-driven interface for accessibility. The engine doesn't know or care what's calling it.
 
 ```
 ┌─────────────────────────────────────────────┐
-│  Rust Process (engine)                      │
+│  Engine (Rust)                              │
 │                                             │
 │  logripper-core:                            │
 │    Log storage, QSO CRUD, QRZ lookups,      │
 │    cache, ADIF parser, gRPC server (tonic)  │
-│                                             │
-│  logripper-tui:                             │
-│    Terminal UI (ratatui) — in-process        │
 └──────────────────┬──────────────────────────┘
                    │ gRPC (protobuf)
-┌──────────────────▼──────────────────────────┐
-│  .NET Process (rich client)                 │
-│    Avalonia GUI, reporting, analytics       │
-│    gRPC client (Grpc.Net.Client)            │
-└─────────────────────────────────────────────┘
+       ┌───────────┼───────────┐
+       ▼           ▼           ▼
+   ┌────────┐ ┌────────┐ ┌────────┐
+   │ TUI    │ │Desktop │ │ Web /  │
+   │        │ │  GUI   │ │ other  │
+   └────────┘ └────────┘ └────────┘
 ```
 
-**Rust** owns the core engine, TUI, QRZ providers, and gRPC server. **.NET** owns the GUI, reporting, and acts as a gRPC client. A future web UI would just be another gRPC client — the engine doesn't know or care what's calling it.
+**Rust** owns the core engine, QRZ providers, and gRPC server. UX implementations are independent consumers of the gRPC API and can be written in any language or framework. Nothing about the project requires any particular UI technology.
+
+### UX Decoupling
+
+The engine exposes a complete gRPC contract. Any UX implementation only needs a gRPC client to interact with the engine. Examples of possible frontends:
+
+- A **terminal UI** built with ratatui, crossterm, or any TUI library in any language.
+- A **native desktop GUI** using Avalonia, WPF, Win32, GTK, Qt, or similar.
+- A **web UI**, **mobile app**, or **CLI tool**.
+- Multiple UIs can run simultaneously against the same engine instance.
+
+No UX implementation is privileged. The gRPC contract is the only interface.
 
 ### Protocol Buffers
 
-Proto files under `proto/` are the **single source of truth** for all shared types (`QsoRecord`, `CallsignRecord`, `LookupResult`, bands, modes, etc.). Code is generated for both languages — zero hand-duplicated types:
+Proto files under `proto/` are the **single source of truth** for all shared types (`QsoRecord`, `CallsignRecord`, `LookupResult`, bands, modes, etc.). Code can be generated for any consuming language -- zero hand-duplicated types:
 
-- **Rust**: `prost` + `tonic-build` generate structs and gRPC server stubs
-- **C#**: `Grpc.Tools` generates classes and gRPC client stubs
+- **Rust** (engine): `prost` + `tonic-build` generate structs and gRPC server stubs
+- **Any client language**: standard protobuf/gRPC tooling generates client stubs (e.g., `Grpc.Tools` for C#, `protoc-gen-go` for Go, `grpc-web` for browsers)
 - **Schema quality**: `buf lint` and `buf breaking` enforce conventions and backward compatibility
 
 ### gRPC Services
 
 | Service | Purpose |
 |---|---|
-| **LookupService** | Callsign lookups — single, streaming, batch, cached, DXCC |
+| **LookupService** | Callsign lookups -- single, streaming, batch, cached, DXCC |
 | **LogbookService** | QSO CRUD, QRZ logbook sync, ADIF import/export |
 
 ### ADIF
 
-ADIF (Amateur Data Interchange Format) is used **only at the edges** — QRZ API calls and file I/O. Internal communication always uses protobuf. The Rust ADIF parser converts to/from proto types at the boundary, with an `extra_fields` map for lossless round-tripping.
+ADIF (Amateur Data Interchange Format) is used **only at the edges** -- QRZ API calls and file I/O. Internal communication always uses protobuf. The Rust ADIF parser converts to/from proto types at the boundary, with an `extra_fields` map for lossless round-tripping.
 
 ## Project Structure
 
 ```
-proto/
-  domain/       CallsignRecord, QsoRecord, LookupResult, enums
-  services/     LookupService, LogbookService gRPC definitions
-crates/
-  logripper-core/   Engine: storage, lookups, cache, ADIF, gRPC server
-  logripper-tui/    Terminal UI (depends on logripper-core)
+proto/                    Shared IDL (language-neutral)
+  domain/                 CallsignRecord, QsoRecord, LookupResult, enums
+  services/               LookupService, LogbookService gRPC definitions
+src/
+  rust/                   Rust workspace
+    logripper-core/       Engine: storage, lookups, cache, ADIF, gRPC server
+    logripper-tui/        Reference TUI (depends on logripper-core)
+tests/
+  fixtures/               Shared test data (ADIF files, etc.)
 docs/
-  architecture/     Data model docs, design decisions
-  integrations/     ADIF spec reference, provider notes
+  architecture/           Data model docs, design decisions
+  integrations/           ADIF spec reference, provider notes
 ```
 
 ## License

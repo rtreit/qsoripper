@@ -23,7 +23,7 @@ async fn parse_adi_to_qsos(data: &[u8]) -> Vec<logripper_core::proto::logripper:
 
 #[tokio::test]
 async fn parse_basic_qsos_file() {
-    let data = include_bytes!("../../../tests/fixtures/basic_qsos.adi");
+    let data = include_bytes!("../../../../tests/fixtures/basic_qsos.adi");
     let qsos = parse_adi_to_qsos(data).await;
 
     assert_eq!(qsos.len(), 3, "Expected 3 QSO records");
@@ -76,7 +76,7 @@ async fn parse_basic_qsos_file() {
 
 #[tokio::test]
 async fn parse_headerless_file() {
-    let data = include_bytes!("../../../tests/fixtures/no_header.adi");
+    let data = include_bytes!("../../../../tests/fixtures/no_header.adi");
     let qsos = parse_adi_to_qsos(data).await;
 
     assert_eq!(qsos.len(), 2, "Expected 2 QSOs from headerless file");
@@ -88,7 +88,7 @@ async fn parse_headerless_file() {
 
 #[tokio::test]
 async fn parse_contest_log() {
-    let data = include_bytes!("../../../tests/fixtures/contest_log.adi");
+    let data = include_bytes!("../../../../tests/fixtures/contest_log.adi");
     let qsos = parse_adi_to_qsos(data).await;
 
     assert_eq!(qsos.len(), 2, "Expected 2 contest QSOs");
@@ -114,7 +114,7 @@ async fn parse_contest_log() {
 
 #[tokio::test]
 async fn parse_extra_fields_preserved() {
-    let data = include_bytes!("../../../tests/fixtures/extra_fields.adi");
+    let data = include_bytes!("../../../../tests/fixtures/extra_fields.adi");
     let qsos = parse_adi_to_qsos(data).await;
 
     assert_eq!(qsos.len(), 1);
@@ -145,7 +145,7 @@ async fn parse_extra_fields_preserved() {
 #[tokio::test]
 async fn round_trip_qso_through_adif() {
     // Parse a QSO from ADIF
-    let data = include_bytes!("../../../tests/fixtures/basic_qsos.adi");
+    let data = include_bytes!("../../../../tests/fixtures/basic_qsos.adi");
     let qsos = parse_adi_to_qsos(data).await;
     let original = &qsos[0];
 
@@ -174,7 +174,7 @@ async fn round_trip_qso_through_adif() {
 
 #[tokio::test]
 async fn round_trip_extra_fields_preserved() {
-    let data = include_bytes!("../../../tests/fixtures/extra_fields.adi");
+    let data = include_bytes!("../../../../tests/fixtures/extra_fields.adi");
     let qsos = parse_adi_to_qsos(data).await;
     let original = &qsos[0];
 

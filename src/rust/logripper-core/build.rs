@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let proto_root = PathBuf::from("../../proto");
+    let proto_root = PathBuf::from("../../../proto");
+    println!("cargo::rerun-if-changed={}", proto_root.display());
 
     let protos = &[
         proto_root.join("domain/callsign.proto"),

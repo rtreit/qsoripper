@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/logripper-core",
-    "crates/logripper-tui",
+    "logripper-core",
+    "logripper-tui",
 ]
 
 [workspace.package]
