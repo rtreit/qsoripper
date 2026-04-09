@@ -1,5 +1,5 @@
 ---
-name: code-testing-agent
+name: code-testing
 description: >-
   Generates comprehensive, workable unit tests for any programming language
   using a Research-Plan-Implement pipeline. Use when asked to generate tests,
@@ -25,6 +25,17 @@ Sourced from [dotnet/skills](https://github.com/dotnet/skills) (MIT license).
 
 - Running or executing existing tests (use the `run-tests` skill)
 - Debugging failing test logic
+
+## Bug Fix Protocol: Tests First
+
+When fixing a bug or addressing a defect (as opposed to writing new feature tests), always follow this sequence:
+
+1. **Write a failing test first** that reproduces the bug. The test should assert the correct behavior that the current code violates.
+2. **Run the test and confirm it fails.** If it passes, the test does not actually reproduce the bug -- rethink the test.
+3. **Only then fix the production code** to make the test pass.
+4. **Run all tests** to verify the fix doesn't break anything else.
+
+This ensures every bug fix comes with a regression test that proves the bug existed and prevents it from returning. Never skip straight to fixing code without a failing test in place.
 
 ## How It Works
 

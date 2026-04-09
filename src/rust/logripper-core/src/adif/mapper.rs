@@ -559,4 +559,46 @@ mod tests {
         let qso = AdifMapper::record_to_qso(&rec);
         assert_eq!(qso.frequency_khz, Some(7039)); // 7038.5 rounds to 7039
     }
+
+    #[test]
+    fn negative_frequency_is_rejected() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "W1AW").unwrap();
+        rec.insert("FREQ", "-1.0").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        assert_eq!(qso.frequency_khz, None, "Negative frequency should be rejected, not mapped to 0");
+    }
+
+    #[test]
+    fn negative_nanos_does_not_corrupt_date() {
+        let qso = crate::proto::logripper::domain::QsoRecord {
+            worked_callsign: "W1AW".into(),
+            utc_timestamp: Some(prost_types::Timestamp {
+                seconds: 1_700_000_000, // 2023-11-14
+                nanos: -1,
+            }),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let field_map: std::collections::HashMap<&str, &str> = fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        assert_ne!(
+            field_map.get("QSO_DATE").copied(),
+            Some("19700101"),
+            "Negative nanos should not silently produce epoch date"
+        );
+    }
+
+    #[test]
+    fn non_ascii_date_does_not_panic() {
+        // "202ü123" is 8 bytes but byte 4 is inside the ü (continuation byte),
+        // so str[0..4] would panic on a char boundary check without a guard.
+        let result = parse_adif_datetime("202\u{00fc}123", None);
+        assert!(result.is_none(), "Non-ASCII date should return None, not panic");
+    }
 }
