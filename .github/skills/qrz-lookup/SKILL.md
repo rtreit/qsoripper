@@ -18,3 +18,8 @@ description: Implementing or extending QRZ lookup flows, including auth/session 
 3. Use bounded retries and timeouts.
 4. Degrade gracefully when QRZ is unavailable.
 
+## Project references
+
+- `docs/integrations/qrz-xml-lookup-api.md`
+- `docs/integrations/qrz-logbook-api.md`
+
