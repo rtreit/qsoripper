@@ -84,6 +84,8 @@ sudo dnf install protobuf-compiler
 
 **C compiler** -- required for the native FFI libraries under `src/c/`. On Windows, install the "Desktop development with C++" workload in Visual Studio or the [Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/). On Linux, `gcc` or `clang` is typically already available; install with `sudo apt install build-essential` if needed. The `cc` crate finds the compiler automatically on both platforms.
 
+**.NET SDK** (10.0+) -- required for the CLI tool and future .NET consumers. Install from [https://dotnet.microsoft.com/download](https://dotnet.microsoft.com/download) or via `winget install Microsoft.DotNet.SDK.10` on Windows.
+
 **buf** (optional) -- for linting and breaking change detection on proto files:
 
 ```
@@ -96,6 +98,8 @@ winget install Bufbuild.Buf
 
 ### Build and Test
 
+**Rust engine:**
+
 ```
 cd src/rust
 cargo build
@@ -103,6 +107,16 @@ cargo test
 ```
 
 This compiles the C libraries via FFI, generates Rust types from the proto files, and builds the engine. All tests (unit + integration) run with `cargo test`.
+
+**CLI tool (.NET):**
+
+```
+cd src/dotnet
+dotnet build
+dotnet run --project LogRipper.Cli -- status
+```
+
+The CLI generates gRPC client stubs from the shared proto files at build time. The engine must be running for the CLI to connect.
 
 ## Project Structure
 
@@ -113,6 +127,8 @@ proto/                    Shared IDL (language-neutral)
 src/
   rust/                   Rust workspace (Cargo.toml at this level)
     logripper-core/       Engine: storage, lookups, cache, ADIF, gRPC server
+  dotnet/                 .NET solution (LogRipper.sln at this level)
+    LogRipper.Cli/        CLI tool: gRPC client for engine validation
   c/                      Native C libraries called by the engine via FFI
     logripper-dsp/        Signal processing helpers (DSP, filtering, audio)
 tests/
