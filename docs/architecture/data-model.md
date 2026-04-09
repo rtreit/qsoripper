@@ -70,12 +70,14 @@ Normalized representation of a ham radio operator/station. Derived from QRZ XML 
 The core QSO (contact) entity. Every logged contact is a QsoRecord.
 
 - **Identity**: local_id (UUID assigned by LogRipper), qrz_logid (from QRZ sync)
-- **Core**: station_callsign, worked_callsign, utc_timestamp, band, mode, frequency_khz
+- **Core**: station_callsign, worked_callsign, utc_timestamp, band, mode, submode, frequency_khz
 - **Signal**: rst_sent, rst_received (structured RstReport), tx_power
 - **QSL**: sent/received status for card, LoTW, eQSL
 - **Enrichment**: worked_operator_name, worked_grid, worked_country, worked_dxcc, worked_continent
 - **Contest**: contest_id, serial_sent/received, exchange_sent/received
+- **Propagation**: prop_mode, sat_name, sat_mode
 - **Sync**: sync_status (local_only → synced → modified → conflict)
+- **ADIF overflow**: extra_fields map preserves unrecognized ADIF fields for lossless round-trip
 
 ### LookupResult (`lookup.proto`)
 
@@ -89,10 +91,11 @@ Includes: state enum, optional CallsignRecord, cache_hit flag, lookup_latency_ms
 
 ### Supporting Enums
 
-- **Band**: 2200m through 1.25cm (24 values)
-- **Mode**: SSB, CW, FT8, FT4, RTTY, and 20+ others
+- **Band**: 2190m through submm (33 values, full ADIF 3.1.7 enumeration with frequency ranges)
+- **Mode**: 45 modes matching the complete ADIF 3.1.7 Mode enumeration; submodes are stored as a string field
 - **GeoSource**: user, geocode, grid, zip, state, dxcc, none (maps to QRZ geoloc values)
 - **SyncStatus**: local_only, synced, modified, conflict
+- **QslStatus**: no, yes, requested, queued, ignore (aligned with ADIF QSL Sent/Rcvd enums)
 - **QslPreference**: unknown, yes, no (tri-state for QRZ's 0/1/blank)
 
 ## gRPC Services
@@ -130,6 +133,18 @@ ADIF (Amateur Data Interchange Format) is used exclusively for:
 3. **Contest log submission** — Cabrillo/ADIF export
 
 ADIF is **never** used for internal IPC. The Rust-side ADIF parser converts to/from proto QsoRecord at the edge.
+
+### ADIF Round-Trip Strategy
+
+QsoRecord includes an `extra_fields` map (`map<string, string>`) to preserve ADIF fields that don't have dedicated proto fields (e.g., MY_ station fields, satellite info, propagation conditions). During import:
+
+1. Recognized fields → mapped to dedicated QsoRecord fields
+2. Unrecognized fields → stored in `extra_fields` (keyed by uppercase ADIF field name)
+3. During export → dedicated fields are emitted first, then `extra_fields` are appended
+
+This ensures no data loss when round-tripping ADIF files through LogRipper.
+
+See `docs/integrations/adif-specification.md` for the complete ADIF 3.1.7 reference including all 150+ QSO fields, data types, enumerations, and field-to-proto mapping table.
 
 ## Code Generation
 
