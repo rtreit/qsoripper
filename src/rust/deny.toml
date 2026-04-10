@@ -20,8 +20,38 @@ allow = [
 confidence-threshold = 0.8
 
 [bans]
-multiple-versions = "warn"
+multiple-versions = "deny"
 wildcards = "deny"
+
+[[bans.skip]]
+name = "getrandom"
+version = "=0.2.17"
+reason = "Required by ring/rustls transitives while uuid and tempfile currently resolve getrandom 0.4."
+
+[[bans.skip]]
+name = "hashbrown"
+version = "=0.12.3"
+reason = "Pulled by the tonic 0.12 transport stack via indexmap 1.x while the rest of the graph is already on indexmap 2.x."
+
+[[bans.skip]]
+name = "indexmap"
+version = "=1.9.3"
+reason = "Pulled by the tonic 0.12 transport stack while newer dependencies resolve indexmap 2.x."
+
+[[bans.skip]]
+name = "socket2"
+version = "=0.5.10"
+reason = "Used by tonic 0.12 transport; newer networking dependencies in the graph use socket2 0.6."
+
+[[bans.skip]]
+name = "tower"
+version = "=0.4.13"
+reason = "Used by tonic 0.12 transport; reqwest and newer Hyper/Axum dependencies use tower 0.5."
+
+[[bans.skip]]
+name = "windows-sys"
+version = "=0.52.0"
+reason = "Legacy transitive requirement from tonic 0.12/socket2 0.5 and ring on Windows; newer crates resolve windows-sys 0.61."
 
 [sources]
 unknown-registry = "deny"
