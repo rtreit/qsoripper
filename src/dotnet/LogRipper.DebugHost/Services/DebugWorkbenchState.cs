@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Net.Sockets;
 using Grpc.Core;
 using Grpc.Net.Client;
@@ -16,18 +17,102 @@ internal sealed class DebugWorkbenchState
         ArgumentNullException.ThrowIfNull(options);
 
         _options = options.Value;
-        EngineEndpoint = _options.DefaultEngineEndpoint;
+        EngineEndpoint = _options.DefaultEngineEndpoint.Trim();
+        EngineStorageBackend = ParseStorageBackend(_options.DefaultEngineStorageBackend);
+        EngineSqlitePath = NormalizeSqlitePath(_options.DefaultEngineSqlitePath);
     }
 
     public string EngineEndpoint { get; private set; }
 
+    public EngineStorageBackend EngineStorageBackend { get; private set; }
+
+    public string EngineSqlitePath { get; private set; }
+
     public TransportProbeResult? LastProbe { get; private set; }
+
+    public RuntimeConfigSnapshot? RuntimeConfigSnapshot { get; private set; }
+
+    public string? RuntimeConfigErrorMessage { get; private set; }
 
     public void UpdateEngineEndpoint(string endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
 
         EngineEndpoint = endpoint.Trim();
+    }
+
+    public void UpdateStorageOptions(EngineStorageBackend backend, string sqlitePath)
+    {
+        ArgumentNullException.ThrowIfNull(sqlitePath);
+
+        EngineStorageBackend = backend;
+        EngineSqlitePath = NormalizeSqlitePath(sqlitePath);
+    }
+
+    public void UpdateRuntimeConfig(RuntimeConfigSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        RuntimeConfigSnapshot = snapshot;
+        RuntimeConfigErrorMessage = null;
+        EngineStorageBackend = ParseStorageBackend(snapshot.ActiveStorageBackend);
+
+        var sqlitePath = snapshot.Values.FirstOrDefault(value =>
+            string.Equals(value.Key, "LOGRIPPER_SQLITE_PATH", StringComparison.OrdinalIgnoreCase));
+        if (sqlitePath is { HasValue: true })
+        {
+            EngineSqlitePath = NormalizeSqlitePath(sqlitePath.DisplayValue);
+        }
+    }
+
+    public void UpdateRuntimeConfigError(string? message)
+    {
+        RuntimeConfigErrorMessage = string.IsNullOrWhiteSpace(message)
+            ? null
+            : message.Trim();
+    }
+
+    public string GetStorageBackendDisplayName()
+    {
+        return EngineStorageBackend switch
+        {
+            EngineStorageBackend.Sqlite => "SQLite",
+            _ => "Memory"
+        };
+    }
+
+    public string BuildRustServerCommand()
+    {
+        return EngineStorageBackend switch
+        {
+            EngineStorageBackend.Sqlite => $"cargo run -p logripper-server -- --storage sqlite --sqlite-path {EngineSqlitePath}",
+            _ => "cargo run -p logripper-server -- --storage memory"
+        };
+    }
+
+    public IReadOnlyDictionary<string, string> GetEngineEnvironmentOverrides()
+    {
+        if (RuntimeConfigSnapshot is not null)
+        {
+            return RuntimeConfigSnapshot.Values
+                .Where(value => value.HasValue)
+                .ToDictionary(
+                    value => value.Key,
+                    value => value.DisplayValue,
+                    StringComparer.OrdinalIgnoreCase);
+        }
+
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["LOGRIPPER_STORAGE_BACKEND"] = EngineStorageBackend == EngineStorageBackend.Sqlite ? "sqlite" : "memory"
+        };
+
+        if (EngineStorageBackend == EngineStorageBackend.Sqlite)
+        {
+            environment["LOGRIPPER_SQLITE_PATH"] = EngineSqlitePath;
+        }
+
+        return environment;
     }
 
     public async Task<TransportProbeResult> ProbeAsync(CancellationToken cancellationToken = default)
@@ -160,5 +245,21 @@ internal sealed class DebugWorkbenchState
             await grpcChannel.ShutdownAsync();
             grpcChannel.Dispose();
         }
+    }
+
+    private static EngineStorageBackend ParseStorageBackend(string? configuredBackend)
+    {
+        return configuredBackend?.Trim().ToUpperInvariant() switch
+        {
+            "SQLITE" => EngineStorageBackend.Sqlite,
+            _ => EngineStorageBackend.Memory
+        };
+    }
+
+    private static string NormalizeSqlitePath(string sqlitePath)
+    {
+        return string.IsNullOrWhiteSpace(sqlitePath)
+            ? @".\data\logripper.db"
+            : sqlitePath.Trim();
     }
 }

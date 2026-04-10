@@ -1,5 +1,6 @@
 @page "/lookup-workbench"
 @inject DebugWorkbenchState WorkbenchState
+@inject RuntimeConfigWorkbenchService RuntimeConfigWorkbenchService
 @inject LookupWorkbenchService LookupWorkbenchService
 @inject SampleProtoFactory SampleProtoFactory
 @inject ProtoJsonService ProtoJsonService
@@ -12,7 +13,11 @@
 </p>
 
 <div class="alert alert-secondary">
-    <strong>Current engine endpoint:</strong> @WorkbenchState.EngineEndpoint
+    <div><strong>Current engine endpoint:</strong> @WorkbenchState.EngineEndpoint</div>
+    @if (WorkbenchState.RuntimeConfigSnapshot is not null)
+    {
+        <div class="mt-1"><strong>Lookup provider:</strong> @WorkbenchState.RuntimeConfigSnapshot.LookupProviderSummary</div>
+    }
 </div>
 
 <div class="card shadow-sm mb-4">
@@ -105,8 +110,9 @@
     private LookupInvocationResult? liveResult;
     private List<ProtoPayloadView> livePayloads = [];
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        await RuntimeConfigWorkbenchService.RefreshAsync();
         Preview();
     }
 
