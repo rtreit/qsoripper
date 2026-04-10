@@ -59,6 +59,15 @@ Primary goals:
 - Use `rg` for text search operations.
 - Keep build and test loops fast to support tight iteration.
 
+## Markdown Code Fences
+
+When writing markdown that will be rendered on GitHub, such as PR descriptions, issue bodies, review comments, or other repository comments:
+
+- Never use `bash` as the code fence language for Windows commands.
+- Backslash path separators like `src\dotnet\LogRipper.slnx` can render incorrectly in GitHub-flavored markdown when labeled as `bash`.
+- Use a plain fenced code block with no language tag, or use `powershell` / `cmd` instead.
+- Prefer Windows-style paths in those examples when the command is intended to run on Windows.
+
 ## Cross-Platform
 
 All code must work on both Windows and Linux. The engine is developed on Windows but runs in Linux Docker containers in production.

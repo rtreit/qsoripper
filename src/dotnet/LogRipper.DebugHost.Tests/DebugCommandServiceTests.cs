@@ -17,7 +17,7 @@ public class DebugCommandServiceTests
         var commands = service.GetCommands();
 
         Assert.Contains(commands, static command => command.Key == "cargo-test" && command.RequiresProtoc);
-        Assert.Contains(commands, static command => command.Key == "dotnet-test");
+        Assert.Contains(commands, static command => command.Key == "dotnet-test" && command.Arguments == "test src\\dotnet\\LogRipper.slnx");
         Assert.Contains(commands, static command => command.Key == "buf-lint" && command.RequiredTool == "buf");
     }
 }

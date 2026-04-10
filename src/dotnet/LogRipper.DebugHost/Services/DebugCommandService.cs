@@ -42,10 +42,10 @@ public sealed class DebugCommandService
                 RequiresProtoc: true),
             new(
                 "dotnet-test",
-                "Run debug host tests",
-                "Runs the .NET debug workbench test project through the local debug solution.",
+                "Run .NET workspace tests",
+                "Runs the full .NET workspace test suite through the root src\\dotnet\\LogRipper.slnx solution.",
                 "dotnet",
-                "test src\\dotnet\\LogRipper.Debug.sln",
+                "test src\\dotnet\\LogRipper.slnx",
                 _repositoryPaths.RepoRoot),
             new(
                 "buf-lint",

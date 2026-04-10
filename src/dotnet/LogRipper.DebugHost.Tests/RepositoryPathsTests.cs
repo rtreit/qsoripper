@@ -11,6 +11,6 @@ public class RepositoryPathsTests
 
         Assert.Equal(@"C:\repo", paths.RepoRoot);
         Assert.Equal(Path.Combine(@"C:\repo", "src", "rust"), paths.RustWorkspaceRoot);
-        Assert.Equal(Path.Combine(@"C:\repo", "src", "dotnet", "LogRipper.Debug.sln"), paths.DebugSolutionPath);
+        Assert.Equal(Path.Combine(@"C:\repo", "src", "dotnet", "LogRipper.slnx"), paths.DotnetWorkspaceSolutionPath);
     }
 }

@@ -14,7 +14,7 @@ public sealed class RepositoryPaths
         ContentRoot = Path.GetFullPath(contentRootPath);
         RepoRoot = Path.GetFullPath(Path.Combine(ContentRoot, "..", "..", ".."));
         RustWorkspaceRoot = Path.Combine(RepoRoot, "src", "rust");
-        DebugSolutionPath = Path.Combine(RepoRoot, "src", "dotnet", "LogRipper.Debug.sln");
+        DotnetWorkspaceSolutionPath = Path.Combine(RepoRoot, "src", "dotnet", "LogRipper.slnx");
     }
 
     public string ContentRoot { get; }
@@ -23,5 +23,5 @@ public sealed class RepositoryPaths
 
     public string RustWorkspaceRoot { get; }
 
-    public string DebugSolutionPath { get; }
+    public string DotnetWorkspaceSolutionPath { get; }
 }

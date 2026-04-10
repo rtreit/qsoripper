@@ -10,10 +10,15 @@ if (arguments.ShowHelp)
     return ShowHelp(arguments.Error);
 }
 
-using var channel = GrpcChannel.ForAddress(arguments.Endpoint);
+if (!CliEndpointValidator.TryCreateEndpointUri(arguments.Endpoint, out var endpointUri))
+{
+    return ShowHelp($"The endpoint '{arguments.Endpoint}' must be a valid absolute http:// or https:// URI.");
+}
 
 try
 {
+    using var channel = GrpcChannel.ForAddress(endpointUri!);
+
     return arguments.Command switch
     {
         "status" => await StatusCommand.RunAsync(channel),
