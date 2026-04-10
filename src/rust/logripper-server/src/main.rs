@@ -1,14 +1,18 @@
 //! Runnable tonic gRPC host for the `LogRipper` Rust engine.
 
-use logripper_core::domain::lookup::{normalize_callsign, placeholder_lookup_error};
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
+
+use logripper_core::lookup::{
+    CallsignProvider, DisabledCallsignProvider, LookupCoordinator, LookupCoordinatorConfig,
+    QrzXmlConfig, QrzXmlProvider,
+};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
 use logripper_core::proto::logripper::domain::{
     BatchLookupRequest, BatchLookupResponse, CachedCallsignRequest, DxccEntity, DxccRequest,
-    LookupRequest, LookupResult, LookupState, QsoRecord,
+    LookupRequest, LookupResult, QsoRecord,
 };
 use logripper_core::proto::logripper::services::{
     logbook_service_server::{LogbookService, LogbookServiceServer},
@@ -22,12 +26,13 @@ use logripper_core::proto::logripper::services::{
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = ServerOptions::from_env_and_args(std::env::args().skip(1))?;
     let address = options.listen_address;
+    let lookup_service = DeveloperLookupService::new(create_lookup_coordinator());
 
     println!("Starting LogRipper gRPC server on {address}");
 
     Server::builder()
         .add_service(LogbookServiceServer::new(DeveloperLogbookService))
-        .add_service(LookupServiceServer::new(DeveloperLookupService))
+        .add_service(LookupServiceServer::new(lookup_service))
         .serve(address)
         .await?;
 
@@ -113,8 +118,16 @@ impl LogbookService for DeveloperLogbookService {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct DeveloperLookupService;
+#[derive(Clone)]
+struct DeveloperLookupService {
+    coordinator: Arc<LookupCoordinator>,
+}
+
+impl DeveloperLookupService {
+    fn new(coordinator: Arc<LookupCoordinator>) -> Self {
+        Self { coordinator }
+    }
+}
 
 #[tonic::async_trait]
 impl LookupService for DeveloperLookupService {
@@ -125,7 +138,11 @@ impl LookupService for DeveloperLookupService {
         request: Request<LookupRequest>,
     ) -> Result<Response<LookupResult>, Status> {
         let request = request.into_inner();
-        Ok(Response::new(placeholder_lookup_error(&request.callsign)))
+        Ok(Response::new(
+            self.coordinator
+                .lookup(&request.callsign, request.skip_cache)
+                .await,
+        ))
     }
 
     async fn stream_lookup(
@@ -133,23 +150,17 @@ impl LookupService for DeveloperLookupService {
         request: Request<LookupRequest>,
     ) -> Result<Response<Self::StreamLookupStream>, Status> {
         let request = request.into_inner();
-        let (sender, receiver) = tokio::sync::mpsc::channel(4);
-        let queried_callsign = normalize_callsign(&request.callsign);
-
-        let _ = sender
-            .send(Ok(LookupResult {
-                state: LookupState::Loading as i32,
-                record: None,
-                error_message: None,
-                cache_hit: false,
-                lookup_latency_ms: 0,
-                queried_callsign: queried_callsign.clone(),
-            }))
+        let updates = self
+            .coordinator
+            .stream_lookup(&request.callsign, request.skip_cache)
             .await;
+        let (sender, receiver) = tokio::sync::mpsc::channel(8);
 
-        let _ = sender
-            .send(Ok(placeholder_lookup_error(&queried_callsign)))
-            .await;
+        for update in updates {
+            if sender.send(Ok(update)).await.is_err() {
+                break;
+            }
+        }
 
         Ok(Response::new(ReceiverStream::new(receiver)))
     }
@@ -159,14 +170,11 @@ impl LookupService for DeveloperLookupService {
         request: Request<CachedCallsignRequest>,
     ) -> Result<Response<LookupResult>, Status> {
         let request = request.into_inner();
-        Ok(Response::new(LookupResult {
-            state: LookupState::NotFound as i32,
-            record: None,
-            error_message: None,
-            cache_hit: false,
-            lookup_latency_ms: 0,
-            queried_callsign: normalize_callsign(&request.callsign),
-        }))
+        Ok(Response::new(
+            self.coordinator
+                .get_cached_callsign(&request.callsign)
+                .await,
+        ))
     }
 
     async fn get_dxcc_entity(
@@ -174,22 +182,40 @@ impl LookupService for DeveloperLookupService {
         _request: Request<DxccRequest>,
     ) -> Result<Response<DxccEntity>, Status> {
         Err(Status::unimplemented(
-            "GetDxccEntity is not implemented yet.",
+            "GetDxccEntity is out of scope for the first lookup slice.",
         ))
     }
 
     async fn batch_lookup(
         &self,
-        request: Request<BatchLookupRequest>,
+        _request: Request<BatchLookupRequest>,
     ) -> Result<Response<BatchLookupResponse>, Status> {
-        let request = request.into_inner();
-        Ok(Response::new(BatchLookupResponse {
-            results: request
-                .callsigns
-                .into_iter()
-                .map(|callsign| placeholder_lookup_error(&callsign))
-                .collect(),
-        }))
+        Err(Status::unimplemented(
+            "BatchLookup is out of scope for the first lookup slice.",
+        ))
+    }
+}
+
+fn create_lookup_coordinator() -> Arc<LookupCoordinator> {
+    Arc::new(LookupCoordinator::new(
+        build_provider_from_env(),
+        LookupCoordinatorConfig::default(),
+    ))
+}
+
+fn build_provider_from_env() -> Arc<dyn CallsignProvider> {
+    match QrzXmlConfig::from_env() {
+        Ok(config) => match QrzXmlProvider::new(config) {
+            Ok(provider) => Arc::new(provider),
+            Err(error) => {
+                eprintln!("QRZ XML lookup disabled: {error}");
+                Arc::new(DisabledCallsignProvider::new(error.to_string()))
+            }
+        },
+        Err(error) => {
+            eprintln!("QRZ XML lookup disabled: {error}");
+            Arc::new(DisabledCallsignProvider::new(error.to_string()))
+        }
     }
 }
 
