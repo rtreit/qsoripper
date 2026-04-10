@@ -43,8 +43,12 @@ async fn parse_basic_qsos_file() {
     assert_eq!(q1.rst_received.as_ref().unwrap().raw, "57");
     assert_eq!(q1.comment.as_deref(), Some("Good signal!"));
     assert_eq!(q1.tx_power.as_deref(), Some("100"));
-    // MY_GRIDSQUARE should be in extra_fields
-    assert!(q1.extra_fields.contains_key("MY_GRIDSQUARE"));
+    assert_eq!(
+        q1.station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.grid.as_deref()),
+        Some("DM43an")
+    );
 
     // Second QSO: ON4UN on 40M SSB/USB (contest)
     let q2 = &qsos[1];
@@ -132,7 +136,11 @@ async fn parse_extra_fields_preserved() {
     assert_eq!(q.sat_name.as_deref(), Some("ISS"));
     assert_eq!(q.sat_mode.as_deref(), Some("V"));
 
-    // MY_ fields and other extras go to extra_fields map
+    // Core MY_ station fields map to the dedicated station snapshot; unknown extras still round-trip.
+    let station_snapshot = q.station_snapshot.as_ref().expect("station snapshot");
+    assert_eq!(station_snapshot.station_callsign, "AA7BQ");
+    assert_eq!(station_snapshot.state.as_deref(), Some("WA"));
+    assert_eq!(station_snapshot.grid.as_deref(), Some("CN87up"));
     assert_eq!(
         q.extra_fields.get("MY_RIG").map(String::as_str),
         Some("Icom IC-7300")
@@ -144,14 +152,6 @@ async fn parse_extra_fields_preserved() {
     assert_eq!(
         q.extra_fields.get("MY_CITY").map(String::as_str),
         Some("Seattle")
-    );
-    assert_eq!(
-        q.extra_fields.get("MY_STATE").map(String::as_str),
-        Some("WA")
-    );
-    assert_eq!(
-        q.extra_fields.get("MY_GRIDSQUARE").map(String::as_str),
-        Some("CN87up")
     );
     assert_eq!(
         q.extra_fields.get("ANT_AZ").map(String::as_str),
@@ -197,6 +197,16 @@ async fn round_trip_qso_through_adif() {
         original.rst_received.as_ref().map(|r| r.raw.as_str())
     );
     assert_eq!(round_tripped.comment, original.comment);
+    assert_eq!(
+        round_tripped
+            .station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.grid.as_deref()),
+        original
+            .station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.grid.as_deref())
+    );
 }
 
 #[tokio::test]
@@ -225,5 +235,25 @@ async fn round_trip_extra_fields_preserved() {
             .extra_fields
             .get("APP_LOGRIPPER_SYNC_STATUS")
             .map(String::as_str),
+    );
+    assert_eq!(
+        round_tripped
+            .station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.state.as_deref()),
+        original
+            .station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.state.as_deref())
+    );
+    assert_eq!(
+        round_tripped
+            .station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.grid.as_deref()),
+        original
+            .station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.grid.as_deref())
     );
 }

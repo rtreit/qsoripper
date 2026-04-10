@@ -80,12 +80,15 @@ impl LogbookService for DeveloperLogbookService {
         &self,
         request: Request<LogQsoRequest>,
     ) -> Result<Response<LogQsoResponse>, Status> {
-        let engine = self.runtime_config.logbook_engine().await;
+        let (engine, active_station_profile) = self.runtime_config.logbook_context().await;
         let request = request.into_inner();
         let qso = request
             .qso
             .ok_or_else(|| Status::invalid_argument("LogQso requires a qso payload."))?;
-        let stored = engine.log_qso(qso).await.map_err(map_logbook_error)?;
+        let stored = engine
+            .log_qso_with_station_profile(qso, active_station_profile.as_ref())
+            .await
+            .map_err(map_logbook_error)?;
         let (sync_success, sync_error) = sync_result(request.sync_to_qrz, "QRZ sync");
 
         Ok(Response::new(LogQsoResponse {

@@ -1,6 +1,9 @@
 //! Logbook workflows built on top of the engine-owned storage ports.
 
 use crate::domain::qso::new_local_id;
+use crate::domain::station::{
+    materialize_station_snapshot_for_create, materialize_station_snapshot_for_update,
+};
 use crate::proto::logripper::domain::{QsoRecord, SyncStatus};
 use crate::storage::{EngineStorage, LogbookCounts, QsoListQuery, StorageError, SyncMetadata};
 use chrono::Utc;
@@ -34,6 +37,35 @@ impl LogbookEngine {
     /// Returns [`LogbookError::Validation`] when required fields are missing and
     /// [`LogbookError::Storage`] when the configured backend rejects the write.
     pub async fn log_qso(&self, mut qso: QsoRecord) -> Result<QsoRecord, LogbookError> {
+        materialize_station_snapshot_for_create(&mut qso, None);
+        validate_required_callsigns(&qso)?;
+
+        if qso.local_id.trim().is_empty() {
+            qso.local_id = new_local_id();
+        }
+
+        let now = now_timestamp();
+        if qso.created_at.is_none() {
+            qso.created_at = Some(now);
+        }
+        qso.updated_at = Some(now);
+
+        self.storage.logbook().insert_qso(&qso).await?;
+        Ok(qso)
+    }
+
+    /// Persist a new QSO using the supplied active station profile as the base snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LogbookError::Validation`] when required fields are missing and
+    /// [`LogbookError::Storage`] when the configured backend rejects the write.
+    pub async fn log_qso_with_station_profile(
+        &self,
+        mut qso: QsoRecord,
+        active_station_profile: Option<&crate::proto::logripper::domain::StationProfile>,
+    ) -> Result<QsoRecord, LogbookError> {
+        materialize_station_snapshot_for_create(&mut qso, active_station_profile);
         validate_required_callsigns(&qso)?;
 
         if qso.local_id.trim().is_empty() {
@@ -58,16 +90,18 @@ impl LogbookEngine {
     /// fields, [`LogbookError::NotFound`] when the local ID does not exist, and
     /// [`LogbookError::Storage`] when the backend write fails.
     pub async fn update_qso(&self, mut qso: QsoRecord) -> Result<QsoRecord, LogbookError> {
-        validate_required_callsigns(&qso)?;
         if qso.local_id.trim().is_empty() {
             return Err(LogbookError::Validation(
                 "local_id is required when updating a QSO.".into(),
             ));
         }
 
-        if qso.created_at.is_none() {
-            qso.created_at = Some(now_timestamp());
-        }
+        let existing = self.storage.logbook().get_qso(&qso.local_id).await?;
+        let existing = existing.ok_or_else(|| LogbookError::NotFound(qso.local_id.clone()))?;
+        materialize_station_snapshot_for_update(&mut qso, Some(&existing));
+        validate_required_callsigns(&qso)?;
+
+        qso.created_at = existing.created_at.or_else(|| Some(now_timestamp()));
         qso.updated_at = Some(now_timestamp());
 
         let updated = self.storage.logbook().update_qso(&qso).await?;

@@ -2,12 +2,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use logripper_core::application::logbook::LogbookEngine;
+use logripper_core::domain::station::station_profile_has_values;
 use logripper_core::lookup::{
     CallsignProvider, DisabledCallsignProvider, LookupCoordinator, LookupCoordinatorConfig,
     QrzXmlConfig, QrzXmlProvider, DEFAULT_QRZ_XML_BASE_URL, QRZ_HTTP_TIMEOUT_SECONDS_ENV_VAR,
     QRZ_MAX_RETRIES_ENV_VAR, QRZ_USER_AGENT_ENV_VAR, QRZ_XML_BASE_URL_ENV_VAR,
     QRZ_XML_CAPTURE_ONLY_ENV_VAR, QRZ_XML_PASSWORD_ENV_VAR, QRZ_XML_USERNAME_ENV_VAR,
 };
+use logripper_core::proto::logripper::domain::StationProfile;
 use logripper_core::proto::logripper::services::{
     ApplyRuntimeConfigRequest, ResetRuntimeConfigRequest, RuntimeConfigDefinition,
     RuntimeConfigMutation, RuntimeConfigMutationKind, RuntimeConfigSnapshot, RuntimeConfigValue,
@@ -19,6 +21,19 @@ use crate::{build_storage, parse_storage_backend, StorageBackendKind, StorageOpt
 
 pub(crate) const STORAGE_BACKEND_ENV_VAR: &str = "LOGRIPPER_STORAGE_BACKEND";
 pub(crate) const SQLITE_PATH_ENV_VAR: &str = "LOGRIPPER_SQLITE_PATH";
+pub(crate) const STATION_PROFILE_NAME_ENV_VAR: &str = "LOGRIPPER_STATION_PROFILE_NAME";
+pub(crate) const STATION_CALLSIGN_ENV_VAR: &str = "LOGRIPPER_STATION_CALLSIGN";
+pub(crate) const STATION_OPERATOR_CALLSIGN_ENV_VAR: &str = "LOGRIPPER_STATION_OPERATOR_CALLSIGN";
+pub(crate) const STATION_OPERATOR_NAME_ENV_VAR: &str = "LOGRIPPER_STATION_OPERATOR_NAME";
+pub(crate) const STATION_GRID_ENV_VAR: &str = "LOGRIPPER_STATION_GRID";
+pub(crate) const STATION_COUNTY_ENV_VAR: &str = "LOGRIPPER_STATION_COUNTY";
+pub(crate) const STATION_STATE_ENV_VAR: &str = "LOGRIPPER_STATION_STATE";
+pub(crate) const STATION_COUNTRY_ENV_VAR: &str = "LOGRIPPER_STATION_COUNTRY";
+pub(crate) const STATION_DXCC_ENV_VAR: &str = "LOGRIPPER_STATION_DXCC";
+pub(crate) const STATION_CQ_ZONE_ENV_VAR: &str = "LOGRIPPER_STATION_CQ_ZONE";
+pub(crate) const STATION_ITU_ZONE_ENV_VAR: &str = "LOGRIPPER_STATION_ITU_ZONE";
+pub(crate) const STATION_LATITUDE_ENV_VAR: &str = "LOGRIPPER_STATION_LATITUDE";
+pub(crate) const STATION_LONGITUDE_ENV_VAR: &str = "LOGRIPPER_STATION_LONGITUDE";
 const DEFAULT_STORAGE_BACKEND: &str = "memory";
 const DEFAULT_SQLITE_PATH: &str = "logripper.db";
 const REDACTED_VALUE: &str = "<redacted>";
@@ -29,6 +44,7 @@ struct RuntimeBindings {
     lookup_coordinator: Arc<LookupCoordinator>,
     active_storage_backend: String,
     lookup_provider_summary: String,
+    active_station_profile: Option<StationProfile>,
 }
 
 pub(crate) struct RuntimeConfigManager {
@@ -93,6 +109,14 @@ impl RuntimeConfigManager {
         self.bindings.read().await.logbook_engine.clone()
     }
 
+    pub(crate) async fn logbook_context(&self) -> (LogbookEngine, Option<StationProfile>) {
+        let bindings = self.bindings.read().await;
+        (
+            bindings.logbook_engine.clone(),
+            bindings.active_station_profile.clone(),
+        )
+    }
+
     pub(crate) async fn lookup_coordinator(&self) -> Arc<LookupCoordinator> {
         self.bindings.read().await.lookup_coordinator.clone()
     }
@@ -133,6 +157,7 @@ struct ConfigFieldSpec {
 }
 
 const STORAGE_ALLOWED_VALUES: &[&str] = &["memory", "sqlite"];
+const BOOLEAN_ALLOWED_VALUES: &[&str] = &["true", "false"];
 
 const SUPPORTED_FIELDS: &[ConfigFieldSpec] = &[
     ConfigFieldSpec {
@@ -152,6 +177,123 @@ const SUPPORTED_FIELDS: &[ConfigFieldSpec] = &[
         secret: false,
         allowed_values: &[],
         default_value: Some(DEFAULT_SQLITE_PATH),
+    },
+    ConfigFieldSpec {
+        key: STATION_PROFILE_NAME_ENV_VAR,
+        label: "Station profile name",
+        description: "Friendly label shown for the active local-station profile.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: STATION_CALLSIGN_ENV_VAR,
+        label: "Station callsign",
+        description: "Default local station callsign used when logging new QSOs.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: STATION_OPERATOR_CALLSIGN_ENV_VAR,
+        label: "Operator callsign",
+        description: "Operator callsign captured in the saved station snapshot.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: STATION_OPERATOR_NAME_ENV_VAR,
+        label: "Operator name",
+        description: "Human-readable operator name captured in the saved station snapshot.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: STATION_GRID_ENV_VAR,
+        label: "Station grid",
+        description: "Default local station Maidenhead grid square.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: STATION_COUNTY_ENV_VAR,
+        label: "Station county",
+        description: "Default local station county for saved QSOs.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: STATION_STATE_ENV_VAR,
+        label: "Station state",
+        description: "Default local station state or province.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: STATION_COUNTRY_ENV_VAR,
+        label: "Station country",
+        description: "Default local station country name.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: STATION_DXCC_ENV_VAR,
+        label: "Station DXCC",
+        description: "Default local station DXCC entity code.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: STATION_CQ_ZONE_ENV_VAR,
+        label: "Station CQ zone",
+        description: "Default local station CQ zone.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: STATION_ITU_ZONE_ENV_VAR,
+        label: "Station ITU zone",
+        description: "Default local station ITU zone.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: STATION_LATITUDE_ENV_VAR,
+        label: "Station latitude",
+        description: "Default local station latitude in decimal degrees.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: STATION_LONGITUDE_ENV_VAR,
+        label: "Station longitude",
+        description: "Default local station longitude in decimal degrees.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
     },
     ConfigFieldSpec {
         key: QRZ_XML_USERNAME_ENV_VAR,
@@ -214,7 +356,7 @@ const SUPPORTED_FIELDS: &[ConfigFieldSpec] = &[
             "When true, capture and redact the outbound QRZ request instead of sending it.",
         kind: RuntimeConfigValueKind::Boolean,
         secret: false,
-        allowed_values: &["true", "false"],
+        allowed_values: BOOLEAN_ALLOWED_VALUES,
         default_value: Some("false"),
     },
 ];
@@ -316,6 +458,12 @@ fn normalize_value(key: &'static str, raw_value: &str) -> Result<String, String>
             .parse::<u32>()
             .map(|value| value.to_string())
             .map_err(|_| format!("'{key}' expects an integer value."))
+    } else if is_station_positive_integer_key(key) {
+        parse_positive_integer(key, trimmed).map(|value| value.to_string())
+    } else if key == STATION_LATITUDE_ENV_VAR {
+        parse_bounded_f64(key, trimmed, -90.0, 90.0).map(|value| value.to_string())
+    } else if key == STATION_LONGITUDE_ENV_VAR {
+        parse_bounded_f64(key, trimmed, -180.0, 180.0).map(|value| value.to_string())
     } else {
         Ok(trimmed.to_string())
     }
@@ -329,6 +477,36 @@ fn parse_bool(raw_value: &str) -> Result<bool, String> {
             "'{raw_value}' is not a valid boolean. Use true/false, yes/no, 1/0, y/n, or on/off."
         )),
     }
+}
+
+fn parse_positive_integer(key: &str, raw_value: &str) -> Result<u32, String> {
+    let value = raw_value
+        .parse::<u32>()
+        .map_err(|_| format!("'{key}' expects an integer value."))?;
+    if value == 0 {
+        return Err(format!("'{key}' expects an integer greater than 0."));
+    }
+    Ok(value)
+}
+
+fn parse_bounded_f64(key: &str, raw_value: &str, min: f64, max: f64) -> Result<f64, String> {
+    let value = raw_value
+        .parse::<f64>()
+        .map_err(|_| format!("'{key}' expects a decimal value."))?;
+    if !value.is_finite() {
+        return Err(format!("'{key}' expects a finite decimal value."));
+    }
+    if value < min || value > max {
+        return Err(format!("'{key}' must be between {min} and {max}."));
+    }
+    Ok(value)
+}
+
+fn is_station_positive_integer_key(key: &str) -> bool {
+    matches!(
+        key,
+        STATION_DXCC_ENV_VAR | STATION_CQ_ZONE_ENV_VAR | STATION_ITU_ZONE_ENV_VAR
+    )
 }
 
 fn merge_values(
@@ -352,13 +530,62 @@ fn build_runtime_bindings(values: &BTreeMap<String, String>) -> Result<RuntimeBi
         provider,
         LookupCoordinatorConfig::default(),
     ));
+    let active_station_profile = build_active_station_profile(values)?;
 
     Ok(RuntimeBindings {
         logbook_engine,
         lookup_coordinator,
         active_storage_backend,
         lookup_provider_summary,
+        active_station_profile,
     })
+}
+
+fn build_active_station_profile(
+    values: &BTreeMap<String, String>,
+) -> Result<Option<StationProfile>, String> {
+    let profile = StationProfile {
+        profile_name: values.get(STATION_PROFILE_NAME_ENV_VAR).cloned(),
+        station_callsign: values
+            .get(STATION_CALLSIGN_ENV_VAR)
+            .cloned()
+            .unwrap_or_default(),
+        operator_callsign: values.get(STATION_OPERATOR_CALLSIGN_ENV_VAR).cloned(),
+        operator_name: values.get(STATION_OPERATOR_NAME_ENV_VAR).cloned(),
+        grid: values.get(STATION_GRID_ENV_VAR).cloned(),
+        county: values.get(STATION_COUNTY_ENV_VAR).cloned(),
+        state: values.get(STATION_STATE_ENV_VAR).cloned(),
+        country: values.get(STATION_COUNTRY_ENV_VAR).cloned(),
+        dxcc: parse_optional_positive_integer(values, STATION_DXCC_ENV_VAR)?,
+        cq_zone: parse_optional_positive_integer(values, STATION_CQ_ZONE_ENV_VAR)?,
+        itu_zone: parse_optional_positive_integer(values, STATION_ITU_ZONE_ENV_VAR)?,
+        latitude: parse_optional_bounded_f64(values, STATION_LATITUDE_ENV_VAR, -90.0, 90.0)?,
+        longitude: parse_optional_bounded_f64(values, STATION_LONGITUDE_ENV_VAR, -180.0, 180.0)?,
+    };
+
+    Ok(station_profile_has_values(&profile).then_some(profile))
+}
+
+fn parse_optional_positive_integer(
+    values: &BTreeMap<String, String>,
+    key: &str,
+) -> Result<Option<u32>, String> {
+    values
+        .get(key)
+        .map(|value| parse_positive_integer(key, value))
+        .transpose()
+}
+
+fn parse_optional_bounded_f64(
+    values: &BTreeMap<String, String>,
+    key: &str,
+    min: f64,
+    max: f64,
+) -> Result<Option<f64>, String> {
+    values
+        .get(key)
+        .map(|value| parse_bounded_f64(key, value, min, max))
+        .transpose()
 }
 
 fn parse_storage_options_from_values(
@@ -452,6 +679,7 @@ fn build_snapshot(
         active_storage_backend: bindings.active_storage_backend.clone(),
         lookup_provider_summary: bindings.lookup_provider_summary.clone(),
         warnings,
+        active_station_profile: bindings.active_station_profile.clone(),
     }
 }
 
@@ -493,7 +721,8 @@ mod tests {
         ApplyRuntimeConfigRequest, ResetRuntimeConfigRequest, RuntimeConfigManager,
         RuntimeConfigMutation, RuntimeConfigMutationKind, QRZ_USER_AGENT_ENV_VAR,
         QRZ_XML_CAPTURE_ONLY_ENV_VAR, QRZ_XML_PASSWORD_ENV_VAR, QRZ_XML_USERNAME_ENV_VAR,
-        SQLITE_PATH_ENV_VAR, STORAGE_BACKEND_ENV_VAR,
+        SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR, STATION_GRID_ENV_VAR,
+        STATION_LATITUDE_ENV_VAR, STATION_OPERATOR_CALLSIGN_ENV_VAR, STORAGE_BACKEND_ENV_VAR,
     };
 
     fn sample_qso(local_id: &str) -> QsoRecord {
@@ -621,6 +850,52 @@ mod tests {
             .expect("capture-only apply")
             .lookup_provider_summary;
         assert_contains(&capture_only_summary, "capture-only");
+    }
+
+    #[tokio::test]
+    async fn runtime_manager_exposes_active_station_profile_in_snapshot() {
+        let mut base_values = BTreeMap::new();
+        base_values.insert(STATION_CALLSIGN_ENV_VAR.to_string(), "K7RND".to_string());
+        base_values.insert(
+            STATION_OPERATOR_CALLSIGN_ENV_VAR.to_string(),
+            "N7OPS".to_string(),
+        );
+        base_values.insert(STATION_GRID_ENV_VAR.to_string(), "CN87".to_string());
+
+        let manager = RuntimeConfigManager::new(base_values).expect("manager");
+        let snapshot = manager.snapshot().await;
+        let profile = snapshot.active_station_profile.expect("active profile");
+
+        assert_eq!("K7RND", profile.station_callsign);
+        assert_eq!(Some("N7OPS"), profile.operator_callsign.as_deref());
+        assert_eq!(Some("CN87"), profile.grid.as_deref());
+    }
+
+    #[tokio::test]
+    async fn runtime_manager_applies_station_profile_overrides() {
+        let manager = RuntimeConfigManager::new(BTreeMap::new()).expect("manager");
+
+        let snapshot = manager
+            .apply_request(ApplyRuntimeConfigRequest {
+                mutations: vec![
+                    RuntimeConfigMutation {
+                        key: STATION_CALLSIGN_ENV_VAR.to_string(),
+                        kind: RuntimeConfigMutationKind::Set as i32,
+                        value: Some("K7RND".to_string()),
+                    },
+                    RuntimeConfigMutation {
+                        key: STATION_LATITUDE_ENV_VAR.to_string(),
+                        kind: RuntimeConfigMutationKind::Set as i32,
+                        value: Some("47.6205".to_string()),
+                    },
+                ],
+            })
+            .await
+            .expect("station overrides");
+        let profile = snapshot.active_station_profile.expect("active profile");
+
+        assert_eq!("K7RND", profile.station_callsign);
+        assert_eq!(Some(47.6205), profile.latitude);
     }
 
     fn assert_contains(actual: &str, expected: &str) {

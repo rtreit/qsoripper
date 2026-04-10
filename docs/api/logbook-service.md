@@ -337,6 +337,7 @@ rpc ExportAdif(ExportRequest) returns (stream AdifChunk)
 | `submode` | Optional | ADIF submode string (e.g., `"USB"`, `"PSK31"`) |
 | `rst_sent` / `rst_received` | Optional | RST signal reports |
 | `sync_status` | Set by engine | `LOCAL_ONLY → SYNCED → MODIFIED → CONFLICT` |
+| `station_snapshot` | Optional | Immutable local-station metadata captured when the QSO was logged |
 | `extra_fields` | Optional | ADIF fields with no dedicated proto field — preserved for lossless round-trip |
 
 ## SortOrder Values

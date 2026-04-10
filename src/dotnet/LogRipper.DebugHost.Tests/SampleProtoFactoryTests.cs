@@ -7,6 +7,7 @@ namespace LogRipper.DebugHost.Tests;
 #pragma warning disable CA1707 // Remove underscores from member names - xUnit allows underscores in test methods
 public class SampleProtoFactoryTests
 {
+    private readonly ProtoSampleCatalog _catalog = new();
     private readonly SampleProtoFactory _factory = new();
 
     [Fact]
@@ -30,18 +31,16 @@ public class SampleProtoFactoryTests
         Assert.True(result.CacheHit);
     }
 
-    [Theory]
-    [InlineData(SampleMessageType.LookupRequest)]
-    [InlineData(SampleMessageType.LookupResult)]
-    [InlineData(SampleMessageType.CallsignRecord)]
-    [InlineData(SampleMessageType.QsoRecord)]
-    [InlineData(SampleMessageType.DxccEntity)]
-    internal void Sample_message_generation_supports_all_registered_types(SampleMessageType sampleType)
+    [Fact]
+    public void Sample_message_generation_supports_all_registered_types()
     {
-        var message = _factory.CreateSampleMessage(sampleType, "AA7BQ");
+        foreach (var sampleDefinition in _catalog.GetDefinitions())
+        {
+            var message = _factory.CreateSampleMessage(sampleDefinition.MessageType, "AA7BQ");
 
-        Assert.NotNull(message);
-        Assert.True(message.CalculateSize() > 0);
+            Assert.NotNull(message);
+            Assert.IsType(sampleDefinition.MessageType, message);
+        }
     }
 
     [Fact]
@@ -59,6 +58,9 @@ public class SampleProtoFactoryTests
         Assert.Equal("599", record.RstSent.Raw);
         Assert.Equal((uint)9, record.RstSent.Tone);
         Assert.Equal("579", record.RstReceived.Raw);
+        Assert.NotNull(record.StationSnapshot);
+        Assert.Equal("K7DBG", record.StationSnapshot.StationCallsign);
+        Assert.Equal("CN87up", record.StationSnapshot.Grid);
     }
 
     [Fact]
@@ -73,6 +75,28 @@ public class SampleProtoFactoryTests
         Assert.True(record.HasSubmode);
         Assert.Equal("USB", record.Submode);
         Assert.Equal("59", record.RstSent.Raw);
+    }
+
+    [Fact]
+    public void Station_profile_generation_populates_sample_metadata()
+    {
+        var profile = _factory.CreateStationProfile();
+
+        Assert.Equal("Home", profile.ProfileName);
+        Assert.Equal("K7DBG", profile.StationCallsign);
+        Assert.Equal("CN87up", profile.Grid);
+        Assert.Equal((uint)291, profile.Dxcc);
+    }
+
+    [Fact]
+    public void Station_snapshot_generation_populates_sample_metadata()
+    {
+        var snapshot = _factory.CreateStationSnapshot();
+
+        Assert.Equal("Home", snapshot.ProfileName);
+        Assert.Equal("K7DBG", snapshot.StationCallsign);
+        Assert.Equal("KING", snapshot.County);
+        Assert.Equal((uint)6, snapshot.ItuZone);
     }
 }
 #pragma warning restore CA1707

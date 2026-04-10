@@ -8,7 +8,8 @@ use std::{borrow::Cow, fmt::Write as _};
 use crate::domain::band::band_from_adif;
 use crate::domain::mode::{import_only_submode, mode_from_adif};
 use crate::domain::qso::{new_local_id, qsl_status_from_adif};
-use crate::proto::logripper::domain::{Band, Mode, QsoRecord, SyncStatus};
+use crate::domain::station::{effective_station_snapshot, station_snapshot_has_values};
+use crate::proto::logripper::domain::{Band, Mode, QsoRecord, StationSnapshot, SyncStatus};
 use difa::Record;
 
 /// Borrowed or owned ADIF field data suitable for ADI serialization.
@@ -30,6 +31,7 @@ impl AdifMapper {
             sync_status: SyncStatus::LocalOnly.into(),
             ..Default::default()
         };
+        let mut station_snapshot: Option<StationSnapshot> = None;
 
         // Collect QSO_DATE and TIME_ON separately for timestamp construction
         let mut qso_date: Option<Cow<'_, str>> = None;
@@ -43,12 +45,25 @@ impl AdifMapper {
             match key_upper.as_str() {
                 // --- Core fields ---
                 "CALL" => value_str.clone_into(&mut qso.worked_callsign),
-                "STATION_CALLSIGN" => value_str.clone_into(&mut qso.station_callsign),
+                "STATION_CALLSIGN" => {
+                    value_str.clone_into(&mut qso.station_callsign);
+                    value_str.clone_into(
+                        &mut station_snapshot
+                            .get_or_insert_with(StationSnapshot::default)
+                            .station_callsign,
+                    );
+                }
                 "OPERATOR" => {
+                    station_snapshot
+                        .get_or_insert_with(StationSnapshot::default)
+                        .operator_callsign = Some(value_str.to_owned());
                     if qso.station_callsign.is_empty() {
                         value_str.clone_into(&mut qso.station_callsign);
-                    } else {
-                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                        value_str.clone_into(
+                            &mut station_snapshot
+                                .get_or_insert_with(StationSnapshot::default)
+                                .station_callsign,
+                        );
                     }
                 }
                 "QSO_DATE" => qso_date = Some(value.clone()),
@@ -113,6 +128,71 @@ impl AdifMapper {
                     }
                 }
                 "IOTA" => qso.worked_iota = Some(value_str.to_owned()),
+                "MY_GRIDSQUARE" => {
+                    station_snapshot
+                        .get_or_insert_with(StationSnapshot::default)
+                        .grid = Some(value_str.to_owned());
+                }
+                "MY_CNTY" => {
+                    station_snapshot
+                        .get_or_insert_with(StationSnapshot::default)
+                        .county = Some(value_str.to_owned());
+                }
+                "MY_STATE" => {
+                    station_snapshot
+                        .get_or_insert_with(StationSnapshot::default)
+                        .state = Some(value_str.to_owned());
+                }
+                "MY_COUNTRY" => {
+                    station_snapshot
+                        .get_or_insert_with(StationSnapshot::default)
+                        .country = Some(value_str.to_owned());
+                }
+                "MY_DXCC" => {
+                    if let Ok(dxcc) = value_str.parse::<u32>() {
+                        station_snapshot
+                            .get_or_insert_with(StationSnapshot::default)
+                            .dxcc = Some(dxcc);
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
+                "MY_CQ_ZONE" => {
+                    if let Ok(zone) = value_str.parse::<u32>() {
+                        station_snapshot
+                            .get_or_insert_with(StationSnapshot::default)
+                            .cq_zone = Some(zone);
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
+                "MY_ITU_ZONE" => {
+                    if let Ok(zone) = value_str.parse::<u32>() {
+                        station_snapshot
+                            .get_or_insert_with(StationSnapshot::default)
+                            .itu_zone = Some(zone);
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
+                "MY_LAT" => {
+                    if let Some(latitude) = parse_adif_location(value_str, true) {
+                        station_snapshot
+                            .get_or_insert_with(StationSnapshot::default)
+                            .latitude = Some(latitude);
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
+                "MY_LON" => {
+                    if let Some(longitude) = parse_adif_location(value_str, false) {
+                        station_snapshot
+                            .get_or_insert_with(StationSnapshot::default)
+                            .longitude = Some(longitude);
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
 
                 // --- QSL ---
                 "QSL_SENT" => qso.qsl_sent_status = qsl_status_from_adif(value_str).into(),
@@ -172,6 +252,10 @@ impl AdifMapper {
             }
         }
 
+        if let Some(snapshot) = station_snapshot.filter(station_snapshot_has_values) {
+            qso.station_snapshot = Some(snapshot);
+        }
+
         qso
     }
 
@@ -196,17 +280,29 @@ impl AdifMapper {
     #[allow(clippy::too_many_lines)]
     fn qso_to_adif_fields_borrowed(qso: &QsoRecord) -> Vec<AdifField<'_>> {
         let mut fields = Vec::with_capacity(qso.extra_fields.len() + 32);
+        let station_snapshot = effective_station_snapshot(qso);
 
         // Core
-        if !qso.station_callsign.is_empty() {
+        if let Some(station_callsign) = station_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.station_callsign.as_str())
+            .filter(|value| !value.is_empty())
+            .or_else(|| (!qso.station_callsign.is_empty()).then_some(qso.station_callsign.as_str()))
+        {
             push_field(
                 &mut fields,
                 "STATION_CALLSIGN",
-                qso.station_callsign.as_str(),
+                station_callsign.to_string(),
             );
         }
         if !qso.worked_callsign.is_empty() {
             push_field(&mut fields, "CALL", qso.worked_callsign.as_str());
+        }
+        if let Some(operator_callsign) = station_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.operator_callsign.as_deref())
+        {
+            push_field(&mut fields, "OPERATOR", operator_callsign.to_string());
         }
 
         // Timestamp → QSO_DATE + TIME_ON
@@ -285,6 +381,41 @@ impl AdifMapper {
         if let Some(v) = qso.worked_iota.as_deref() {
             push_field(&mut fields, "IOTA", v);
         }
+        if let Some(snapshot) = station_snapshot.as_ref() {
+            if let Some(v) = snapshot.grid.as_deref() {
+                push_field(&mut fields, "MY_GRIDSQUARE", v.to_string());
+            }
+            if let Some(v) = snapshot.county.as_deref() {
+                push_field(&mut fields, "MY_CNTY", v.to_string());
+            }
+            if let Some(v) = snapshot.state.as_deref() {
+                push_field(&mut fields, "MY_STATE", v.to_string());
+            }
+            if let Some(v) = snapshot.country.as_deref() {
+                push_field(&mut fields, "MY_COUNTRY", v.to_string());
+            }
+            if let Some(dxcc) = snapshot.dxcc {
+                push_field(&mut fields, "MY_DXCC", dxcc.to_string());
+            }
+            if let Some(zone) = snapshot.cq_zone {
+                push_field(&mut fields, "MY_CQ_ZONE", zone.to_string());
+            }
+            if let Some(zone) = snapshot.itu_zone {
+                push_field(&mut fields, "MY_ITU_ZONE", zone.to_string());
+            }
+            if let Some(latitude) = snapshot
+                .latitude
+                .and_then(|value| format_adif_location(value, true))
+            {
+                push_field(&mut fields, "MY_LAT", latitude);
+            }
+            if let Some(longitude) = snapshot
+                .longitude
+                .and_then(|value| format_adif_location(value, false))
+            {
+                push_field(&mut fields, "MY_LON", longitude);
+            }
+        }
 
         // QSL
         let sent = crate::domain::qso::qsl_status_to_adif(
@@ -346,7 +477,7 @@ impl AdifMapper {
 
         // Extra fields (round-trip overflow)
         for (k, v) in &qso.extra_fields {
-            if confirmation_field_is_overridden(qso, k) {
+            if field_is_overridden(qso, station_snapshot.as_ref(), k) {
                 continue;
             }
             push_field(&mut fields, k.as_str(), v.as_str());
@@ -444,6 +575,74 @@ fn format_adif_datetime(ts: &prost_types::Timestamp) -> Option<(String, String)>
     Some((date, time))
 }
 
+fn parse_adif_location(raw_value: &str, latitude: bool) -> Option<f64> {
+    let trimmed = raw_value.trim();
+    if trimmed.len() != 11 || !trimmed.is_ascii() {
+        return None;
+    }
+
+    let direction = trimmed.chars().next()?.to_ascii_uppercase();
+    match (latitude, direction) {
+        (true, 'N' | 'S') | (false, 'E' | 'W') => {}
+        _ => return None,
+    }
+
+    if trimmed.as_bytes().get(4).copied() != Some(b' ') {
+        return None;
+    }
+
+    let degrees: f64 = trimmed.get(1..4)?.parse().ok()?;
+    let minutes: f64 = trimmed.get(5..11)?.parse().ok()?;
+    if !(0.0..60.0).contains(&minutes) {
+        return None;
+    }
+
+    let signed = (degrees + (minutes / 60.0))
+        * if matches!(direction, 'S' | 'W') {
+            -1.0
+        } else {
+            1.0
+        };
+    let limit = if latitude { 90.0 } else { 180.0 };
+    (signed.is_finite() && signed.abs() <= limit).then_some(signed)
+}
+
+fn format_adif_location(value: f64, latitude: bool) -> Option<String> {
+    if !value.is_finite() {
+        return None;
+    }
+
+    let limit = if latitude { 90.0 } else { 180.0 };
+    if value.abs() > limit {
+        return None;
+    }
+
+    let direction = if latitude {
+        if value.is_sign_negative() {
+            'S'
+        } else {
+            'N'
+        }
+    } else if value.is_sign_negative() {
+        'W'
+    } else {
+        'E'
+    };
+
+    let absolute = value.abs();
+    let mut degrees = absolute.floor();
+    let mut minutes = ((absolute - degrees) * 60.0 * 1000.0).round() / 1000.0;
+    if minutes >= 60.0 {
+        degrees += 1.0;
+        minutes = 0.0;
+    }
+    if degrees > limit {
+        return None;
+    }
+
+    Some(format!("{direction}{degrees:03.0} {minutes:06.3}"))
+}
+
 fn mhz_to_khz(mhz: f64) -> Option<u64> {
     if !mhz.is_finite() || mhz.is_sign_negative() {
         return None;
@@ -492,7 +691,11 @@ fn push_confirmation_field(
     }
 }
 
-fn confirmation_field_is_overridden(qso: &QsoRecord, key: &str) -> bool {
+fn field_is_overridden(
+    qso: &QsoRecord,
+    station_snapshot: Option<&StationSnapshot>,
+    key: &str,
+) -> bool {
     if key.eq_ignore_ascii_case("LOTW_QSL_SENT") {
         qso.lotw_sent.is_some()
     } else if key.eq_ignore_ascii_case("LOTW_QSL_RCVD") {
@@ -501,6 +704,50 @@ fn confirmation_field_is_overridden(qso: &QsoRecord, key: &str) -> bool {
         qso.eqsl_sent.is_some()
     } else if key.eq_ignore_ascii_case("EQSL_QSL_RCVD") {
         qso.eqsl_received.is_some()
+    } else if key.eq_ignore_ascii_case("STATION_CALLSIGN") {
+        station_snapshot.map_or(!qso.station_callsign.is_empty(), |snapshot| {
+            !snapshot.station_callsign.is_empty()
+        })
+    } else if key.eq_ignore_ascii_case("OPERATOR") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.operator_callsign.as_ref())
+            .is_some()
+    } else if key.eq_ignore_ascii_case("MY_GRIDSQUARE") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.grid.as_ref())
+            .is_some()
+    } else if key.eq_ignore_ascii_case("MY_CNTY") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.county.as_ref())
+            .is_some()
+    } else if key.eq_ignore_ascii_case("MY_STATE") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.state.as_ref())
+            .is_some()
+    } else if key.eq_ignore_ascii_case("MY_COUNTRY") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.country.as_ref())
+            .is_some()
+    } else if key.eq_ignore_ascii_case("MY_DXCC") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.dxcc)
+            .is_some()
+    } else if key.eq_ignore_ascii_case("MY_CQ_ZONE") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.cq_zone)
+            .is_some()
+    } else if key.eq_ignore_ascii_case("MY_ITU_ZONE") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.itu_zone)
+            .is_some()
+    } else if key.eq_ignore_ascii_case("MY_LAT") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.latitude)
+            .is_some()
+    } else if key.eq_ignore_ascii_case("MY_LON") {
+        station_snapshot
+            .and_then(|snapshot| snapshot.longitude)
+            .is_some()
     } else {
         false
     }
@@ -544,6 +791,12 @@ mod tests {
         assert_eq!(qso.mode, Mode::Rtty as i32);
         assert_eq!(qso.frequency_khz, Some(14085));
         assert!(qso.utc_timestamp.is_some());
+        assert_eq!(
+            qso.station_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.station_callsign.as_str()),
+            Some("AA7BQ")
+        );
     }
 
     #[test]
@@ -680,6 +933,31 @@ mod tests {
     }
 
     #[test]
+    fn record_to_qso_maps_station_snapshot_fields() {
+        let mut rec = Record::new();
+        rec.insert("CALL", "W1AW").unwrap();
+        rec.insert("STATION_CALLSIGN", "K7RND").unwrap();
+        rec.insert("OPERATOR", "N7OPS").unwrap();
+        rec.insert("MY_GRIDSQUARE", "CN87").unwrap();
+        rec.insert("MY_STATE", "WA").unwrap();
+        rec.insert("MY_DXCC", "291").unwrap();
+        rec.insert("MY_LAT", "N047 36.372").unwrap();
+        rec.insert("MY_LON", "W122 19.866").unwrap();
+
+        let qso = AdifMapper::record_to_qso(&rec);
+        let snapshot = qso.station_snapshot.expect("snapshot");
+
+        assert_eq!("K7RND", qso.station_callsign);
+        assert_eq!("K7RND", snapshot.station_callsign);
+        assert_eq!(Some("N7OPS"), snapshot.operator_callsign.as_deref());
+        assert_eq!(Some("CN87"), snapshot.grid.as_deref());
+        assert_eq!(Some("WA"), snapshot.state.as_deref());
+        assert_eq!(Some(291), snapshot.dxcc);
+        assert_eq!(Some(47.6062), snapshot.latitude);
+        assert_eq!(Some(-122.3311), snapshot.longitude);
+    }
+
+    #[test]
     fn record_to_qso_propagation_fields() {
         let mut rec = Record::new();
         rec.insert("CALL", "W1AW").unwrap();
@@ -755,6 +1033,37 @@ mod tests {
     }
 
     #[test]
+    fn qso_to_adif_fields_emits_station_snapshot_fields() {
+        let qso = crate::proto::logripper::domain::QsoRecord {
+            station_callsign: "K7RND".into(),
+            worked_callsign: "W1AW".into(),
+            station_snapshot: Some(StationSnapshot {
+                station_callsign: "K7RND".into(),
+                operator_callsign: Some("N7OPS".into()),
+                grid: Some("CN87".into()),
+                state: Some("WA".into()),
+                latitude: Some(47.6062),
+                longitude: Some(-122.3311),
+                ..StationSnapshot::default()
+            }),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let field_map: std::collections::HashMap<&str, &str> = fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        assert_eq!(field_map.get("STATION_CALLSIGN"), Some(&"K7RND"));
+        assert_eq!(field_map.get("OPERATOR"), Some(&"N7OPS"));
+        assert_eq!(field_map.get("MY_GRIDSQUARE"), Some(&"CN87"));
+        assert_eq!(field_map.get("MY_STATE"), Some(&"WA"));
+        assert_eq!(field_map.get("MY_LAT"), Some(&"N047 36.372"));
+        assert_eq!(field_map.get("MY_LON"), Some(&"W122 19.866"));
+    }
+
+    #[test]
     fn adi_format_output() {
         let fields = vec![
             ("CALL".to_string(), "W1AW".to_string()),
@@ -790,12 +1099,20 @@ mod tests {
     }
 
     #[test]
-    fn confirmation_fields_do_not_duplicate_overridden_extra_fields() {
+    fn dedicated_fields_do_not_duplicate_overridden_extra_fields() {
         let qso = crate::proto::logripper::domain::QsoRecord {
+            station_callsign: "K7RND".into(),
             worked_callsign: "W1AW".into(),
             lotw_sent: Some(true),
             eqsl_received: Some(false),
+            station_snapshot: Some(StationSnapshot {
+                station_callsign: "K7RND".into(),
+                grid: Some("CN87".into()),
+                ..StationSnapshot::default()
+            }),
             extra_fields: [
+                ("station_callsign".to_string(), "OLD".to_string()),
+                ("my_gridsquare".to_string(), "OLDGRID".to_string()),
                 ("lotw_qsl_sent".to_string(), "R".to_string()),
                 ("eqsl_qsl_rcvd".to_string(), "I".to_string()),
             ]
@@ -815,9 +1132,21 @@ mod tests {
             .filter(|(k, _)| k == "EQSL_QSL_RCVD")
             .map(|(_, v)| v.as_str())
             .collect();
+        let station_callsign_values: Vec<&str> = fields
+            .iter()
+            .filter(|(k, _)| k == "STATION_CALLSIGN")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        let grid_values: Vec<&str> = fields
+            .iter()
+            .filter(|(k, _)| k == "MY_GRIDSQUARE")
+            .map(|(_, v)| v.as_str())
+            .collect();
 
         assert_eq!(lotw_values, vec!["Y"]);
         assert_eq!(eqsl_values, vec!["N"]);
+        assert_eq!(station_callsign_values, vec!["K7RND"]);
+        assert_eq!(grid_values, vec!["CN87"]);
     }
 
     #[test]
@@ -829,6 +1158,12 @@ mod tests {
 
         let qso = AdifMapper::record_to_qso(&rec);
         assert_eq!(qso.station_callsign, "AA7BQ");
+        assert_eq!(
+            qso.station_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.operator_callsign.as_deref()),
+            Some("AA7BQ")
+        );
     }
 
     #[test]
@@ -896,6 +1231,21 @@ mod tests {
         assert!(
             result.is_none(),
             "Non-ASCII date should return None, not panic"
+        );
+    }
+
+    #[test]
+    fn adif_location_round_trips() {
+        let latitude = parse_adif_location("N047 36.372", true).expect("latitude");
+        let longitude = parse_adif_location("W122 19.866", false).expect("longitude");
+
+        assert_eq!(
+            Some("N047 36.372".to_string()),
+            format_adif_location(latitude, true)
+        );
+        assert_eq!(
+            Some("W122 19.866".to_string()),
+            format_adif_location(longitude, false)
         );
     }
 }

@@ -1,5 +1,6 @@
 using LogRipper.DebugHost.Models;
 using LogRipper.DebugHost.Services;
+using LogRipper.Domain;
 using LogRipper.Services;
 using Microsoft.Extensions.Options;
 
@@ -79,6 +80,47 @@ public class DebugWorkbenchStateTests
         Assert.Equal(@".\data\live-logripper.db", state.EngineSqlitePath);
         Assert.Equal("<redacted>", state.GetEngineEnvironmentOverrides()["LOGRIPPER_QRZ_XML_PASSWORD"]);
         Assert.Contains("--storage sqlite", state.BuildRustServerCommand(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Update_runtime_config_includes_station_profile_environment_overrides()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
+
+        state.UpdateRuntimeConfig(new RuntimeConfigSnapshot
+        {
+            ActiveStorageBackend = "memory",
+            ActiveStationProfile = new StationProfile
+            {
+                StationCallsign = "K7RND",
+                Grid = "CN87"
+            },
+            Values =
+            {
+                new RuntimeConfigValue
+                {
+                    Key = "LOGRIPPER_STORAGE_BACKEND",
+                    HasValue = true,
+                    DisplayValue = "memory"
+                },
+                new RuntimeConfigValue
+                {
+                    Key = "LOGRIPPER_STATION_CALLSIGN",
+                    HasValue = true,
+                    DisplayValue = "K7RND"
+                },
+                new RuntimeConfigValue
+                {
+                    Key = "LOGRIPPER_STATION_GRID",
+                    HasValue = true,
+                    DisplayValue = "CN87"
+                }
+            }
+        });
+
+        Assert.Equal("K7RND", state.GetEngineEnvironmentOverrides()["LOGRIPPER_STATION_CALLSIGN"]);
+        Assert.Equal("CN87", state.GetEngineEnvironmentOverrides()["LOGRIPPER_STATION_GRID"]);
+        Assert.Equal(EngineStorageBackend.Memory, state.EngineStorageBackend);
     }
 }
 #pragma warning restore CA1707

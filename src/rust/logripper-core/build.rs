@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let protos = &[
         proto_root.join("domain/callsign.proto"),
+        proto_root.join("domain/station.proto"),
         proto_root.join("domain/qso.proto"),
         proto_root.join("domain/lookup.proto"),
         proto_root.join("services/debug_control_service.proto"),

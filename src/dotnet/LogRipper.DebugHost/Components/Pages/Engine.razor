@@ -1,7 +1,9 @@
 @page "/engine"
 @using LogRipper.DebugHost.Models
+@using LogRipper.Domain
 @using LogRipper.Services
 @inject DebugWorkbenchState WorkbenchState
+@inject ProtoJsonService ProtoJsonService
 @inject RuntimeConfigWorkbenchService RuntimeConfigWorkbenchService
 @inject ToolchainLocator ToolchainLocator
 
@@ -157,20 +159,39 @@
                 <strong>Lookup provider:</strong> @WorkbenchState.RuntimeConfigSnapshot?.LookupProviderSummary
             </div>
 
-            @if (WorkbenchState.RuntimeConfigSnapshot?.Warnings.Count > 0)
-            {
-                <div class="alert alert-warning">
-                    <ul class="mb-0">
+             @if (WorkbenchState.RuntimeConfigSnapshot?.Warnings.Count > 0)
+             {
+                 <div class="alert alert-warning">
+                     <ul class="mb-0">
                         @foreach (var warning in WorkbenchState.RuntimeConfigSnapshot.Warnings)
                         {
                             <li>@warning</li>
                         }
                     </ul>
-                </div>
-            }
+                 </div>
+             }
 
-            <div class="table-responsive">
-                <table class="table table-sm align-middle mb-0">
+             @if (WorkbenchState.RuntimeConfigSnapshot?.ActiveStationProfile is not null && activeStationProfilePayload is not null)
+             {
+                 var activeStationProfile = WorkbenchState.RuntimeConfigSnapshot.ActiveStationProfile;
+                 <div class="alert alert-secondary">
+                     <div>
+                         <strong>Active station profile:</strong> @GetActiveStationSummary(activeStationProfile)
+                     </div>
+                     <div class="small text-muted mt-1">
+                         New LogQso requests use this profile as the base station snapshot unless the request payload overrides specific station fields.
+                     </div>
+                 </div>
+                 <div class="row g-4 mb-3">
+                     <div class="col-xl-6">
+                         <PayloadCard Title="Active station profile"
+                                      Payload="@activeStationProfilePayload.Json" />
+                     </div>
+                 </div>
+             }
+
+             <div class="table-responsive">
+                 <table class="table table-sm align-middle mb-0">
                     <thead>
                         <tr>
                             <th>Setting</th>
@@ -266,6 +287,7 @@
     private string? statusMessage;
     private IReadOnlyList<ToolAvailability> tools = Array.Empty<ToolAvailability>();
     private List<RuntimeConfigEditorEntry> runtimeEntries = [];
+    private ProtoPayloadView? activeStationProfilePayload;
     private bool isRuntimeConfigBusy;
 
     protected override async Task OnInitializedAsync()
@@ -365,8 +387,13 @@
         if (WorkbenchState.RuntimeConfigSnapshot is null)
         {
             runtimeEntries = [];
+            activeStationProfilePayload = null;
             return;
         }
+
+        activeStationProfilePayload = WorkbenchState.RuntimeConfigSnapshot.ActiveStationProfile is null
+            ? null
+            : ProtoJsonService.Describe(WorkbenchState.RuntimeConfigSnapshot.ActiveStationProfile);
 
         runtimeEntries = WorkbenchState.RuntimeConfigSnapshot.Definitions
             .Select(definition =>
@@ -376,5 +403,18 @@
                 return new RuntimeConfigEditorEntry(definition, currentValue);
             })
             .ToList();
+    }
+
+    private static string GetActiveStationSummary(StationProfile profile)
+    {
+        var summary = profile.StationCallsign;
+        if (!string.IsNullOrWhiteSpace(profile.Grid))
+        {
+            summary = $"{summary} ({profile.Grid})";
+        }
+
+        return string.IsNullOrWhiteSpace(profile.OperatorCallsign)
+            ? summary
+            : $"{summary} operator {profile.OperatorCallsign}";
     }
 }

@@ -145,9 +145,9 @@ $env:LOGRIPPER_SQLITE_PATH = ".\data\logripper.db"
 cargo run -p logripper-server
 ```
 
-### QRZ local configuration
+### Local engine configuration
 
-Use `.env.example` as the local template for QRZ settings:
+Use `.env.example` as the local template for QRZ settings and optional local-station defaults:
 
 ```
 Copy-Item .env.example .env
@@ -170,6 +170,8 @@ LOGRIPPER_QRZ_XML_CAPTURE_ONLY=true
 ```
 
 In capture mode, LogRipper builds the outgoing QRZ XML request and returns redacted request diagnostics without sending any HTTP traffic to QRZ.
+
+You can also set `LOGRIPPER_STATION_*` values in `.env` to define the active station profile that the Rust engine snapshots into newly logged QSOs.
 
 ### Local lookup debug workflow
 

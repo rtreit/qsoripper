@@ -32,6 +32,7 @@ Primary goals:
 - Proto files are the single source of truth. Never hand-write types that should come from proto generation.
 - Use `buf lint` to validate proto files. Use `buf breaking` to guard against incompatible schema changes.
 - ADIF is for external interchange (QRZ API, file I/O) only — internal IPC uses protobuf.
+- Keep shared proto messages discoverable in the Debug Host Protobuf Lab; prefer auto-discovered message catalogs over hand-maintained UI enums or lists.
 - See `docs/architecture/data-model.md` for full conventions.
 
 ## Domain Guidance
