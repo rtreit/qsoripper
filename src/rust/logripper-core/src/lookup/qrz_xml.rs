@@ -808,7 +808,53 @@ fn map_qsl_preference(value: Option<&str>) -> i32 {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use std::{
+        sync::{Arc, Mutex as StdMutex, OnceLock},
+        time::Duration,
+    };
+
     use super::*;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
+
+    const LOGIN_SUCCESS_XML: &str = r#"
+<?xml version="1.0"?>
+<QRZDatabase version="1.34">
+  <Session>
+    <Key>session-key</Key>
+  </Session>
+</QRZDatabase>
+"#;
+
+    const LOGIN_AUTH_FAILURE_XML: &str = r#"
+<?xml version="1.0"?>
+<QRZDatabase version="1.34">
+  <Session>
+    <Error>Password incorrect</Error>
+  </Session>
+</QRZDatabase>
+"#;
+
+    const LOOKUP_NOT_FOUND_XML: &str = r#"
+<?xml version="1.0"?>
+<QRZDatabase version="1.34">
+  <Session>
+    <Key>session-key</Key>
+    <Error>Not found: w1aw</Error>
+  </Session>
+</QRZDatabase>
+"#;
+
+    const SESSION_TIMEOUT_XML: &str = r#"
+<?xml version="1.0"?>
+<QRZDatabase version="1.34">
+  <Session>
+    <Error>Session Timeout</Error>
+  </Session>
+</QRZDatabase>
+"#;
 
     const FOUND_XML: &str = r#"
 <?xml version="1.0"?>
@@ -852,6 +898,74 @@ mod tests {
 </QRZDatabase>
 "#;
 
+    fn test_config(base_url: String) -> QrzXmlConfig {
+        QrzXmlConfig {
+            base_url,
+            username: "KC7AVA".to_string(),
+            password: "super-secret-password".to_string(),
+            user_agent: "LogRipper/0.1.0 (KC7AVA)".to_string(),
+            http_timeout: Duration::from_secs(2),
+            max_retries: 0,
+            capture_only: false,
+        }
+    }
+
+    async fn spawn_qrz_server(responses: &[&str]) -> (String, Arc<StdMutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("local addr");
+        let recorded_requests = Arc::new(StdMutex::new(Vec::new()));
+        let recorded_requests_clone = Arc::clone(&recorded_requests);
+        let responses = responses
+            .iter()
+            .copied()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        tokio::spawn(async move {
+            for response in responses {
+                let (mut socket, _) = listener.accept().await.expect("accept");
+                let request = read_http_request(&mut socket).await;
+                recorded_requests_clone
+                    .lock()
+                    .expect("recorded requests")
+                    .push(request);
+                write_http_response(&mut socket, &response).await;
+            }
+        });
+
+        (format!("http://{address}/xml/current/"), recorded_requests)
+    }
+
+    async fn read_http_request(socket: &mut TcpStream) -> String {
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let read = socket.read(&mut buffer).await.expect("read request");
+            if read == 0 {
+                break;
+            }
+
+            bytes.extend_from_slice(buffer.get(..read).expect("buffer slice"));
+            if bytes.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+
+        String::from_utf8(bytes).expect("request utf8")
+    }
+
+    async fn write_http_response(socket: &mut TcpStream, response_body: &str) {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        socket
+            .write_all(response.as_bytes())
+            .await
+            .expect("write response");
+    }
+
     #[test]
     fn qrz_callsign_payload_maps_to_proto_record() {
         let parsed: QrzDatabase = quick_xml::de::from_str(FOUND_XML).expect("parse");
@@ -885,6 +999,91 @@ mod tests {
         assert!((offset - 5.75).abs() < 0.000_01);
     }
 
+    #[tokio::test]
+    async fn lookup_callsign_logs_in_then_queries_by_session_key() {
+        let (base_url, recorded_requests) = spawn_qrz_server(&[LOGIN_SUCCESS_XML, FOUND_XML]).await;
+        let provider = QrzXmlProvider::new(test_config(base_url)).expect("provider");
+
+        let result = provider.lookup_callsign("w1aw").await.expect("lookup");
+
+        assert!(matches!(
+            result,
+            ProviderLookup::Found(record) if record.callsign == "W1AW"
+        ));
+
+        let requests = recorded_requests.lock().expect("requests");
+        assert_eq!(2, requests.len());
+        let login_request = requests.first().expect("login request");
+        let lookup_request = requests.get(1).expect("lookup request");
+        assert!(login_request.contains("username=KC7AVA"));
+        assert!(login_request.contains("password=super-secret-password"));
+        assert!(login_request.contains("agent=LogRipper"));
+        assert!(lookup_request.contains("s=session-key"));
+        assert!(lookup_request.contains("callsign=W1AW"));
+    }
+
+    #[tokio::test]
+    async fn lookup_callsign_retries_after_session_timeout_once() {
+        let (base_url, recorded_requests) = spawn_qrz_server(&[
+            LOGIN_SUCCESS_XML,
+            SESSION_TIMEOUT_XML,
+            LOGIN_SUCCESS_XML,
+            FOUND_XML,
+        ])
+        .await;
+        let provider = QrzXmlProvider::new(test_config(base_url)).expect("provider");
+
+        let result = provider.lookup_callsign("w1aw").await.expect("lookup");
+
+        assert!(matches!(result, ProviderLookup::Found(_)));
+        assert_eq!(4, recorded_requests.lock().expect("requests").len());
+    }
+
+    #[tokio::test]
+    async fn lookup_callsign_returns_not_found_when_qrz_keeps_session_key() {
+        let (base_url, _) = spawn_qrz_server(&[LOGIN_SUCCESS_XML, LOOKUP_NOT_FOUND_XML]).await;
+        let provider = QrzXmlProvider::new(test_config(base_url)).expect("provider");
+
+        let result = provider.lookup_callsign("w1aw").await.expect("lookup");
+
+        assert!(matches!(result, ProviderLookup::NotFound));
+    }
+
+    #[tokio::test]
+    async fn lookup_callsign_surfaces_login_authentication_failures() {
+        let (base_url, _) = spawn_qrz_server(&[LOGIN_AUTH_FAILURE_XML]).await;
+        let provider = QrzXmlProvider::new(test_config(base_url)).expect("provider");
+
+        let error = provider
+            .lookup_callsign("w1aw")
+            .await
+            .expect_err("auth error");
+
+        assert_eq!(
+            "Provider authentication error: QRZ login failed: Password incorrect",
+            error.to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn capture_only_mode_returns_redacted_request_diagnostics() {
+        let mut config = test_config("https://xmldata.qrz.com/xml/current/".to_string());
+        config.capture_only = true;
+        let provider = QrzXmlProvider::new(config).expect("provider");
+
+        let error = provider
+            .lookup_callsign("w1aw")
+            .await
+            .expect_err("capture error");
+        let message = error.to_string();
+
+        assert!(message.contains("request not sent"));
+        assert!(message.contains("username=KC7AVA"));
+        assert!(message.contains("password=<redacted>"));
+        assert!(!message.contains("super-secret-password"));
+        assert!(message.contains("starts_with_quote=false"));
+    }
+
     #[test]
     fn capture_rendering_redacts_sensitive_values() {
         let rendered = render_capture_query("password", "\"secret\"");
@@ -895,10 +1094,79 @@ mod tests {
     }
 
     #[test]
+    fn qrz_config_supports_capture_only_flag_from_env() {
+        let _guard = env_lock().lock().expect("env lock");
+        let saved_username = std::env::var("LOGRIPPER_QRZ_XML_USERNAME").ok();
+        let saved_password = std::env::var("LOGRIPPER_QRZ_XML_PASSWORD").ok();
+        let saved_agent = std::env::var("LOGRIPPER_QRZ_USER_AGENT").ok();
+        let saved_base_url = std::env::var("LOGRIPPER_QRZ_XML_BASE_URL").ok();
+        let saved_capture_only = std::env::var(CAPTURE_ONLY_ENV_VAR).ok();
+
+        std::env::set_var("LOGRIPPER_QRZ_XML_USERNAME", "KC7AVA");
+        std::env::set_var("LOGRIPPER_QRZ_XML_PASSWORD", "super-secret-password");
+        std::env::set_var("LOGRIPPER_QRZ_USER_AGENT", "LogRipper/0.1.0 (KC7AVA)");
+        std::env::set_var(
+            "LOGRIPPER_QRZ_XML_BASE_URL",
+            "https://xmldata.qrz.com/xml/current",
+        );
+        std::env::set_var(CAPTURE_ONLY_ENV_VAR, "true");
+
+        let config = QrzXmlConfig::from_env().expect("config");
+
+        assert_eq!("https://xmldata.qrz.com/xml/current/", config.base_url);
+        assert!(config.capture_only);
+
+        restore_env("LOGRIPPER_QRZ_XML_USERNAME", saved_username);
+        restore_env("LOGRIPPER_QRZ_XML_PASSWORD", saved_password);
+        restore_env("LOGRIPPER_QRZ_USER_AGENT", saved_agent);
+        restore_env("LOGRIPPER_QRZ_XML_BASE_URL", saved_base_url);
+        restore_env(CAPTURE_ONLY_ENV_VAR, saved_capture_only);
+    }
+
+    #[test]
+    fn qrz_config_rejects_invalid_capture_only_value() {
+        let _guard = env_lock().lock().expect("env lock");
+        let saved_username = std::env::var("LOGRIPPER_QRZ_XML_USERNAME").ok();
+        let saved_password = std::env::var("LOGRIPPER_QRZ_XML_PASSWORD").ok();
+        let saved_agent = std::env::var("LOGRIPPER_QRZ_USER_AGENT").ok();
+        let saved_capture_only = std::env::var(CAPTURE_ONLY_ENV_VAR).ok();
+
+        std::env::set_var("LOGRIPPER_QRZ_XML_USERNAME", "KC7AVA");
+        std::env::set_var("LOGRIPPER_QRZ_XML_PASSWORD", "super-secret-password");
+        std::env::set_var("LOGRIPPER_QRZ_USER_AGENT", "LogRipper/0.1.0 (KC7AVA)");
+        std::env::set_var(CAPTURE_ONLY_ENV_VAR, "sometimes");
+
+        let error = QrzXmlConfig::from_env().expect_err("invalid bool");
+
+        assert_eq!(
+            "Environment variable 'LOGRIPPER_QRZ_XML_CAPTURE_ONLY' has invalid boolean value 'sometimes'.",
+            error.to_string()
+        );
+
+        restore_env("LOGRIPPER_QRZ_XML_USERNAME", saved_username);
+        restore_env("LOGRIPPER_QRZ_XML_PASSWORD", saved_password);
+        restore_env("LOGRIPPER_QRZ_USER_AGENT", saved_agent);
+        restore_env(CAPTURE_ONLY_ENV_VAR, saved_capture_only);
+    }
+
+    #[test]
     fn sensitive_query_detection_catches_qrz_session_and_password_fields() {
         assert!(is_sensitive_query_key("password"));
         assert!(is_sensitive_query_key("s"));
         assert!(!is_sensitive_query_key("agent"));
         assert!(!is_sensitive_query_key("callsign"));
+    }
+
+    fn restore_env(name: &str, value: Option<String>) {
+        if let Some(value) = value {
+            std::env::set_var(name, value);
+        } else {
+            std::env::remove_var(name);
+        }
+    }
+
+    fn env_lock() -> &'static StdMutex<()> {
+        static ENV_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| StdMutex::new(()))
     }
 }

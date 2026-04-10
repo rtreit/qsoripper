@@ -74,3 +74,31 @@ impl CallsignProvider for DisabledCallsignProvider {
         Err(ProviderLookupError::Configuration(self.reason.clone()))
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retryable_errors_are_transport_and_rate_limit_only() {
+        assert!(ProviderLookupError::Transport("offline".to_string()).is_retryable());
+        assert!(ProviderLookupError::RateLimited("slow down".to_string()).is_retryable());
+        assert!(!ProviderLookupError::Authentication("bad password".to_string()).is_retryable());
+        assert!(!ProviderLookupError::Configuration("missing".to_string()).is_retryable());
+        assert!(!ProviderLookupError::Session("expired".to_string()).is_retryable());
+        assert!(!ProviderLookupError::Parse("invalid xml".to_string()).is_retryable());
+    }
+
+    #[tokio::test]
+    async fn disabled_provider_returns_configuration_error() {
+        let provider = DisabledCallsignProvider::new("missing config");
+
+        let error = provider.lookup_callsign("W1AW").await.expect_err("error");
+
+        assert_eq!(
+            "Provider configuration error: missing config",
+            error.to_string()
+        );
+    }
+}
