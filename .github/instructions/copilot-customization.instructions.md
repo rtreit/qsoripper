@@ -167,6 +167,25 @@ What these instructions govern.
 - Keep each file focused on a single domain (security, performance, UI, etc.).
 - Write rules as actionable directives, not aspirational goals.
 - Reference specific paths, commands, or patterns from the codebase.
+- When documenting Windows commands in markdown that may be rendered on GitHub, never label the code fence as `bash`; use an unlabeled fence or `powershell` / `cmd` so backslash paths render correctly.
+
+## GitHub-Rendered Markdown
+
+GitHub issues, PR descriptions, comments, and review text need an extra Windows-specific rule:
+
+- Do **not** use `bash` code fences for Windows commands.
+- Backslash path separators such as `src\dotnet\LogRipper.slnx` or `src\rust\Cargo.toml` can be rendered as garbled escape sequences when treated like shell escape text.
+- Use one of these instead:
+  - plain fenced block with no language tag
+  - `powershell`
+  - `cmd`
+
+Example:
+
+```powershell
+dotnet build src\dotnet\LogRipper.slnx
+cargo test --manifest-path src\rust\Cargo.toml
+```
 
 ## Common Mistakes
 
