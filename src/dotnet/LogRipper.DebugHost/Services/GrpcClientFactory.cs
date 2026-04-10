@@ -33,4 +33,9 @@ internal sealed class GrpcClientFactory
     {
         return new LogbookService.LogbookServiceClient(CreateChannel());
     }
+
+    public DeveloperControlService.DeveloperControlServiceClient CreateDeveloperControlClient()
+    {
+        return new DeveloperControlService.DeveloperControlServiceClient(CreateChannel());
+    }
 }

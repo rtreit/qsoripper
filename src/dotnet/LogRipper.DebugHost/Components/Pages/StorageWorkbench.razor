@@ -1,5 +1,6 @@
 @page "/storage-workbench"
 @inject DebugWorkbenchState WorkbenchState
+@inject RuntimeConfigWorkbenchService RuntimeConfigWorkbenchService
 @inject StorageWorkbenchService StorageWorkbenchService
 @inject SampleProtoFactory SampleProtoFactory
 @inject ProtoJsonService ProtoJsonService
@@ -8,18 +9,24 @@
 
 <h1 class="mb-3">Storage Workbench</h1>
 <p class="text-muted">
-    Exercise the logbook storage path against the active Rust engine endpoint. Switch the engine between memory and SQLite on the engine session page, restart the Rust host, then rerun the same smoke test here to compare behavior.
+    Exercise the logbook storage path against the active Rust engine endpoint. Use the engine session page to hot-apply memory or SQLite runtime overrides, then rerun the same smoke test here to compare behavior without restarting the process.
 </p>
 
 <div class="alert alert-secondary">
     <div><strong>Current engine endpoint:</strong> @WorkbenchState.EngineEndpoint</div>
     <div class="mt-1">
-        <strong>Planned backend:</strong> @WorkbenchState.GetStorageBackendDisplayName()
+        <strong>Active backend:</strong> @WorkbenchState.GetStorageBackendDisplayName()
         @if (WorkbenchState.EngineStorageBackend == EngineStorageBackend.Sqlite)
         {
             <span> using <code>@WorkbenchState.EngineSqlitePath</code></span>
         }
     </div>
+    @if (WorkbenchState.RuntimeConfigSnapshot is not null)
+    {
+        <div class="mt-1">
+            <strong>Lookup provider:</strong> @WorkbenchState.RuntimeConfigSnapshot.LookupProviderSummary
+        </div>
+    }
 </div>
 
 <div class="card shadow-sm mb-4">
@@ -151,8 +158,9 @@
     private ProtoPayloadView? deleteResponsePayload;
     private List<ProtoPayloadView> listedPayloads = [];
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
+        await RuntimeConfigWorkbenchService.RefreshAsync();
         Preview();
     }
 

@@ -1,5 +1,6 @@
 using LogRipper.DebugHost.Models;
 using LogRipper.DebugHost.Services;
+using LogRipper.Services;
 using Microsoft.Extensions.Options;
 
 namespace LogRipper.DebugHost.Tests;
@@ -37,6 +38,47 @@ public class DebugWorkbenchStateTests
         Assert.Equal("memory", state.GetEngineEnvironmentOverrides()["LOGRIPPER_STORAGE_BACKEND"]);
         Assert.DoesNotContain("LOGRIPPER_SQLITE_PATH", state.GetEngineEnvironmentOverrides().Keys, StringComparer.Ordinal);
         Assert.Equal("cargo run -p logripper-server -- --storage memory", state.BuildRustServerCommand());
+    }
+
+    [Fact]
+    public void Update_runtime_config_syncs_active_storage_and_redacts_secret_values()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
+
+        state.UpdateRuntimeConfig(new RuntimeConfigSnapshot
+        {
+            ActiveStorageBackend = "sqlite",
+            LookupProviderSummary = "QRZ XML capture-only via https://xmldata.qrz.com/xml/current/",
+            Values =
+            {
+                new RuntimeConfigValue
+                {
+                    Key = "LOGRIPPER_STORAGE_BACKEND",
+                    HasValue = true,
+                    DisplayValue = "sqlite"
+                },
+                new RuntimeConfigValue
+                {
+                    Key = "LOGRIPPER_SQLITE_PATH",
+                    HasValue = true,
+                    DisplayValue = @".\data\live-logripper.db"
+                },
+                new RuntimeConfigValue
+                {
+                    Key = "LOGRIPPER_QRZ_XML_PASSWORD",
+                    HasValue = true,
+                    DisplayValue = "<redacted>",
+                    Secret = true,
+                    Redacted = true,
+                    Overridden = true
+                }
+            }
+        });
+
+        Assert.Equal(EngineStorageBackend.Sqlite, state.EngineStorageBackend);
+        Assert.Equal(@".\data\live-logripper.db", state.EngineSqlitePath);
+        Assert.Equal("<redacted>", state.GetEngineEnvironmentOverrides()["LOGRIPPER_QRZ_XML_PASSWORD"]);
+        Assert.Contains("--storage sqlite", state.BuildRustServerCommand(), StringComparison.Ordinal);
     }
 }
 #pragma warning restore CA1707

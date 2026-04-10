@@ -4,6 +4,7 @@ using Grpc.Net.Client;
 using LogRipper.DebugHost.Models;
 using LogRipper.Services;
 using Microsoft.Extensions.Options;
+using System.Linq;
 
 namespace LogRipper.DebugHost.Services;
 
@@ -29,6 +30,10 @@ internal sealed class DebugWorkbenchState
 
     public TransportProbeResult? LastProbe { get; private set; }
 
+    public RuntimeConfigSnapshot? RuntimeConfigSnapshot { get; private set; }
+
+    public string? RuntimeConfigErrorMessage { get; private set; }
+
     public void UpdateEngineEndpoint(string endpoint)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
@@ -42,6 +47,29 @@ internal sealed class DebugWorkbenchState
 
         EngineStorageBackend = backend;
         EngineSqlitePath = NormalizeSqlitePath(sqlitePath);
+    }
+
+    public void UpdateRuntimeConfig(RuntimeConfigSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+
+        RuntimeConfigSnapshot = snapshot;
+        RuntimeConfigErrorMessage = null;
+        EngineStorageBackend = ParseStorageBackend(snapshot.ActiveStorageBackend);
+
+        var sqlitePath = snapshot.Values.FirstOrDefault(value =>
+            string.Equals(value.Key, "LOGRIPPER_SQLITE_PATH", StringComparison.OrdinalIgnoreCase));
+        if (sqlitePath is { HasValue: true })
+        {
+            EngineSqlitePath = NormalizeSqlitePath(sqlitePath.DisplayValue);
+        }
+    }
+
+    public void UpdateRuntimeConfigError(string? message)
+    {
+        RuntimeConfigErrorMessage = string.IsNullOrWhiteSpace(message)
+            ? null
+            : message.Trim();
     }
 
     public string GetStorageBackendDisplayName()
@@ -64,6 +92,16 @@ internal sealed class DebugWorkbenchState
 
     public IReadOnlyDictionary<string, string> GetEngineEnvironmentOverrides()
     {
+        if (RuntimeConfigSnapshot is not null)
+        {
+            return RuntimeConfigSnapshot.Values
+                .Where(value => value.HasValue)
+                .ToDictionary(
+                    value => value.Key,
+                    value => value.DisplayValue,
+                    StringComparer.OrdinalIgnoreCase);
+        }
+
         var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["LOGRIPPER_STORAGE_BACKEND"] = EngineStorageBackend == EngineStorageBackend.Sqlite ? "sqlite" : "memory"

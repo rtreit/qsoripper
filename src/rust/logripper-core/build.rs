@@ -10,6 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         proto_root.join("domain/callsign.proto"),
         proto_root.join("domain/qso.proto"),
         proto_root.join("domain/lookup.proto"),
+        proto_root.join("services/debug_control_service.proto"),
         proto_root.join("services/lookup_service.proto"),
         proto_root.join("services/logbook_service.proto"),
     ];

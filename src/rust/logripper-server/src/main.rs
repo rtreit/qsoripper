@@ -1,12 +1,10 @@
 //! Runnable tonic gRPC host for the `LogRipper` Rust engine.
 
+mod runtime_config;
+
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use logripper_core::application::logbook::{LogbookEngine, LogbookError};
-use logripper_core::lookup::{
-    CallsignProvider, DisabledCallsignProvider, LookupCoordinator, LookupCoordinatorConfig,
-    QrzXmlConfig, QrzXmlProvider,
-};
+use logripper_core::application::logbook::LogbookError;
 use logripper_core::storage::{EngineStorage, QsoListQuery, QsoSortOrder, StorageError};
 use logripper_storage_memory::MemoryStorage;
 use logripper_storage_sqlite::SqliteStorageBuilder;
@@ -19,29 +17,37 @@ use logripper_core::proto::logripper::domain::{
     LookupRequest, LookupResult, Mode, QsoRecord,
 };
 use logripper_core::proto::logripper::services::{
+    developer_control_service_server::{DeveloperControlService, DeveloperControlServiceServer},
     logbook_service_server::{LogbookService, LogbookServiceServer},
     lookup_service_server::{LookupService, LookupServiceServer},
-    AdifChunk, DeleteQsoRequest, DeleteQsoResponse, ExportRequest, GetQsoRequest, GetQsoResponse,
-    ImportResult, ListQsosRequest, LogQsoRequest, LogQsoResponse, SortOrder, SyncProgress,
-    SyncRequest, SyncStatusRequest, SyncStatusResponse, UpdateQsoRequest, UpdateQsoResponse,
+    AdifChunk, ApplyRuntimeConfigRequest, DeleteQsoRequest, DeleteQsoResponse, ExportRequest,
+    GetQsoRequest, GetQsoResponse, GetRuntimeConfigRequest, ImportResult, ListQsosRequest,
+    LogQsoRequest, LogQsoResponse, ResetRuntimeConfigRequest, RuntimeConfigSnapshot, SortOrder,
+    SyncProgress, SyncRequest, SyncStatusRequest, SyncStatusResponse, UpdateQsoRequest,
+    UpdateQsoResponse,
 };
+use runtime_config::RuntimeConfigManager;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = ServerOptions::from_env_and_args(std::env::args().skip(1))?;
     let address = options.listen_address;
-    let storage = build_storage(&options.storage)?;
-    let logbook_service = DeveloperLogbookService::new(LogbookEngine::new(storage));
-    let lookup_service = DeveloperLookupService::new(create_lookup_coordinator());
+    let runtime_config = Arc::new(RuntimeConfigManager::new_from_storage_options(
+        &options.storage,
+    )?);
+    let logbook_service = DeveloperLogbookService::new(runtime_config.clone());
+    let lookup_service = DeveloperLookupService::new(runtime_config.clone());
+    let developer_control_service = DeveloperControlSurface::new(runtime_config.clone());
+    let active_storage_backend = runtime_config.active_storage_backend().await;
 
-    println!(
-        "Starting LogRipper gRPC server on {address} using {} storage",
-        logbook_service.engine.storage_backend_name()
-    );
+    println!("Starting LogRipper gRPC server on {address} using {active_storage_backend} storage");
 
     Server::builder()
         .add_service(LogbookServiceServer::new(logbook_service))
         .add_service(LookupServiceServer::new(lookup_service))
+        .add_service(DeveloperControlServiceServer::new(
+            developer_control_service,
+        ))
         .serve(address)
         .await?;
 
@@ -50,12 +56,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[derive(Clone)]
 struct DeveloperLogbookService {
-    engine: LogbookEngine,
+    runtime_config: Arc<RuntimeConfigManager>,
 }
 
 impl DeveloperLogbookService {
-    fn new(engine: LogbookEngine) -> Self {
-        Self { engine }
+    fn new(runtime_config: Arc<RuntimeConfigManager>) -> Self {
+        Self { runtime_config }
     }
 }
 
@@ -69,11 +75,12 @@ impl LogbookService for DeveloperLogbookService {
         &self,
         request: Request<LogQsoRequest>,
     ) -> Result<Response<LogQsoResponse>, Status> {
+        let engine = self.runtime_config.logbook_engine().await;
         let request = request.into_inner();
         let qso = request
             .qso
             .ok_or_else(|| Status::invalid_argument("LogQso requires a qso payload."))?;
-        let stored = self.engine.log_qso(qso).await.map_err(map_logbook_error)?;
+        let stored = engine.log_qso(qso).await.map_err(map_logbook_error)?;
         let (sync_success, sync_error) = sync_result(request.sync_to_qrz, "QRZ sync");
 
         Ok(Response::new(LogQsoResponse {
@@ -88,15 +95,12 @@ impl LogbookService for DeveloperLogbookService {
         &self,
         request: Request<UpdateQsoRequest>,
     ) -> Result<Response<UpdateQsoResponse>, Status> {
+        let engine = self.runtime_config.logbook_engine().await;
         let request = request.into_inner();
         let qso = request
             .qso
             .ok_or_else(|| Status::invalid_argument("UpdateQso requires a qso payload."))?;
-        let _ = self
-            .engine
-            .update_qso(qso)
-            .await
-            .map_err(map_logbook_error)?;
+        let _ = engine.update_qso(qso).await.map_err(map_logbook_error)?;
         let (sync_success, sync_error) = sync_result(request.sync_to_qrz, "QRZ sync");
 
         Ok(Response::new(UpdateQsoResponse {
@@ -111,8 +115,9 @@ impl LogbookService for DeveloperLogbookService {
         &self,
         request: Request<DeleteQsoRequest>,
     ) -> Result<Response<DeleteQsoResponse>, Status> {
+        let engine = self.runtime_config.logbook_engine().await;
         let request = request.into_inner();
-        self.engine
+        engine
             .delete_qso(&request.local_id)
             .await
             .map_err(map_logbook_error)?;
@@ -131,9 +136,9 @@ impl LogbookService for DeveloperLogbookService {
         &self,
         request: Request<GetQsoRequest>,
     ) -> Result<Response<GetQsoResponse>, Status> {
+        let engine = self.runtime_config.logbook_engine().await;
         let request = request.into_inner();
-        let qso = self
-            .engine
+        let qso = engine
             .get_qso(&request.local_id)
             .await
             .map_err(map_logbook_error)?;
@@ -145,13 +150,10 @@ impl LogbookService for DeveloperLogbookService {
         &self,
         request: Request<ListQsosRequest>,
     ) -> Result<Response<Self::ListQsosStream>, Status> {
+        let engine = self.runtime_config.logbook_engine().await;
         let request = request.into_inner();
         let query = qso_list_query_from_request(&request).map_err(|status| *status)?;
-        let records = self
-            .engine
-            .list_qsos(&query)
-            .await
-            .map_err(map_logbook_error)?;
+        let records = engine.list_qsos(&query).await.map_err(map_logbook_error)?;
         let (sender, receiver) = tokio::sync::mpsc::channel(records.len().max(1));
 
         for record in records {
@@ -175,7 +177,9 @@ impl LogbookService for DeveloperLogbookService {
         _request: Request<SyncStatusRequest>,
     ) -> Result<Response<SyncStatusResponse>, Status> {
         let sync_status = self
-            .engine
+            .runtime_config
+            .logbook_engine()
+            .await
             .get_sync_status()
             .await
             .map_err(map_logbook_error)?;
@@ -206,12 +210,12 @@ impl LogbookService for DeveloperLogbookService {
 
 #[derive(Clone)]
 struct DeveloperLookupService {
-    coordinator: Arc<LookupCoordinator>,
+    runtime_config: Arc<RuntimeConfigManager>,
 }
 
 impl DeveloperLookupService {
-    fn new(coordinator: Arc<LookupCoordinator>) -> Self {
-        Self { coordinator }
+    fn new(runtime_config: Arc<RuntimeConfigManager>) -> Self {
+        Self { runtime_config }
     }
 }
 
@@ -223,9 +227,10 @@ impl LookupService for DeveloperLookupService {
         &self,
         request: Request<LookupRequest>,
     ) -> Result<Response<LookupResult>, Status> {
+        let coordinator = self.runtime_config.lookup_coordinator().await;
         let request = request.into_inner();
         Ok(Response::new(
-            self.coordinator
+            coordinator
                 .lookup(&request.callsign, request.skip_cache)
                 .await,
         ))
@@ -235,9 +240,9 @@ impl LookupService for DeveloperLookupService {
         &self,
         request: Request<LookupRequest>,
     ) -> Result<Response<Self::StreamLookupStream>, Status> {
+        let coordinator = self.runtime_config.lookup_coordinator().await;
         let request = request.into_inner();
-        let updates = self
-            .coordinator
+        let updates = coordinator
             .stream_lookup(&request.callsign, request.skip_cache)
             .await;
         let (sender, receiver) = tokio::sync::mpsc::channel(8);
@@ -255,11 +260,10 @@ impl LookupService for DeveloperLookupService {
         &self,
         request: Request<CachedCallsignRequest>,
     ) -> Result<Response<LookupResult>, Status> {
+        let coordinator = self.runtime_config.lookup_coordinator().await;
         let request = request.into_inner();
         Ok(Response::new(
-            self.coordinator
-                .get_cached_callsign(&request.callsign)
-                .await,
+            coordinator.get_cached_callsign(&request.callsign).await,
         ))
     }
 
@@ -282,26 +286,48 @@ impl LookupService for DeveloperLookupService {
     }
 }
 
-fn create_lookup_coordinator() -> Arc<LookupCoordinator> {
-    Arc::new(LookupCoordinator::new(
-        build_provider_from_env(),
-        LookupCoordinatorConfig::default(),
-    ))
+#[derive(Clone)]
+struct DeveloperControlSurface {
+    runtime_config: Arc<RuntimeConfigManager>,
 }
 
-fn build_provider_from_env() -> Arc<dyn CallsignProvider> {
-    match QrzXmlConfig::from_env() {
-        Ok(config) => match QrzXmlProvider::new(config) {
-            Ok(provider) => Arc::new(provider),
-            Err(error) => {
-                eprintln!("QRZ XML lookup disabled: {error}");
-                Arc::new(DisabledCallsignProvider::new(error.to_string()))
-            }
-        },
-        Err(error) => {
-            eprintln!("QRZ XML lookup disabled: {error}");
-            Arc::new(DisabledCallsignProvider::new(error.to_string()))
-        }
+impl DeveloperControlSurface {
+    fn new(runtime_config: Arc<RuntimeConfigManager>) -> Self {
+        Self { runtime_config }
+    }
+}
+
+#[tonic::async_trait]
+impl DeveloperControlService for DeveloperControlSurface {
+    async fn get_runtime_config(
+        &self,
+        _request: Request<GetRuntimeConfigRequest>,
+    ) -> Result<Response<RuntimeConfigSnapshot>, Status> {
+        Ok(Response::new(self.runtime_config.snapshot().await))
+    }
+
+    async fn apply_runtime_config(
+        &self,
+        request: Request<ApplyRuntimeConfigRequest>,
+    ) -> Result<Response<RuntimeConfigSnapshot>, Status> {
+        let snapshot = self
+            .runtime_config
+            .apply_request(request.into_inner())
+            .await
+            .map_err(Status::invalid_argument)?;
+        Ok(Response::new(snapshot))
+    }
+
+    async fn reset_runtime_config(
+        &self,
+        request: Request<ResetRuntimeConfigRequest>,
+    ) -> Result<Response<RuntimeConfigSnapshot>, Status> {
+        let snapshot = self
+            .runtime_config
+            .reset_request(request.into_inner())
+            .await
+            .map_err(Status::invalid_argument)?;
+        Ok(Response::new(snapshot))
     }
 }
 
@@ -469,6 +495,7 @@ fn sync_result(requested: bool, label: &str) -> (bool, Option<String>) {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -477,10 +504,7 @@ mod tests {
         build_storage, parse_storage_backend, DeveloperLogbookService, DeveloperLookupService,
         ServerOptions, StorageBackendKind, StorageOptions,
     };
-    use logripper_core::application::logbook::LogbookEngine;
-    use logripper_core::lookup::{
-        DisabledCallsignProvider, LookupCoordinator, LookupCoordinatorConfig,
-    };
+    use crate::runtime_config::RuntimeConfigManager;
     use logripper_core::proto::logripper::domain::{
         dxcc_request, BatchLookupRequest, CachedCallsignRequest, DxccRequest, LookupRequest,
         LookupResult, LookupState,
@@ -493,11 +517,11 @@ mod tests {
     use tonic::{Code, Request};
 
     fn test_lookup_service() -> DeveloperLookupService {
-        let coordinator = Arc::new(LookupCoordinator::new(
-            Arc::new(DisabledCallsignProvider::new("lookup disabled")),
-            LookupCoordinatorConfig::default(),
-        ));
-        DeveloperLookupService::new(coordinator)
+        DeveloperLookupService::new(test_runtime_config())
+    }
+
+    fn test_runtime_config() -> Arc<RuntimeConfigManager> {
+        Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime config"))
     }
 
     #[test]
@@ -603,7 +627,9 @@ mod tests {
 
         assert_eq!(LookupState::Error as i32, response.state);
         assert_eq!(
-            Some("Provider configuration error: lookup disabled"),
+            Some(
+                "Provider configuration error: Required environment variable 'LOGRIPPER_QRZ_XML_USERNAME' is missing or blank."
+            ),
             response.error_message.as_deref()
         );
     }
@@ -681,12 +707,7 @@ mod tests {
 
     #[tokio::test]
     async fn logbook_sync_status_returns_zeroed_placeholder_values() {
-        let storage = build_storage(&StorageOptions {
-            backend: StorageBackendKind::Memory,
-            sqlite_path: std::path::PathBuf::from("ignored.db"),
-        })
-        .expect("storage");
-        let service = DeveloperLogbookService::new(LogbookEngine::new(storage));
+        let service = DeveloperLogbookService::new(test_runtime_config());
 
         let response =
             LogbookService::get_sync_status(&service, Request::new(SyncStatusRequest {}))

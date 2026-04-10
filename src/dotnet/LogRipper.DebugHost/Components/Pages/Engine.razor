@@ -1,38 +1,26 @@
 @page "/engine"
 @using LogRipper.DebugHost.Models
+@using LogRipper.Services
 @inject DebugWorkbenchState WorkbenchState
+@inject RuntimeConfigWorkbenchService RuntimeConfigWorkbenchService
 @inject ToolchainLocator ToolchainLocator
 
 <PageTitle>Engine Session</PageTitle>
 
 <h1 class="mb-3">Engine Session</h1>
 <p class="text-muted">
-    Configure the Rust engine endpoint the debug workbench should target. The probe checks TCP reachability then performs a live gRPC call to <code>GetSyncStatus</code> to verify that the engine is actually serving the expected LogRipper services.
+    Configure the Rust engine endpoint the debug workbench should target. The probe checks TCP reachability then performs a live gRPC call to <code>GetSyncStatus</code> to verify that the engine is actually serving the expected LogRipper services. When the host is reachable, this page also lets you hot-apply supported storage and QRZ runtime config overrides without restarting the Rust process.
 </p>
 
 <EditForm Model="this" OnSubmit="SaveEndpointAsync">
     <div class="row g-3 align-items-end">
-        <div class="col-lg-5">
+        <div class="col-lg-8">
             <label class="form-label" for="engine-endpoint">Engine endpoint</label>
             <InputText id="engine-endpoint" class="form-control" @bind-Value="endpoint" />
-        </div>
-        <div class="col-lg-3">
-            <label class="form-label" for="engine-storage-backend">Storage backend</label>
-            <InputSelect id="engine-storage-backend" class="form-select" @bind-Value="storageBackend">
-                <option value="@EngineStorageBackend.Memory">Memory</option>
-                <option value="@EngineStorageBackend.Sqlite">SQLite</option>
-            </InputSelect>
         </div>
         <div class="col-lg-4 d-flex gap-2">
             <button type="submit" class="btn btn-primary">Save endpoint</button>
             <button type="button" class="btn btn-outline-primary" @onclick="ProbeAsync">Probe engine</button>
-        </div>
-    </div>
-    <div class="row g-3 mt-1">
-        <div class="col-lg-8">
-            <label class="form-label" for="engine-sqlite-path">SQLite path</label>
-            <InputText id="engine-sqlite-path" class="form-control" @bind-Value="sqlitePath" />
-            <div class="form-text">Only used when the engine is started with the SQLite backend.</div>
         </div>
     </div>
 </EditForm>
@@ -40,6 +28,11 @@
 @if (!string.IsNullOrWhiteSpace(statusMessage))
 {
     <div class="alert alert-info mt-3">@statusMessage</div>
+}
+
+@if (!string.IsNullOrWhiteSpace(WorkbenchState.RuntimeConfigErrorMessage))
+{
+    <div class="alert alert-warning mt-3">@WorkbenchState.RuntimeConfigErrorMessage</div>
 }
 
 @if (WorkbenchState.LastProbe is not null)
@@ -86,7 +79,7 @@
                 <ul class="mb-0">
                     <li>The workbench stores endpoint selection per Blazor server circuit.</li>
                     <li>Use <code>http://localhost:50051</code> by default for local Rust gRPC development.</li>
-                    <li>Switch storage backend here, restart the Rust host, then rerun the storage workbench against the same endpoint.</li>
+                    <li>Use the live runtime config table below to hot-apply supported storage and QRZ overrides without restarting the engine.</li>
                     <li>The lookup and storage workbench pages use this endpoint automatically.</li>
                 </ul>
             </div>
@@ -126,6 +119,135 @@
 
 <div class="card shadow-sm mt-4">
     <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3 gap-3 flex-wrap">
+            <div>
+                <h2 class="h5 mb-1">Live runtime config</h2>
+                <div class="small text-muted">
+                    Apply hot-reloadable engine settings against the current endpoint. Storage and QRZ overrides take effect for new requests immediately.
+                </div>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+                <button class="btn btn-sm btn-outline-primary"
+                        @onclick="RefreshRuntimeConfigAsync"
+                        disabled="@isRuntimeConfigBusy">
+                    Refresh live config
+                </button>
+                <button class="btn btn-sm btn-outline-danger"
+                        @onclick="ResetAllRuntimeOverridesAsync"
+                        disabled="@(isRuntimeConfigBusy || runtimeEntries.Count == 0)">
+                    Reset all overrides
+                </button>
+            </div>
+        </div>
+
+        @if (isRuntimeConfigBusy && runtimeEntries.Count == 0)
+        {
+            <div class="alert alert-info mb-0">Loading live runtime config...</div>
+        }
+        else if (runtimeEntries.Count == 0)
+        {
+            <div class="alert alert-secondary mb-0">
+                No live runtime config is loaded yet. Refresh after the engine endpoint is reachable.
+            </div>
+        }
+        else
+        {
+            <div class="mb-3">
+                <strong>Active storage:</strong> @WorkbenchState.GetStorageBackendDisplayName()<br />
+                <strong>Lookup provider:</strong> @WorkbenchState.RuntimeConfigSnapshot?.LookupProviderSummary
+            </div>
+
+            @if (WorkbenchState.RuntimeConfigSnapshot?.Warnings.Count > 0)
+            {
+                <div class="alert alert-warning">
+                    <ul class="mb-0">
+                        @foreach (var warning in WorkbenchState.RuntimeConfigSnapshot.Warnings)
+                        {
+                            <li>@warning</li>
+                        }
+                    </ul>
+                </div>
+            }
+
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Setting</th>
+                            <th>Effective value</th>
+                            <th>New override</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entry in runtimeEntries)
+                        {
+                            <tr>
+                                <td class="w-40">
+                                    <div class="fw-semibold">@entry.Definition.Label</div>
+                                    <div class="small text-muted"><code>@entry.Definition.Key</code></div>
+                                    <div class="small text-muted">@entry.Definition.Description</div>
+                                </td>
+                                <td class="w-25">
+                                    <div>@entry.EffectiveDisplayValue</div>
+                                    <div class="mt-1 d-flex gap-1 flex-wrap">
+                                        @if (entry.IsOverridden)
+                                        {
+                                            <span class="badge text-bg-primary">Override</span>
+                                        }
+                                        @if (entry.CurrentValue?.Redacted == true)
+                                        {
+                                            <span class="badge text-bg-secondary">Redacted</span>
+                                        }
+                                    </div>
+                                </td>
+                                <td class="w-25">
+                                    @if (entry.HasAllowedValues)
+                                    {
+                                        <select class="form-select form-select-sm" @bind="entry.DraftValue">
+                                            @foreach (var allowedValue in entry.Definition.AllowedValues)
+                                            {
+                                                <option value="@allowedValue">@allowedValue</option>
+                                            }
+                                        </select>
+                                    }
+                                    else if (entry.IsSecret)
+                                    {
+                                        <input type="password"
+                                               class="form-control form-control-sm"
+                                               @bind="entry.DraftValue"
+                                               placeholder="Enter new value" />
+                                    }
+                                    else
+                                    {
+                                        <input class="form-control form-control-sm" @bind="entry.DraftValue" />
+                                    }
+                                </td>
+                                <td class="text-nowrap">
+                                    <div class="d-flex gap-2 flex-wrap">
+                                        <button class="btn btn-sm btn-primary"
+                                                disabled="@(!entry.CanSave || isRuntimeConfigBusy)"
+                                                @onclick="() => ApplyRuntimeEntryAsync(entry)">
+                                            Apply
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-secondary"
+                                                disabled="@(!entry.IsOverridden || isRuntimeConfigBusy)"
+                                                @onclick="() => ClearRuntimeEntryAsync(entry)">
+                                            Clear
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>
+
+<div class="card shadow-sm mt-4">
+    <div class="card-body">
         <h2 class="h5">Rust host launch preview</h2>
         <div class="small text-muted mb-2">
             The command below matches the storage session configured in this page.
@@ -141,33 +263,118 @@
 
 @code {
     private string endpoint = string.Empty;
-    private EngineStorageBackend storageBackend;
-    private string sqlitePath = string.Empty;
     private string? statusMessage;
     private IReadOnlyList<ToolAvailability> tools = Array.Empty<ToolAvailability>();
+    private List<RuntimeConfigEditorEntry> runtimeEntries = [];
+    private bool isRuntimeConfigBusy;
 
-    protected override void OnInitialized()
+    protected override async Task OnInitializedAsync()
     {
         endpoint = WorkbenchState.EngineEndpoint;
-        storageBackend = WorkbenchState.EngineStorageBackend;
-        sqlitePath = WorkbenchState.EngineSqlitePath;
         tools = ToolchainLocator.GetToolAvailability();
+        await RefreshRuntimeConfigAsync();
     }
 
     private Task SaveEndpointAsync()
     {
         WorkbenchState.UpdateEngineEndpoint(endpoint);
-        WorkbenchState.UpdateStorageOptions(storageBackend, sqlitePath);
-        statusMessage = $"Saved engine session for '{WorkbenchState.EngineEndpoint}' using {WorkbenchState.GetStorageBackendDisplayName()} storage.";
+        statusMessage = $"Saved engine session for '{WorkbenchState.EngineEndpoint}'.";
         return Task.CompletedTask;
     }
 
     private async Task ProbeAsync()
     {
         WorkbenchState.UpdateEngineEndpoint(endpoint);
-        WorkbenchState.UpdateStorageOptions(storageBackend, sqlitePath);
         statusMessage = "Probing engine transport...";
         await WorkbenchState.ProbeAsync();
         statusMessage = null;
+    }
+
+    private async Task RefreshRuntimeConfigAsync()
+    {
+        isRuntimeConfigBusy = true;
+        try
+        {
+            await RuntimeConfigWorkbenchService.RefreshAsync();
+            RebuildRuntimeEntries();
+        }
+        finally
+        {
+            isRuntimeConfigBusy = false;
+        }
+    }
+
+    private async Task ApplyRuntimeEntryAsync(RuntimeConfigEditorEntry entry)
+    {
+        statusMessage = $"Applying {entry.Definition.Label}...";
+        isRuntimeConfigBusy = true;
+        try
+        {
+            await RuntimeConfigWorkbenchService.ApplyAsync(
+            [
+                new RuntimeConfigMutation
+                {
+                    Key = entry.Definition.Key,
+                    Kind = RuntimeConfigMutationKind.Set,
+                    Value = entry.GetMutationValue()
+                }
+            ]);
+            RebuildRuntimeEntries();
+            statusMessage = $"Applied {entry.Definition.Label}.";
+        }
+        finally
+        {
+            isRuntimeConfigBusy = false;
+        }
+    }
+
+    private async Task ClearRuntimeEntryAsync(RuntimeConfigEditorEntry entry)
+    {
+        statusMessage = $"Clearing override for {entry.Definition.Label}...";
+        isRuntimeConfigBusy = true;
+        try
+        {
+            await RuntimeConfigWorkbenchService.ResetAsync([entry.Definition.Key]);
+            RebuildRuntimeEntries();
+            statusMessage = $"Cleared override for {entry.Definition.Label}.";
+        }
+        finally
+        {
+            isRuntimeConfigBusy = false;
+        }
+    }
+
+    private async Task ResetAllRuntimeOverridesAsync()
+    {
+        statusMessage = "Clearing all live runtime overrides...";
+        isRuntimeConfigBusy = true;
+        try
+        {
+            await RuntimeConfigWorkbenchService.ResetAsync();
+            RebuildRuntimeEntries();
+            statusMessage = "Cleared all live runtime overrides.";
+        }
+        finally
+        {
+            isRuntimeConfigBusy = false;
+        }
+    }
+
+    private void RebuildRuntimeEntries()
+    {
+        if (WorkbenchState.RuntimeConfigSnapshot is null)
+        {
+            runtimeEntries = [];
+            return;
+        }
+
+        runtimeEntries = WorkbenchState.RuntimeConfigSnapshot.Definitions
+            .Select(definition =>
+            {
+                var currentValue = WorkbenchState.RuntimeConfigSnapshot.Values
+                    .FirstOrDefault(value => string.Equals(value.Key, definition.Key, StringComparison.OrdinalIgnoreCase));
+                return new RuntimeConfigEditorEntry(definition, currentValue);
+            })
+            .ToList();
     }
 }
