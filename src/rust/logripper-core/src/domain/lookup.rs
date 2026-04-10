@@ -112,6 +112,9 @@ mod tests {
 
         assert_eq!(record.callsign, "W1AW");
         assert_eq!(record.cross_ref, "W1AW");
-        assert_eq!(record.formatted_name.as_deref(), Some("Developer Placeholder"));
+        assert_eq!(
+            record.formatted_name.as_deref(),
+            Some("Developer Placeholder")
+        );
     }
 }

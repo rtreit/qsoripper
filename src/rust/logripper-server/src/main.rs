@@ -1,7 +1,7 @@
 //! Runnable tonic gRPC host for the `LogRipper` Rust engine.
 
-use std::net::SocketAddr;
 use logripper_core::domain::lookup::{normalize_callsign, placeholder_lookup_error};
+use std::net::SocketAddr;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
