@@ -111,6 +111,10 @@ impl AdifMapper {
                 // --- QSL ---
                 "QSL_SENT" => qso.qsl_sent_status = qsl_status_from_adif(&value_str).into(),
                 "QSL_RCVD" => qso.qsl_received_status = qsl_status_from_adif(&value_str).into(),
+                // Note: ADIF specifies Y/N/R/Q/I as valid values, but the proto field is
+                // bool. R (requested), Q (queued), and I (ignore) all map to false here,
+                // which is a lossy mapping. The full range is preserved via extra_fields
+                // only if the ADIF field is unrecognized; here we intentionally normalize.
                 "LOTW_QSL_SENT" => qso.lotw_sent = Some(value_str == "Y"),
                 "LOTW_QSL_RCVD" => qso.lotw_received = Some(value_str == "Y"),
                 "EQSL_QSL_SENT" => qso.eqsl_sent = Some(value_str == "Y"),
@@ -254,17 +258,17 @@ impl AdifMapper {
             fields.push(("QSL_RCVD".into(), s.to_string()));
         }
 
-        if let Some(true) = qso.lotw_sent {
-            fields.push(("LOTW_QSL_SENT".into(), "Y".into()));
+        if let Some(v) = qso.lotw_sent {
+            fields.push(("LOTW_QSL_SENT".into(), if v { "Y" } else { "N" }.into()));
         }
-        if let Some(true) = qso.lotw_received {
-            fields.push(("LOTW_QSL_RCVD".into(), "Y".into()));
+        if let Some(v) = qso.lotw_received {
+            fields.push(("LOTW_QSL_RCVD".into(), if v { "Y" } else { "N" }.into()));
         }
-        if let Some(true) = qso.eqsl_sent {
-            fields.push(("EQSL_QSL_SENT".into(), "Y".into()));
+        if let Some(v) = qso.eqsl_sent {
+            fields.push(("EQSL_QSL_SENT".into(), if v { "Y" } else { "N" }.into()));
         }
-        if let Some(true) = qso.eqsl_received {
-            fields.push(("EQSL_QSL_RCVD".into(), "Y".into()));
+        if let Some(v) = qso.eqsl_received {
+            fields.push(("EQSL_QSL_RCVD".into(), if v { "Y" } else { "N" }.into()));
         }
 
         // Contest
@@ -495,6 +499,103 @@ mod tests {
         );
         assert_eq!(qso.lotw_sent, Some(true));
         assert_eq!(qso.eqsl_received, Some(true));
+    }
+
+    #[test]
+    fn lotw_eqsl_false_emits_n_on_export() {
+        let qso = crate::proto::logripper::domain::QsoRecord {
+            worked_callsign: "W1AW".into(),
+            lotw_sent: Some(false),
+            lotw_received: Some(false),
+            eqsl_sent: Some(false),
+            eqsl_received: Some(false),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let field_map: std::collections::HashMap<&str, &str> = fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        assert_eq!(
+            field_map.get("LOTW_QSL_SENT"),
+            Some(&"N"),
+            "Some(false) must emit N, not be silently dropped"
+        );
+        assert_eq!(
+            field_map.get("LOTW_QSL_RCVD"),
+            Some(&"N"),
+            "Some(false) must emit N, not be silently dropped"
+        );
+        assert_eq!(
+            field_map.get("EQSL_QSL_SENT"),
+            Some(&"N"),
+            "Some(false) must emit N, not be silently dropped"
+        );
+        assert_eq!(
+            field_map.get("EQSL_QSL_RCVD"),
+            Some(&"N"),
+            "Some(false) must emit N, not be silently dropped"
+        );
+    }
+
+    #[test]
+    fn lotw_eqsl_true_emits_y_on_export() {
+        let qso = crate::proto::logripper::domain::QsoRecord {
+            worked_callsign: "W1AW".into(),
+            lotw_sent: Some(true),
+            lotw_received: Some(true),
+            eqsl_sent: Some(true),
+            eqsl_received: Some(true),
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let field_map: std::collections::HashMap<&str, &str> = fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        assert_eq!(field_map.get("LOTW_QSL_SENT"), Some(&"Y"));
+        assert_eq!(field_map.get("LOTW_QSL_RCVD"), Some(&"Y"));
+        assert_eq!(field_map.get("EQSL_QSL_SENT"), Some(&"Y"));
+        assert_eq!(field_map.get("EQSL_QSL_RCVD"), Some(&"Y"));
+    }
+
+    #[test]
+    fn lotw_eqsl_none_omitted_on_export() {
+        let qso = crate::proto::logripper::domain::QsoRecord {
+            worked_callsign: "W1AW".into(),
+            lotw_sent: None,
+            lotw_received: None,
+            eqsl_sent: None,
+            eqsl_received: None,
+            ..Default::default()
+        };
+
+        let fields = AdifMapper::qso_to_adif_fields(&qso);
+        let field_map: std::collections::HashMap<&str, &str> = fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        assert!(
+            !field_map.contains_key("LOTW_QSL_SENT"),
+            "None should not emit any field"
+        );
+        assert!(
+            !field_map.contains_key("LOTW_QSL_RCVD"),
+            "None should not emit any field"
+        );
+        assert!(
+            !field_map.contains_key("EQSL_QSL_SENT"),
+            "None should not emit any field"
+        );
+        assert!(
+            !field_map.contains_key("EQSL_QSL_RCVD"),
+            "None should not emit any field"
+        );
     }
 
     #[test]
