@@ -3,6 +3,7 @@ name = "logripper-core"
 description = "Core engine for LogRipper ham radio logging system"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
@@ -16,6 +17,9 @@ difa = "0.1"
 thiserror = "2"
 chrono = "0.4"
 futures = "0.3"
+
+[lints]
+workspace = true
 
 [build-dependencies]
 tonic-build = "0.12"
