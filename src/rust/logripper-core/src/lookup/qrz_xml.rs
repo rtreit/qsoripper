@@ -15,11 +15,28 @@ use crate::{
 
 use super::provider::{CallsignProvider, ProviderLookup, ProviderLookupError};
 
-const DEFAULT_QRZ_XML_BASE_URL: &str = "https://xmldata.qrz.com/xml/current/";
-const DEFAULT_HTTP_TIMEOUT_SECONDS: u64 = 8;
-const DEFAULT_MAX_RETRIES: u32 = 2;
+/// Environment variable that overrides the QRZ XML base URL.
+pub const QRZ_XML_BASE_URL_ENV_VAR: &str = "LOGRIPPER_QRZ_XML_BASE_URL";
+/// Environment variable that provides the QRZ XML username.
+pub const QRZ_XML_USERNAME_ENV_VAR: &str = "LOGRIPPER_QRZ_XML_USERNAME";
+/// Environment variable that provides the QRZ XML password.
+pub const QRZ_XML_PASSWORD_ENV_VAR: &str = "LOGRIPPER_QRZ_XML_PASSWORD";
+/// Environment variable that provides the QRZ request user agent.
+pub const QRZ_USER_AGENT_ENV_VAR: &str = "LOGRIPPER_QRZ_USER_AGENT";
+/// Environment variable that overrides the QRZ HTTP timeout in seconds.
+pub const QRZ_HTTP_TIMEOUT_SECONDS_ENV_VAR: &str = "LOGRIPPER_QRZ_HTTP_TIMEOUT_SECONDS";
+/// Environment variable that overrides the QRZ retry count.
+pub const QRZ_MAX_RETRIES_ENV_VAR: &str = "LOGRIPPER_QRZ_MAX_RETRIES";
+/// Environment variable that enables request-capture mode instead of live calls.
+pub const QRZ_XML_CAPTURE_ONLY_ENV_VAR: &str = "LOGRIPPER_QRZ_XML_CAPTURE_ONLY";
+
+/// Default QRZ XML endpoint.
+pub const DEFAULT_QRZ_XML_BASE_URL: &str = "https://xmldata.qrz.com/xml/current/";
+/// Default QRZ HTTP timeout in seconds.
+pub const DEFAULT_QRZ_HTTP_TIMEOUT_SECONDS: u64 = 8;
+/// Default retry count for retryable QRZ failures.
+pub const DEFAULT_QRZ_MAX_RETRIES: u32 = 2;
 const RETRY_BASE_DELAY_MILLIS: u64 = 200;
-const CAPTURE_ONLY_ENV_VAR: &str = "LOGRIPPER_QRZ_XML_CAPTURE_ONLY";
 
 /// QRZ XML provider configuration.
 #[derive(Clone)]
@@ -67,17 +84,39 @@ impl QrzXmlConfig {
     /// Returns `QrzXmlConfigError` when required values are missing/blank or
     /// integer-valued settings cannot be parsed.
     pub fn from_env() -> Result<Self, QrzXmlConfigError> {
-        let base_url = env::var("LOGRIPPER_QRZ_XML_BASE_URL")
-            .unwrap_or_else(|_| DEFAULT_QRZ_XML_BASE_URL.to_string());
-        let username = required_env("LOGRIPPER_QRZ_XML_USERNAME")?;
-        let password = required_env("LOGRIPPER_QRZ_XML_PASSWORD")?;
-        let user_agent = required_env("LOGRIPPER_QRZ_USER_AGENT")?;
-        let http_timeout_seconds = optional_env_u64(
-            "LOGRIPPER_QRZ_HTTP_TIMEOUT_SECONDS",
-            DEFAULT_HTTP_TIMEOUT_SECONDS,
+        Self::from_value_provider(|name| env::var(name).ok())
+    }
+
+    /// Load provider configuration from an arbitrary key/value source.
+    ///
+    /// This is used by the developer runtime-config surface so a running engine
+    /// can be reconfigured without mutating the process environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns `QrzXmlConfigError` when required values are missing/blank or
+    /// integer-valued settings cannot be parsed.
+    pub fn from_value_provider<F>(mut get_value: F) -> Result<Self, QrzXmlConfigError>
+    where
+        F: FnMut(&'static str) -> Option<String>,
+    {
+        let base_url = optional_value(QRZ_XML_BASE_URL_ENV_VAR, &mut get_value)
+            .unwrap_or_else(|| DEFAULT_QRZ_XML_BASE_URL.to_string());
+        let username = required_value(QRZ_XML_USERNAME_ENV_VAR, &mut get_value)?;
+        let password = required_value(QRZ_XML_PASSWORD_ENV_VAR, &mut get_value)?;
+        let user_agent = required_value(QRZ_USER_AGENT_ENV_VAR, &mut get_value)?;
+        let http_timeout_seconds = optional_value_u64(
+            QRZ_HTTP_TIMEOUT_SECONDS_ENV_VAR,
+            DEFAULT_QRZ_HTTP_TIMEOUT_SECONDS,
+            &mut get_value,
         )?;
-        let max_retries = optional_env_u32("LOGRIPPER_QRZ_MAX_RETRIES", DEFAULT_MAX_RETRIES)?;
-        let capture_only = optional_env_bool(CAPTURE_ONLY_ENV_VAR, false)?;
+        let max_retries = optional_value_u32(
+            QRZ_MAX_RETRIES_ENV_VAR,
+            DEFAULT_QRZ_MAX_RETRIES,
+            &mut get_value,
+        )?;
+        let capture_only =
+            optional_value_bool(QRZ_XML_CAPTURE_ONLY_ENV_VAR, false, &mut get_value)?;
 
         Ok(Self {
             base_url: normalize_base_url(base_url),
@@ -88,6 +127,18 @@ impl QrzXmlConfig {
             max_retries,
             capture_only,
         })
+    }
+
+    /// Return the configured QRZ XML endpoint for diagnostics.
+    #[must_use]
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// Return whether request-capture mode is enabled.
+    #[must_use]
+    pub fn capture_only(&self) -> bool {
+        self.capture_only
     }
 }
 
@@ -241,7 +292,7 @@ impl QrzXmlProvider {
         };
 
         Ok(format!(
-            "QRZ XML request capture mode enabled ({CAPTURE_ONLY_ENV_VAR}=true): request not sent. QRZ XML uses HTTP GET query parameters (no JSON body). method={}, url={}, query_details=[{}]",
+            "QRZ XML request capture mode enabled ({QRZ_XML_CAPTURE_ONLY_ENV_VAR}=true): request not sent. QRZ XML uses HTTP GET query parameters (no JSON body). method={}, url={}, query_details=[{}]",
             request.method(),
             url,
             query_details
@@ -549,36 +600,74 @@ fn map_callsign_record(queried_callsign: &str, qrz: &QrzCallsign) -> CallsignRec
     }
 }
 
-fn required_env(name: &'static str) -> Result<String, QrzXmlConfigError> {
-    match env::var(name) {
-        Ok(value) if !value.trim().is_empty() => Ok(value),
+fn required_value<F>(name: &'static str, get_value: &mut F) -> Result<String, QrzXmlConfigError>
+where
+    F: FnMut(&'static str) -> Option<String>,
+{
+    match get_value(name) {
+        Some(value) if !value.trim().is_empty() => Ok(value),
         _ => Err(QrzXmlConfigError::Missing { name }),
     }
 }
 
-fn optional_env_u64(name: &'static str, default: u64) -> Result<u64, QrzXmlConfigError> {
-    match env::var(name) {
-        Ok(raw) => raw
+fn optional_value<F>(name: &'static str, get_value: &mut F) -> Option<String>
+where
+    F: FnMut(&'static str) -> Option<String>,
+{
+    get_value(name).and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn optional_value_u64<F>(
+    name: &'static str,
+    default: u64,
+    get_value: &mut F,
+) -> Result<u64, QrzXmlConfigError>
+where
+    F: FnMut(&'static str) -> Option<String>,
+{
+    match get_value(name) {
+        Some(raw) => raw
             .trim()
             .parse::<u64>()
             .map_err(|_| QrzXmlConfigError::InvalidInteger { name, value: raw }),
-        Err(_) => Ok(default),
+        None => Ok(default),
     }
 }
 
-fn optional_env_u32(name: &'static str, default: u32) -> Result<u32, QrzXmlConfigError> {
-    match env::var(name) {
-        Ok(raw) => raw
+fn optional_value_u32<F>(
+    name: &'static str,
+    default: u32,
+    get_value: &mut F,
+) -> Result<u32, QrzXmlConfigError>
+where
+    F: FnMut(&'static str) -> Option<String>,
+{
+    match get_value(name) {
+        Some(raw) => raw
             .trim()
             .parse::<u32>()
             .map_err(|_| QrzXmlConfigError::InvalidInteger { name, value: raw }),
-        Err(_) => Ok(default),
+        None => Ok(default),
     }
 }
 
-fn optional_env_bool(name: &'static str, default: bool) -> Result<bool, QrzXmlConfigError> {
-    match env::var(name) {
-        Ok(raw) => {
+fn optional_value_bool<F>(
+    name: &'static str,
+    default: bool,
+    get_value: &mut F,
+) -> Result<bool, QrzXmlConfigError>
+where
+    F: FnMut(&'static str) -> Option<String>,
+{
+    match get_value(name) {
+        Some(raw) => {
             let normalized = raw.trim().to_ascii_lowercase();
             match normalized.as_str() {
                 "1" | "true" | "yes" | "y" | "on" => Ok(true),
@@ -586,7 +675,7 @@ fn optional_env_bool(name: &'static str, default: bool) -> Result<bool, QrzXmlCo
                 _ => Err(QrzXmlConfigError::InvalidBoolean { name, value: raw }),
             }
         }
-        Err(_) => Ok(default),
+        None => Ok(default),
     }
 }
 
@@ -1100,7 +1189,7 @@ mod tests {
         let saved_password = std::env::var("LOGRIPPER_QRZ_XML_PASSWORD").ok();
         let saved_agent = std::env::var("LOGRIPPER_QRZ_USER_AGENT").ok();
         let saved_base_url = std::env::var("LOGRIPPER_QRZ_XML_BASE_URL").ok();
-        let saved_capture_only = std::env::var(CAPTURE_ONLY_ENV_VAR).ok();
+        let saved_capture_only = std::env::var(QRZ_XML_CAPTURE_ONLY_ENV_VAR).ok();
 
         std::env::set_var("LOGRIPPER_QRZ_XML_USERNAME", "KC7AVA");
         std::env::set_var("LOGRIPPER_QRZ_XML_PASSWORD", "super-secret-password");
@@ -1109,7 +1198,7 @@ mod tests {
             "LOGRIPPER_QRZ_XML_BASE_URL",
             "https://xmldata.qrz.com/xml/current",
         );
-        std::env::set_var(CAPTURE_ONLY_ENV_VAR, "true");
+        std::env::set_var(QRZ_XML_CAPTURE_ONLY_ENV_VAR, "true");
 
         let config = QrzXmlConfig::from_env().expect("config");
 
@@ -1120,7 +1209,7 @@ mod tests {
         restore_env("LOGRIPPER_QRZ_XML_PASSWORD", saved_password);
         restore_env("LOGRIPPER_QRZ_USER_AGENT", saved_agent);
         restore_env("LOGRIPPER_QRZ_XML_BASE_URL", saved_base_url);
-        restore_env(CAPTURE_ONLY_ENV_VAR, saved_capture_only);
+        restore_env(QRZ_XML_CAPTURE_ONLY_ENV_VAR, saved_capture_only);
     }
 
     #[test]
@@ -1129,12 +1218,12 @@ mod tests {
         let saved_username = std::env::var("LOGRIPPER_QRZ_XML_USERNAME").ok();
         let saved_password = std::env::var("LOGRIPPER_QRZ_XML_PASSWORD").ok();
         let saved_agent = std::env::var("LOGRIPPER_QRZ_USER_AGENT").ok();
-        let saved_capture_only = std::env::var(CAPTURE_ONLY_ENV_VAR).ok();
+        let saved_capture_only = std::env::var(QRZ_XML_CAPTURE_ONLY_ENV_VAR).ok();
 
         std::env::set_var("LOGRIPPER_QRZ_XML_USERNAME", "KC7AVA");
         std::env::set_var("LOGRIPPER_QRZ_XML_PASSWORD", "super-secret-password");
         std::env::set_var("LOGRIPPER_QRZ_USER_AGENT", "LogRipper/0.1.0 (KC7AVA)");
-        std::env::set_var(CAPTURE_ONLY_ENV_VAR, "sometimes");
+        std::env::set_var(QRZ_XML_CAPTURE_ONLY_ENV_VAR, "sometimes");
 
         let error = QrzXmlConfig::from_env().expect_err("invalid bool");
 
@@ -1146,7 +1235,7 @@ mod tests {
         restore_env("LOGRIPPER_QRZ_XML_USERNAME", saved_username);
         restore_env("LOGRIPPER_QRZ_XML_PASSWORD", saved_password);
         restore_env("LOGRIPPER_QRZ_USER_AGENT", saved_agent);
-        restore_env(CAPTURE_ONLY_ENV_VAR, saved_capture_only);
+        restore_env(QRZ_XML_CAPTURE_ONLY_ENV_VAR, saved_capture_only);
     }
 
     #[test]

@@ -1,0 +1,89 @@
+using Grpc.Core;
+using LogRipper.Services;
+
+namespace LogRipper.DebugHost.Services;
+
+internal sealed class RuntimeConfigWorkbenchService
+{
+    private readonly GrpcClientFactory _clientFactory;
+    private readonly DebugWorkbenchState _workbenchState;
+
+    public RuntimeConfigWorkbenchService(
+        GrpcClientFactory clientFactory,
+        DebugWorkbenchState workbenchState)
+    {
+        ArgumentNullException.ThrowIfNull(clientFactory);
+        ArgumentNullException.ThrowIfNull(workbenchState);
+
+        _clientFactory = clientFactory;
+        _workbenchState = workbenchState;
+    }
+
+    public Task<RuntimeConfigSnapshot?> RefreshAsync(CancellationToken cancellationToken = default)
+    {
+        return ExecuteAsync(
+            client => client.GetRuntimeConfigAsync(new GetRuntimeConfigRequest(), cancellationToken: cancellationToken).ResponseAsync,
+            cancellationToken);
+    }
+
+    public Task<RuntimeConfigSnapshot?> ApplyAsync(
+        IEnumerable<RuntimeConfigMutation> mutations,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(mutations);
+
+        return ExecuteAsync(
+            client => client.ApplyRuntimeConfigAsync(
+                    new ApplyRuntimeConfigRequest
+                    {
+                        Mutations = { mutations }
+                    },
+                    cancellationToken: cancellationToken)
+                .ResponseAsync,
+            cancellationToken);
+    }
+
+    public Task<RuntimeConfigSnapshot?> ResetAsync(
+        IEnumerable<string>? keys = null,
+        CancellationToken cancellationToken = default)
+    {
+        var request = new ResetRuntimeConfigRequest();
+        if (keys is not null)
+        {
+            request.Keys.AddRange(keys);
+        }
+
+        return ExecuteAsync(
+            client => client.ResetRuntimeConfigAsync(request, cancellationToken: cancellationToken).ResponseAsync,
+            cancellationToken);
+    }
+
+    private async Task<RuntimeConfigSnapshot?> ExecuteAsync(
+        Func<DeveloperControlService.DeveloperControlServiceClient, Task<RuntimeConfigSnapshot>> action,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var channel = _clientFactory.CreateChannel();
+            var client = new DeveloperControlService.DeveloperControlServiceClient(channel);
+            var snapshot = await action(client);
+            _workbenchState.UpdateRuntimeConfig(snapshot);
+            return snapshot;
+        }
+        catch (RpcException ex)
+        {
+            _workbenchState.UpdateRuntimeConfigError(ex.Status.Detail);
+            return null;
+        }
+        catch (OperationCanceledException ex)
+        {
+            _workbenchState.UpdateRuntimeConfigError(ex.Message);
+            return null;
+        }
+        catch (InvalidOperationException ex)
+        {
+            _workbenchState.UpdateRuntimeConfigError(ex.Message);
+            return null;
+        }
+    }
+}

@@ -22,7 +22,7 @@
         <div class="card h-100 shadow-sm">
             <div class="card-body">
                 <h2 class="h5">Engine Session</h2>
-                <p class="text-muted">Configure the target Rust endpoint, probe transport reachability, and inspect developer tool availability.</p>
+                <p class="text-muted">Configure the target Rust endpoint, probe transport reachability, and hot-apply supported storage and QRZ runtime overrides.</p>
                 <a class="btn btn-primary" href="engine">Open engine tools</a>
             </div>
         </div>
@@ -42,6 +42,15 @@
                 <h2 class="h5">Callsign Lookup</h2>
                 <p class="text-muted">Preview lookup requests now and invoke the live gRPC path as soon as the Rust lookup host is available.</p>
                 <a class="btn btn-primary" href="lookup-workbench">Open lookup workbench</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3">
+        <div class="card h-100 shadow-sm">
+            <div class="card-body">
+                <h2 class="h5">Storage Workbench</h2>
+                <p class="text-muted">Exercise logbook CRUD through gRPC, compare memory vs SQLite sessions, and verify persistence behavior after engine restarts.</p>
+                <a class="btn btn-primary" href="storage-workbench">Open storage workbench</a>
             </div>
         </div>
     </div>

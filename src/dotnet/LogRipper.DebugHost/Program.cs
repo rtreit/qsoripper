@@ -15,6 +15,8 @@ builder.Services.AddSingleton<SampleProtoFactory>();
 builder.Services.AddScoped<DebugWorkbenchState>();
 builder.Services.AddScoped<GrpcClientFactory>();
 builder.Services.AddScoped<LookupWorkbenchService>();
+builder.Services.AddScoped<StorageWorkbenchService>();
+builder.Services.AddScoped<RuntimeConfigWorkbenchService>();
 builder.Services.AddScoped<DebugCommandService>();
 
 var app = builder.Build();
