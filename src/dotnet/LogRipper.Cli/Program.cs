@@ -22,6 +22,9 @@ try
     return arguments.Command switch
     {
         "status" => await StatusCommand.RunAsync(channel),
+        "lookup" => await RequireCallsign(arguments, () => LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache)),
+        "stream-lookup" => await RequireCallsign(arguments, () => StreamLookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache)),
+        "cache-check" => await RequireCallsign(arguments, () => CacheCheckCommand.RunAsync(channel, arguments.Callsign!)),
         _ => ShowHelp($"Unknown command: {arguments.Command}")
     };
 }
@@ -47,16 +50,31 @@ static int ShowHelp(string? error = null)
     Console.WriteLine("""
         LogRipper CLI - validate and interact with the LogRipper engine
 
-        Usage: logripper-cli [options] <command>
+        Usage: logripper-cli [options] <command> [arguments]
 
         Commands:
-          status    Show engine sync status and QSO counts
+          status                         Show engine sync status and QSO counts
+          lookup <callsign>              Look up a callsign via QRZ
+          stream-lookup <callsign>       Streaming lookup with progressive updates
+          cache-check <callsign>         Check if a callsign is in the cache
 
         Options:
           --endpoint, -e <url>  Engine gRPC endpoint (default: http://localhost:50051)
                                 Also configurable via LOGRIPPER_ENDPOINT env var
+          --skip-cache          Bypass the cache and force a fresh lookup
           --help, -h            Show this help
         """);
 
     return error is null ? 0 : 1;
+}
+
+static Task<int> RequireCallsign(CliArguments arguments, Func<Task<int>> action)
+{
+    if (string.IsNullOrEmpty(arguments.Callsign))
+    {
+        Console.Error.WriteLine($"The '{arguments.Command}' command requires a callsign argument.");
+        return Task.FromResult(1);
+    }
+
+    return action();
 }
