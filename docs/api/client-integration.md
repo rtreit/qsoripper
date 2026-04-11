@@ -263,12 +263,14 @@ Do not attempt to connect a browser-side JavaScript client directly to `http://l
 
 ## Schema Evolution and Compatibility
 
-The LogRipper proto contract follows standard proto3 additive evolution rules:
+The current LogRipper proto contract follows standard proto3 additive evolution rules **from the current 1-1-1 envelope baseline forward**.
+
+> PR [#74](https://github.com/rtreit/logripper/pull/74) was a deliberate breaking-contract cleanup performed while the project is still early. Clients pinned to older pre-1-1-1 revisions must regenerate against the current `proto/` surface rather than assuming wire compatibility across that cutover.
 
 - **New optional fields** may be added to any message in future releases without breaking existing clients.
 - **New RPCs** may be added to existing services. Old clients will not call them.
 - **Enum values** may be added. Clients should handle unknown enum integer values gracefully (proto3 preserves unknown enum values as their integer form).
-- **Field numbers and types** are never changed. `buf breaking` enforces this in CI.
+- **Field numbers and types** should not be changed within the current published baseline. `buf breaking` is the guardrail for future changes against that baseline.
 
 **Client tolerance recommendations:**
 - Ignore unknown fields in responses — proto3 decoders do this by default.
