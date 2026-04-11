@@ -59,15 +59,18 @@ internal static class ListQsosCommand
 
         if (jsonOutput)
         {
-            // Collect all records from stream, print each as JSON on its own line (JSON Lines format)
+            var records = new List<Google.Protobuf.IMessage>();
+
             while (await call.ResponseStream.MoveNext(CancellationToken.None))
             {
                 var qso = call.ResponseStream.Current.Qso;
                 if (qso is not null)
                 {
-                    JsonOutput.Print(qso);
+                    records.Add(qso);
                 }
             }
+
+            JsonOutput.PrintArray(records);
             return 0;
         }
 
