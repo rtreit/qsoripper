@@ -87,6 +87,16 @@ public class SampleProtoFactoryTests
     }
 
     [Fact]
+    public void Sync_request_generation_sets_full_sync()
+    {
+        var request = Assert.IsType<SyncRequest>(
+            _factory.CreateSampleMessage(typeof(SyncRequest), "AA7BQ"));
+
+        Assert.True(request.FullSync);
+        Assert.True(request.CalculateSize() > 0);
+    }
+
+    [Fact]
     public void Qso_record_generation_supports_cw_without_submode()
     {
         var record = _factory.CreateQsoRecord("w1aw", new QsoSampleOptions

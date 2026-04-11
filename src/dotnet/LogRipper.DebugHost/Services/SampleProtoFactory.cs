@@ -225,7 +225,9 @@ internal sealed class SampleProtoFactory
 
         if (CustomBuilders.TryGetValue(messageType, out var builder))
         {
-            return builder(this, context);
+            var built = builder(this, context);
+            EnsureMessageSerializesNonDefault(built, context, activeTypes, depth);
+            return built;
         }
 
         if (messageType == typeof(Timestamp))
@@ -248,6 +250,7 @@ internal sealed class SampleProtoFactory
             try
             {
                 PopulateMessage(message, context, activeTypes, depth + 1);
+                EnsureMessageSerializesNonDefault(message, context, activeTypes, depth + 1);
             }
             finally
             {
@@ -306,6 +309,100 @@ internal sealed class SampleProtoFactory
         {
             field.Accessor.SetValue(message, value);
         }
+    }
+
+    private void EnsureMessageSerializesNonDefault(
+        IMessage message,
+        SampleGenerationContext context,
+        HashSet<System.Type> activeTypes,
+        int depth)
+    {
+        if (message.CalculateSize() > 0 || message.Descriptor.Fields.InFieldNumberOrder().Count == 0)
+        {
+            return;
+        }
+
+        foreach (var field in message.Descriptor.Fields.InFieldNumberOrder())
+        {
+            ForcePopulateField(message, field, context, activeTypes, depth);
+            if (message.CalculateSize() > 0)
+            {
+                return;
+            }
+        }
+    }
+
+    private void ForcePopulateField(
+        IMessage message,
+        FieldDescriptor field,
+        SampleGenerationContext context,
+        HashSet<System.Type> activeTypes,
+        int depth)
+    {
+        if (field.IsMap)
+        {
+            ForcePopulateMapField(message, field, context, activeTypes, depth);
+            return;
+        }
+
+        if (field.IsRepeated)
+        {
+            ForcePopulateRepeatedField(message, field, context, activeTypes, depth);
+            return;
+        }
+
+        var value = CreateGuaranteedNonDefaultValue(message, field, context, activeTypes, depth);
+        if (value is not null)
+        {
+            field.Accessor.SetValue(message, value);
+        }
+    }
+
+    private void ForcePopulateRepeatedField(
+        IMessage message,
+        FieldDescriptor field,
+        SampleGenerationContext context,
+        HashSet<System.Type> activeTypes,
+        int depth)
+    {
+        var collection = field.Accessor.GetValue(message);
+        var item = CreateGuaranteedNonDefaultValue(message, field, context, activeTypes, depth);
+        if (collection is null || item is null)
+        {
+            return;
+        }
+
+        var addMethod = collection.GetType()
+            .GetMethods()
+            .FirstOrDefault(static method => method.Name == "Add" && method.GetParameters().Length == 1)
+            ?? throw new InvalidOperationException($"Could not find Add(T) on repeated field '{field.FullName}'.");
+        addMethod.Invoke(collection, [item]);
+    }
+
+    private void ForcePopulateMapField(
+        IMessage message,
+        FieldDescriptor field,
+        SampleGenerationContext context,
+        HashSet<System.Type> activeTypes,
+        int depth)
+    {
+        var map = field.Accessor.GetValue(message);
+        var keyField = field.MessageType.FindFieldByNumber(1)
+            ?? throw new InvalidOperationException($"Map field '{field.FullName}' is missing a key descriptor.");
+        var valueField = field.MessageType.FindFieldByNumber(2)
+            ?? throw new InvalidOperationException($"Map field '{field.FullName}' is missing a value descriptor.");
+        var key = CreateGuaranteedNonDefaultValue(message, keyField, context, activeTypes, depth);
+        var value = CreateGuaranteedNonDefaultValue(message, valueField, context, activeTypes, depth);
+        if (map is null || key is null || value is null)
+        {
+            return;
+        }
+
+        var addMethod = map.GetType()
+            .GetMethods()
+            .FirstOrDefault(static method => method.Name == "Add" && method.GetParameters().Length == 2)
+            ?? throw new InvalidOperationException($"Could not find Add(TKey, TValue) on map field '{field.FullName}'.");
+        addMethod.Invoke(map, [key, value]);
     }
 
     private void PopulateRepeatedField(
@@ -387,6 +484,38 @@ internal sealed class SampleProtoFactory
             FieldType.Message => CreateSampleNestedMessage(field, context, activeTypes, depth),
             _ => null
         };
+    }
+
+    private object? CreateGuaranteedNonDefaultValue(
+        IMessage message,
+        FieldDescriptor field,
+        SampleGenerationContext context,
+        HashSet<System.Type> activeTypes,
+        int depth)
+    {
+        return field.FieldType switch
+        {
+            FieldType.String => $"sample-{field.JsonName}-{context.GenerationToken[..6]}",
+            FieldType.Bool => true,
+            FieldType.Int32 or FieldType.SInt32 or FieldType.SFixed32 => 1,
+            FieldType.UInt32 or FieldType.Fixed32 => 1U,
+            FieldType.Int64 or FieldType.SInt64 or FieldType.SFixed64 => 1L,
+            FieldType.UInt64 or FieldType.Fixed64 => 1UL,
+            FieldType.Float => 1F,
+            FieldType.Double => 1D,
+            FieldType.Bytes => ByteString.CopyFromUtf8($"sample-{field.JsonName}-{context.GenerationToken[..6]}"),
+            FieldType.Enum => CreateGuaranteedEnumValue(message, field),
+            FieldType.Message => CreateSampleNestedMessage(field, context, activeTypes, depth),
+            _ => null
+        };
+    }
+
+    private static object CreateGuaranteedEnumValue(IMessage message, FieldDescriptor field)
+    {
+        var enumValue = field.EnumType.Values.FirstOrDefault(static value => value.Number != 0)
+            ?? field.EnumType.Values[0];
+        var enumType = field.Accessor.GetValue(message).GetType();
+        return System.Enum.ToObject(enumType, enumValue.Number);
     }
 
     private IMessage? CreateSampleNestedMessage(
