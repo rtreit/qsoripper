@@ -1,6 +1,7 @@
 using LogRipper.DebugHost.Models;
 using LogRipper.DebugHost.Services;
 using LogRipper.Domain;
+using LogRipper.Services;
 
 namespace LogRipper.DebugHost.Tests;
 
@@ -41,6 +42,22 @@ public class ProtoJsonServiceTests
         Assert.Contains("\"tone\": 9", payload.Json);
         Assert.Contains("\"stationSnapshot\":", payload.Json);
         Assert.DoesNotContain("\"submode\":", payload.Json);
+    }
+
+    [Fact]
+    public void Describe_populates_save_station_profile_request_payload()
+    {
+        var factory = new SampleProtoFactory();
+        var service = new ProtoJsonService();
+        var message = Assert.IsType<SaveStationProfileRequest>(
+            factory.CreateSampleMessage(typeof(SaveStationProfileRequest), "AA7BQ"));
+
+        var payload = service.Describe(message);
+
+        Assert.Contains("\"profileId\":", payload.Json);
+        Assert.Contains("\"profile\":", payload.Json);
+        Assert.Contains("\"stationCallsign\":", payload.Json);
+        Assert.Contains("\"makeActive\":", payload.Json);
     }
 }
 #pragma warning restore CA1707
