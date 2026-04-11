@@ -1,11 +1,12 @@
 using Grpc.Net.Client;
+using LogRipper.Cli;
 using LogRipper.Services;
 
 namespace LogRipper.Cli.Commands;
 
 internal static class ConfigCommand
 {
-    public static async Task<int> RunAsync(GrpcChannel channel, string[] args)
+    public static async Task<int> RunAsync(GrpcChannel channel, string[] args, bool jsonOutput = false)
     {
         var client = new DeveloperControlService.DeveloperControlServiceClient(channel);
 
@@ -14,8 +15,15 @@ internal static class ConfigCommand
             if (args[i] == "--reset")
             {
                 var resetResponse = await client.ResetRuntimeConfigAsync(new ResetRuntimeConfigRequest());
-                Console.WriteLine("Runtime config reset to defaults.");
-                PrintSnapshot(resetResponse.Snapshot);
+                if (jsonOutput)
+                {
+                    JsonOutput.Print(resetResponse.Snapshot);
+                }
+                else
+                {
+                    Console.WriteLine("Runtime config reset to defaults.");
+                    PrintSnapshot(resetResponse.Snapshot);
+                }
                 return 0;
             }
 
@@ -41,14 +49,28 @@ internal static class ConfigCommand
                 });
 
                 var applyResponse = await client.ApplyRuntimeConfigAsync(applyRequest);
-                Console.WriteLine("Config updated.");
-                PrintSnapshot(applyResponse.Snapshot);
+                if (jsonOutput)
+                {
+                    JsonOutput.Print(applyResponse.Snapshot);
+                }
+                else
+                {
+                    Console.WriteLine("Config updated.");
+                    PrintSnapshot(applyResponse.Snapshot);
+                }
                 return 0;
             }
         }
 
         var response = await client.GetRuntimeConfigAsync(new GetRuntimeConfigRequest());
-        PrintSnapshot(response.Snapshot);
+        if (jsonOutput)
+        {
+            JsonOutput.Print(response.Snapshot);
+        }
+        else
+        {
+            PrintSnapshot(response.Snapshot);
+        }
         return 0;
     }
 

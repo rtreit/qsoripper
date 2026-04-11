@@ -1,11 +1,12 @@
 using Grpc.Net.Client;
+using LogRipper.Cli;
 using LogRipper.Services;
 
 namespace LogRipper.Cli.Commands;
 
 internal static class SetupCommand
 {
-    public static async Task<int> RunAsync(GrpcChannel channel)
+    public static async Task<int> RunAsync(GrpcChannel channel, bool jsonOutput = false)
     {
         var client = new SetupService.SetupServiceClient(channel);
         var response = await client.GetSetupStatusAsync(new GetSetupStatusRequest());
@@ -15,6 +16,12 @@ internal static class SetupCommand
         {
             Console.WriteLine("Setup status unavailable.");
             return 1;
+        }
+
+        if (jsonOutput)
+        {
+            JsonOutput.Print(response);
+            return status.SetupComplete ? 0 : 1;
         }
 
         Console.WriteLine($"Setup complete:    {status.SetupComplete}");

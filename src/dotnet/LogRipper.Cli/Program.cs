@@ -33,18 +33,18 @@ try
 
     return arguments.Command switch
     {
-        "status" => await StatusCommand.RunAsync(channel),
-        "lookup" => await LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache),
+        "status" => await StatusCommand.RunAsync(channel, arguments.JsonOutput),
+        "lookup" => await LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache, arguments.JsonOutput),
         "stream-lookup" => await StreamLookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache),
-        "cache-check" => await CacheCheckCommand.RunAsync(channel, arguments.Callsign!),
+        "cache-check" => await CacheCheckCommand.RunAsync(channel, arguments.Callsign!, arguments.JsonOutput),
         "log" => await LogQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.RemainingArgs),
-        "get" => await GetQsoCommand.RunAsync(channel, arguments.Callsign!),
-        "list" => await ListQsosCommand.RunAsync(channel, arguments.RemainingArgs),
+        "get" => await GetQsoCommand.RunAsync(channel, arguments.Callsign!, arguments.JsonOutput),
+        "list" => await ListQsosCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput),
         "delete" => await DeleteQsoCommand.RunAsync(channel, arguments.Callsign!),
         "import" => await ImportAdifCommand.RunAsync(channel, arguments.Callsign ?? arguments.RemainingArgs.FirstOrDefault() ?? ""),
         "export" => await ExportAdifCommand.RunAsync(channel, arguments.RemainingArgs),
-        "config" => await ConfigCommand.RunAsync(channel, arguments.RemainingArgs),
-        "setup" => await SetupCommand.RunAsync(channel),
+        "config" => await ConfigCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput),
+        "setup" => await SetupCommand.RunAsync(channel, arguments.JsonOutput),
         _ => ShowHelp($"Unknown command: {arguments.Command}")
     };
 }
@@ -95,6 +95,7 @@ static int ShowHelp(string? error = null)
         Options:
           --endpoint, -e <url>             Engine endpoint (default: http://127.0.0.1:50051)
           --skip-cache                     Bypass cache for lookup commands
+          --json                           Output as JSON (for piping to PowerShell)
           --help, -h                       Show this help
         """);
 

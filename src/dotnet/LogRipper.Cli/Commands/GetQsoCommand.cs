@@ -1,4 +1,5 @@
 using Grpc.Net.Client;
+using LogRipper.Cli;
 using LogRipper.Domain;
 using LogRipper.Services;
 
@@ -6,7 +7,7 @@ namespace LogRipper.Cli.Commands;
 
 internal static class GetQsoCommand
 {
-    public static async Task<int> RunAsync(GrpcChannel channel, string localId)
+    public static async Task<int> RunAsync(GrpcChannel channel, string localId, bool jsonOutput = false)
     {
         var client = new LogbookService.LogbookServiceClient(channel);
         var response = await client.GetQsoAsync(new GetQsoRequest { LocalId = localId });
@@ -15,6 +16,12 @@ internal static class GetQsoCommand
         {
             Console.Error.WriteLine($"QSO not found: {localId}");
             return 1;
+        }
+
+        if (jsonOutput)
+        {
+            JsonOutput.Print(response);
+            return 0;
         }
 
         Console.WriteLine($"Local ID:         {qso.LocalId}");

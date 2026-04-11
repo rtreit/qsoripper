@@ -12,6 +12,7 @@ internal static class CliArgumentParser
         string? command = null;
         string? callsign = null;
         var skipCache = false;
+        var jsonOutput = false;
 
         var remaining = new List<string>();
 
@@ -41,6 +42,12 @@ internal static class CliArgumentParser
                 continue;
             }
 
+            if (arg is "--json")
+            {
+                jsonOutput = true;
+                continue;
+            }
+
             if (command is null && !arg.StartsWith('-'))
             {
                 command = arg;
@@ -62,6 +69,7 @@ internal static class CliArgumentParser
             ShowHelp: command is null,
             Callsign: callsign,
             SkipCache: skipCache,
+            JsonOutput: jsonOutput,
             RemainingArgs: remaining.ToArray());
     }
 }

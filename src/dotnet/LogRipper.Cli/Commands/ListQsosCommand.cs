@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Grpc.Net.Client;
+using LogRipper.Cli;
 using LogRipper.Domain;
 using LogRipper.Services;
 using static LogRipper.Cli.EnumHelpers;
@@ -8,7 +9,7 @@ namespace LogRipper.Cli.Commands;
 
 internal static class ListQsosCommand
 {
-    public static async Task<int> RunAsync(GrpcChannel channel, string[] args)
+    public static async Task<int> RunAsync(GrpcChannel channel, string[] args, bool jsonOutput = false)
     {
         var request = new ListQsosRequest { Limit = 20 };
 
@@ -55,6 +56,20 @@ internal static class ListQsosCommand
 
         var client = new LogbookService.LogbookServiceClient(channel);
         using var call = client.ListQsos(request);
+
+        if (jsonOutput)
+        {
+            // Collect all records from stream, print each as JSON on its own line (JSON Lines format)
+            while (await call.ResponseStream.MoveNext(CancellationToken.None))
+            {
+                var qso = call.ResponseStream.Current.Qso;
+                if (qso is not null)
+                {
+                    JsonOutput.Print(qso);
+                }
+            }
+            return 0;
+        }
 
         Console.WriteLine($"{"UTC",-20} {"ID",-38} {"Callsign",-12} {"Band",-8} {"Mode",-8} {"RST S",-6} {"RST R",-6}");
         Console.WriteLine(new string('-', 102));
