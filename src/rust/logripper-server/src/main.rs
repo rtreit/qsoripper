@@ -4,7 +4,7 @@ mod runtime_config;
 mod setup;
 mod station_profile_support;
 
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{future::Future, net::SocketAddr, path::PathBuf, sync::Arc};
 
 use logripper_core::adif::{parse_adi_qsos, serialize_adi_qsos};
 use logripper_core::application::logbook::LogbookError;
@@ -41,6 +41,16 @@ use setup::{
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     load_dotenv_if_present();
     let options = ServerOptions::from_env_and_args(std::env::args().skip(1))?;
+    run_server(options, tokio::signal::ctrl_c()).await
+}
+
+async fn run_server<ShutdownSignal>(
+    options: ServerOptions,
+    shutdown_signal: ShutdownSignal,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    ShutdownSignal: Future<Output = std::io::Result<()>>,
+{
     let address = options.listen_address;
     let setup_state = Arc::new(SetupState::load(options.config_path.clone())?);
     let config_file_values = setup_state.runtime_config_values().await;
@@ -84,7 +94,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
     );
 
-    Server::builder()
+    let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel::<()>();
+    let server = Server::builder()
         .add_service(LogbookServiceServer::new(logbook_service))
         .add_service(LookupServiceServer::new(lookup_service))
         .add_service(SetupServiceServer::new(setup_service))
@@ -92,8 +103,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_service(DeveloperControlServiceServer::new(
             developer_control_service,
         ))
-        .serve_with_incoming(TcpListenerStream::new(listener))
-        .await?;
+        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
+            let _ = shutdown_receiver.await;
+        });
+    tokio::pin!(server);
+    tokio::pin!(shutdown_signal);
+
+    tokio::select! {
+        result = &mut server => {
+            result?;
+        }
+        signal_result = &mut shutdown_signal => {
+            signal_result?;
+            println!("Shutting down.");
+            let _ = shutdown_sender.send(());
+            server.await?;
+        }
+    }
 
     Ok(())
 }
@@ -680,9 +706,9 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        build_storage, load_dotenv_if_present, parse_storage_backend, server_ready_message,
-        server_starting_message, DeveloperLogbookService, DeveloperLookupService, Server,
-        ServerOptions, StorageBackendKind, StorageOptions,
+        build_storage, load_dotenv_if_present, parse_storage_backend, run_server,
+        server_ready_message, server_starting_message, DeveloperLogbookService,
+        DeveloperLookupService, Server, ServerOptions, StorageBackendKind, StorageOptions,
     };
     use crate::runtime_config::{
         RuntimeConfigManager, SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR, STATION_GRID_ENV_VAR,
@@ -744,6 +770,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn capture_clean_process_state() -> (std::sync::MutexGuard<'static, ()>, ProcessStateGuard) {
+        let process_state_lock = PROCESS_STATE_LOCK.lock().expect("lock process state");
+        let process_state = ProcessStateGuard::capture();
+
+        for key in SERVER_ENV_KEYS {
+            std::env::remove_var(key);
+        }
+
+        (process_state_lock, process_state)
     }
 
     fn test_lookup_service() -> DeveloperLookupService {
@@ -1000,12 +1037,7 @@ mod tests {
 
     #[test]
     fn load_dotenv_if_present_reads_env_from_current_directory() {
-        let _process_state_lock = PROCESS_STATE_LOCK.lock().expect("lock process state");
-        let process_state = ProcessStateGuard::capture();
-
-        for key in SERVER_ENV_KEYS {
-            std::env::remove_var(key);
-        }
+        let (_process_state_lock, process_state) = capture_clean_process_state();
 
         let temp_dir = std::env::temp_dir().join(format!(
             "logripper-dotenv-{}-{}",
@@ -1041,13 +1073,12 @@ mod tests {
 
         process_state.restore_current_dir();
         fs::remove_file(env_path).expect("remove temp .env");
-        fs::remove_dir(temp_dir).expect("remove temp dir");
+        fs::remove_dir_all(temp_dir).expect("remove temp dir");
     }
 
     #[test]
     fn load_dotenv_if_present_does_not_panic_on_malformed_env() {
-        let _process_state_lock = PROCESS_STATE_LOCK.lock().expect("lock process state");
-        let process_state = ProcessStateGuard::capture();
+        let (_process_state_lock, process_state) = capture_clean_process_state();
 
         let temp_dir = std::env::temp_dir().join(format!(
             "logripper-dotenv-bad-{}-{}",
@@ -1072,7 +1103,7 @@ mod tests {
 
         process_state.restore_current_dir();
         fs::remove_file(env_path).expect("remove temp .env");
-        fs::remove_dir(temp_dir).expect("remove temp dir");
+        fs::remove_dir_all(temp_dir).expect("remove temp dir");
     }
 
     #[test]
@@ -1107,9 +1138,7 @@ mod tests {
 
     #[test]
     fn server_options_default_to_localhost_port_50051() {
-        std::env::remove_var("LOGRIPPER_SERVER_ADDR");
-        std::env::remove_var("LOGRIPPER_STORAGE_BACKEND");
-        std::env::remove_var("LOGRIPPER_SQLITE_PATH");
+        let (_process_state_lock, _process_state) = capture_clean_process_state();
 
         let options = ServerOptions::from_env_and_args(Vec::<String>::new()).unwrap();
 
@@ -1120,7 +1149,7 @@ mod tests {
 
     #[test]
     fn server_options_allow_explicit_listen_override() {
-        std::env::remove_var("LOGRIPPER_SERVER_ADDR");
+        let (_process_state_lock, _process_state) = capture_clean_process_state();
 
         let options = ServerOptions::from_env_and_args([
             "--listen".to_string(),
@@ -1140,6 +1169,8 @@ mod tests {
 
     #[test]
     fn server_options_allow_sqlite_storage_override() {
+        let (_process_state_lock, _process_state) = capture_clean_process_state();
+
         let options = ServerOptions::from_env_and_args([
             "--storage".to_string(),
             "sqlite".to_string(),
@@ -1171,6 +1202,8 @@ mod tests {
 
     #[test]
     fn server_options_emit_default_sqlite_path_when_cli_selects_sqlite_without_path() {
+        let (_process_state_lock, _process_state) = capture_clean_process_state();
+
         let options =
             ServerOptions::from_env_and_args(["--storage".to_string(), "sqlite".to_string()])
                 .unwrap();
@@ -1226,6 +1259,35 @@ mod tests {
 
         if sqlite_path.exists() {
             fs::remove_file(sqlite_path).expect("remove sqlite test database");
+        }
+    }
+
+    #[tokio::test]
+    async fn server_exits_cleanly_when_shutdown_signal_resolves() {
+        let config_path = unique_sqlite_test_path("ctrl-c-config").with_extension("toml");
+        let options = ServerOptions {
+            listen_address: "127.0.0.1:0".parse().expect("listen address"),
+            config_path: config_path.clone(),
+            storage: StorageOptions {
+                backend: StorageBackendKind::Memory,
+                sqlite_path: PathBuf::from("ignored.db"),
+            },
+            storage_cli_overrides: BTreeMap::from([(
+                STORAGE_BACKEND_ENV_VAR.to_string(),
+                "memory".to_string(),
+            )]),
+        };
+
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            run_server(options, std::future::ready(Ok(()))),
+        )
+        .await
+        .expect("shutdown timeout")
+        .expect("clean server shutdown");
+
+        if config_path.exists() {
+            fs::remove_file(config_path).expect("remove config test file");
         }
     }
 
