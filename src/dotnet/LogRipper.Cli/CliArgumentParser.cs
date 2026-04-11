@@ -49,7 +49,7 @@ internal static class CliArgumentParser
 
             if (command is not null && callsign is null && !arg.StartsWith('-'))
             {
-                callsign = arg.ToUpperInvariant();
+                callsign = arg;
                 continue;
             }
 
