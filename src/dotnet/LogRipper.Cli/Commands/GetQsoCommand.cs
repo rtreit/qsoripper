@@ -20,8 +20,8 @@ internal static class GetQsoCommand
         Console.WriteLine($"Local ID:         {qso.LocalId}");
         Console.WriteLine($"Callsign:         {qso.WorkedCallsign}");
         Console.WriteLine($"Station:          {qso.StationCallsign}");
-        Console.WriteLine($"Band:             {qso.Band}");
-        Console.WriteLine($"Mode:             {qso.Mode}");
+        Console.WriteLine($"Band:             {EnumHelpers.FormatBand(qso.Band)}");
+        Console.WriteLine($"Mode:             {EnumHelpers.FormatMode(qso.Mode)}");
 
         if (qso.UtcTimestamp is not null)
         {

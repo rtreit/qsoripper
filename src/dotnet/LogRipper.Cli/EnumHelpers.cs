@@ -96,4 +96,15 @@ internal static class EnumHelpers
             _ => throw new ArgumentException($"Unknown mode: {input}. Examples: FT8, CW, SSB, RTTY"),
         };
     }
+
+    public static string FormatBand(Band band)
+    {
+        var name = band.ToString();
+        return name.TrimStart('_');
+    }
+
+    public static string FormatMode(Mode mode)
+    {
+        return mode.ToString().ToUpperInvariant();
+    }
 }

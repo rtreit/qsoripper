@@ -1,7 +1,7 @@
 using Grpc.Core;
 using Grpc.Net.Client;
-using LogRipper.Domain;
 using LogRipper.Services;
+using static LogRipper.Cli.EnumHelpers;
 
 namespace LogRipper.Cli.Commands;
 
@@ -55,8 +55,8 @@ internal static class ListQsosCommand
         var client = new LogbookService.LogbookServiceClient(channel);
         using var call = client.ListQsos(request);
 
-        Console.WriteLine($"{"UTC",-20} {"Callsign",-12} {"Band",-8} {"Mode",-8} {"RST S",-6} {"RST R",-6}");
-        Console.WriteLine(new string('-', 62));
+        Console.WriteLine($"{"UTC",-20} {"ID",-38} {"Callsign",-12} {"Band",-8} {"Mode",-8} {"RST S",-6} {"RST R",-6}");
+        Console.WriteLine(new string('-', 102));
 
         var count = 0u;
 
@@ -69,10 +69,12 @@ internal static class ListQsosCommand
             }
 
             var utc = qso.UtcTimestamp?.ToDateTime().ToString("u") ?? "";
+            var band = FormatBand(qso.Band);
+            var mode = FormatMode(qso.Mode);
             var rstS = qso.RstSent is not null ? $"{qso.RstSent.Readability}{qso.RstSent.Strength}" : "";
             var rstR = qso.RstReceived is not null ? $"{qso.RstReceived.Readability}{qso.RstReceived.Strength}" : "";
 
-            Console.WriteLine($"{utc,-20} {qso.WorkedCallsign,-12} {qso.Band,-8} {qso.Mode,-8} {rstS,-6} {rstR,-6}");
+            Console.WriteLine($"{utc,-20} {qso.LocalId,-38} {qso.WorkedCallsign,-12} {band,-8} {mode,-8} {rstS,-6} {rstR,-6}");
             count++;
         }
 
