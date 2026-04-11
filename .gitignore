@@ -70,3 +70,6 @@ compile_commands.json
 *.a
 *.so
 *.dylib
+
+# Stress test reports
+stress-report.html
