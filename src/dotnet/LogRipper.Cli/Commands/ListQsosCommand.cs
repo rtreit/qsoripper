@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Grpc.Net.Client;
+using LogRipper.Domain;
 using LogRipper.Services;
 using static LogRipper.Cli.EnumHelpers;
 
@@ -71,8 +72,8 @@ internal static class ListQsosCommand
             var utc = qso.UtcTimestamp?.ToDateTime().ToString("u") ?? "";
             var band = FormatBand(qso.Band);
             var mode = FormatMode(qso.Mode);
-            var rstS = qso.RstSent is not null ? $"{qso.RstSent.Readability}{qso.RstSent.Strength}" : "";
-            var rstR = qso.RstReceived is not null ? $"{qso.RstReceived.Readability}{qso.RstReceived.Strength}" : "";
+            var rstS = FormatRst(qso.RstSent);
+            var rstR = FormatRst(qso.RstReceived);
 
             Console.WriteLine($"{utc,-20} {qso.LocalId,-38} {qso.WorkedCallsign,-12} {band,-8} {mode,-8} {rstS,-6} {rstR,-6}");
             count++;
@@ -82,5 +83,17 @@ internal static class ListQsosCommand
         Console.WriteLine($"{count} QSO(s)");
 
         return 0;
+    }
+
+    private static string FormatRst(RstReport? rst)
+    {
+        if (rst is null)
+        {
+            return "";
+        }
+
+        return rst.HasTone
+            ? $"{rst.Readability}{rst.Strength}{rst.Tone}"
+            : $"{rst.Readability}{rst.Strength}";
     }
 }
