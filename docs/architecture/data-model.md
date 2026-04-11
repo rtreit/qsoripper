@@ -136,7 +136,7 @@ ADIF is **never** used for internal IPC. The Rust-side ADIF parser converts to/f
 
 ### ADIF Round-Trip Strategy
 
-QsoRecord includes an `extra_fields` map (`map<string, string>`) to preserve ADIF fields that don't have dedicated proto fields (e.g., MY_ station fields, satellite info, propagation conditions). During import:
+QsoRecord includes an `extra_fields` map (`map<string, string>`) to preserve ADIF fields that don't have dedicated proto fields (e.g., satellite info, propagation conditions, application-defined fields). Core local-station ADIF fields now flow through `station_snapshot` instead of `extra_fields`. During import:
 
 1. Recognized fields → mapped to dedicated QsoRecord fields
 2. Unrecognized fields → stored in `extra_fields` (keyed by uppercase ADIF field name)

@@ -39,6 +39,7 @@ public class ProtoJsonServiceTests
         Assert.Contains("\"mode\":", payload.Json);
         Assert.Contains("\"raw\": \"599\"", payload.Json);
         Assert.Contains("\"tone\": 9", payload.Json);
+        Assert.Contains("\"stationSnapshot\":", payload.Json);
         Assert.DoesNotContain("\"submode\":", payload.Json);
     }
 }

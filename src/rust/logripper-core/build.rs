@@ -8,11 +8,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let protos = &[
         proto_root.join("domain/callsign.proto"),
+        proto_root.join("domain/station.proto"),
         proto_root.join("domain/qso.proto"),
         proto_root.join("domain/lookup.proto"),
         proto_root.join("services/debug_control_service.proto"),
         proto_root.join("services/lookup_service.proto"),
         proto_root.join("services/logbook_service.proto"),
+        proto_root.join("services/setup_service.proto"),
+        proto_root.join("services/station_profile_service.proto"),
     ];
 
     tonic_build::configure()

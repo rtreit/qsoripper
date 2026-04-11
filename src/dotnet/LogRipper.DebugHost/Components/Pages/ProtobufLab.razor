@@ -1,5 +1,6 @@
 @page "/protobuf-lab"
 @inject SampleProtoFactory SampleProtoFactory
+@inject ProtoSampleCatalog ProtoSampleCatalog
 @inject ProtoJsonService ProtoJsonService
 
 <PageTitle>Protobuf Lab</PageTitle>
@@ -14,10 +15,10 @@
         <div class="row g-3 align-items-end">
             <div class="col-md-4">
                 <label class="form-label" for="sample-type">Sample type</label>
-                <InputSelect id="sample-type" class="form-select" @bind-Value="selectedSampleType">
-                    @foreach (var sampleType in System.Enum.GetValues<SampleMessageType>())
+                <InputSelect id="sample-type" class="form-select" @bind-Value="selectedSampleId">
+                    @foreach (var sampleDefinition in sampleDefinitions)
                     {
-                        <option value="@sampleType">@sampleType</option>
+                        <option value="@sampleDefinition.Id">@sampleDefinition.Label</option>
                     }
                 </InputSelect>
             </div>
@@ -30,7 +31,7 @@
             </div>
         </div>
 
-        @if (selectedSampleType == SampleMessageType.QsoRecord)
+        @if (SelectedSampleDefinition?.SupportsQsoOptions == true)
         {
             <div class="row g-3 align-items-end mt-1">
                 <div class="col-md-6">
@@ -59,7 +60,7 @@
 <div class="row g-4">
     <div class="col-xl-7">
         <PayloadCard Title="JSON payload"
-                     BadgeText="@selectedSampleType.ToString()"
+                     BadgeText="@(SelectedSampleDefinition?.Label ?? string.Empty)"
                      Payload="@payload.Json" />
     </div>
     <div class="col-xl-5">
@@ -88,7 +89,8 @@
 </div>
 
 @code {
-    private SampleMessageType selectedSampleType = SampleMessageType.LookupRequest;
+    private IReadOnlyList<ProtoSampleDefinition> sampleDefinitions = Array.Empty<ProtoSampleDefinition>();
+    private string selectedSampleId = string.Empty;
     private string callsign = "K7DBG";
     private Band selectedBand = Band._20M;
     private Mode selectedMode = Mode.Ssb;
@@ -98,13 +100,21 @@
 
     protected override void OnInitialized()
     {
+        sampleDefinitions = ProtoSampleCatalog.GetDefinitions();
+        selectedSampleId = sampleDefinitions.FirstOrDefault()?.Id ?? string.Empty;
         Generate();
     }
 
     private void Generate()
     {
+        if (SelectedSampleDefinition is null)
+        {
+            payload = new ProtoPayloadView("{}", string.Empty, 0);
+            return;
+        }
+
         var message = SampleProtoFactory.CreateSampleMessage(
-            selectedSampleType,
+            SelectedSampleDefinition.MessageType,
             callsign,
             new QsoSampleOptions
             {
@@ -113,4 +123,8 @@
             });
         payload = ProtoJsonService.Describe(message);
     }
+
+    private ProtoSampleDefinition? SelectedSampleDefinition =>
+        sampleDefinitions.FirstOrDefault(definition =>
+            string.Equals(definition.Id, selectedSampleId, StringComparison.Ordinal));
 }

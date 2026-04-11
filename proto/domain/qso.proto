@@ -5,6 +5,7 @@ package logripper.domain;
 option csharp_namespace = "LogRipper.Domain";
 
 import "google/protobuf/timestamp.proto";
+import "domain/station.proto";
 
 // Standard amateur radio frequency bands (full ADIF 3.1.7 enumeration).
 enum Band {
@@ -136,6 +137,7 @@ message QsoRecord {
   Mode mode                    = 14;
   optional uint64 frequency_khz = 15; // Precise frequency in kHz
   optional string submode      = 16;  // ADIF submode string (e.g., "USB", "PSK31")
+  optional StationSnapshot station_snapshot = 17; // Materialized local-station values used at log time
 
   // --- Signal reports ---
   optional RstReport rst_sent      = 20;

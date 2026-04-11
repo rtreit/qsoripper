@@ -26,6 +26,12 @@
         <div class="mt-1">
             <strong>Lookup provider:</strong> @WorkbenchState.RuntimeConfigSnapshot.LookupProviderSummary
         </div>
+        @if (WorkbenchState.RuntimeConfigSnapshot.ActiveStationProfile is not null)
+        {
+            <div class="mt-1">
+                <strong>Active station:</strong> @DescribeActiveStation(WorkbenchState.RuntimeConfigSnapshot.ActiveStationProfile)
+            </div>
+        }
     }
 </div>
 
@@ -58,6 +64,13 @@
         <PayloadCard Title="Sample QSO payload"
                      Payload="@samplePayload.Json" />
     </div>
+    @if (activeStationProfilePayload is not null)
+    {
+        <div class="col-xl-6">
+            <PayloadCard Title="Active station profile"
+                         Payload="@activeStationProfilePayload.Json" />
+        </div>
+    }
     <div class="col-xl-6">
         <PayloadCard Title="Rust host launch command"
                      Payload="@WorkbenchState.BuildRustServerCommand()"
@@ -120,6 +133,12 @@
                         <PayloadCard Title="Loaded QSO" Payload="@loadedPayload.Json" />
                     </div>
                 }
+                @if (loadedStationSnapshotPayload is not null)
+                {
+                    <div class="col-xl-6">
+                        <PayloadCard Title="Loaded station snapshot" Payload="@loadedStationSnapshotPayload.Json" />
+                    </div>
+                }
                 @if (syncStatusPayload is not null)
                 {
                     <div class="col-xl-6">
@@ -152,8 +171,10 @@
     private bool retainRecord;
     private ProtoPayloadView samplePayload = new("{}", string.Empty, 0);
     private StorageSmokeTestResult? result;
+    private ProtoPayloadView? activeStationProfilePayload;
     private ProtoPayloadView? logResponsePayload;
     private ProtoPayloadView? loadedPayload;
+    private ProtoPayloadView? loadedStationSnapshotPayload;
     private ProtoPayloadView? syncStatusPayload;
     private ProtoPayloadView? deleteResponsePayload;
     private List<ProtoPayloadView> listedPayloads = [];
@@ -167,6 +188,9 @@
     private void Preview()
     {
         samplePayload = ProtoJsonService.Describe(SampleProtoFactory.CreateQsoRecord(workedCallsign));
+        activeStationProfilePayload = WorkbenchState.RuntimeConfigSnapshot?.ActiveStationProfile is null
+            ? null
+            : ProtoJsonService.Describe(WorkbenchState.RuntimeConfigSnapshot.ActiveStationProfile);
     }
 
     private async Task RunSmokeTestAsync()
@@ -175,8 +199,24 @@
         result = await StorageWorkbenchService.RunSmokeTestAsync(workedCallsign, retainRecord);
         logResponsePayload = result.LogResponse is null ? null : ProtoJsonService.Describe(result.LogResponse);
         loadedPayload = result.LoadedResponse?.Qso is null ? null : ProtoJsonService.Describe(result.LoadedResponse.Qso);
+        loadedStationSnapshotPayload = result.LoadedResponse?.Qso?.StationSnapshot is null
+            ? null
+            : ProtoJsonService.Describe(result.LoadedResponse.Qso.StationSnapshot);
         syncStatusPayload = result.SyncStatus is null ? null : ProtoJsonService.Describe(result.SyncStatus);
         deleteResponsePayload = result.DeleteResponse is null ? null : ProtoJsonService.Describe(result.DeleteResponse);
         listedPayloads = result.ListedQsos.Select(ProtoJsonService.Describe).ToList();
+    }
+
+    private static string DescribeActiveStation(StationProfile profile)
+    {
+        var summary = profile.StationCallsign;
+        if (!string.IsNullOrWhiteSpace(profile.Grid))
+        {
+            summary = $"{summary} ({profile.Grid})";
+        }
+
+        return string.IsNullOrWhiteSpace(profile.OperatorCallsign)
+            ? summary
+            : $"{summary} operator {profile.OperatorCallsign}";
     }
 }
