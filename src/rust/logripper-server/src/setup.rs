@@ -1166,6 +1166,15 @@ mod tests {
             .join(DEFAULT_CONFIG_FILE_NAME)
     }
 
+    fn absolute_log_file_path(config_path: &std::path::Path, file_name: &str) -> String {
+        config_path
+            .parent()
+            .expect("config directory")
+            .join(file_name)
+            .display()
+            .to_string()
+    }
+
     #[tokio::test]
     async fn get_setup_status_reports_missing_config() {
         let config_path = unique_config_path();
@@ -1270,6 +1279,7 @@ station_callsign = "K7RND"
     #[tokio::test]
     async fn save_setup_persists_config_and_hot_applies_runtime_values() {
         let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "portable.db");
         let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
         let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
         let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
@@ -1279,7 +1289,7 @@ station_callsign = "K7RND"
             Request::new(SaveSetupRequest {
                 storage_backend: StorageBackend::Unspecified as i32,
                 sqlite_path: None,
-                log_file_path: Some("data\\portable.db".to_string()),
+                log_file_path: Some(log_file_path.clone()),
                 station_profile: Some(StationProfile {
                     station_callsign: "k7rnd".to_string(),
                     operator_name: Some("Randy".to_string()),
@@ -1298,7 +1308,10 @@ station_callsign = "K7RND"
         assert!(status.config_file_exists);
         assert!(status.setup_complete);
         assert_eq!(StorageBackend::Sqlite as i32, status.storage_backend);
-        assert_eq!(Some("data\\portable.db"), status.log_file_path.as_deref());
+        assert_eq!(
+            Some(log_file_path.as_str()),
+            status.log_file_path.as_deref()
+        );
         assert_eq!(status.log_file_path, status.sqlite_path);
         assert_eq!(Some("Home"), station_profile.profile_name.as_deref());
         assert_eq!("K7RND", station_profile.station_callsign);
@@ -1307,7 +1320,7 @@ station_callsign = "K7RND"
         let parsed_config =
             toml::from_str::<PersistedSetupConfig>(&saved_config).expect("parse saved config");
         assert_eq!(
-            Some("data\\portable.db"),
+            Some(log_file_path.as_str()),
             parsed_config.logbook.file_path.as_deref()
         );
         assert!(parsed_config.storage.backend.is_none());
@@ -1335,6 +1348,8 @@ station_callsign = "K7RND"
     #[tokio::test]
     async fn save_setup_preserves_existing_station_profiles() {
         let config_path = unique_config_path();
+        let initial_log_file_path = absolute_log_file_path(&config_path, "home.db");
+        let updated_log_file_path = absolute_log_file_path(&config_path, "updated.db");
         let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
         let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
         let setup_service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
@@ -1346,7 +1361,7 @@ station_callsign = "K7RND"
             Request::new(SaveSetupRequest {
                 storage_backend: StorageBackend::Unspecified as i32,
                 sqlite_path: None,
-                log_file_path: Some("data\\home.db".to_string()),
+                log_file_path: Some(initial_log_file_path),
                 station_profile: Some(StationProfile {
                     profile_name: Some("Home".to_string()),
                     station_callsign: "k7rnd".to_string(),
@@ -1381,7 +1396,7 @@ station_callsign = "K7RND"
             Request::new(SaveSetupRequest {
                 storage_backend: StorageBackend::Unspecified as i32,
                 sqlite_path: None,
-                log_file_path: Some("data\\updated.db".to_string()),
+                log_file_path: Some(updated_log_file_path.clone()),
                 station_profile: Some(StationProfile {
                     profile_name: Some("Home Debug".to_string()),
                     station_callsign: "k7rnd".to_string(),
@@ -1399,7 +1414,10 @@ station_callsign = "K7RND"
         .expect("status");
 
         assert_eq!(StorageBackend::Sqlite as i32, updated.storage_backend);
-        assert_eq!(Some("data\\updated.db"), updated.log_file_path.as_deref());
+        assert_eq!(
+            Some(updated_log_file_path.as_str()),
+            updated.log_file_path.as_deref()
+        );
         assert_eq!(Some("home"), updated.active_station_profile_id.as_deref());
         assert_eq!(2, updated.station_profile_count);
         assert_eq!(
@@ -1441,6 +1459,11 @@ station_callsign = "K7RND"
         let runtime_snapshot = runtime_config.snapshot().await;
         assert_eq!("sqlite", runtime_snapshot.active_storage_backend);
 
+        drop(station_profile_service);
+        drop(setup_service);
+        drop(runtime_config);
+        drop(setup_state);
+
         let config_directory = config_path.parent().expect("config directory");
         fs::remove_dir_all(config_directory).expect("remove temp config directory");
     }
@@ -1448,6 +1471,7 @@ station_callsign = "K7RND"
     #[tokio::test]
     async fn save_setup_rejects_partial_qrz_credentials() {
         let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "partial.db");
         let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
         let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
         let service = SetupControlSurface::new(setup_state, runtime_config);
@@ -1457,7 +1481,7 @@ station_callsign = "K7RND"
             Request::new(SaveSetupRequest {
                 storage_backend: StorageBackend::Unspecified as i32,
                 sqlite_path: None,
-                log_file_path: Some("data\\partial.db".to_string()),
+                log_file_path: Some(log_file_path),
                 station_profile: Some(StationProfile {
                     station_callsign: "k7rnd".to_string(),
                     ..StationProfile::default()
@@ -1477,6 +1501,7 @@ station_callsign = "K7RND"
     async fn station_profile_service_lists_legacy_profile_and_supports_activation_and_session_override(
     ) {
         let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "station-profiles.db");
         let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
         let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
         let setup_service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
@@ -1488,7 +1513,7 @@ station_callsign = "K7RND"
             Request::new(SaveSetupRequest {
                 storage_backend: StorageBackend::Unspecified as i32,
                 sqlite_path: None,
-                log_file_path: Some("data\\station-profiles.db".to_string()),
+                log_file_path: Some(log_file_path),
                 station_profile: Some(StationProfile {
                     profile_name: Some("Home".to_string()),
                     station_callsign: "k7rnd".to_string(),
@@ -1588,6 +1613,11 @@ station_callsign = "K7RND"
                 .as_ref()
                 .map(|profile| profile.station_callsign.as_str())
         );
+
+        drop(station_profile_service);
+        drop(setup_service);
+        drop(runtime_config);
+        drop(setup_state);
 
         let config_directory = config_path.parent().expect("config directory");
         fs::remove_dir_all(config_directory).expect("remove temp config directory");
