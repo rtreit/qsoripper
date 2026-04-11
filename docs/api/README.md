@@ -67,7 +67,7 @@ In general:
 - `SetupService` can report persisted setup status and save the initial storage/station bootstrap config.
 - `LogbookService` local QSO CRUD, ADIF import/export, and local sync-status reporting are implemented against the active storage backend. QRZ sync remains planned, and `GetSyncStatus` still reports QRZ fields as zero/absent until remote sync lands.
 
-The proto contract is considered stable for additive changes. Client code generated from the proto files will continue to compile as new fields and RPCs are added. See [client-integration.md](client-integration.md#schema-evolution-and-compatibility) for field tolerance guidance.
+The current proto contract should now be treated as the stable **post-1-1-1 baseline**. PR [#74](https://github.com/rtreit/logripper/pull/74) was a deliberate breaking-contract cutover while the project is still early. From this baseline forward, additive changes are preferred and client code generated from the current proto files should continue to compile as new fields and RPCs are added. See [client-integration.md](client-integration.md#schema-evolution-and-compatibility) for field tolerance guidance.
 
 ## Quick Links
 
