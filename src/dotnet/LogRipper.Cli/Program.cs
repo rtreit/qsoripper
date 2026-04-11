@@ -139,6 +139,8 @@ static int ShowCommandHelp(string command)
               --callsign <call>    Filter by worked callsign
               --band <band>        Filter by band (e.g., 20m)
               --mode <mode>        Filter by mode (e.g., FT8)
+              --after <time>       QSOs after this time (e.g., 2.days, 3.hours, 2026-04-10)
+              --before <time>      QSOs before this time
               --limit <n>          Max results (default: 20)
             """,
         "delete" => """

@@ -44,6 +44,26 @@ internal static class ListQsosCommand
                     }
 
                     break;
+                case "--after":
+                    var after = TimeParser.Parse(args[++i]);
+                    if (after is null)
+                    {
+                        Console.Error.WriteLine("Invalid --after value. Use relative (2.days, 3.hours) or absolute (2026-04-10).");
+                        return 1;
+                    }
+
+                    request.After = after;
+                    break;
+                case "--before":
+                    var before = TimeParser.Parse(args[++i]);
+                    if (before is null)
+                    {
+                        Console.Error.WriteLine("Invalid --before value. Use relative (2.days, 3.hours) or absolute (2026-04-10).");
+                        return 1;
+                    }
+
+                    request.Before = before;
+                    break;
                 case "--limit":
                     if (uint.TryParse(args[++i], out var limit))
                     {
