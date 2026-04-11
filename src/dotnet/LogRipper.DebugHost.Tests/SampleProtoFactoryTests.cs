@@ -1,6 +1,7 @@
 using LogRipper.DebugHost.Models;
 using LogRipper.DebugHost.Services;
 using LogRipper.Domain;
+using LogRipper.Services;
 
 namespace LogRipper.DebugHost.Tests;
 
@@ -41,6 +42,48 @@ public class SampleProtoFactoryTests
             Assert.NotNull(message);
             Assert.IsType(sampleDefinition.MessageType, message);
         }
+    }
+
+    [Fact]
+    public void Messages_with_fields_generate_non_default_wire_payloads()
+    {
+        foreach (var sampleDefinition in _catalog.GetDefinitions())
+        {
+            var message = _factory.CreateSampleMessage(sampleDefinition.MessageType, "AA7BQ");
+
+            if (message.Descriptor.Fields.InFieldNumberOrder().Count == 0)
+            {
+                Assert.Equal(0, message.CalculateSize());
+                continue;
+            }
+
+            Assert.True(
+                message.CalculateSize() > 0,
+                $"{sampleDefinition.Label} should serialize at least one populated field.");
+        }
+    }
+
+    [Fact]
+    public void Save_station_profile_request_includes_nested_profile_payload()
+    {
+        var request = Assert.IsType<SaveStationProfileRequest>(
+            _factory.CreateSampleMessage(typeof(SaveStationProfileRequest), "AA7BQ"));
+
+        Assert.False(string.IsNullOrWhiteSpace(request.ProfileId));
+        Assert.NotNull(request.Profile);
+        Assert.False(string.IsNullOrWhiteSpace(request.Profile.ProfileName));
+        Assert.False(string.IsNullOrWhiteSpace(request.Profile.StationCallsign));
+    }
+
+    [Fact]
+    public void Save_station_profile_request_changes_between_generations()
+    {
+        var first = Assert.IsType<SaveStationProfileRequest>(
+            _factory.CreateSampleMessage(typeof(SaveStationProfileRequest), "AA7BQ"));
+        var second = Assert.IsType<SaveStationProfileRequest>(
+            _factory.CreateSampleMessage(typeof(SaveStationProfileRequest), "AA7BQ"));
+
+        Assert.NotEqual(first.ProfileId, second.ProfileId);
     }
 
     [Fact]
