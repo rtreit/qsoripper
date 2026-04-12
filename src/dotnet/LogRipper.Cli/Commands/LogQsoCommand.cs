@@ -17,6 +17,8 @@ internal static class LogQsoCommand
 
         var requestQso = qso!;
 
+        ApplyDefaultRst(requestQso);
+
         if (!noEnrich)
         {
             await EnrichFromLookup(channel, requestQso);
@@ -75,6 +77,25 @@ internal static class LogQsoCommand
         }
 
         return TryApplyOptionalArgs(args, qso, ref noEnrich, out error);
+    }
+
+    internal static RstReport DefaultRst(Mode mode)
+    {
+        return IsPhoneMode(mode)
+            ? new RstReport { Readability = 5, Strength = 9 }
+            : new RstReport { Readability = 5, Strength = 9, Tone = 9 };
+    }
+
+    internal static bool IsPhoneMode(Mode mode)
+    {
+        return mode is Mode.Ssb or Mode.Am or Mode.Fm or Mode.Digitalvoice or Mode.Voi;
+    }
+
+    internal static void ApplyDefaultRst(QsoRecord qso)
+    {
+        var defaultRst = DefaultRst(qso.Mode);
+        qso.RstSent ??= defaultRst.Clone();
+        qso.RstReceived ??= defaultRst.Clone();
     }
 
     internal static bool TryApplyOptionalArgs(string[] args, QsoRecord qso, ref bool noEnrich, out string? error)
