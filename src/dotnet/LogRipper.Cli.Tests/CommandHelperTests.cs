@@ -80,6 +80,59 @@ public sealed class CommandHelperTests
         Assert.False(LogQsoCommand.TryParseRst(value, out _));
     }
 
+    [Theory]
+    [InlineData(Mode.Ssb, 5u, 9u, 0u)]
+    [InlineData(Mode.Am, 5u, 9u, 0u)]
+    [InlineData(Mode.Fm, 5u, 9u, 0u)]
+    [InlineData(Mode.Cw, 5u, 9u, 9u)]
+    [InlineData(Mode.Ft8, 5u, 9u, 9u)]
+    [InlineData(Mode.Rtty, 5u, 9u, 9u)]
+    public void DefaultRst_returns_59_for_phone_and_599_for_digital(Mode mode, uint readability, uint strength, uint tone)
+    {
+        var rst = LogQsoCommand.DefaultRst(mode);
+
+        Assert.Equal(readability, rst.Readability);
+        Assert.Equal(strength, rst.Strength);
+        Assert.Equal(tone, rst.Tone);
+    }
+
+    [Fact]
+    public void ApplyDefaultRst_does_not_overwrite_explicit_values()
+    {
+        var qso = new QsoRecord
+        {
+            Mode = Mode.Cw,
+            RstSent = new RstReport { Readability = 4, Strength = 7, Tone = 8 },
+        };
+
+        LogQsoCommand.ApplyDefaultRst(qso);
+
+        Assert.Equal(4u, qso.RstSent.Readability);
+        Assert.Equal(7u, qso.RstSent.Strength);
+        Assert.Equal(8u, qso.RstSent.Tone);
+        Assert.Equal(5u, qso.RstReceived!.Readability);
+        Assert.Equal(9u, qso.RstReceived.Strength);
+        Assert.Equal(9u, qso.RstReceived.Tone);
+    }
+
+    [Fact]
+    public void TryBuildQso_without_rst_flags_gets_defaults_after_apply()
+    {
+        var success = LogQsoCommand.TryBuildQso("W1AW", ["20m", "SSB"], out var qso, out _, out _);
+
+        Assert.True(success);
+        Assert.Null(qso!.RstSent);
+
+        LogQsoCommand.ApplyDefaultRst(qso);
+
+        Assert.Equal(5u, qso.RstSent!.Readability);
+        Assert.Equal(9u, qso.RstSent.Strength);
+        Assert.Equal(0u, qso.RstSent.Tone);
+        Assert.Equal(5u, qso.RstReceived!.Readability);
+        Assert.Equal(9u, qso.RstReceived.Strength);
+        Assert.Equal(0u, qso.RstReceived.Tone);
+    }
+
     [Fact]
     public void TryParseArgs_populates_filters()
     {
