@@ -1,4 +1,4 @@
-//! Adversarial stress test: hunt for panics in the LogRipper engine.
+//! Adversarial stress test: hunt for panics in the `LogRipper` engine.
 //!
 //! Each attack vector spawns tasks that call public API functions with
 //! pathological inputs. Panics are caught via `tokio::task::spawn` (which
@@ -16,6 +16,8 @@ use logripper_core::domain::band::{band_from_adif, band_from_frequency_mhz};
 use logripper_core::domain::mode::mode_from_adif;
 use logripper_core::ffi;
 use logripper_core::proto::logripper::domain::QsoRecord;
+
+type FfiCase = (&'static str, Box<dyn FnOnce() + Send + 'static>);
 
 #[derive(Debug)]
 struct PanicReport {
@@ -88,23 +90,31 @@ async fn fuzz_parse_adi_qsos() -> Vec<PanicReport> {
         ("no value after tag", b"<CALL:4>".to_vec()),
         ("eor only", b"<eor>".to_vec()),
         ("header only", b"test header <eoh>".to_vec()),
-        ("valid then garbage", b"<CALL:4>W1AW<BAND:3>20M<eor>\xFF\xFF\xFF".to_vec()),
-        ("multibyte in field value", format!("<CALL:6>W1\u{00FC}AW<eor>").into_bytes()),
+        (
+            "valid then garbage",
+            b"<CALL:4>W1AW<BAND:3>20M<eor>\xFF\xFF\xFF".to_vec(),
+        ),
+        (
+            "multibyte in field value",
+            "<CALL:6>W1\u{00FC}AW<eor>".to_string().into_bytes(),
+        ),
         ("null bytes in value", b"<CALL:5>W1\x00AW<eor>".to_vec()),
-        ("emoji in callsign", "<CALL:4>\u{1F4A9}<eor>".to_owned().into_bytes()),
+        (
+            "emoji in callsign",
+            "<CALL:4>\u{1F4A9}<eor>".to_owned().into_bytes(),
+        ),
         ("1MB payload", vec![b'A'; 1_000_000]),
         (
             "adversarial date",
-            format!(
-                "<CALL:4>W1AW<QSO_DATE:8>202\u{00fc}123<TIME_ON:4>1200<BAND:3>20M<MODE:2>CW<eor>"
-            )
-            .into_bytes(),
+            "<CALL:4>W1AW<QSO_DATE:8>202\u{00fc}123<TIME_ON:4>1200<BAND:3>20M<MODE:2>CW<eor>"
+                .to_string()
+                .into_bytes(),
         ),
     ];
 
     for (desc, payload) in &garbage_payloads {
         let payload = payload.clone();
-        let desc = desc.to_string();
+        let desc = (*desc).to_string();
         let handle = tokio::task::spawn(async move {
             let _ = parse_adi_qsos(&payload).await;
         });
@@ -130,65 +140,56 @@ async fn fuzz_adif_mapper() -> Vec<PanicReport> {
     let field_combos: Vec<(&str, Vec<(&str, &str)>)> = vec![
         ("empty record", vec![]),
         ("call only", vec![("CALL", "W1AW")]),
-        ("non-ASCII date", vec![
-            ("CALL", "W1AW"),
-            ("QSO_DATE", "202\u{00fc}123"),
-        ]),
-        ("non-ASCII time", vec![
-            ("CALL", "W1AW"),
-            ("QSO_DATE", "20250115"),
-            ("TIME_ON", "12\u{00e4}0"),
-        ]),
-        ("negative freq", vec![
-            ("CALL", "W1AW"),
-            ("FREQ", "-14.074"),
-        ]),
-        ("huge freq", vec![
-            ("CALL", "W1AW"),
-            ("FREQ", "999999999999.0"),
-        ]),
-        ("NaN freq", vec![
-            ("CALL", "W1AW"),
-            ("FREQ", "NaN"),
-        ]),
-        ("infinity freq", vec![
-            ("CALL", "W1AW"),
-            ("FREQ", "Infinity"),
-        ]),
-        ("null byte callsign", vec![
-            ("CALL", "\0\0\0\0"),
-        ]),
-        ("emoji callsign", vec![
-            ("CALL", "\u{1F4A9}\u{1F4A9}"),
-        ]),
-        ("huge callsign", vec![
-            ("CALL", &huge_callsign),
-        ]),
-        ("empty band", vec![
-            ("CALL", "W1AW"),
-            ("BAND", ""),
-        ]),
-        ("garbage band", vec![
-            ("CALL", "W1AW"),
-            ("BAND", "\u{FFFD}\u{FFFD}"),
-        ]),
-        ("all fields adversarial", vec![
-            ("CALL", "\u{200F}\u{202E}"),
-            ("QSO_DATE", "\0\0\0\0\0\0\0\0"),
-            ("TIME_ON", "ZZZZ"),
-            ("BAND", "999ZZZ"),
-            ("MODE", "\t\n\r"),
-            ("FREQ", "-0.0"),
-            ("RST_SENT", "\u{FEFF}"),
-            ("RST_RCVD", ""),
-        ]),
+        (
+            "non-ASCII date",
+            vec![("CALL", "W1AW"), ("QSO_DATE", "202\u{00fc}123")],
+        ),
+        (
+            "non-ASCII time",
+            vec![
+                ("CALL", "W1AW"),
+                ("QSO_DATE", "20250115"),
+                ("TIME_ON", "12\u{00e4}0"),
+            ],
+        ),
+        ("negative freq", vec![("CALL", "W1AW"), ("FREQ", "-14.074")]),
+        (
+            "huge freq",
+            vec![("CALL", "W1AW"), ("FREQ", "999999999999.0")],
+        ),
+        ("NaN freq", vec![("CALL", "W1AW"), ("FREQ", "NaN")]),
+        (
+            "infinity freq",
+            vec![("CALL", "W1AW"), ("FREQ", "Infinity")],
+        ),
+        ("null byte callsign", vec![("CALL", "\0\0\0\0")]),
+        ("emoji callsign", vec![("CALL", "\u{1F4A9}\u{1F4A9}")]),
+        ("huge callsign", vec![("CALL", &huge_callsign)]),
+        ("empty band", vec![("CALL", "W1AW"), ("BAND", "")]),
+        (
+            "garbage band",
+            vec![("CALL", "W1AW"), ("BAND", "\u{FFFD}\u{FFFD}")],
+        ),
+        (
+            "all fields adversarial",
+            vec![
+                ("CALL", "\u{200F}\u{202E}"),
+                ("QSO_DATE", "\0\0\0\0\0\0\0\0"),
+                ("TIME_ON", "ZZZZ"),
+                ("BAND", "999ZZZ"),
+                ("MODE", "\t\n\r"),
+                ("FREQ", "-0.0"),
+                ("RST_SENT", "\u{FEFF}"),
+                ("RST_RCVD", ""),
+            ],
+        ),
     ];
 
     for (desc, fields) in &field_combos {
-        let desc = desc.to_string();
+        let desc = (*desc).to_string();
         let fields: Vec<(String, String)> = fields
             .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect();
         let handle = tokio::task::spawn_blocking(move || {
             let mut rec = difa::Record::new();
@@ -217,60 +218,76 @@ async fn fuzz_qso_roundtrip() -> Vec<PanicReport> {
 
     let adversarial_qsos: Vec<(&str, QsoRecord)> = vec![
         ("default record", QsoRecord::default()),
-        ("negative nanos", QsoRecord {
-            worked_callsign: "W1AW".into(),
-            utc_timestamp: Some(prost_types::Timestamp {
-                seconds: 1_700_000_000,
-                nanos: -1,
-            }),
-            ..Default::default()
-        }),
-        ("i32::MIN nanos", QsoRecord {
-            worked_callsign: "W1AW".into(),
-            utc_timestamp: Some(prost_types::Timestamp {
-                seconds: 0,
-                nanos: i32::MIN,
-            }),
-            ..Default::default()
-        }),
-        ("i64::MIN seconds", QsoRecord {
-            worked_callsign: "W1AW".into(),
-            utc_timestamp: Some(prost_types::Timestamp {
-                seconds: i64::MIN,
-                nanos: 0,
-            }),
-            ..Default::default()
-        }),
-        ("i64::MAX seconds", QsoRecord {
-            worked_callsign: "W1AW".into(),
-            utc_timestamp: Some(prost_types::Timestamp {
-                seconds: i64::MAX,
-                nanos: 999_999_999,
-            }),
-            ..Default::default()
-        }),
-        ("extreme band enum", QsoRecord {
-            worked_callsign: "W1AW".into(),
-            band: i32::MAX,
-            mode: i32::MIN,
-            ..Default::default()
-        }),
-        ("null-byte strings", QsoRecord {
-            worked_callsign: "\0\0\0".into(),
-            station_callsign: "\0".into(),
-            comment: Some("\0".into()),
-            ..Default::default()
-        }),
+        (
+            "negative nanos",
+            QsoRecord {
+                worked_callsign: "W1AW".into(),
+                utc_timestamp: Some(prost_types::Timestamp {
+                    seconds: 1_700_000_000,
+                    nanos: -1,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "i32::MIN nanos",
+            QsoRecord {
+                worked_callsign: "W1AW".into(),
+                utc_timestamp: Some(prost_types::Timestamp {
+                    seconds: 0,
+                    nanos: i32::MIN,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "i64::MIN seconds",
+            QsoRecord {
+                worked_callsign: "W1AW".into(),
+                utc_timestamp: Some(prost_types::Timestamp {
+                    seconds: i64::MIN,
+                    nanos: 0,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "i64::MAX seconds",
+            QsoRecord {
+                worked_callsign: "W1AW".into(),
+                utc_timestamp: Some(prost_types::Timestamp {
+                    seconds: i64::MAX,
+                    nanos: 999_999_999,
+                }),
+                ..Default::default()
+            },
+        ),
+        (
+            "extreme band enum",
+            QsoRecord {
+                worked_callsign: "W1AW".into(),
+                band: i32::MAX,
+                mode: i32::MIN,
+                ..Default::default()
+            },
+        ),
+        (
+            "null-byte strings",
+            QsoRecord {
+                worked_callsign: "\0\0\0".into(),
+                station_callsign: "\0".into(),
+                comment: Some("\0".into()),
+                ..Default::default()
+            },
+        ),
         ("huge extra_fields", {
             let mut qso = QsoRecord {
                 worked_callsign: "W1AW".into(),
                 ..Default::default()
             };
             for i in 0..1000 {
-                qso.extra_fields.insert(
-                    format!("FIELD_{i}"),
-                    "\u{1F4A9}".repeat(100),
-                );
+                qso.extra_fields
+                    .insert(format!("FIELD_{i}"), "\u{1F4A9}".repeat(100));
             }
             qso
         }),
@@ -301,9 +318,7 @@ async fn fuzz_qso_roundtrip() -> Vec<PanicReport> {
 
 async fn hammer_lookup_coordinator() -> Vec<PanicReport> {
     use logripper_core::lookup::coordinator::{LookupCoordinator, LookupCoordinatorConfig};
-    use logripper_core::lookup::provider::{
-        CallsignProvider, ProviderLookup, ProviderLookupError,
-    };
+    use logripper_core::lookup::provider::{CallsignProvider, ProviderLookup, ProviderLookupError};
 
     #[derive(Debug)]
     struct ChaosProvider {
@@ -382,19 +397,62 @@ async fn hammer_lookup_coordinator() -> Vec<PanicReport> {
 async fn fuzz_ffi() -> Vec<PanicReport> {
     let mut reports = Vec::new();
 
-    let ffi_cases: Vec<(&str, Box<dyn FnOnce() + Send + 'static>)> = vec![
-        ("version", Box::new(|| { let _ = ffi::dsp_version(); })),
-        ("hz_to_khz(0)", Box::new(|| { let _ = ffi::hz_to_khz(0); })),
-        ("hz_to_khz(u64::MAX)", Box::new(|| { let _ = ffi::hz_to_khz(u64::MAX); })),
-        ("hz_to_khz(1)", Box::new(|| { let _ = ffi::hz_to_khz(1); })),
-        ("moving_average(empty)", Box::new(|| { let _ = ffi::moving_average(&[]); })),
-        ("moving_average(single)", Box::new(|| { let _ = ffi::moving_average(&[42.0]); })),
-        ("moving_average(NaN)", Box::new(|| { let _ = ffi::moving_average(&[f64::NAN]); })),
-        ("moving_average(Infinity)", Box::new(|| { let _ = ffi::moving_average(&[f64::INFINITY, f64::NEG_INFINITY]); })),
-        ("moving_average(large)", Box::new(|| {
-            let data = vec![1.0_f64; 100_000];
-            let _ = ffi::moving_average(&data);
-        })),
+    let ffi_cases: Vec<FfiCase> = vec![
+        (
+            "version",
+            Box::new(|| {
+                let _ = ffi::dsp_version();
+            }),
+        ),
+        (
+            "hz_to_khz(0)",
+            Box::new(|| {
+                let _ = ffi::hz_to_khz(0);
+            }),
+        ),
+        (
+            "hz_to_khz(u64::MAX)",
+            Box::new(|| {
+                let _ = ffi::hz_to_khz(u64::MAX);
+            }),
+        ),
+        (
+            "hz_to_khz(1)",
+            Box::new(|| {
+                let _ = ffi::hz_to_khz(1);
+            }),
+        ),
+        (
+            "moving_average(empty)",
+            Box::new(|| {
+                let _ = ffi::moving_average(&[]);
+            }),
+        ),
+        (
+            "moving_average(single)",
+            Box::new(|| {
+                let _ = ffi::moving_average(&[42.0]);
+            }),
+        ),
+        (
+            "moving_average(NaN)",
+            Box::new(|| {
+                let _ = ffi::moving_average(&[f64::NAN]);
+            }),
+        ),
+        (
+            "moving_average(Infinity)",
+            Box::new(|| {
+                let _ = ffi::moving_average(&[f64::INFINITY, f64::NEG_INFINITY]);
+            }),
+        ),
+        (
+            "moving_average(large)",
+            Box::new(|| {
+                let data = vec![1.0_f64; 100_000];
+                let _ = ffi::moving_average(&data);
+            }),
+        ),
     ];
 
     for (desc, func) in ffi_cases {
@@ -432,7 +490,7 @@ async fn fuzz_band_mode_parsing() -> Vec<PanicReport> {
     ];
 
     for (desc, freq) in &frequency_values {
-        let desc = desc.to_string();
+        let desc = (*desc).to_string();
         let freq = *freq;
         let handle = tokio::task::spawn_blocking(move || {
             let _ = band_from_frequency_mhz(freq);
@@ -448,7 +506,11 @@ async fn fuzz_band_mode_parsing() -> Vec<PanicReport> {
 
     for adversarial in adversarial_strings() {
         let desc = if adversarial.len() > 30 {
-            format!("{}... ({} bytes)", &adversarial[..30.min(adversarial.len())], adversarial.len())
+            format!(
+                "{}... ({} bytes)",
+                &adversarial[..30.min(adversarial.len())],
+                adversarial.len()
+            )
         } else {
             format!("{adversarial:?}")
         };

@@ -40,6 +40,7 @@ internal static class EnumHelpers
             "2.5MM" => Band._25Mm,
             "2MM" => Band._2Mm,
             "1MM" => Band._1Mm,
+            "SUBMM" => Band.Submm,
             _ => throw new ArgumentException($"Unknown band: {input}. Examples: 20m, 40m, 2m, 70cm"),
         };
     }
@@ -99,8 +100,43 @@ internal static class EnumHelpers
 
     public static string FormatBand(Band band)
     {
-        var name = band.ToString();
-        return name.TrimStart('_');
+        return band switch
+        {
+            Band._2190M => "2190M",
+            Band._630M => "630M",
+            Band._560M => "560M",
+            Band._160M => "160M",
+            Band._80M => "80M",
+            Band._60M => "60M",
+            Band._40M => "40M",
+            Band._30M => "30M",
+            Band._20M => "20M",
+            Band._17M => "17M",
+            Band._15M => "15M",
+            Band._12M => "12M",
+            Band._10M => "10M",
+            Band._8M => "8M",
+            Band._6M => "6M",
+            Band._5M => "5M",
+            Band._4M => "4M",
+            Band._2M => "2M",
+            Band._125M => "1.25M",
+            Band._70Cm => "70CM",
+            Band._33Cm => "33CM",
+            Band._23Cm => "23CM",
+            Band._13Cm => "13CM",
+            Band._9Cm => "9CM",
+            Band._6Cm => "6CM",
+            Band._3Cm => "3CM",
+            Band._125Cm => "1.25CM",
+            Band._6Mm => "6MM",
+            Band._4Mm => "4MM",
+            Band._25Mm => "2.5MM",
+            Band._2Mm => "2MM",
+            Band._1Mm => "1MM",
+            Band.Submm => "SUBMM",
+            _ => band.ToString().ToUpperInvariant()
+        };
     }
 
     public static string FormatMode(Mode mode)

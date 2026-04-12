@@ -1,4 +1,5 @@
-using Grpc.Core;
+using System.Runtime.CompilerServices;
+using Google.Protobuf;
 using Grpc.Net.Client;
 using LogRipper.Services;
 
@@ -18,13 +19,11 @@ internal static class ImportAdifCommand
 
         var client = new LogbookService.LogbookServiceClient(channel);
         using var call = client.ImportAdif();
-        var fileBytes = await File.ReadAllBytesAsync(filePath);
+        await using var input = File.OpenRead(filePath);
 
-        for (var offset = 0; offset < fileBytes.Length; offset += ChunkSize)
+        await foreach (var request in ReadRequestsAsync(input))
         {
-            var length = Math.Min(ChunkSize, fileBytes.Length - offset);
-            var chunk = new AdifChunk { Data = Google.Protobuf.ByteString.CopyFrom(fileBytes, offset, length) };
-            await call.RequestStream.WriteAsync(new ImportAdifRequest { Chunk = chunk });
+            await call.RequestStream.WriteAsync(request);
         }
 
         await call.RequestStream.CompleteAsync();
@@ -39,5 +38,31 @@ internal static class ImportAdifCommand
         }
 
         return 0;
+    }
+
+    internal static async IAsyncEnumerable<ImportAdifRequest> ReadRequestsAsync(
+        Stream input,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+
+        var buffer = new byte[ChunkSize];
+
+        while (true)
+        {
+            var bytesRead = await input.ReadAsync(buffer.AsMemory(0, buffer.Length), cancellationToken);
+            if (bytesRead == 0)
+            {
+                yield break;
+            }
+
+            yield return new ImportAdifRequest
+            {
+                Chunk = new AdifChunk
+                {
+                    Data = ByteString.CopyFrom(buffer, 0, bytesRead)
+                }
+            };
+        }
     }
 }
