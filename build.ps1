@@ -33,10 +33,9 @@ function Write-Step([string]$Message) {
     Write-Host "`n=== $Message ===" -ForegroundColor Cyan
 }
 
-function Invoke-StepCommand {
-    param([string]$Step, [scriptblock]$Block)
+function Invoke-Build([string]$Step, [string]$Command, [string[]]$Arguments) {
     Write-Step $Step
-    & $Block
+    & $Command @Arguments
     if ($LASTEXITCODE -ne 0) {
         Write-Host "FAILED: $Step" -ForegroundColor Red
         exit $LASTEXITCODE
@@ -44,15 +43,11 @@ function Invoke-StepCommand {
 }
 
 function Build-Rust {
-    Invoke-StepCommand 'Building Rust' {
-        cargo build --manifest-path $RustManifest
-    }
+    Invoke-Build 'Building Rust' cargo @('build', '--manifest-path', $RustManifest)
 }
 
 function Build-Dotnet {
-    Invoke-StepCommand 'Building .NET' {
-        dotnet build $DotnetSolution
-    }
+    Invoke-Build 'Building .NET' dotnet @('build', $DotnetSolution)
 }
 
 function Build-All {
@@ -61,40 +56,36 @@ function Build-All {
 }
 
 function Check-Proto {
-    Invoke-StepCommand 'buf lint' {
-        $bufCmd = Get-Command buf -ErrorAction SilentlyContinue
-        if (-not $bufCmd) {
-            Write-Host 'buf not installed, skipping. Install from: https://buf.build/docs/installation' -ForegroundColor Yellow
-            return
-        }
-        buf lint
+    $bufCmd = Get-Command buf -ErrorAction SilentlyContinue
+    if (-not $bufCmd) {
+        Write-Step 'buf lint'
+        Write-Host 'buf not installed, skipping. Install from: https://buf.build/docs/installation' -ForegroundColor Yellow
+        return
     }
+    Invoke-Build 'buf lint' buf @('lint')
 }
 
 function Check-Rust {
-    Invoke-StepCommand 'Rust formatting' {
-        cargo fmt --manifest-path $RustManifest --all -- --check
-    }
-
-    Invoke-StepCommand 'Rust clippy' {
-        cargo clippy --manifest-path $RustManifest --all-targets -- -D warnings
-    }
-
-    Invoke-StepCommand 'Rust tests' {
-        cargo test --manifest-path $RustManifest
-    }
+    Invoke-Build 'Rust formatting' cargo @('fmt', '--manifest-path', $RustManifest, '--all', '--', '--check')
+    Invoke-Build 'Rust clippy' cargo @('clippy', '--manifest-path', $RustManifest, '--all-targets', '--', '-D', 'warnings')
+    Invoke-Build 'Rust tests' cargo @('test', '--manifest-path', $RustManifest)
 
     Check-Proto
 
-    Invoke-StepCommand 'cargo deny' {
+    $denyCmd = Get-Command cargo-deny -ErrorAction SilentlyContinue
+    if (-not $denyCmd) {
+        Write-Step 'cargo deny'
+        Write-Host 'cargo-deny not installed, skipping. Install with: cargo install cargo-deny' -ForegroundColor Yellow
+    }
+    else {
+        Write-Step 'cargo deny'
         Push-Location $RustDir
         try {
-            $denyCmd = Get-Command cargo-deny -ErrorAction SilentlyContinue
-            if (-not $denyCmd) {
-                Write-Host 'cargo-deny not installed, skipping. Install with: cargo install cargo-deny' -ForegroundColor Yellow
-                return
-            }
             cargo deny check --config deny.toml
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "FAILED: cargo deny" -ForegroundColor Red
+                exit $LASTEXITCODE
+            }
         }
         finally {
             Pop-Location
@@ -103,17 +94,9 @@ function Check-Rust {
 }
 
 function Check-Dotnet {
-    Invoke-StepCommand '.NET formatting' {
-        dotnet format $DotnetSolution --verify-no-changes
-    }
-
-    Invoke-StepCommand '.NET build' {
-        dotnet build $DotnetSolution
-    }
-
-    Invoke-StepCommand '.NET tests' {
-        dotnet test $DotnetSolution --no-build
-    }
+    Invoke-Build '.NET formatting' dotnet @('format', $DotnetSolution, '--verify-no-changes')
+    Invoke-Build '.NET build' dotnet @('build', $DotnetSolution)
+    Invoke-Build '.NET tests' dotnet @('test', $DotnetSolution, '--no-build')
 }
 
 function Check-All {
