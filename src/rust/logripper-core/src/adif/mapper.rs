@@ -790,9 +790,7 @@ fn field_is_overridden(
         station_snapshot
             .and_then(|snapshot| snapshot.longitude)
             .is_some()
-    } else if key.eq_ignore_ascii_case("QSO_DATE_OFF") {
-        qso.utc_end_timestamp.is_some()
-    } else if key.eq_ignore_ascii_case("TIME_OFF") {
+    } else if key.eq_ignore_ascii_case("QSO_DATE_OFF") || key.eq_ignore_ascii_case("TIME_OFF") {
         qso.utc_end_timestamp.is_some()
     } else {
         false
@@ -1140,7 +1138,10 @@ mod tests {
             rec.insert("MODE", raw_mode).unwrap();
 
             let qso = AdifMapper::record_to_qso(&rec);
-            assert_eq!(qso.mode, expected_mode as i32, "mode mismatch for {raw_mode}");
+            assert_eq!(
+                qso.mode, expected_mode as i32,
+                "mode mismatch for {raw_mode}"
+            );
             assert_eq!(
                 qso.submode.as_deref(),
                 Some(expected_submode),
