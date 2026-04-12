@@ -5,8 +5,9 @@
 
 use std::{borrow::Cow, fmt::Write as _};
 
+use crate::adif::normalize::{enrich_from_dxcc, parse_rst_report};
 use crate::domain::band::band_from_adif;
-use crate::domain::mode::{import_only_submode, mode_from_adif};
+use crate::domain::mode::normalize_mode_from_adif;
 use crate::domain::qso::{new_local_id, qsl_status_from_adif};
 use crate::domain::station::{effective_station_snapshot, station_snapshot_has_values};
 use crate::proto::logripper::domain::{Band, Mode, QsoRecord, StationSnapshot, SyncStatus};
@@ -36,6 +37,8 @@ impl AdifMapper {
         // Collect QSO_DATE and TIME_ON separately for timestamp construction
         let mut qso_date: Option<Cow<'_, str>> = None;
         let mut time_on: Option<Cow<'_, str>> = None;
+        let mut qso_date_off: Option<Cow<'_, str>> = None;
+        let mut time_off: Option<Cow<'_, str>> = None;
 
         for (key, datum) in record.fields() {
             let value = datum.as_str();
@@ -68,6 +71,8 @@ impl AdifMapper {
                 }
                 "QSO_DATE" => qso_date = Some(value.clone()),
                 "TIME_ON" => time_on = Some(value.clone()),
+                "QSO_DATE_OFF" => qso_date_off = Some(value.clone()),
+                "TIME_OFF" => time_off = Some(value.clone()),
                 "BAND" => {
                     if let Some(band) = band_from_adif(value_str) {
                         qso.band = band.into();
@@ -76,13 +81,10 @@ impl AdifMapper {
                     }
                 }
                 "MODE" => {
-                    if let Some(mode) = mode_from_adif(value_str) {
+                    if let Some((mode, submode)) = normalize_mode_from_adif(value_str) {
                         qso.mode = mode.into();
-                        // Handle import-only modes that map to submode
-                        if let Some(sub) = import_only_submode(value_str) {
-                            if qso.submode.is_none() {
-                                qso.submode = Some(sub.to_string());
-                            }
+                        if let Some(submode) = submode.filter(|_| qso.submode.is_none()) {
+                            qso.submode = Some(submode.to_owned());
                         }
                     } else {
                         qso.extra_fields.insert(key_upper, value_str.to_owned());
@@ -101,18 +103,8 @@ impl AdifMapper {
                     }
                 }
                 // --- Signal reports ---
-                "RST_SENT" => {
-                    qso.rst_sent = Some(crate::proto::logripper::domain::RstReport {
-                        raw: value_str.to_owned(),
-                        ..Default::default()
-                    });
-                }
-                "RST_RCVD" => {
-                    qso.rst_received = Some(crate::proto::logripper::domain::RstReport {
-                        raw: value_str.to_owned(),
-                        ..Default::default()
-                    });
-                }
+                "RST_SENT" => qso.rst_sent = Some(parse_rst_report(value_str)),
+                "RST_RCVD" => qso.rst_received = Some(parse_rst_report(value_str)),
                 "TX_PWR" => qso.tx_power = Some(value_str.to_owned()),
 
                 // --- Geographic / enrichment ---
@@ -272,6 +264,30 @@ impl AdifMapper {
                 .insert("TIME_ON".to_string(), time_on.to_owned());
         }
 
+        if let Some(time_off) = time_off.as_deref() {
+            let end_date = qso_date_off.as_deref().or(qso_date.as_deref());
+            if let Some(end_date) = end_date {
+                if let Some(ts) = parse_adif_datetime(end_date, Some(time_off)) {
+                    qso.utc_end_timestamp = Some(ts);
+                } else {
+                    if let Some(raw_date_off) = qso_date_off.as_deref() {
+                        qso.extra_fields
+                            .insert("QSO_DATE_OFF".to_string(), raw_date_off.to_owned());
+                    }
+                    qso.extra_fields
+                        .insert("TIME_OFF".to_string(), time_off.to_owned());
+                }
+            } else {
+                qso.extra_fields
+                    .insert("TIME_OFF".to_string(), time_off.to_owned());
+            }
+        } else if let Some(raw_date_off) = qso_date_off.as_deref() {
+            qso.extra_fields
+                .insert("QSO_DATE_OFF".to_string(), raw_date_off.to_owned());
+        }
+
+        enrich_from_dxcc(&mut qso);
+
         if let Some(snapshot) = station_snapshot.filter(station_snapshot_has_values) {
             qso.station_snapshot = Some(snapshot);
         }
@@ -330,6 +346,12 @@ impl AdifMapper {
             if let Some((date_str, time_str)) = format_adif_datetime(ts) {
                 push_field(&mut fields, "QSO_DATE", date_str);
                 push_field(&mut fields, "TIME_ON", time_str);
+            }
+        }
+        if let Some(ref ts) = qso.utc_end_timestamp {
+            if let Some((date_str, time_str)) = format_adif_datetime(ts) {
+                push_field(&mut fields, "QSO_DATE_OFF", date_str);
+                push_field(&mut fields, "TIME_OFF", time_str);
             }
         }
 
@@ -768,6 +790,10 @@ fn field_is_overridden(
         station_snapshot
             .and_then(|snapshot| snapshot.longitude)
             .is_some()
+    } else if key.eq_ignore_ascii_case("QSO_DATE_OFF") {
+        qso.utc_end_timestamp.is_some()
+    } else if key.eq_ignore_ascii_case("TIME_OFF") {
+        qso.utc_end_timestamp.is_some()
     } else {
         false
     }
@@ -1182,8 +1208,8 @@ mod tests {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
 
-        assert_eq!(field_map.get("QSO_DATE_OFF"), Some(&"20260115"));
-        assert_eq!(field_map.get("TIME_OFF"), Some(&"051840"));
+        assert_eq!(field_map.get("QSO_DATE_OFF"), Some(&"20260116"));
+        assert_eq!(field_map.get("TIME_OFF"), Some(&"154200"));
     }
 
     #[test]

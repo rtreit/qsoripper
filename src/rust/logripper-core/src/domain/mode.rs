@@ -86,6 +86,18 @@ static MODE_TO_ADIF_MAP: LazyLock<HashMap<Mode, &'static str>> = LazyLock::new(|
         .collect()
 });
 
+static SUBMODE_ALIAS_TO_MODE: LazyLock<HashMap<&'static str, (&'static str, Mode)>> =
+    LazyLock::new(|| {
+        include_str!("../adif/data/submode_aliases.tsv")
+            .lines()
+            .filter_map(|line| {
+                let (submode, mode_name) = line.split_once('\t')?;
+                let mode = ADIF_TO_MODE.get(mode_name).copied()?;
+                Some((submode, (submode, mode)))
+            })
+            .collect()
+    });
+
 /// Parse an ADIF mode string (case-insensitive) into a Mode enum value.
 /// For import-only modes (C4FM, DSTAR), returns the replacement mode.
 #[must_use]
@@ -104,6 +116,20 @@ pub fn import_only_submode(mode_str: &str) -> Option<&'static str> {
         .iter()
         .find(|(name, _, _)| *name == upper)
         .map(|(_, _, submode)| *submode)
+}
+
+/// Parse an ADIF MODE field into a canonical Mode plus an optional submode alias.
+#[must_use]
+pub fn normalize_mode_from_adif(s: &str) -> Option<(Mode, Option<&'static str>)> {
+    if let Some(mode) = mode_from_adif(s) {
+        return Some((mode, import_only_submode(s)));
+    }
+
+    let upper = s.to_uppercase();
+    SUBMODE_ALIAS_TO_MODE
+        .get(upper.as_str())
+        .copied()
+        .map(|(submode, mode)| (mode, Some(submode)))
 }
 
 /// Convert a Mode enum value to its canonical ADIF string representation.
@@ -185,6 +211,18 @@ mod tests {
     fn standard_mode_has_no_import_only_submode() {
         assert_eq!(import_only_submode("SSB"), None);
         assert_eq!(import_only_submode("FT8"), None);
+    }
+
+    #[test]
+    fn normalize_mode_from_known_submode_alias() {
+        assert_eq!(
+            normalize_mode_from_adif("PSK31"),
+            Some((Mode::Psk, Some("PSK31")))
+        );
+        assert_eq!(
+            normalize_mode_from_adif("usb"),
+            Some((Mode::Ssb, Some("USB")))
+        );
     }
 
     #[test]
