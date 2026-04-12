@@ -1,6 +1,7 @@
 //! ADIF adapter: parses and serializes ADIF at the engine boundary.
 
 pub mod mapper;
+mod normalize;
 
 use crate::proto::logripper::domain::QsoRecord;
 use difa::RecordStream;
