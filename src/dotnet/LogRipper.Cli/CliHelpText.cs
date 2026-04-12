@@ -44,16 +44,19 @@ internal static class CliHelpText
             "log" => """
                 Usage: log <callsign> <band> <mode> [options]
 
-                Log a new QSO to the engine.
+                Log a new QSO. Auto-enriches with QRZ data (grid, country, etc.)
 
                   --station <call>     Your station callsign (if not set via setup)
+                  --at <time>          QSO time (default: now). Relative (30.minutes) or absolute.
                   --rst-sent <rst>     RST sent (e.g., 59, 599)
                   --rst-rcvd <rst>     RST received
                   --freq <khz>         Frequency in kHz (e.g., 14074)
+                  --no-enrich          Skip automatic QRZ lookup enrichment
 
                 Examples:
                   log W1AW 20m FT8
                   log W1AW 40m CW --station AE7XI --rst-sent 599 --freq 7030
+                  log K7ABV 20m SSB --at 30.minutes
                 """,
             "get" => """
                 Usage: get <local-id>

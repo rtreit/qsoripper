@@ -14,6 +14,7 @@ public sealed class CommandHelperTests
             "W1AW",
             ["20m", "FT8", "--station", "k7abv", "--rst-sent", "59", "--rst-rcvd", "57", "--freq", "14074"],
             out var qso,
+            out _,
             out var error);
 
         Assert.True(success);
@@ -41,6 +42,7 @@ public sealed class CommandHelperTests
             "W1AW",
             ["20m", "FT8", option, value],
             out _,
+            out _,
             out var error);
 
         Assert.False(success);
@@ -52,7 +54,7 @@ public sealed class CommandHelperTests
     [InlineData("--freq", "Missing value for --freq.")]
     public void TryBuildQso_rejects_missing_option_values(string option, string expectedError)
     {
-        var success = LogQsoCommand.TryBuildQso("W1AW", ["20m", "FT8", option], out _, out var error);
+        var success = LogQsoCommand.TryBuildQso("W1AW", ["20m", "FT8", option], out _, out _, out var error);
 
         Assert.False(success);
         Assert.Equal(expectedError, error);

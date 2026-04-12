@@ -9,7 +9,7 @@ internal static class LogQsoCommand
 {
     public static async Task<int> RunAsync(GrpcChannel channel, string callsign, string[] args)
     {
-        if (!TryBuildQso(callsign, args, out var qso, out var error))
+        if (!TryBuildQso(callsign, args, out var qso, out var noEnrich, out var error))
         {
             Console.Error.WriteLine(error);
             return 1;
@@ -17,11 +17,26 @@ internal static class LogQsoCommand
 
         var requestQso = qso!;
 
+        if (!noEnrich)
+        {
+            await EnrichFromLookup(channel, requestQso);
+        }
+
         var client = new LogbookService.LogbookServiceClient(channel);
         var response = await client.LogQsoAsync(new LogQsoRequest { Qso = requestQso });
 
         Console.WriteLine($"QSO logged: {response.LocalId}");
-        Console.WriteLine($"  {callsign} on {requestQso.Band} {requestQso.Mode} at {requestQso.UtcTimestamp!.ToDateTime():u}");
+        Console.WriteLine($"  {requestQso.WorkedCallsign} on {EnumHelpers.FormatBand(requestQso.Band)} {EnumHelpers.FormatMode(requestQso.Mode)} at {requestQso.UtcTimestamp!.ToDateTime():u}");
+
+        if (requestQso.HasWorkedGrid)
+        {
+            Console.WriteLine($"  Grid: {requestQso.WorkedGrid}");
+        }
+
+        if (requestQso.HasWorkedCountry)
+        {
+            Console.WriteLine($"  Country: {requestQso.WorkedCountry}");
+        }
 
         if (response.HasSyncError)
         {
@@ -31,14 +46,15 @@ internal static class LogQsoCommand
         return 0;
     }
 
-    internal static bool TryBuildQso(string callsign, string[] args, out QsoRecord? qso, out string? error)
+    internal static bool TryBuildQso(string callsign, string[] args, out QsoRecord? qso, out bool noEnrich, out string? error)
     {
         qso = null;
+        noEnrich = false;
         error = null;
 
         if (args.Length < 2 || args.Any(static a => a is "help" or "-?" or "--help"))
         {
-            error = "Usage: log <callsign> <band> <mode> [--station call] [--rst-sent 59] [--rst-rcvd 59] [--freq khz]";
+            error = "Usage: log <callsign> <band> <mode> [--station call] [--at time] [--rst-sent 59] [--rst-rcvd 59] [--freq khz] [--no-enrich]";
             return false;
         }
 
@@ -46,10 +62,10 @@ internal static class LogQsoCommand
         {
             qso = new QsoRecord
             {
-                WorkedCallsign = callsign,
+                WorkedCallsign = callsign.ToUpperInvariant(),
                 Band = EnumHelpers.ParseBand(args[0]),
                 Mode = EnumHelpers.ParseMode(args[1]),
-                UtcTimestamp = Timestamp.FromDateTime(DateTime.UtcNow)
+                UtcTimestamp = Timestamp.FromDateTime(DateTime.UtcNow),
             };
         }
         catch (ArgumentException ex)
@@ -58,10 +74,10 @@ internal static class LogQsoCommand
             return false;
         }
 
-        return TryApplyOptionalArgs(args, qso, out error);
+        return TryApplyOptionalArgs(args, qso, ref noEnrich, out error);
     }
 
-    internal static bool TryApplyOptionalArgs(string[] args, QsoRecord qso, out string? error)
+    internal static bool TryApplyOptionalArgs(string[] args, QsoRecord qso, ref bool noEnrich, out string? error)
     {
         error = null;
 
@@ -74,6 +90,19 @@ internal static class LogQsoCommand
                     break;
                 case "--station":
                     error = "Missing value for --station.";
+                    return false;
+                case "--at" when i < args.Length - 1:
+                    var ts = TimeParser.Parse(args[++i]);
+                    if (ts is null)
+                    {
+                        error = "Invalid --at value. Use relative (30.minutes, 2.hours) or absolute (2026-04-12T19:30:00Z).";
+                        return false;
+                    }
+
+                    qso.UtcTimestamp = ts;
+                    break;
+                case "--at":
+                    error = "Missing value for --at.";
                     return false;
                 case "--rst-sent" when i < args.Length - 1:
                     if (!TryParseRst(args[++i], out var rstSent))
@@ -112,6 +141,9 @@ internal static class LogQsoCommand
                 case "--freq":
                     error = "Missing value for --freq.";
                     return false;
+                case "--no-enrich":
+                    noEnrich = true;
+                    break;
                 default:
                     error = $"Unknown option: {args[i]}";
                     return false;
@@ -139,5 +171,49 @@ internal static class LogQsoCommand
         }
 
         return true;
+    }
+
+    private static async Task EnrichFromLookup(GrpcChannel channel, QsoRecord qso)
+    {
+        try
+        {
+            var lookupClient = new LookupService.LookupServiceClient(channel);
+            var response = await lookupClient.LookupAsync(new LookupRequest
+            {
+                Callsign = qso.WorkedCallsign,
+                SkipCache = false,
+            });
+
+            var result = response.Result;
+            if (result is null || result.State != LookupState.Found || result.Record is null)
+            {
+                return;
+            }
+
+            var record = result.Record;
+
+            if (record.HasGridSquare && !qso.HasWorkedGrid)
+            {
+                qso.WorkedGrid = record.GridSquare;
+            }
+
+            if (record.HasCountry && !qso.HasWorkedCountry)
+            {
+                qso.WorkedCountry = record.Country;
+            }
+
+            if (record.HasState && !qso.HasWorkedState)
+            {
+                qso.WorkedState = record.State;
+            }
+
+            if (record.DxccEntityId != 0 && qso.WorkedDxcc == 0)
+            {
+                qso.WorkedDxcc = record.DxccEntityId;
+            }
+        }
+        catch (Grpc.Core.RpcException)
+        {
+        }
     }
 }
