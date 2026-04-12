@@ -350,6 +350,7 @@ rpc ExportAdif(ExportAdifRequest) returns (stream ExportAdifResponse)
 | `station_callsign` | Required | Local operator's callsign |
 | `worked_callsign` | Required | Remote station's callsign |
 | `utc_timestamp` | Required | UTC time of the contact |
+| `utc_end_timestamp` | Optional | UTC end time of the contact when known |
 | `band` | Required | Frequency band (see `Band` enum) |
 | `mode` | Required | Operating mode (see `Mode` enum) |
 | `frequency_khz` | Optional | Precise frequency in kHz |
