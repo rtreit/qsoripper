@@ -111,4 +111,19 @@ mod tests {
         assert_eq!(qso.worked_cq_zone, Some(25));
         assert_eq!(qso.worked_itu_zone, Some(45));
     }
+
+    #[test]
+    fn dxcc_enrichment_ignores_unknown_entity_codes() {
+        let mut qso = QsoRecord {
+            worked_dxcc: Some(9_999),
+            ..QsoRecord::default()
+        };
+
+        enrich_from_dxcc(&mut qso);
+
+        assert_eq!(qso.worked_country, None);
+        assert_eq!(qso.worked_continent, None);
+        assert_eq!(qso.worked_cq_zone, None);
+        assert_eq!(qso.worked_itu_zone, None);
+    }
 }
