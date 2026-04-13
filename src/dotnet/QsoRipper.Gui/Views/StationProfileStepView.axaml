@@ -4,66 +4,76 @@
              x:Class="QsoRipper.Gui.Views.StationProfileStepView"
              x:DataType="vm:StationProfileStepViewModel">
 
-  <StackPanel Spacing="10">
-    <TextBlock Text="Profile Name (required):" FontWeight="SemiBold" />
-    <TextBox Text="{Binding ProfileName, Mode=TwoWay}"
-             PlaceholderText="e.g. Home, Portable, Contest" />
+  <Grid ColumnDefinitions="*,24,*">
+    <Border Grid.Column="0"
+            Padding="16"
+            CornerRadius="6"
+            BorderThickness="1"
+            BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+      <StackPanel Spacing="10">
+        <TextBlock Text="Station Basics" FontSize="16" FontWeight="SemiBold" />
+        <TextBlock Text="Required fields to start logging."
+                   Opacity="0.7"
+                   TextWrapping="Wrap" />
 
-    <TextBlock Text="Station Callsign (required):" FontWeight="SemiBold" />
-    <TextBox Text="{Binding Callsign, Mode=TwoWay}"
-             PlaceholderText="e.g. W1AW" />
+        <TextBlock Text="Profile Name (required):" FontWeight="SemiBold" />
+        <TextBox Text="{Binding ProfileName, Mode=TwoWay}"
+                 PlaceholderText="e.g. Home, Portable, Contest" />
 
-    <TextBlock Text="Operator Callsign (required):" FontWeight="SemiBold" />
-    <TextBox Text="{Binding OperatorCallsign, Mode=TwoWay}"
-             PlaceholderText="e.g. W1AW (or personal call if different)" />
+        <TextBlock Text="Station Callsign (required):" FontWeight="SemiBold" />
+        <TextBox Text="{Binding Callsign, Mode=TwoWay}"
+                 PlaceholderText="e.g. W1AW" />
 
-    <TextBlock Text="Grid Square (required):" FontWeight="SemiBold" />
-    <TextBox Text="{Binding GridSquare, Mode=TwoWay}"
-             PlaceholderText="e.g. FN31pr" />
+        <TextBlock Text="Operator Callsign (required):" FontWeight="SemiBold" />
+        <TextBox Text="{Binding OperatorCallsign, Mode=TwoWay}"
+                 PlaceholderText="e.g. W1AW (or personal call if different)" />
 
-    <TextBlock Text="Operator Name:" />
-    <TextBox Text="{Binding OperatorName, Mode=TwoWay}"
-             PlaceholderText="e.g. John Smith" />
+        <TextBlock Text="Operator Name:" />
+        <TextBox Text="{Binding OperatorName, Mode=TwoWay}"
+                 PlaceholderText="e.g. John Smith" />
+      </StackPanel>
+    </Border>
 
-    <!-- Additional fields in a collapsible section -->
-    <Expander Header="Location &amp; Contest Fields" Padding="0,4">
-      <StackPanel Spacing="8">
-        <Grid ColumnDefinitions="*,12,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
-          <TextBlock Grid.Row="0" Grid.Column="0" Text="Country:" />
-          <TextBox Grid.Row="1" Grid.Column="0" Text="{Binding Country, Mode=TwoWay}"
-                   PlaceholderText="e.g. United States" />
+    <Border Grid.Column="2"
+            Padding="16"
+            CornerRadius="6"
+            BorderThickness="1"
+            BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}">
+      <StackPanel Spacing="10">
+        <TextBlock Text="Location &amp; Contest Details"
+                   FontSize="16"
+                   FontWeight="SemiBold" />
+        <TextBlock Text="Optional except Grid Square."
+                   Opacity="0.7"
+                   TextWrapping="Wrap" />
 
-          <TextBlock Grid.Row="0" Grid.Column="2" Text="State:" />
-          <TextBox Grid.Row="1" Grid.Column="2" Text="{Binding State, Mode=TwoWay}"
-                   PlaceholderText="e.g. CT" />
+        <Grid ColumnDefinitions="*,12,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+          <TextBlock Grid.Row="0" Grid.Column="0" Text="Grid Square (required):" FontWeight="SemiBold" />
+          <TextBlock Grid.Row="0" Grid.Column="2" Text="Country:" />
+          <TextBox Grid.Row="1" Grid.Column="0" Text="{Binding GridSquare, Mode=TwoWay}" PlaceholderText="e.g. FN31pr" />
+          <TextBox Grid.Row="1" Grid.Column="2" Text="{Binding Country, Mode=TwoWay}" PlaceholderText="e.g. United States" />
 
-          <TextBlock Grid.Row="2" Grid.Column="0" Text="County:" Margin="0,6,0,0" />
-          <TextBox Grid.Row="3" Grid.Column="0" Text="{Binding County, Mode=TwoWay}"
-                   PlaceholderText="e.g. Hartford" />
+          <TextBlock Grid.Row="2" Grid.Column="0" Text="State:" Margin="0,6,0,0" />
+          <TextBlock Grid.Row="2" Grid.Column="2" Text="County:" Margin="0,6,0,0" />
+          <TextBox Grid.Row="3" Grid.Column="0" Text="{Binding State, Mode=TwoWay}" PlaceholderText="e.g. CT" />
+          <TextBox Grid.Row="3" Grid.Column="2" Text="{Binding County, Mode=TwoWay}" PlaceholderText="e.g. Hartford" />
 
-          <TextBlock Grid.Row="2" Grid.Column="2" Text="ARRL Section:" Margin="0,6,0,0" />
-          <TextBox Grid.Row="3" Grid.Column="2" Text="{Binding ArrlSection, Mode=TwoWay}"
-                   PlaceholderText="e.g. CT" />
+          <TextBlock Grid.Row="4" Grid.Column="0" Text="ARRL Section:" Margin="0,6,0,0" />
+          <TextBlock Grid.Row="4" Grid.Column="2" Text="DXCC:" Margin="0,6,0,0" />
+          <TextBox Grid.Row="5" Grid.Column="0" Text="{Binding ArrlSection, Mode=TwoWay}" PlaceholderText="e.g. CT" />
+          <TextBox Grid.Row="5" Grid.Column="2" Text="{Binding Dxcc, Mode=TwoWay}" PlaceholderText="e.g. 291" />
 
-          <TextBlock Grid.Row="4" Grid.Column="0" Text="CQ Zone:" Margin="0,6,0,0" />
-          <TextBox Grid.Row="5" Grid.Column="0" Text="{Binding CqZone, Mode=TwoWay}"
-                   PlaceholderText="e.g. 5" />
+          <TextBlock Grid.Row="6" Grid.Column="0" Text="CQ Zone:" Margin="0,6,0,0" />
+          <TextBlock Grid.Row="6" Grid.Column="2" Text="ITU Zone:" Margin="0,6,0,0" />
+          <TextBox Grid.Row="7" Grid.Column="0" Text="{Binding CqZone, Mode=TwoWay}" PlaceholderText="e.g. 5" />
+          <TextBox Grid.Row="7" Grid.Column="2" Text="{Binding ItuZone, Mode=TwoWay}" PlaceholderText="e.g. 8" />
 
-          <TextBlock Grid.Row="4" Grid.Column="2" Text="ITU Zone:" Margin="0,6,0,0" />
-          <TextBox Grid.Row="5" Grid.Column="2" Text="{Binding ItuZone, Mode=TwoWay}"
-                   PlaceholderText="e.g. 8" />
-
-          <TextBlock Grid.Row="6" Grid.Column="0" Text="DXCC:" Margin="0,6,0,0" />
-          <TextBox Grid.Row="7" Grid.Column="0" Text="{Binding Dxcc, Mode=TwoWay}"
-                   PlaceholderText="e.g. 291" />
-
-          <TextBlock Grid.Row="6" Grid.Column="2" Text="Lat / Lon:" Margin="0,6,0,0" />
-          <StackPanel Grid.Row="7" Grid.Column="2" Orientation="Horizontal" Spacing="4">
-            <TextBox Text="{Binding Latitude, Mode=TwoWay}" PlaceholderText="Lat" Width="80" />
-            <TextBox Text="{Binding Longitude, Mode=TwoWay}" PlaceholderText="Lon" Width="80" />
-          </StackPanel>
+          <TextBlock Grid.Row="8" Grid.Column="0" Text="Latitude:" Margin="0,6,0,0" />
+          <TextBlock Grid.Row="8" Grid.Column="2" Text="Longitude:" Margin="0,6,0,0" />
+          <TextBox Grid.Row="9" Grid.Column="0" Text="{Binding Latitude, Mode=TwoWay}" PlaceholderText="e.g. 41.76" />
+          <TextBox Grid.Row="9" Grid.Column="2" Text="{Binding Longitude, Mode=TwoWay}" PlaceholderText="e.g. -72.68" />
         </Grid>
       </StackPanel>
-    </Expander>
-  </StackPanel>
+    </Border>
+  </Grid>
 </UserControl>
