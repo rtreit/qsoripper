@@ -12,7 +12,7 @@
   <DockPanel>
     <!-- Menu bar — always on top, never covered by overlay -->
     <Menu DockPanel.Dock="Top">
-      <MenuItem Header="_File">
+      <MenuItem x:Name="FileMenuItem" Header="_File">
         <MenuItem Header="_Settings" InputGesture="Ctrl+OemComma"
                   Command="{Binding OpenWizardCommand}" />
         <Separator />
