@@ -28,7 +28,9 @@ internal static class SetupCommand
         Console.WriteLine($"Config path:       {status.ConfigPath}");
         Console.WriteLine($"QRZ username:      {status.QrzXmlUsername ?? "(not set)"}");
         Console.WriteLine($"Station profile:   {status.HasStationProfile}");
+#pragma warning disable CS0612 // Type or member is obsolete
         Console.WriteLine($"Storage backend:   {status.StorageBackend}");
+#pragma warning restore CS0612
 
         return status.SetupComplete ? 0 : 1;
     }
