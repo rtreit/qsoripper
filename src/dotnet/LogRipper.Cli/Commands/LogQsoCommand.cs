@@ -208,6 +208,13 @@ internal static class LogQsoCommand
             var result = response.Result;
             if (result is null || result.State != LookupState.Found || result.Record is null)
             {
+                var reason = result?.State switch
+                {
+                    LookupState.NotFound => "callsign not found",
+                    LookupState.Error => result.HasErrorMessage ? result.ErrorMessage : "lookup error",
+                    _ => "no result",
+                };
+                Console.Error.WriteLine($"  \u26a0 Lookup skipped for {qso.WorkedCallsign}: {reason}");
                 return;
             }
 
@@ -233,8 +240,11 @@ internal static class LogQsoCommand
                 qso.WorkedDxcc = record.DxccEntityId;
             }
         }
-        catch (Grpc.Core.RpcException)
+        catch (Grpc.Core.RpcException ex)
         {
+            var detail = ex.Status.Detail;
+            var message = string.IsNullOrEmpty(detail) ? ex.StatusCode.ToString() : detail;
+            Console.Error.WriteLine($"  \u26a0 Lookup unavailable for {qso.WorkedCallsign}: {message}");
         }
     }
 }
