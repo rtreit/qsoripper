@@ -1,4 +1,4 @@
-//! Adversarial stress test: hunt for panics in the LogRipper engine.
+//! Adversarial stress test: hunt for panics in the `LogRipper` engine.
 //!
 //! Each attack vector spawns tasks that call public API functions with
 //! pathological inputs. Panics are caught via `tokio::task::spawn` (which
@@ -16,6 +16,8 @@ use logripper_core::domain::band::{band_from_adif, band_from_frequency_mhz};
 use logripper_core::domain::mode::mode_from_adif;
 use logripper_core::ffi;
 use logripper_core::proto::logripper::domain::QsoRecord;
+
+type FfiCase = (&'static str, Box<dyn FnOnce() + Send + 'static>);
 
 #[derive(Debug)]
 struct PanicReport {
@@ -94,7 +96,7 @@ async fn fuzz_parse_adi_qsos() -> Vec<PanicReport> {
         ),
         (
             "multibyte in field value",
-            format!("<CALL:6>W1\u{00FC}AW<eor>").into_bytes(),
+            "<CALL:6>W1\u{00FC}AW<eor>".to_string().into_bytes(),
         ),
         ("null bytes in value", b"<CALL:5>W1\x00AW<eor>".to_vec()),
         (
@@ -104,16 +106,15 @@ async fn fuzz_parse_adi_qsos() -> Vec<PanicReport> {
         ("1MB payload", vec![b'A'; 1_000_000]),
         (
             "adversarial date",
-            format!(
-                "<CALL:4>W1AW<QSO_DATE:8>202\u{00fc}123<TIME_ON:4>1200<BAND:3>20M<MODE:2>CW<eor>"
-            )
-            .into_bytes(),
+            "<CALL:4>W1AW<QSO_DATE:8>202\u{00fc}123<TIME_ON:4>1200<BAND:3>20M<MODE:2>CW<eor>"
+                .to_string()
+                .into_bytes(),
         ),
     ];
 
     for (desc, payload) in &garbage_payloads {
         let payload = payload.clone();
-        let desc = desc.to_string();
+        let desc = (*desc).to_string();
         let handle = tokio::task::spawn(async move {
             let _ = parse_adi_qsos(&payload).await;
         });
@@ -185,10 +186,10 @@ async fn fuzz_adif_mapper() -> Vec<PanicReport> {
     ];
 
     for (desc, fields) in &field_combos {
-        let desc = desc.to_string();
+        let desc = (*desc).to_string();
         let fields: Vec<(String, String)> = fields
             .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect();
         let handle = tokio::task::spawn_blocking(move || {
             let mut rec = difa::Record::new();
@@ -396,7 +397,7 @@ async fn hammer_lookup_coordinator() -> Vec<PanicReport> {
 async fn fuzz_ffi() -> Vec<PanicReport> {
     let mut reports = Vec::new();
 
-    let ffi_cases: Vec<(&str, Box<dyn FnOnce() + Send + 'static>)> = vec![
+    let ffi_cases: Vec<FfiCase> = vec![
         (
             "version",
             Box::new(|| {
@@ -489,7 +490,7 @@ async fn fuzz_band_mode_parsing() -> Vec<PanicReport> {
     ];
 
     for (desc, freq) in &frequency_values {
-        let desc = desc.to_string();
+        let desc = (*desc).to_string();
         let freq = *freq;
         let handle = tokio::task::spawn_blocking(move || {
             let _ = band_from_frequency_mhz(freq);

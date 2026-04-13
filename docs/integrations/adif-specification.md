@@ -618,6 +618,7 @@ The ADIF parser (Rust-side edge adapter) converts ADIF fields to/from proto `Qso
 | STATION_CALLSIGN | station_callsign | Falls back to OPERATOR if absent |
 | CALL | worked_callsign | — |
 | QSO_DATE + TIME_ON | utc_timestamp | Combined into Timestamp |
+| QSO_DATE_OFF + TIME_OFF | utc_end_timestamp | End date falls back to QSO_DATE when ADIF omits QSO_DATE_OFF |
 | BAND | band | Map string to Band enum |
 | MODE + SUBMODE | mode | Map to Mode enum; store submode separately if needed |
 | FREQ | frequency_khz | Convert MHz → kHz (multiply by 1000) |
