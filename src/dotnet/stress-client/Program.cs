@@ -179,7 +179,7 @@ var vectors = new List<Task>
 
     RunVector("ListQsos-chaos", async ct =>
     {
-        await logbook.ListQsosAsync(new ListQsosRequest
+        using var stream = logbook.ListQsos(new ListQsosRequest
         {
             CallsignFilter = adversarialStrings[random.Next(adversarialStrings.Length)],
             BandFilter = (Band)random.Next(-5, 40),
@@ -187,6 +187,7 @@ var vectors = new List<Task>
             Limit = (uint)random.Next(0, 10000),
             Offset = (uint)random.Next(0, 10000),
         }, cancellationToken: ct);
+        while (await stream.ResponseStream.MoveNext(ct)) { }
     }),
 
     RunVector("Lookup-adversarial", async ct =>
@@ -211,19 +212,23 @@ var vectors = new List<Task>
     RunVector("ImportAdif-garbage", async ct =>
     {
         var payload = adversarialAdifPayloads[random.Next(adversarialAdifPayloads.Length)];
-        await logbook.ImportAdifAsync(new ImportAdifRequest
+        using var call = logbook.ImportAdif(cancellationToken: ct);
+        await call.RequestStream.WriteAsync(new ImportAdifRequest
         {
             Chunk = new AdifChunk { Data = ByteString.CopyFrom(payload) }
-        }, cancellationToken: ct);
+        }, ct);
+        await call.RequestStream.CompleteAsync();
+        _ = await call.ResponseAsync;
     }),
 
     RunVector("ExportAdif-chaos", async ct =>
     {
-        await logbook.ExportAdifAsync(new ExportAdifRequest
+        using var stream = logbook.ExportAdif(new ExportAdifRequest
         {
             IncludeHeader = random.Next(2) == 0,
             After = new Timestamp { Seconds = random.NextInt64(-1000, long.MaxValue / 2) },
         }, cancellationToken: ct);
+        while (await stream.ResponseStream.MoveNext(ct)) { }
     }),
 };
 
