@@ -66,8 +66,8 @@
       </Border>
 
       <!-- Step content -->
-      <ScrollViewer Grid.Column="1" Padding="24,16">
-        <StackPanel Spacing="16">
+      <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="16" Margin="24,16">
           <TextBlock Text="{Binding CurrentStep.Title}"
                      FontSize="20" FontWeight="SemiBold" />
           <TextBlock Text="{Binding CurrentStep.Description}"
