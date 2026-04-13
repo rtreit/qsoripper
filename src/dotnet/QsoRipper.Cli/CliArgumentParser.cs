@@ -13,6 +13,7 @@ internal static class CliArgumentParser
         string? callsign = null;
         var skipCache = false;
         var jsonOutput = false;
+        var refresh = false;
 
         var remaining = new List<string>();
 
@@ -48,6 +49,12 @@ internal static class CliArgumentParser
                 continue;
             }
 
+            if (arg is "--refresh")
+            {
+                refresh = true;
+                continue;
+            }
+
             if (arg is "--json")
             {
                 jsonOutput = true;
@@ -78,6 +85,7 @@ internal static class CliArgumentParser
             Callsign: callsign,
             SkipCache: skipCache,
             JsonOutput: jsonOutput,
+            Refresh: refresh,
             RemainingArgs: remaining.ToArray());
     }
 }
