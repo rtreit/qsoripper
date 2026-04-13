@@ -285,19 +285,11 @@
 
     private static string FormatBand(QsoRipper.Domain.Band band)
     {
-        return band.ToString().Replace("Band", "").Replace("_", ".").ToUpperInvariant() switch
-        {
-            var s when s.StartsWith("BAND", StringComparison.Ordinal) => s[4..],
-            var s => s
-        };
+        return ProtoEnumDisplay.ForBand(band);
     }
 
     private static string FormatMode(QsoRipper.Domain.Mode mode)
     {
-        return mode.ToString().Replace("Mode", "").ToUpperInvariant() switch
-        {
-            var s when s.StartsWith("MODE", StringComparison.Ordinal) => s[4..],
-            var s => s
-        };
+        return ProtoEnumDisplay.ForMode(mode);
     }
 }
