@@ -11,7 +11,8 @@
       <Button DockPanel.Dock="Right" Content="Browse…"
               Margin="8,0,0,0"
               x:Name="BrowseButton" />
-      <TextBox Text="{Binding LogFolder, Mode=TwoWay}"
+      <TextBox x:Name="WizardLogFolderBox"
+               Text="{Binding LogFolder, Mode=TwoWay}"
                PlaceholderText="e.g. C:\Users\you\QsoRipper" />
     </DockPanel>
 
@@ -20,7 +21,8 @@
       <TextBlock Text="{Binding DirectoryMessage}"
                  TextWrapping="Wrap" FontSize="12"
                  Foreground="{Binding OfferCreateDirectory, Converter={x:Static v:LogFileStepView.DirectoryColor}}" />
-      <Button Content="Create Directory"
+      <Button x:Name="WizardCreateDirectoryButton"
+              Content="Create Directory"
               Command="{Binding CreateDirectoryCommand}"
               IsVisible="{Binding OfferCreateDirectory}"
               Classes="accent" />
@@ -30,7 +32,8 @@
     <DockPanel>
       <TextBlock DockPanel.Dock="Right" Text=".db"
                  VerticalAlignment="Center" Opacity="0.5" Margin="4,0,0,0" />
-      <TextBox Text="{Binding LogFileName, Mode=TwoWay}"
+      <TextBox x:Name="WizardLogNameBox"
+               Text="{Binding LogFileName, Mode=TwoWay}"
                PlaceholderText="qsoripper" />
     </DockPanel>
 
