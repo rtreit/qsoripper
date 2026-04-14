@@ -10,7 +10,8 @@
 
     <TextBlock Text="QRZ Logbook API Key:" FontWeight="SemiBold" />
     <TextBox x:Name="WizardQrzLogbookApiKeyBox"
-             Text="{Binding ApiKey, Mode=TwoWay}"
+             AutomationProperties.AutomationId="WizardQrzLogbookApiKeyBox"
+              Text="{Binding ApiKey, Mode=TwoWay}"
               PasswordChar="•"
               PlaceholderText="Paste your API key here" />
 
@@ -19,14 +20,16 @@
                Opacity="0.6" FontSize="12" />
 
     <CheckBox x:Name="WizardAutoSyncCheckBox"
-              Content="Enable automatic sync"
+              AutomationProperties.AutomationId="WizardAutoSyncCheckBox"
+               Content="Enable automatic sync"
               IsChecked="{Binding AutoSyncEnabled, Mode=TwoWay}"
               Margin="0,8,0,0" />
 
     <StackPanel Spacing="4" IsEnabled="{Binding IsSyncIntervalEnabled}">
       <TextBlock Text="Sync interval (seconds):" FontWeight="SemiBold" />
       <NumericUpDown x:Name="WizardSyncIntervalInput"
-                     Value="{Binding SyncIntervalSeconds, Mode=TwoWay}"
+                     AutomationProperties.AutomationId="WizardSyncIntervalInput"
+                      Value="{Binding SyncIntervalSeconds, Mode=TwoWay}"
                      Minimum="60" Maximum="3600" Increment="60"
                      FormatString="0" />
       <TextBlock Text="How often to sync with QRZ logbook (60–3600 seconds)."

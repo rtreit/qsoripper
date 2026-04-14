@@ -4,7 +4,8 @@
              xmlns:v="using:QsoRipper.Gui.Views"
              x:Class="QsoRipper.Gui.Views.SetupWizardView"
              x:Name="SetupWizardRoot"
-             x:DataType="vm:SetupWizardViewModel">
+             x:DataType="vm:SetupWizardViewModel"
+             AutomationProperties.AutomationId="SetupWizardRoot">
 
   <DockPanel>
     <!-- Footer: step label + buttons -->
@@ -23,17 +24,21 @@
                     Spacing="8"
                     HorizontalAlignment="Right">
           <Button x:Name="WizardCancelButton"
+                  AutomationProperties.AutomationId="WizardCancelButton"
                   Content="Cancel"
                   Command="{Binding CancelCommand}" />
           <Button x:Name="WizardBackButton"
+                  AutomationProperties.AutomationId="WizardBackButton"
                   Content="Back"
                   Command="{Binding BackCommand}"
                   IsVisible="{Binding CanGoBack}" />
           <Button x:Name="WizardSkipButton"
+                  AutomationProperties.AutomationId="WizardSkipButton"
                   Content="Skip"
                   Command="{Binding SkipCommand}"
                   IsVisible="{Binding CurrentStep.IsSkippable}" />
           <Button x:Name="WizardNextButton"
+                  AutomationProperties.AutomationId="WizardNextButton"
                   Content="{Binding IsLastStep, Converter={x:Static v:SetupWizardView.NextOrSave}}"
                   Command="{Binding NextCommand}"
                   Classes="accent"
@@ -79,7 +84,9 @@
                      Opacity="0.7" TextWrapping="Wrap" />
 
           <!-- Dynamic step content -->
-          <ContentControl x:Name="WizardStepContent" Content="{Binding CurrentStep}">
+          <ContentControl x:Name="WizardStepContent"
+                          AutomationProperties.AutomationId="WizardStepContent"
+                          Content="{Binding CurrentStep}">
             <ContentControl.DataTemplates>
               <DataTemplate DataType="vm:LogFileStepViewModel">
                 <v:LogFileStepView />

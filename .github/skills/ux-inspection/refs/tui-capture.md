@@ -9,7 +9,7 @@
 
 ## QsoRipper rules
 
-- Use `scripts\capture-tui.ps1` as the entry point; it can bootstrap a compatible repo-local Terminalizer runtime when needed.
+- Use `scripts\capture-tui.ps1` as the entry point; it is currently Windows-only and can bootstrap a compatible repo-local Terminalizer runtime when needed.
 - Be honest about scope: today this path targets terminal workflows and the CLI, not a full ratatui UI.
 - Keep terminal size and theme fixed so the rendered artifact is repeatable.
 - Always save the raw transcript as well as the rendered artifact.

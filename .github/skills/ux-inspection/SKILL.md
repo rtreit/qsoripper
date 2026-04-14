@@ -33,7 +33,7 @@ description: >-
 
 ### Terminal / TUI workflows
 
-- Script: `scripts/capture-tui.ps1`
+- Script: `scripts/capture-tui.ps1` (Windows-only today)
 - Today this targets scripted CLI/terminal workflows honestly; point it at a future TUI binary later
 - Best for terminal review artifacts, transcripts, and GIF capture through Terminalizer
 

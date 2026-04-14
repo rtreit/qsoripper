@@ -159,7 +159,7 @@ The repo now includes three developer-facing UX inspection lanes:
 
 - **Web** screenshots and diffs with Playwright
 - **Avalonia desktop** deterministic capture plus Windows UI automation
-- **Terminal** workflow capture to GIF/transcript via a repo-local Terminalizer runtime
+- **Terminal** workflow capture to GIF/transcript via a repo-local Terminalizer runtime (**Windows-only** today)
 
 One-time setup after cloning:
 
@@ -170,7 +170,7 @@ npx playwright install chromium
 
 - `npm install` restores the root TypeScript and Playwright tooling used by `scripts\capture-web.ts` and `scripts\capture-web-diff.ts`.
 - `npx playwright install chromium` installs the browser binary used for web captures.
-- `scripts\capture-tui.ps1` does **not** require a global Terminalizer install. On first run it bootstraps a repo-local Node 22 + Terminalizer runtime under `tools\terminalizer-bootstrap\` and `tools\terminalizer-runtime\`.
+- `scripts\capture-tui.ps1` is currently **Windows-only**. It does **not** require a global Terminalizer install; on first run it bootstraps a repo-local Node 22 + Terminalizer runtime under `tools\terminalizer-bootstrap\` and `tools\terminalizer-runtime\`.
 - `scripts\drive-avalonia.ps1` is **Windows-only** and needs an interactive desktop session because it uses Windows UI Automation APIs. It does not require WinAppDriver.
 
 Common entry points:
@@ -186,7 +186,7 @@ npm run ux:diff:web -- --scenario debughost-home --launch-debughost
 # Windows UI automation against the live Avalonia window
 .\scripts\drive-avalonia.ps1 -ActionScript .\scripts\automation\avalonia-main-window-smoke.json
 
-# Terminal workflow capture
+# Terminal workflow capture (Windows-only today)
 .\scripts\capture-tui.ps1 -Scenario cli-help
 ```
 

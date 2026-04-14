@@ -6,7 +6,7 @@ QsoRipper now has three repo-local UI inspection lanes:
 
 - **Web** capture and visual diff with Playwright
 - **Avalonia desktop** deterministic screenshot export plus Windows UI automation
-- **Terminal** workflow capture to GIF/transcript with a repo-local Terminalizer runtime
+- **Terminal** workflow capture to GIF/transcript with a repo-local Terminalizer runtime (Windows-only today)
 
 All three write artifacts under:
 
@@ -22,6 +22,7 @@ All three write artifacts under:
 | Node.js + npm | Restores Playwright tooling and bootstraps the local Terminalizer runtime |
 | PowerShell 7 | Runs `capture-avalonia.ps1`, `drive-avalonia.ps1`, `capture-tui.ps1`, and other repo scripts |
 | Playwright Chromium browser | Required by the web capture/diff scripts |
+| Windows | Required for `drive-avalonia.ps1` and for the current `capture-tui.ps1` implementation |
 | Windows desktop session | Required only for `drive-avalonia.ps1` because it uses Windows UI Automation |
 
 ## One-time setup
@@ -37,7 +38,7 @@ Notes:
 
 - `npm install` restores the root TypeScript/Playwright toolchain from `package.json`.
 - `npx playwright install chromium` installs the browser binary used by the web capture scripts.
-- You do **not** need to install Terminalizer globally. `scripts\capture-tui.ps1` bootstraps a repo-local Node 22 + Terminalizer runtime under `tools\terminalizer-bootstrap\` and `tools\terminalizer-runtime\` on first use.
+- You do **not** need to install Terminalizer globally. `scripts\capture-tui.ps1` is currently Windows-only and bootstraps a repo-local Node 22 + Terminalizer runtime under `tools\terminalizer-bootstrap\` and `tools\terminalizer-runtime\` on first use.
 - `drive-avalonia.ps1` does **not** require WinAppDriver. It uses built-in Windows UI Automation assemblies plus native user32 calls.
 
 ## Lane-specific setup and constraints
@@ -112,11 +113,13 @@ Entry point:
 
 Requirements:
 
+- Windows
 - PowerShell 7 (`pwsh`)
 - `npm` available on the machine
 
 Notes:
 
+- The script is currently Windows-only.
 - The script bootstraps a repo-local Node 22 + Terminalizer runtime on first use.
 - No global Terminalizer install is required.
 - The current terminal lane targets scripted CLI workflows honestly; it can point at a future TUI binary later without changing the artifact contract.
@@ -131,3 +134,5 @@ npm run ux:capture:web -- --scenario debughost-home --launch-debughost
 ```
 
 If all three commands succeed, the local UI inspection toolchain is ready.
+
+The terminal verification command currently requires Windows.

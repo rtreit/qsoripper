@@ -21,6 +21,12 @@ if ([string]::IsNullOrWhiteSpace($Output)) {
     $Output = Join-Path $currentRoot "$Scenario.png"
 }
 
+$Output = [System.IO.Path]::GetFullPath($Output)
+$outputDirectory = Split-Path -Parent $Output
+if (-not [string]::IsNullOrWhiteSpace($outputDirectory)) {
+    New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
+}
+
 if ([string]::IsNullOrWhiteSpace($Fixture)) {
     $defaultFixture = Join-Path $PSScriptRoot "fixtures\ux-main-window.fixture.json"
     if (Test-Path $defaultFixture) {
@@ -36,7 +42,7 @@ $arguments = @(
     "--capture",
     "--capture-scenario", $Scenario,
     "--capture-target", $Target,
-    "--capture-output", (Resolve-Path -LiteralPath (Split-Path -Parent $Output) | ForEach-Object { Join-Path $_ (Split-Path -Leaf $Output) }),
+    "--capture-output", $Output,
     "--capture-theme", $Theme
 )
 

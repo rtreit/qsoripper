@@ -196,6 +196,7 @@ export async function captureWeb(options: WebCaptureOptions): Promise<WebCapture
     await page.evaluate(async () => {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     });
+    await mkdir(path.dirname(options.outputPath), { recursive: true });
 
     if (options.selector) {
       const locator = page.locator(options.selector);
@@ -308,7 +309,15 @@ async function maybeStartDebugHost(
     ],
     {
       cwd: repoRoot,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        // MapStaticAssets in Production mode serves pre-compressed .gz files
+        // that only exist after `dotnet publish`. Development mode falls back
+        // to serving source files from wwwroot, which is what we need for
+        // `dotnet run` based captures.
+        ASPNETCORE_ENVIRONMENT: 'Development'
+      }
     }
   );
 

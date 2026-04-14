@@ -11,17 +11,20 @@
 
     <TextBlock Text="QRZ Username:" FontWeight="SemiBold" />
     <TextBox x:Name="WizardQrzUsernameBox"
-             Text="{Binding Username, Mode=TwoWay}"
+             AutomationProperties.AutomationId="WizardQrzUsernameBox"
+              Text="{Binding Username, Mode=TwoWay}"
               PlaceholderText="Your QRZ username" />
 
     <TextBlock Text="QRZ Password:" FontWeight="SemiBold" />
     <TextBox x:Name="WizardQrzPasswordBox"
-             Text="{Binding Password, Mode=TwoWay}"
+             AutomationProperties.AutomationId="WizardQrzPasswordBox"
+              Text="{Binding Password, Mode=TwoWay}"
               PasswordChar="•"
               PlaceholderText="Your QRZ password" />
 
     <StackPanel Orientation="Horizontal" Spacing="12">
       <Button x:Name="WizardTestQrzConnectionButton"
+              AutomationProperties.AutomationId="WizardTestQrzConnectionButton"
               Content="Test Connection"
               Command="{Binding TestConnectionCommand}"
               IsEnabled="{Binding !IsTesting}" />

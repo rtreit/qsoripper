@@ -42,9 +42,24 @@
 3. Save diff output under `artifacts/ux/diff/` when pixels differ.
 4. Fail explicitly on missing baselines unless baseline creation was requested.
 
+## Common failure modes
+
+- **Unstyled / no CSS**: DebugHost must run in `Development` environment.
+  `MapStaticAssets` in Production mode serves pre-compressed `.gz` files that
+  only exist after `dotnet publish`. When using `dotnet run`, set
+  `ASPNETCORE_ENVIRONMENT=Development` or the page renders with zero styling.
+  The `--launch-debughost` flag handles this automatically.
+- **Blazor not interactive**: The page prerender may look correct structurally
+  but interactive components won't respond. Wait for `blazor.web.js` to
+  establish the SignalR circuit before capturing interactive state.
+- **Stale fingerprinted URLs**: After rebuilding, the fingerprint hashes in CSS
+  `<link>` tags change. Restart the DebugHost after rebuild to pick up new
+  static asset manifests.
+
 ## Check this first
 
 - Is the capture using the expected route and viewport?
+- Is the DebugHost running in `Development` environment? (check for unstyled output)
 - Is the page still animating or loading late content?
 - Is the defect page-wide or local to one selector?
 - Are you comparing against a baseline produced on the same platform/browser setup?

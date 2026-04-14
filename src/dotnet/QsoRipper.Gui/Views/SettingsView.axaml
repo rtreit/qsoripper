@@ -5,6 +5,7 @@
         x:Class="QsoRipper.Gui.Views.SettingsView"
         x:Name="SettingsWindow"
         x:DataType="vm:SettingsViewModel"
+        AutomationProperties.AutomationId="SettingsWindow"
         Title="Settings"
         Width="560" Height="780"
         MinWidth="480" MinHeight="520"
@@ -36,10 +37,12 @@
                     Spacing="8"
                     HorizontalAlignment="Right">
           <Button x:Name="SettingsCancelButton"
+                  AutomationProperties.AutomationId="SettingsCancelButton"
                   Content="Cancel"
                   Command="{Binding CancelCommand}"
                   IsEnabled="{Binding !IsSaving}" />
           <Button x:Name="SettingsSaveButton"
+                  AutomationProperties.AutomationId="SettingsSaveButton"
                   Content="Save"
                   Command="{Binding SaveCommand}"
                   Classes="accent"
@@ -71,6 +74,7 @@
             <TextBlock Grid.Row="0" Grid.Column="0"
                        Text="Callsign:" VerticalAlignment="Center" />
             <TextBox x:Name="SettingsCallsignBox"
+                     AutomationProperties.AutomationId="SettingsCallsignBox"
                      Grid.Row="0" Grid.Column="1"
                       Text="{Binding Callsign, Mode=TwoWay}"
                       PlaceholderText="e.g. W1AW" />
@@ -78,6 +82,7 @@
             <TextBlock Grid.Row="1" Grid.Column="0"
                        Text="Grid Square:" VerticalAlignment="Center" />
             <TextBox x:Name="SettingsGridSquareBox"
+                     AutomationProperties.AutomationId="SettingsGridSquareBox"
                      Grid.Row="1" Grid.Column="1"
                       Text="{Binding GridSquare, Mode=TwoWay}"
                       PlaceholderText="e.g. FN31" />
@@ -85,48 +90,57 @@
             <TextBlock Grid.Row="2" Grid.Column="0"
                        Text="Operator Name:" VerticalAlignment="Center" />
             <TextBox x:Name="SettingsOperatorNameBox"
+                     AutomationProperties.AutomationId="SettingsOperatorNameBox"
                      Grid.Row="2" Grid.Column="1"
                       Text="{Binding OperatorName, Mode=TwoWay}" />
 
             <TextBlock Grid.Row="3" Grid.Column="0"
                        Text="Operator Call:" VerticalAlignment="Center" />
             <TextBox x:Name="SettingsOperatorCallsignBox"
+                     AutomationProperties.AutomationId="SettingsOperatorCallsignBox"
                      Grid.Row="3" Grid.Column="1"
                       Text="{Binding OperatorCallsign, Mode=TwoWay}" />
 
             <TextBlock Grid.Row="4" Grid.Column="0"
                        Text="Profile Name:" VerticalAlignment="Center" />
             <TextBox x:Name="SettingsProfileNameBox"
+                     AutomationProperties.AutomationId="SettingsProfileNameBox"
                      Grid.Row="4" Grid.Column="1"
                       Text="{Binding ProfileName, Mode=TwoWay}"
                       PlaceholderText="Default" />
           </Grid>
 
           <!-- Expander for extended station fields -->
-          <Expander x:Name="SettingsMoreStationFieldsExpander" Header="More Station Fields" Padding="0,4">
+          <Expander x:Name="SettingsMoreStationFieldsExpander"
+                    AutomationProperties.AutomationId="SettingsMoreStationFieldsExpander"
+                    Header="More Station Fields" Padding="0,4">
             <Grid ColumnDefinitions="140,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
                   ColumnSpacing="12" RowSpacing="6" Margin="0,4,0,0">
               <TextBlock Grid.Row="0" Grid.Column="0"
                          Text="County:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsCountyBox"
+                       AutomationProperties.AutomationId="SettingsCountyBox"
                        Grid.Row="0" Grid.Column="1"
                         Text="{Binding County, Mode=TwoWay}" />
 
               <TextBlock Grid.Row="1" Grid.Column="0"
                          Text="State:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsStateBox"
+                       AutomationProperties.AutomationId="SettingsStateBox"
                        Grid.Row="1" Grid.Column="1"
                         Text="{Binding State, Mode=TwoWay}" />
 
               <TextBlock Grid.Row="2" Grid.Column="0"
                          Text="Country:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsCountryBox"
+                       AutomationProperties.AutomationId="SettingsCountryBox"
                        Grid.Row="2" Grid.Column="1"
                         Text="{Binding Country, Mode=TwoWay}" />
 
               <TextBlock Grid.Row="3" Grid.Column="0"
                          Text="DXCC:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsDxccBox"
+                       AutomationProperties.AutomationId="SettingsDxccBox"
                        Grid.Row="3" Grid.Column="1"
                         Text="{Binding Dxcc, Mode=TwoWay}"
                         PlaceholderText="e.g. 291" />
@@ -134,18 +148,21 @@
               <TextBlock Grid.Row="4" Grid.Column="0"
                          Text="CQ Zone:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsCqZoneBox"
+                       AutomationProperties.AutomationId="SettingsCqZoneBox"
                        Grid.Row="4" Grid.Column="1"
                         Text="{Binding CqZone, Mode=TwoWay}" />
 
               <TextBlock Grid.Row="5" Grid.Column="0"
                          Text="ITU Zone:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsItuZoneBox"
+                       AutomationProperties.AutomationId="SettingsItuZoneBox"
                        Grid.Row="5" Grid.Column="1"
                         Text="{Binding ItuZone, Mode=TwoWay}" />
 
               <TextBlock Grid.Row="6" Grid.Column="0"
                          Text="Latitude:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsLatitudeBox"
+                       AutomationProperties.AutomationId="SettingsLatitudeBox"
                        Grid.Row="6" Grid.Column="1"
                         Text="{Binding Latitude, Mode=TwoWay}"
                         PlaceholderText="Decimal degrees" />
@@ -153,6 +170,7 @@
               <TextBlock Grid.Row="7" Grid.Column="0"
                          Text="Longitude:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsLongitudeBox"
+                       AutomationProperties.AutomationId="SettingsLongitudeBox"
                        Grid.Row="7" Grid.Column="1"
                         Text="{Binding Longitude, Mode=TwoWay}"
                         PlaceholderText="Decimal degrees" />
@@ -160,6 +178,7 @@
               <TextBlock Grid.Row="8" Grid.Column="0"
                          Text="ARRL Section:" VerticalAlignment="Center" />
               <TextBox x:Name="SettingsArrlSectionBox"
+                       AutomationProperties.AutomationId="SettingsArrlSectionBox"
                        Grid.Row="8" Grid.Column="1"
                         Text="{Binding ArrlSection, Mode=TwoWay}" />
             </Grid>
@@ -180,12 +199,14 @@
             <TextBlock Grid.Row="0" Grid.Column="0"
                        Text="Username:" VerticalAlignment="Center" />
              <TextBox x:Name="SettingsQrzXmlUsernameBox"
+                      AutomationProperties.AutomationId="SettingsQrzXmlUsernameBox"
                       Grid.Row="0" Grid.Column="1"
                       Text="{Binding QrzXmlUsername, Mode=TwoWay}" />
 
             <TextBlock Grid.Row="1" Grid.Column="0"
                        Text="Password:" VerticalAlignment="Center" />
              <TextBox x:Name="SettingsQrzXmlPasswordBox"
+                      AutomationProperties.AutomationId="SettingsQrzXmlPasswordBox"
                       Grid.Row="1" Grid.Column="1"
                       Text="{Binding QrzXmlPassword, Mode=TwoWay}"
                       PasswordChar="•"
@@ -194,6 +215,7 @@
 
           <StackPanel Orientation="Horizontal" Spacing="12">
              <Button x:Name="SettingsTestQrzXmlButton"
+                     AutomationProperties.AutomationId="SettingsTestQrzXmlButton"
                      Content="Test XML Connection"
                      Command="{Binding TestQrzXmlCommand}"
                      IsEnabled="{Binding !IsTestingQrzXml}" />
@@ -222,6 +244,7 @@
             <TextBlock Grid.Row="0" Grid.Column="0"
                        Text="API Key:" VerticalAlignment="Center" />
              <TextBox x:Name="SettingsQrzLogbookApiKeyBox"
+                      AutomationProperties.AutomationId="SettingsQrzLogbookApiKeyBox"
                       Grid.Row="0" Grid.Column="1"
                       Text="{Binding QrzLogbookApiKey, Mode=TwoWay}"
                       PasswordChar="•"
@@ -230,6 +253,7 @@
 
           <StackPanel Orientation="Horizontal" Spacing="12">
              <Button x:Name="SettingsTestLogbookButton"
+                     AutomationProperties.AutomationId="SettingsTestLogbookButton"
                      Content="Test Logbook"
                      Command="{Binding TestQrzLogbookCommand}"
                      IsEnabled="{Binding !IsTestingLogbook}" />
@@ -252,6 +276,7 @@
                      FontSize="16" FontWeight="SemiBold" />
 
            <CheckBox x:Name="SettingsAutoSyncCheckBox"
+                     AutomationProperties.AutomationId="SettingsAutoSyncCheckBox"
                      Content="Enable automatic sync"
                      IsChecked="{Binding AutoSyncEnabled, Mode=TwoWay}" />
 
@@ -260,6 +285,7 @@
             <TextBlock Grid.Row="0" Grid.Column="0"
                        Text="Interval (sec):" VerticalAlignment="Center" />
              <NumericUpDown x:Name="SettingsSyncIntervalInput"
+                            AutomationProperties.AutomationId="SettingsSyncIntervalInput"
                             Grid.Row="0" Grid.Column="1"
                            Value="{Binding SyncIntervalSeconds, Mode=TwoWay}"
                            Minimum="30" Maximum="86400"
@@ -271,7 +297,8 @@
             <TextBlock Grid.Row="1" Grid.Column="0"
                        Text="Conflict Policy:" VerticalAlignment="Center" />
              <ComboBox x:Name="SettingsConflictPolicyComboBox"
-                       Grid.Row="1" Grid.Column="1"
+                       AutomationProperties.AutomationId="SettingsConflictPolicyComboBox"
+                        Grid.Row="1" Grid.Column="1"
                        SelectedIndex="{Binding ConflictPolicy, Mode=TwoWay, Converter={x:Static v:SettingsView.ConflictPolicyIndex}}"
                        HorizontalAlignment="Left"
                        Width="220">
@@ -293,6 +320,7 @@
             <TextBlock Grid.Column="0"
                        Text="Path:" VerticalAlignment="Center" />
              <TextBox x:Name="SettingsLogFilePathBox"
+                      AutomationProperties.AutomationId="SettingsLogFilePathBox"
                       Grid.Column="1"
                       Text="{Binding LogFilePath, Mode=TwoWay}" />
           </Grid>

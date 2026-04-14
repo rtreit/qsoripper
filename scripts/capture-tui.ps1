@@ -10,6 +10,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if (-not $IsWindows) {
+    throw "scripts\capture-tui.ps1 currently supports Windows only."
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $currentRoot = Join-Path $repoRoot "artifacts\ux\current"
 $baselineRoot = Join-Path $repoRoot "artifacts\ux\baseline"
@@ -21,7 +25,11 @@ if ([string]::IsNullOrWhiteSpace($Output)) {
     $Output = Join-Path $currentRoot "$Scenario.gif"
 }
 
+$Output = [System.IO.Path]::GetFullPath($Output)
 $outputDirectory = [System.IO.Path]::GetDirectoryName($Output)
+if (-not [string]::IsNullOrWhiteSpace($outputDirectory)) {
+    New-Item -ItemType Directory -Force -Path $outputDirectory | Out-Null
+}
 $outputStem = [System.IO.Path]::GetFileNameWithoutExtension($Output)
 $yamlBase = [System.IO.Path]::Combine($outputDirectory, $outputStem)
 $yamlPath = "$yamlBase.yml"
