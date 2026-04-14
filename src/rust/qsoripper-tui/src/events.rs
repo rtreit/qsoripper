@@ -32,6 +32,13 @@ pub(crate) enum AppEvent {
     QsoDeleteFailed(String),
     /// Refreshed snapshot of recent QSOs.
     RecentQsos(Vec<RecentQso>),
+    /// Background name enrichment result for one QSO in the recent list.
+    QsoNameEnriched {
+        /// The QSO whose name was resolved.
+        local_id: String,
+        /// Operator name from the lookup cache.
+        name: String,
+    },
 }
 
 /// Spawn a blocking OS thread that reads crossterm key events and forwards them to `tx`.

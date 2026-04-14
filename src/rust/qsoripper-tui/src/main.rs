@@ -192,6 +192,21 @@ fn handle_event(
                     };
                 }
             }
+            // Enrich QSOs that have no operator name from the lookup cache.
+            let unnamed: Vec<(String, String)> = app
+                .recent_qsos
+                .iter()
+                .filter(|q| q.name.is_none())
+                .map(|q| (q.local_id.clone(), q.callsign.clone()))
+                .collect();
+            if !unnamed.is_empty() {
+                enrich_names(unnamed, event_tx, endpoint);
+            }
+        }
+        AppEvent::QsoNameEnriched { local_id, name } => {
+            if let Some(q) = app.recent_qsos.iter_mut().find(|q| q.local_id == local_id) {
+                q.name = Some(name);
+            }
         }
     }
 }
@@ -635,6 +650,31 @@ fn cycle_right(app: &mut App) {
         }
         _ => {}
     }
+}
+
+/// Spawn background tasks to enrich QSOs with operator names from the lookup cache.
+///
+/// For each `(local_id, callsign)` pair, performs a cache-first lookup and sends
+/// [`AppEvent::QsoNameEnriched`] if a name is resolved.
+fn enrich_names(
+    qsos: Vec<(String, String)>,
+    event_tx: &mpsc::UnboundedSender<AppEvent>,
+    endpoint: &str,
+) {
+    let tx = event_tx.clone();
+    let ep = endpoint.to_string();
+    tokio::spawn(async move {
+        let Ok(ch) = grpc::create_channel(&ep).await else {
+            return;
+        };
+        for (local_id, callsign) in qsos {
+            if let Ok(Some(info)) = grpc::lookup_callsign(ch.clone(), &callsign).await {
+                if let Some(name) = info.name {
+                    let _ = tx.send(AppEvent::QsoNameEnriched { local_id, name });
+                }
+            }
+        }
+    });
 }
 
 /// Spawn a task to refresh the recent QSOs list and forward the result to the event channel.
