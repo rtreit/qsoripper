@@ -146,6 +146,7 @@ fn handle_event(
             app.form.mode_idx = mode_idx;
             app.form.on_band_change();
             app.lookup_result = None;
+            app.qso_started_at = std::time::Instant::now();
             refresh_recent_qsos(event_tx, endpoint);
         }
         AppEvent::QsoLogFailed(err) => {
@@ -161,6 +162,7 @@ fn handle_event(
             app.form.on_band_change();
             app.lookup_result = None;
             app.editing_local_id = None;
+            app.qso_started_at = std::time::Instant::now();
             refresh_recent_qsos(event_tx, endpoint);
         }
         AppEvent::QsoUpdateFailed(err) => {
@@ -292,6 +294,10 @@ fn handle_key(
         KeyCode::F(6) if matches!(app.view, app::View::Advanced) => {
             app.form.prev_advanced_tab();
         }
+        KeyCode::F(7) => {
+            app.reset_qso_start_time();
+            app.set_status(format!("QSO start time reset to {}", app.form.time));
+        }
         KeyCode::F(10) => spawn_log_qso(app, event_tx, endpoint),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
             spawn_log_qso(app, event_tx, endpoint);
@@ -309,6 +315,7 @@ fn handle_key(
                 app.form = LogForm::new();
                 app.lookup_result = None;
                 app.editing_local_id = None;
+                app.qso_started_at = std::time::Instant::now();
             }
             app::View::Help | app::View::ConfirmDeleteQso => {}
         },
@@ -576,7 +583,7 @@ fn spawn_log_qso(app: &App, event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint
     let ep = endpoint.to_string();
     let mut form_snap = app.form.clone();
     let editing_id = app.editing_local_id.clone();
-    if editing_id.is_none() && form_snap.time_off.is_empty() {
+    if editing_id.is_none() {
         form_snap.time_off = chrono::Utc::now().format("%H:%M").to_string();
     }
     let lookup_snap = app.lookup_result.as_ref().map(|info| {

@@ -50,6 +50,7 @@ pub(super) fn render(frame: &mut Frame, area: Rect) {
         "Toggle advanced fields (F2 or Esc to close)",
     ));
     lines.push(binding("F10 / Shift+Enter ", "Log the QSO"));
+    lines.push(binding("F7               ", "Reset QSO start time to now"));
     lines.push(binding(
         "Esc              ",
         "Clear form (or close advanced view)",

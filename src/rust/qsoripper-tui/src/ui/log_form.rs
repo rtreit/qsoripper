@@ -35,8 +35,7 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
-
-    if inner.height < 7 {
+    if inner.height < 8 {
         return;
     }
 
@@ -46,6 +45,7 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
         Constraint::Length(1), // comment
         Constraint::Length(1), // notes
         Constraint::Length(1), // freq / date / time
+        Constraint::Length(1), // QSO duration
         Constraint::Fill(1),   // padding
         Constraint::Length(1), // action hints
     ])
@@ -56,7 +56,8 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let comment_area = layout.get(2).copied().unwrap_or(inner);
     let notes_area = layout.get(3).copied().unwrap_or(inner);
     let freq_area = layout.get(4).copied().unwrap_or(inner);
-    let hints_area = layout.get(6).copied().unwrap_or(inner);
+    let duration_area = layout.get(5).copied().unwrap_or(inner);
+    let hints_area = layout.get(7).copied().unwrap_or(inner);
 
     let form = &app.form;
 
@@ -65,6 +66,7 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     render_comment_row(frame, comment_area, form);
     render_notes_row(frame, notes_area, form);
     render_freq_row(frame, freq_area, form);
+    render_duration_row(frame, duration_area, app);
     render_hints_row(frame, hints_area);
 }
 
@@ -151,6 +153,31 @@ fn render_freq_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
     spans.extend(label_m("", 'T', "ime "));
     spans.push(styled_field(time_val, time_focused, time_selected));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Render the live QSO duration row.
+fn render_duration_row(frame: &mut Frame, area: Rect, app: &App) {
+    let duration = app.qso_duration_str();
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("QSO duration  ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                duration,
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("   "),
+            Span::styled(
+                "F7",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" Reset start time", Style::default().fg(Color::DarkGray)),
+        ])),
+        area,
+    );
 }
 
 /// Render the action keyboard-hints row.

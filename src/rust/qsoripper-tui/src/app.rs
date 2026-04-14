@@ -140,6 +140,10 @@ pub(crate) struct App {
     pub(crate) running: bool,
     /// gRPC server endpoint URL.
     pub(crate) endpoint: String,
+    /// When the current QSO started — used for the live duration display.
+    ///
+    /// Reset by F7, by Esc (form clear), and after each QSO is successfully logged or updated.
+    pub(crate) qso_started_at: Instant,
 }
 
 impl App {
@@ -162,6 +166,7 @@ impl App {
             search_focused: false,
             running: true,
             endpoint,
+            qso_started_at: Instant::now(),
         }
     }
 
@@ -182,6 +187,27 @@ impl App {
     /// Find a QSO in `recent_qsos` by its local ID.
     pub(crate) fn find_qso_by_id(&self, id: &str) -> Option<&RecentQso> {
         self.recent_qsos.iter().find(|q| q.local_id == id)
+    }
+
+    /// Reset the QSO start time to now and update the form date/time fields to match.
+    pub(crate) fn reset_qso_start_time(&mut self) {
+        let now = chrono::Utc::now();
+        self.qso_started_at = Instant::now();
+        self.form.date = now.format("%Y-%m-%d").to_string();
+        self.form.time = now.format("%H:%M").to_string();
+    }
+
+    /// Format the elapsed QSO duration as `M:SS` (< 1 h) or `H:MM:SS`.
+    pub(crate) fn qso_duration_str(&self) -> String {
+        let secs = self.qso_started_at.elapsed().as_secs();
+        let h = secs / 3600;
+        let m = (secs % 3600) / 60;
+        let s = secs % 60;
+        if h > 0 {
+            format!("{h}:{m:02}:{s:02}")
+        } else {
+            format!("{m}:{s:02}")
+        }
     }
 
     /// Set a success status message, replacing any current message.
