@@ -31,7 +31,7 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.height < 7 {
+    if inner.height < 8 {
         return;
     }
 
@@ -42,7 +42,8 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
         Constraint::Length(1), // notes
         Constraint::Length(1), // freq / date / time
         Constraint::Fill(1),   // padding
-        Constraint::Length(1), // hints
+        Constraint::Length(1), // action hints
+        Constraint::Length(1), // Alt+key field jump hints
     ])
     .split(inner);
 
@@ -52,6 +53,7 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let notes_area = layout.get(3).copied().unwrap_or(inner);
     let freq_area = layout.get(4).copied().unwrap_or(inner);
     let hints_area = layout.get(6).copied().unwrap_or(inner);
+    let alt_hints_area = layout.get(7).copied().unwrap_or(inner);
 
     let form = &app.form;
 
@@ -61,6 +63,7 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     render_notes_row(frame, notes_area, form);
     render_freq_row(frame, freq_area, form);
     render_hints_row(frame, hints_area);
+    render_alt_hints_row(frame, alt_hints_area);
 }
 
 /// Render the callsign / band / mode row.
@@ -72,35 +75,29 @@ fn render_callsign_row(frame: &mut Frame, area: Rect, form: &crate::form::LogFor
     );
     let band_val = cycle_value(form.band_str(), form.focused == Field::Band);
     let mode_val = cycle_value(form.mode_str(), form.focused == Field::Mode);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            label("Callsign "),
-            styled_field(cs_val, form.focused == Field::Callsign),
-            Span::raw("  "),
-            label("Band "),
-            styled_cycle(band_val, form.focused == Field::Band),
-            Span::raw("  "),
-            label("Mode "),
-            styled_cycle(mode_val, form.focused == Field::Mode),
-        ])),
-        area,
-    );
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.extend(label_m("", 'C', "allsign "));
+    spans.push(styled_field(cs_val, form.focused == Field::Callsign));
+    spans.push(Span::raw("  "));
+    spans.extend(label_m("", 'B', "and "));
+    spans.push(styled_cycle(band_val, form.focused == Field::Band));
+    spans.push(Span::raw("  "));
+    spans.extend(label_m("", 'M', "ode "));
+    spans.push(styled_cycle(mode_val, form.focused == Field::Mode));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Render the RST sent / RST received row.
 fn render_rst_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
     let sent_val = field_value(&form.rst_sent, form.focused == Field::RstSent, RST_WIDTH);
     let rcvd_val = field_value(&form.rst_rcvd, form.focused == Field::RstRcvd, RST_WIDTH);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            label("RST Snt  "),
-            styled_field(sent_val, form.focused == Field::RstSent),
-            Span::raw("   "),
-            label("RST Rcvd "),
-            styled_field(rcvd_val, form.focused == Field::RstRcvd),
-        ])),
-        area,
-    );
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.extend(label_m("RST ", 'S', "nt  "));
+    spans.push(styled_field(sent_val, form.focused == Field::RstSent));
+    spans.push(Span::raw("   "));
+    spans.extend(label_m("RST ", 'R', "cvd "));
+    spans.push(styled_field(rcvd_val, form.focused == Field::RstRcvd));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Render the comment row.
@@ -108,13 +105,10 @@ fn render_comment_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm
     let label_len: usize = 9;
     let width = (area.width as usize).saturating_sub(label_len + 2).max(10);
     let val = field_value(&form.comment, form.focused == Field::Comment, width);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            label("Comment  "),
-            styled_field(val, form.focused == Field::Comment),
-        ])),
-        area,
-    );
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.extend(label_m("C", 'o', "mment  "));
+    spans.push(styled_field(val, form.focused == Field::Comment));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Render the notes row.
@@ -122,13 +116,10 @@ fn render_notes_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) 
     let label_len: usize = 9;
     let width = (area.width as usize).saturating_sub(label_len + 2).max(10);
     let val = field_value(&form.notes, form.focused == Field::Notes, width);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            label("Notes    "),
-            styled_field(val, form.focused == Field::Notes),
-        ])),
-        area,
-    );
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.extend(label_m("", 'N', "otes    "));
+    spans.push(styled_field(val, form.focused == Field::Notes));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Render the frequency / date / time row.
@@ -140,22 +131,19 @@ fn render_freq_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
     );
     let date_val = field_value(&form.date, form.focused == Field::Date, DATE_WIDTH);
     let time_val = field_value(&form.time, form.focused == Field::Time, TIME_WIDTH);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            label("Freq MHz "),
-            styled_field(freq_val, form.focused == Field::FrequencyMhz),
-            Span::raw("  "),
-            label("Date "),
-            styled_field(date_val, form.focused == Field::Date),
-            Span::raw("  "),
-            label("Time "),
-            styled_field(time_val, form.focused == Field::Time),
-        ])),
-        area,
-    );
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.extend(label_m("", 'F', "req MHz "));
+    spans.push(styled_field(freq_val, form.focused == Field::FrequencyMhz));
+    spans.push(Span::raw("  "));
+    spans.extend(label_m("", 'D', "ate "));
+    spans.push(styled_field(date_val, form.focused == Field::Date));
+    spans.push(Span::raw("  "));
+    spans.extend(label_m("", 'T', "ime "));
+    spans.push(styled_field(time_val, form.focused == Field::Time));
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// Render the keyboard-hints row at the bottom of the form.
+/// Render the action keyboard-hints row.
 fn render_hints_row(frame: &mut Frame, area: Rect) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -177,9 +165,56 @@ fn render_hints_row(frame: &mut Frame, area: Rect) {
                 " F2 Advanced ",
                 Style::default().fg(Color::Black).bg(Color::DarkGray),
             ),
+            Span::raw("  "),
+            Span::styled(
+                " F3 QSO List ",
+                Style::default().fg(Color::Black).bg(Color::DarkGray),
+            ),
         ])),
         area,
     );
+}
+
+/// Render the Alt+key field-jump hints row.
+fn render_alt_hints_row(frame: &mut Frame, area: Rect) {
+    let key_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD);
+    let sep = Style::default().fg(Color::DarkGray);
+    let pairs: &[(char, &str)] = &[
+        ('C', "=Cs"),
+        ('B', "=Bnd"),
+        ('M', "=Md"),
+        ('S', "=Snt\u{2191}"),
+        ('R', "=Rcvd\u{2193}"),
+        ('O', "=Cmt"),
+        ('N', "=Nts"),
+        ('F', "=Frq"),
+        ('D', "=Dt"),
+        ('T', "=Tm"),
+    ];
+    let mut spans: Vec<Span<'static>> = vec![Span::styled(" Alt:", sep)];
+    for (key, desc) in pairs {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(key.to_string(), key_style));
+        spans.push(Span::styled(*desc, sep));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Create three spans for a label with one underlined mnemonic character.
+///
+/// Renders as `before` + underlined `mnemonic` + `after`, all in `DarkGray`.
+fn label_m(before: &'static str, mnemonic: char, after: &'static str) -> [Span<'static>; 3] {
+    let label_style = Style::default().fg(Color::DarkGray);
+    [
+        Span::styled(before, label_style),
+        Span::styled(
+            mnemonic.to_string(),
+            label_style.add_modifier(Modifier::UNDERLINED),
+        ),
+        Span::styled(after, label_style),
+    ]
 }
 
 /// Format a text field value with a fixed display width.
@@ -206,11 +241,6 @@ fn cycle_value(text: &str, focused: bool) -> String {
     } else {
         format!("  {text}  ")
     }
-}
-
-/// Styled span for a label.
-fn label(text: &str) -> Span<'static> {
-    Span::styled(text.to_string(), Style::default().fg(Color::DarkGray))
 }
 
 /// Styled span for a text-input field value.

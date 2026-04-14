@@ -92,6 +92,10 @@ pub(crate) struct App {
     pub(crate) space_weather: Option<SpaceWeatherInfo>,
     /// Transient status bar message.
     pub(crate) status_message: Option<StatusMessage>,
+    /// Whether keyboard focus is on the recent QSOs list panel.
+    pub(crate) qso_list_focused: bool,
+    /// Selected row index within the recent QSOs list (when focused).
+    pub(crate) qso_selected: Option<usize>,
     /// Whether the main event loop should keep running.
     pub(crate) running: bool,
     /// gRPC server endpoint URL.
@@ -108,6 +112,8 @@ impl App {
             recent_qsos: Vec::new(),
             space_weather: None,
             status_message: None,
+            qso_list_focused: false,
+            qso_selected: None,
             running: true,
             endpoint,
         }

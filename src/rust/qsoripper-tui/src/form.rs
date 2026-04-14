@@ -270,6 +270,50 @@ impl LogForm {
     pub(crate) fn is_cycle_field(&self) -> bool {
         matches!(self.focused, Field::Band | Field::Mode)
     }
+
+    /// Cycle to the next band whose name starts with `ch` (case-insensitive).
+    ///
+    /// Repeated calls with the same char advance through all matching bands, wrapping around.
+    pub(crate) fn type_select_band(&mut self, ch: char) {
+        let ch_lo = ch.to_ascii_lowercase();
+        let matches: Vec<usize> = BANDS
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.chars().next().map(|c| c.to_ascii_lowercase()) == Some(ch_lo))
+            .map(|(i, _)| i)
+            .collect();
+        if matches.is_empty() {
+            return;
+        }
+        let pos = matches.iter().position(|&i| i == self.band_idx);
+        let next = pos.map_or(0, |p| (p + 1) % matches.len());
+        if let Some(&idx) = matches.get(next) {
+            self.band_idx = idx;
+            self.on_band_change();
+        }
+    }
+
+    /// Cycle to the next mode whose name starts with `ch` (case-insensitive).
+    ///
+    /// Repeated calls with the same char advance through all matching modes, wrapping around.
+    pub(crate) fn type_select_mode(&mut self, ch: char) {
+        let ch_lo = ch.to_ascii_lowercase();
+        let matches: Vec<usize> = MODES
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.chars().next().map(|c| c.to_ascii_lowercase()) == Some(ch_lo))
+            .map(|(i, _)| i)
+            .collect();
+        if matches.is_empty() {
+            return;
+        }
+        let pos = matches.iter().position(|&i| i == self.mode_idx);
+        let next = pos.map_or(0, |p| (p + 1) % matches.len());
+        if let Some(&idx) = matches.get(next) {
+            self.mode_idx = idx;
+            self.on_mode_change();
+        }
+    }
 }
 
 /// Return the default RST string for the given mode index.

@@ -151,9 +151,13 @@ fn handle_key(
 ) {
     use crossterm::event::{KeyCode, KeyModifiers};
 
-    // Any key closes the help overlay.
     if matches!(app.view, app::View::Help) {
         app.view = app::View::LogEntry;
+        return;
+    }
+
+    if app.qso_list_focused {
+        handle_qso_list_key(app, key, lookup_tx);
         return;
     }
 
@@ -178,26 +182,13 @@ fn handle_key(
             }
             app::View::Help => {}
         },
-        KeyCode::F(10) => {
-            let tx = event_tx.clone();
-            let ep = endpoint.to_string();
-            let form_snap = app.form.clone();
-            tokio::spawn(async move {
-                match grpc::create_channel(&ep).await {
-                    Ok(ch) => match grpc::log_qso(ch, &form_snap).await {
-                        Ok(id) => {
-                            let _ = tx.send(AppEvent::QsoLogged(id));
-                        }
-                        Err(e) => {
-                            let _ = tx.send(AppEvent::QsoLogFailed(e.to_string()));
-                        }
-                    },
-                    Err(e) => {
-                        let _ = tx.send(AppEvent::QsoLogFailed(e.to_string()));
-                    }
-                }
-            });
+        KeyCode::F(3) => {
+            if !app.recent_qsos.is_empty() {
+                app.qso_list_focused = true;
+                app.qso_selected = Some(0);
+            }
         }
+        KeyCode::F(10) => spawn_log_qso(app, event_tx, endpoint),
         KeyCode::Esc => match app.view {
             app::View::Advanced => {
                 app.view = app::View::LogEntry;
@@ -212,12 +203,8 @@ fn handle_key(
         KeyCode::Char('q' | 'Q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.running = false;
         }
-        KeyCode::Left if app.form.is_cycle_field() => {
-            cycle_left(app);
-        }
-        KeyCode::Right if app.form.is_cycle_field() => {
-            cycle_right(app);
-        }
+        KeyCode::Left if app.form.is_cycle_field() => cycle_left(app),
+        KeyCode::Right if app.form.is_cycle_field() => cycle_right(app),
         KeyCode::Backspace => {
             let focused = app.form.focused.clone();
             if let Some(text) = app.form.current_field_text_mut() {
@@ -228,8 +215,57 @@ fn handle_key(
                 let _ = lookup_tx.send(callsign);
             }
         }
-        KeyCode::Char(c) => {
-            let focused = app.form.focused.clone();
+        KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::ALT) => {
+            jump_to_field(app, c);
+        }
+        KeyCode::Char(c) => handle_char_key(app, c, lookup_tx),
+        _ => {}
+    }
+}
+
+/// Navigate the QSO list with keyboard (active when `app.qso_list_focused` is true).
+fn handle_qso_list_key(
+    app: &mut App,
+    key: crossterm::event::KeyEvent,
+    lookup_tx: &watch::Sender<String>,
+) {
+    use crossterm::event::KeyCode;
+    let max = app.recent_qsos.len().saturating_sub(1);
+    match key.code {
+        KeyCode::Up => {
+            app.qso_selected = Some(match app.qso_selected {
+                Some(i) if i > 0 => i - 1,
+                _ => 0,
+            });
+        }
+        KeyCode::Down => {
+            app.qso_selected = Some(match app.qso_selected {
+                Some(i) => (i + 1).min(max),
+                None => 0,
+            });
+        }
+        KeyCode::Enter => {
+            if let Some(idx) = app.qso_selected {
+                load_qso_into_form(app, idx, lookup_tx);
+            } else {
+                app.qso_list_focused = false;
+            }
+        }
+        KeyCode::Esc | KeyCode::F(3) => {
+            app.qso_list_focused = false;
+            app.qso_selected = None;
+        }
+        _ => {}
+    }
+}
+
+/// Handle a plain character key press — type-selects Band/Mode, or appends to text fields.
+fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
+    let focused = app.form.focused.clone();
+    match focused {
+        Field::Band => app.form.type_select_band(c),
+        Field::Mode => app.form.type_select_mode(c),
+        _ => {
             if let Some(text) = app.form.current_field_text_mut() {
                 if focused == Field::Callsign {
                     text.push(c.to_ascii_uppercase());
@@ -242,8 +278,75 @@ fn handle_key(
                 let _ = lookup_tx.send(callsign);
             }
         }
-        _ => {}
     }
+}
+
+/// Jump form focus to the field bound to `ch` (Alt+key mapping).
+fn jump_to_field(app: &mut App, ch: char) {
+    let target = match ch.to_ascii_lowercase() {
+        'c' => Field::Callsign,
+        'b' => Field::Band,
+        'm' => Field::Mode,
+        's' => Field::RstSent,
+        'r' => Field::RstRcvd,
+        'o' => Field::Comment,
+        'n' => Field::Notes,
+        'f' => Field::FrequencyMhz,
+        'd' => Field::Date,
+        't' => Field::Time,
+        _ => return,
+    };
+    if matches!(app.view, app::View::Advanced) {
+        app.view = app::View::LogEntry;
+    }
+    app.form.focused = target;
+    app.qso_list_focused = false;
+}
+
+/// Load the QSO at `idx` in `recent_qsos` into the form for re-logging.
+fn load_qso_into_form(app: &mut App, idx: usize, lookup_tx: &watch::Sender<String>) {
+    let Some(qso) = app.recent_qsos.get(idx) else {
+        return;
+    };
+    app.form.callsign = qso.callsign.clone();
+    if let Some(bi) = BANDS.iter().position(|&b| b == qso.band.as_str()) {
+        app.form.band_idx = bi;
+    }
+    if let Some(mi) = MODES.iter().position(|&m| m == qso.mode.as_str()) {
+        app.form.mode_idx = mi;
+    }
+    app.form.on_band_change();
+    app.form.rst_sent = qso.rst_sent.clone();
+    app.form.rst_rcvd = qso.rst_rcvd.clone();
+    app.form.focused = Field::Callsign;
+    app.qso_list_focused = false;
+    app.qso_selected = None;
+    if matches!(app.view, app::View::Advanced) {
+        app.view = app::View::LogEntry;
+    }
+    let _ = lookup_tx.send(app.form.callsign.clone());
+}
+
+/// Spawn a task to log the current form contents and forward the result to the event channel.
+fn spawn_log_qso(app: &App, event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint: &str) {
+    let tx = event_tx.clone();
+    let ep = endpoint.to_string();
+    let form_snap = app.form.clone();
+    tokio::spawn(async move {
+        match grpc::create_channel(&ep).await {
+            Ok(ch) => match grpc::log_qso(ch, &form_snap).await {
+                Ok(id) => {
+                    let _ = tx.send(AppEvent::QsoLogged(id));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::QsoLogFailed(e.to_string()));
+                }
+            },
+            Err(e) => {
+                let _ = tx.send(AppEvent::QsoLogFailed(e.to_string()));
+            }
+        }
+    });
 }
 
 /// Cycle the focused selector one step to the left (decreasing index).

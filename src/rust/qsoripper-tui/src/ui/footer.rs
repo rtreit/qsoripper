@@ -12,9 +12,10 @@ use ratatui::{
 pub(super) fn render(frame: &mut Frame, area: Rect) {
     let hints: &[(&str, &str)] = &[
         ("Tab", "Next field"),
-        ("←/→", "Cycle Band/Mode"),
+        ("\u{2190}/\u{2192}", "Cycle Band/Mode"),
         ("F1", "Help"),
         ("F2", "Advanced"),
+        ("F3", "QSO List"),
         ("F10", "Log QSO"),
         ("Esc", "Clear"),
         ("Ctrl+Q", "Quit"),

@@ -3,7 +3,7 @@
 use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Modifier, Style},
-    widgets::{Block, Cell, Row, Table},
+    widgets::{Block, Cell, Row, Table, TableState},
     Frame,
 };
 
@@ -11,12 +11,28 @@ use crate::app::App;
 
 /// Render the recent QSOs panel into `area`.
 pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
+    let (border_color, title) = if app.qso_list_focused {
+        (
+            Color::Yellow,
+            " Recent QSOs  \u{2191}\u{2193} navigate  Enter load  Esc exit ",
+        )
+    } else {
+        (Color::Cyan, " Recent QSOs  (F3 to focus) ")
+    };
+
     let block = Block::bordered()
-        .title(" Recent QSOs ")
-        .border_style(Style::default().fg(Color::Cyan));
+        .title(title)
+        .border_style(Style::default().fg(border_color));
 
     let header_cells = [
-        "UTC", "Callsign", "Band", "Mode", "RST↑", "RST↓", "Country", "Grid",
+        "UTC",
+        "Callsign",
+        "Band",
+        "Mode",
+        "RST\u{2191}",
+        "RST\u{2193}",
+        "Country",
+        "Grid",
     ]
     .iter()
     .map(|h| {
@@ -64,10 +80,26 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
         Constraint::Length(7),
     ];
 
+    let highlight_style = if app.qso_list_focused {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().add_modifier(Modifier::BOLD)
+    };
+
     let table = Table::new(rows, widths)
         .header(header)
         .block(block)
-        .row_highlight_style(Style::default().add_modifier(Modifier::BOLD));
+        .row_highlight_style(highlight_style);
 
-    frame.render_widget(table, area);
+    let mut state = TableState::default();
+    state.select(if app.qso_list_focused {
+        app.qso_selected
+    } else {
+        None
+    });
+
+    frame.render_stateful_widget(table, area, &mut state);
 }
