@@ -34,6 +34,7 @@ try
     return arguments.Command switch
     {
         "status" => await StatusCommand.RunAsync(channel, arguments.JsonOutput),
+        "space-weather" => await SpaceWeatherCommand.RunAsync(channel, arguments.Refresh, arguments.JsonOutput),
         "lookup" => await LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache, arguments.JsonOutput),
         "stream-lookup" => await StreamLookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache),
         "cache-check" => await CacheCheckCommand.RunAsync(channel, arguments.Callsign!, arguments.JsonOutput),

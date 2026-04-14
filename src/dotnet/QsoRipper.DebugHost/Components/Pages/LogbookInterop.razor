@@ -1,0 +1,581 @@
+@page "/logbook-interop"
+@using System.ComponentModel.DataAnnotations
+@using System.Text
+@using QsoRipper.Services
+@inject DebugWorkbenchState WorkbenchState
+@inject RuntimeConfigWorkbenchService RuntimeConfigWorkbenchService
+@inject LogbookInteropWorkbenchService LogbookInteropWorkbenchService
+@inject ProtoJsonService ProtoJsonService
+
+<PageTitle>ADIF & Sync Workbench</PageTitle>
+
+<h1 class="mb-3">ADIF & Sync Workbench</h1>
+<p class="text-muted">
+    Import and export ADIF, then exercise QRZ logbook sync through the live <code>LogbookService</code>
+    gRPC surface. This page fills the interop gap between the storage CRUD smoke test and the QSO viewer.
+</p>
+
+<div class="alert alert-secondary">
+    <div><strong>Current engine endpoint:</strong> @WorkbenchState.EngineEndpoint</div>
+    <div class="mt-1">
+        <strong>Active backend:</strong> @WorkbenchState.GetStorageBackendDisplayName()
+        @if (WorkbenchState.EngineStorageBackend == EngineStorageBackend.Sqlite)
+        {
+            <span> using <code>@WorkbenchState.EngineSqlitePath</code></span>
+        }
+    </div>
+    @if (WorkbenchState.RuntimeConfigSnapshot is not null)
+    {
+        <div class="mt-1">
+            <strong>Lookup provider:</strong> @WorkbenchState.RuntimeConfigSnapshot.LookupProviderSummary
+        </div>
+    }
+</div>
+
+<div class="row g-4">
+    <div class="col-xxl-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5">Import ADIF</h2>
+                <p class="text-muted small">
+                    Paste ADIF text or load a local <code>.adi</code>/<code>.adif</code> file, then stream it into
+                    <code>ImportAdif</code>. Enable refresh to merge duplicates instead of skipping them.
+                </p>
+
+                <div class="row g-3">
+                    <div class="col-lg-8">
+                        <label class="form-label" for="adif-import-file">Load local ADIF file</label>
+                        <InputFile id="adif-import-file"
+                                   OnChange="LoadImportFileAsync"
+                                   accept=".adi,.adif,text/plain" />
+                        @if (!string.IsNullOrWhiteSpace(importSourceDescription))
+                        {
+                            <div class="small text-muted mt-2">@importSourceDescription</div>
+                        }
+                    </div>
+                    <div class="col-lg-4 d-flex align-items-end">
+                        <div class="form-check mb-2">
+                            <InputCheckbox id="adif-refresh"
+                                           class="form-check-input"
+                                           @bind-Value="importRefresh" />
+                            <label class="form-check-label" for="adif-refresh">
+                                Refresh duplicates
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="adif-import-text">ADIF payload</label>
+                        <InputTextArea id="adif-import-text"
+                                       class="form-control font-monospace"
+                                       @bind-Value="importText"
+                                       rows="14" />
+                    </div>
+                    <div class="col-12 d-flex gap-2 flex-wrap">
+                        <button class="btn btn-outline-secondary"
+                                type="button"
+                                @onclick="UseLatestExportAsImport"
+                                disabled="@string.IsNullOrWhiteSpace(exportResult?.AdifText)">
+                            Use latest export
+                        </button>
+                        <button class="btn btn-outline-secondary"
+                                type="button"
+                                @onclick="ClearImport">
+                            Clear
+                        </button>
+                        <button class="btn btn-primary"
+                                type="button"
+                                @onclick="RunImportAsync"
+                                disabled="@isImporting">
+                            @(isImporting ? "Importing..." : "Import ADIF")
+                        </button>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(importErrorMessage))
+                {
+                    <div class="alert alert-danger mt-3 mb-0">@importErrorMessage</div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xxl-6">
+        <div class="card shadow-sm h-100">
+            <div class="card-body">
+                <h2 class="h5">Export ADIF</h2>
+                <p class="text-muted small">
+                    Build an <code>ExportAdifRequest</code>, stream the raw ADIF payload back from the engine, and
+                    inspect the reconstructed text side-by-side with the request envelope.
+                </p>
+
+                <div class="row g-3 align-items-end">
+                    <div class="col-md-6">
+                        <label class="form-label" for="adif-after">After (UTC / ISO-8601)</label>
+                        <InputText id="adif-after"
+                                   class="form-control"
+                                   @bind-Value="exportModel.AfterUtc"
+                                   placeholder="2026-04-13T00:00:00Z" />
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="adif-before">Before (UTC / ISO-8601)</label>
+                        <InputText id="adif-before"
+                                   class="form-control"
+                                   @bind-Value="exportModel.BeforeUtc"
+                                   placeholder="2026-04-13T23:59:59Z" />
+                    </div>
+                    <div class="col-md-8">
+                        <label class="form-label" for="adif-contest">Contest ID</label>
+                        <InputText id="adif-contest"
+                                   class="form-control"
+                                   @bind-Value="exportModel.ContestId"
+                                   placeholder="ARRL-DX-SSB" />
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end">
+                        <div class="form-check mb-2">
+                            <InputCheckbox id="adif-header"
+                                           class="form-check-input"
+                                           @bind-Value="exportModel.IncludeHeader" />
+                            <label class="form-check-label" for="adif-header">
+                                Include ADIF header
+                            </label>
+                        </div>
+                    </div>
+                    <div class="col-12 d-flex gap-2 flex-wrap">
+                        <button class="btn btn-outline-primary"
+                                type="button"
+                                @onclick="PreviewExportRequest">
+                            Preview request
+                        </button>
+                        <button class="btn btn-primary"
+                                type="button"
+                                @onclick="RunExportAsync"
+                                disabled="@isExporting">
+                            @(isExporting ? "Exporting..." : "Export ADIF")
+                        </button>
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(exportErrorMessage))
+                {
+                    <div class="alert alert-danger mt-3 mb-0">@exportErrorMessage</div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4 mt-1">
+    <div class="col-xl-6">
+        <PayloadCard Title="Export request payload"
+                     Payload="@exportRequestPayload.Json" />
+    </div>
+    @if (importResult is not null)
+    {
+        <div class="col-xl-6">
+            <PayloadCard Title="Import summary"
+                         BadgeText="@(importResult.Succeeded ? "Completed" : "Failed")"
+                         Payload="@BuildImportSummary(importResult)" />
+        </div>
+        @if (importResponsePayload is not null)
+        {
+            <div class="col-xl-6">
+                <PayloadCard Title="ImportAdif response"
+                             Payload="@importResponsePayload.Json" />
+            </div>
+        }
+        @if (importResult.WarningCount > 0)
+        {
+            <div class="col-xl-6">
+                <div class="card shadow-sm h-100">
+                    <div class="card-body">
+                        <h2 class="h5">Import warnings</h2>
+                        <ul class="mb-0">
+                            @foreach (var warning in importResult.Response!.Warnings)
+                            {
+                                <li>@warning</li>
+                            }
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        }
+    }
+    @if (exportResult is not null)
+    {
+        <div class="col-xl-6">
+            <PayloadCard Title="Export summary"
+                         BadgeText="@($"{exportResult.RecordCountEstimate} record(s)")"
+                         Payload="@BuildExportSummary(exportResult)" />
+        </div>
+        <div class="col-12">
+            <PayloadCard Title="Exported ADIF"
+                         BadgeText="@($"{exportResult.ByteCount:N0} bytes")"
+                         Payload="@GetExportPayload(exportResult)" />
+        </div>
+    }
+</div>
+
+<div class="card shadow-sm mt-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3 gap-3 flex-wrap">
+            <div>
+                <h2 class="h5 mb-1">QRZ sync</h2>
+                <div class="small text-muted">
+                    Stream live <code>SyncWithQrz</code> progress frames and then refresh <code>GetSyncStatus</code>
+                    against the same endpoint.
+                </div>
+            </div>
+            <div class="d-flex gap-2 flex-wrap align-items-center">
+                <div class="form-check">
+                    <InputCheckbox id="full-sync"
+                                   class="form-check-input"
+                                   @bind-Value="fullSync" />
+                    <label class="form-check-label" for="full-sync">
+                        Full sync
+                    </label>
+                </div>
+                <button class="btn btn-outline-secondary"
+                        type="button"
+                        @onclick="RefreshSyncStatusAsync"
+                        disabled="@isSyncing">
+                    Refresh status
+                </button>
+                <button class="btn btn-primary"
+                        type="button"
+                        @onclick="RunSyncAsync"
+                        disabled="@isSyncing">
+                    @(isSyncing ? "Syncing..." : "Run QRZ sync")
+                </button>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(syncErrorMessage))
+        {
+            <div class="alert alert-danger">@syncErrorMessage</div>
+        }
+
+        <div class="row g-4">
+            @if (syncStatusPayload is not null)
+            {
+                <div class="col-xl-6">
+                    <PayloadCard Title="Current sync status"
+                                 Payload="@syncStatusPayload.Json" />
+                </div>
+            }
+            @if (latestSyncPayload is not null)
+            {
+                <div class="col-xl-6">
+                    <PayloadCard Title="Latest SyncWithQrz frame"
+                                 Payload="@latestSyncPayload.Json" />
+                </div>
+            }
+        </div>
+
+        @if (syncResult is null)
+        {
+            <p class="text-muted mt-3 mb-0">
+                No QRZ sync run yet. Use this page to inspect both the streamed sync frames and the refreshed sync status envelope.
+            </p>
+        }
+        else
+        {
+            <div class="d-flex justify-content-between align-items-center mt-4 mb-2">
+                <h3 class="h6 mb-0">Sync progress</h3>
+                <span class="badge @(syncResult.Succeeded ? "text-bg-success" : "text-bg-danger")">
+                    @(syncResult.Succeeded ? "Completed" : "Failed")
+                </span>
+            </div>
+            <div class="small text-muted mb-3">
+                Completed @syncResult.CompletedAtUtc.LocalDateTime.ToString("g")
+                using @(syncResult.FullSync ? "full" : "incremental") sync mode.
+            </div>
+
+            @if (syncResult.ProgressUpdates.Count == 0)
+            {
+                <p class="text-muted mb-0">No streamed progress frames were returned.</p>
+            }
+            else
+            {
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>#</th>
+                                <th>Action</th>
+                                <th>Processed</th>
+                                <th>Uploaded</th>
+                                <th>Downloaded</th>
+                                <th>Conflicts</th>
+                                <th>Complete</th>
+                                <th>Error</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var (update, index) in syncResult.ProgressUpdates.Select((value, i) => (value, i)))
+                            {
+                                <tr>
+                                    <td>@(index + 1)</td>
+                                    <td>@(string.IsNullOrWhiteSpace(update.CurrentAction) ? "—" : update.CurrentAction)</td>
+                                    <td>@FormatProcessed(update)</td>
+                                    <td>@update.UploadedRecords</td>
+                                    <td>@update.DownloadedRecords</td>
+                                    <td>@update.ConflictRecords</td>
+                                    <td>@(update.Complete ? "Yes" : "No")</td>
+                                    <td>@(string.IsNullOrWhiteSpace(update.Error) ? "—" : update.Error)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@code {
+    private const long MaxImportFileSizeBytes = 16 * 1024 * 1024;
+
+    private readonly AdifExportEditorModel exportModel = new();
+
+    private string importText = string.Empty;
+    private string importSourceDescription = "Pasted ADIF text";
+    private bool importRefresh;
+    private bool fullSync;
+    private bool isImporting;
+    private bool isExporting;
+    private bool isSyncing;
+    private string? importErrorMessage;
+    private string? exportErrorMessage;
+    private string? syncErrorMessage;
+    private AdifImportInvocationResult? importResult;
+    private AdifExportInvocationResult? exportResult;
+    private QrzSyncInvocationResult? syncResult;
+    private ProtoPayloadView exportRequestPayload = new("{}", string.Empty, 0);
+    private ProtoPayloadView? importResponsePayload;
+    private ProtoPayloadView? latestSyncPayload;
+    private ProtoPayloadView? syncStatusPayload;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RuntimeConfigWorkbenchService.RefreshAsync();
+        PreviewExportRequest();
+        await RefreshSyncStatusAsync();
+    }
+
+    private async Task LoadImportFileAsync(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        if (file is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await using var input = file.OpenReadStream(MaxImportFileSizeBytes);
+            await using var buffer = new MemoryStream();
+            await input.CopyToAsync(buffer);
+            importText = Encoding.UTF8.GetString(buffer.ToArray());
+            importSourceDescription = $"{file.Name} ({buffer.Length:N0} bytes)";
+            importErrorMessage = null;
+            importResult = null;
+            importResponsePayload = null;
+        }
+        catch (IOException ex)
+        {
+            importErrorMessage = $"Could not load file: {ex.Message}";
+        }
+        catch (OperationCanceledException ex)
+        {
+            importErrorMessage = ex.Message;
+        }
+    }
+
+    private void UseLatestExportAsImport()
+    {
+        if (string.IsNullOrWhiteSpace(exportResult?.AdifText))
+        {
+            return;
+        }
+
+        importText = exportResult.AdifText;
+        importSourceDescription = $"Latest export output ({exportResult.ByteCount:N0} bytes)";
+        importErrorMessage = null;
+        importResult = null;
+        importResponsePayload = null;
+    }
+
+    private void ClearImport()
+    {
+        importText = string.Empty;
+        importSourceDescription = "Pasted ADIF text";
+        importErrorMessage = null;
+        importResult = null;
+        importResponsePayload = null;
+    }
+
+    private async Task RunImportAsync()
+    {
+        if (string.IsNullOrWhiteSpace(importText))
+        {
+            importErrorMessage = "ADIF payload is required.";
+            return;
+        }
+
+        isImporting = true;
+        try
+        {
+            importErrorMessage = null;
+            importResult = await LogbookInteropWorkbenchService.ImportAdifAsync(
+                importText,
+                importRefresh,
+                importSourceDescription);
+            importErrorMessage = importResult.ErrorMessage;
+            importResponsePayload = importResult.Response is null
+                ? null
+                : ProtoJsonService.Describe(importResult.Response);
+        }
+        finally
+        {
+            isImporting = false;
+        }
+    }
+
+    private void PreviewExportRequest()
+    {
+        if (!TryBuildExportRequest(out var request))
+        {
+            return;
+        }
+
+        exportRequestPayload = ProtoJsonService.Describe(request);
+    }
+
+    private async Task RunExportAsync()
+    {
+        if (!TryBuildExportRequest(out var request))
+        {
+            return;
+        }
+
+        isExporting = true;
+        try
+        {
+            exportErrorMessage = null;
+            exportResult = await LogbookInteropWorkbenchService.ExportAdifAsync(request);
+            exportErrorMessage = exportResult.ErrorMessage;
+        }
+        finally
+        {
+            isExporting = false;
+        }
+    }
+
+    private async Task RefreshSyncStatusAsync()
+    {
+        var (response, errorMessage) = await LogbookInteropWorkbenchService.GetSyncStatusAsync();
+        syncStatusPayload = response is null ? null : ProtoJsonService.Describe(response);
+        syncErrorMessage = errorMessage;
+    }
+
+    private async Task RunSyncAsync()
+    {
+        isSyncing = true;
+        try
+        {
+            syncErrorMessage = null;
+            syncResult = await LogbookInteropWorkbenchService.SyncWithQrzAsync(fullSync);
+            syncErrorMessage = syncResult.ErrorMessage;
+            latestSyncPayload = syncResult.LatestUpdate is null
+                ? null
+                : ProtoJsonService.Describe(syncResult.LatestUpdate);
+            syncStatusPayload = syncResult.SyncStatus is null
+                ? syncStatusPayload
+                : ProtoJsonService.Describe(syncResult.SyncStatus);
+        }
+        finally
+        {
+            isSyncing = false;
+        }
+    }
+
+    private bool TryBuildExportRequest(out ExportAdifRequest request)
+    {
+        var validationResults = new List<ValidationResult>();
+        var isValid = Validator.TryValidateObject(
+            exportModel,
+            new ValidationContext(exportModel),
+            validationResults,
+            validateAllProperties: true);
+
+        if (!isValid)
+        {
+            exportErrorMessage = string.Join(Environment.NewLine, validationResults.Select(result => result.ErrorMessage));
+            request = new ExportAdifRequest { IncludeHeader = exportModel.IncludeHeader };
+            return false;
+        }
+
+        exportErrorMessage = null;
+        request = exportModel.ToRequest();
+        return true;
+    }
+
+    private static string BuildImportSummary(AdifImportInvocationResult result)
+    {
+        var response = result.Response;
+
+        return
+            $"""
+            Source: {result.SourceDescription}
+            Refresh duplicates: {(result.Refresh ? "Yes" : "No")}
+            Bytes sent: {result.ByteCount:N0}
+            Chunks sent: {result.ChunkCount:N0}
+            Imported: {(response?.RecordsImported ?? 0)}
+            Updated: {(response?.RecordsUpdated ?? 0)}
+            Skipped: {(response?.RecordsSkipped ?? 0)}
+            Warnings: {result.WarningCount}
+            Completed: {result.CompletedAtUtc.LocalDateTime:g}
+            """;
+    }
+
+    private static string BuildExportSummary(AdifExportInvocationResult result)
+    {
+        var request = result.Request;
+
+        return
+            $"""
+            Bytes received: {result.ByteCount:N0}
+            Chunks received: {result.ChunkCount:N0}
+            Estimated records: {result.RecordCountEstimate}
+            Include header: {(request.IncludeHeader ? "Yes" : "No")}
+            Contest ID: {(string.IsNullOrWhiteSpace(request.ContestId) ? "(none)" : request.ContestId)}
+            After: {FormatTimestamp(request.After)}
+            Before: {FormatTimestamp(request.Before)}
+            Completed: {result.CompletedAtUtc.LocalDateTime:g}
+            """;
+    }
+
+    private static string GetExportPayload(AdifExportInvocationResult result)
+    {
+        return string.IsNullOrWhiteSpace(result.AdifText)
+            ? "(empty)"
+            : result.AdifText;
+    }
+
+    private static string FormatTimestamp(Timestamp? timestamp)
+    {
+        return timestamp is null
+            ? "(none)"
+            : timestamp.ToDateTime().ToLocalTime().ToString("g");
+    }
+
+    private static string FormatProcessed(SyncWithQrzResponse update)
+    {
+        if (update.TotalRecords == 0)
+        {
+            return update.ProcessedRecords.ToString();
+        }
+
+        return $"{update.ProcessedRecords}/{update.TotalRecords}";
+    }
+}

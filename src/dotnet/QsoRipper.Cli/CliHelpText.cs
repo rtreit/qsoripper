@@ -30,6 +30,7 @@ internal static class CliHelpText
               sync [--force]                   Sync with QRZ logbook (--force = full sync)
               sync-status                      Detailed sync status and scheduling info
               test-logbook [--api-key <key>]   Test QRZ logbook API key
+              space-weather [--refresh]        Show current NOAA space weather snapshot
               config [--set KEY=VALUE]         View or modify runtime config
               setup [--status | --from-env]    Interactive setup wizard or headless config
 
@@ -199,6 +200,14 @@ internal static class CliHelpText
                 Uses the configured key if --api-key is not provided.
 
                   --api-key <key>      API key to test (optional)
+                """,
+            "space-weather" => """
+                Usage: space-weather [--refresh]
+
+                Show the current engine-backed NOAA space weather snapshot.
+
+                  --refresh          Force an immediate refresh before printing
+                  --json             Output the snapshot as JSON
                 """,
             _ => $"No help available for '{command}'."
         };

@@ -24,16 +24,19 @@ use qsoripper_core::proto::qsoripper::services::{
     logbook_service_server::{LogbookService, LogbookServiceServer},
     lookup_service_server::{LookupService, LookupServiceServer},
     setup_service_server::SetupServiceServer,
+    space_weather_service_server::{SpaceWeatherService, SpaceWeatherServiceServer},
     station_profile_service_server::StationProfileServiceServer,
     AdifChunk, ApplyRuntimeConfigRequest, ApplyRuntimeConfigResponse, BatchLookupRequest,
     BatchLookupResponse, DeleteQsoRequest, DeleteQsoResponse, ExportAdifRequest,
-    ExportAdifResponse, GetCachedCallsignRequest, GetCachedCallsignResponse, GetDxccEntityRequest,
+    ExportAdifResponse, GetCachedCallsignRequest, GetCachedCallsignResponse,
+    GetCurrentSpaceWeatherRequest, GetCurrentSpaceWeatherResponse, GetDxccEntityRequest,
     GetDxccEntityResponse, GetQsoRequest, GetQsoResponse, GetRuntimeConfigRequest,
     GetRuntimeConfigResponse, GetSyncStatusRequest, GetSyncStatusResponse, ImportAdifRequest,
     ImportAdifResponse, ListQsosRequest, ListQsosResponse, LogQsoRequest, LogQsoResponse,
-    LookupRequest, LookupResponse, QsoSortOrder as ProtoQsoSortOrder, ResetRuntimeConfigRequest,
-    ResetRuntimeConfigResponse, StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest,
-    SyncWithQrzResponse, UpdateQsoRequest, UpdateQsoResponse,
+    LookupRequest, LookupResponse, QsoSortOrder as ProtoQsoSortOrder, RefreshSpaceWeatherRequest,
+    RefreshSpaceWeatherResponse, ResetRuntimeConfigRequest, ResetRuntimeConfigResponse,
+    StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse,
+    UpdateQsoRequest, UpdateQsoResponse,
 };
 use runtime_config::RuntimeConfigManager;
 use setup::{
@@ -73,6 +76,7 @@ where
     let setup_service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
     let station_profile_service =
         StationProfileControlSurface::new(setup_state.clone(), runtime_config.clone());
+    let space_weather_service = SpaceWeatherControlSurface::new(runtime_config.clone());
     let active_storage_backend = runtime_config.active_storage_backend().await;
     let setup_status = setup_state.status().await;
     let setup_completion = setup_completion_label(setup_status.setup_complete);
@@ -107,6 +111,7 @@ where
         .add_service(LookupServiceServer::new(lookup_service))
         .add_service(SetupServiceServer::new(setup_service))
         .add_service(StationProfileServiceServer::new(station_profile_service))
+        .add_service(SpaceWeatherServiceServer::new(space_weather_service))
         .add_service(DeveloperControlServiceServer::new(
             developer_control_service,
         ))
@@ -656,6 +661,50 @@ impl DeveloperControlService for DeveloperControlSurface {
     }
 }
 
+#[derive(Clone)]
+struct SpaceWeatherControlSurface {
+    runtime_config: Arc<RuntimeConfigManager>,
+}
+
+impl SpaceWeatherControlSurface {
+    fn new(runtime_config: Arc<RuntimeConfigManager>) -> Self {
+        Self { runtime_config }
+    }
+}
+
+#[tonic::async_trait]
+impl SpaceWeatherService for SpaceWeatherControlSurface {
+    async fn get_current_space_weather(
+        &self,
+        _request: Request<GetCurrentSpaceWeatherRequest>,
+    ) -> Result<Response<GetCurrentSpaceWeatherResponse>, Status> {
+        let snapshot = self
+            .runtime_config
+            .space_weather_monitor()
+            .await
+            .current_snapshot()
+            .await;
+        Ok(Response::new(GetCurrentSpaceWeatherResponse {
+            snapshot: Some(snapshot),
+        }))
+    }
+
+    async fn refresh_space_weather(
+        &self,
+        _request: Request<RefreshSpaceWeatherRequest>,
+    ) -> Result<Response<RefreshSpaceWeatherResponse>, Status> {
+        let snapshot = self
+            .runtime_config
+            .space_weather_monitor()
+            .await
+            .refresh_snapshot()
+            .await;
+        Ok(Response::new(RefreshSpaceWeatherResponse {
+            snapshot: Some(snapshot),
+        }))
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ServerOptions {
     listen_address: SocketAddr,
@@ -883,7 +932,8 @@ mod tests {
         build_storage, legacy_qrz_user_agent_line_compatibility, load_dotenv_if_present,
         parse_storage_backend, run_server, sanitize_legacy_qrz_user_agent_contents,
         server_ready_message, server_starting_message, sync_scheduler, DeveloperLogbookService,
-        DeveloperLookupService, Server, ServerOptions, StorageBackendKind, StorageOptions,
+        DeveloperLookupService, Server, ServerOptions, SpaceWeatherControlSurface,
+        StorageBackendKind, StorageOptions,
     };
     use crate::runtime_config::{
         RuntimeConfigManager, SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR, STATION_GRID_ENV_VAR,
@@ -893,6 +943,7 @@ mod tests {
     use qsoripper_core::lookup::{
         QRZ_USER_AGENT_ENV_VAR, QRZ_XML_PASSWORD_ENV_VAR, QRZ_XML_USERNAME_ENV_VAR,
     };
+    use qsoripper_core::proto::qsoripper::domain::SpaceWeatherStatus;
     use qsoripper_core::proto::qsoripper::domain::{
         Band, LookupResult, LookupState, Mode, QsoRecord,
     };
@@ -901,10 +952,12 @@ mod tests {
         logbook_service_client::LogbookServiceClient,
         logbook_service_server::{LogbookService, LogbookServiceServer},
         lookup_service_server::LookupService,
+        space_weather_service_server::SpaceWeatherService,
         AdifChunk, BatchLookupRequest, DeleteQsoRequest, ExportAdifRequest,
-        GetCachedCallsignRequest, GetDxccEntityRequest, GetQsoRequest, GetSyncStatusRequest,
-        ImportAdifRequest, ImportAdifResponse, ListQsosRequest, LogQsoRequest, LookupRequest,
-        QsoSortOrder, StreamLookupRequest, UpdateQsoRequest,
+        GetCachedCallsignRequest, GetCurrentSpaceWeatherRequest, GetDxccEntityRequest,
+        GetQsoRequest, GetSyncStatusRequest, ImportAdifRequest, ImportAdifResponse,
+        ListQsosRequest, LogQsoRequest, LookupRequest, QsoSortOrder, RefreshSpaceWeatherRequest,
+        StreamLookupRequest, UpdateQsoRequest,
     };
     use tokio_stream::StreamExt;
     use tonic::transport::Channel;
@@ -912,11 +965,17 @@ mod tests {
 
     static PROCESS_STATE_LOCK: Mutex<()> = Mutex::new(());
 
-    const PROCESS_ENV_KEYS: [&str; 4] = [
+    const PROCESS_ENV_KEYS: [&str; 10] = [
         "QSORIPPER_SERVER_ADDR",
         "QSORIPPER_CONFIG_PATH",
         "QSORIPPER_STORAGE_BACKEND",
         "QSORIPPER_SQLITE_PATH",
+        "QSORIPPER_NOAA_SPACE_WEATHER_ENABLED",
+        "QSORIPPER_NOAA_KP_INDEX_URL",
+        "QSORIPPER_NOAA_SOLAR_INDICES_URL",
+        "QSORIPPER_NOAA_HTTP_TIMEOUT_SECONDS",
+        "QSORIPPER_NOAA_REFRESH_INTERVAL_SECONDS",
+        "QSORIPPER_NOAA_STALE_AFTER_SECONDS",
     ];
 
     struct ProcessStateGuard {
@@ -1011,6 +1070,56 @@ mod tests {
         }
 
         Arc::new(RuntimeConfigManager::new(startup_values).expect("runtime config"))
+    }
+
+    fn test_runtime_config_with_space_weather_enabled(enabled: bool) -> Arc<RuntimeConfigManager> {
+        let mut startup_values = BTreeMap::new();
+        startup_values.insert(
+            qsoripper_core::space_weather::NOAA_SPACE_WEATHER_ENABLED_ENV_VAR.to_string(),
+            enabled.to_string(),
+        );
+
+        Arc::new(RuntimeConfigManager::new(startup_values).expect("runtime config"))
+    }
+
+    #[tokio::test]
+    async fn get_current_space_weather_returns_disabled_snapshot_when_provider_is_disabled() {
+        let service =
+            SpaceWeatherControlSurface::new(test_runtime_config_with_space_weather_enabled(false));
+
+        let response = service
+            .get_current_space_weather(Request::new(GetCurrentSpaceWeatherRequest {}))
+            .await
+            .expect("space weather response")
+            .into_inner();
+        let snapshot = response.snapshot.expect("space weather snapshot");
+        let error_message = snapshot.error_message.expect("error message");
+
+        assert_eq!(SpaceWeatherStatus::Error as i32, snapshot.status);
+        assert!(
+            error_message.contains("disabled"),
+            "unexpected error message: {error_message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_space_weather_returns_disabled_snapshot_when_provider_is_disabled() {
+        let service =
+            SpaceWeatherControlSurface::new(test_runtime_config_with_space_weather_enabled(false));
+
+        let response = service
+            .refresh_space_weather(Request::new(RefreshSpaceWeatherRequest {}))
+            .await
+            .expect("space weather response")
+            .into_inner();
+        let snapshot = response.snapshot.expect("space weather snapshot");
+        let error_message = snapshot.error_message.expect("error message");
+
+        assert_eq!(SpaceWeatherStatus::Error as i32, snapshot.status);
+        assert!(
+            error_message.contains("disabled"),
+            "unexpected error message: {error_message}"
+        );
     }
 
     fn unique_sqlite_test_path(label: &str) -> PathBuf {

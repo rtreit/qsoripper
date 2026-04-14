@@ -2,10 +2,10 @@ using System.Text;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Services;
-
 namespace QsoRipper.Cli.Tests;
 
 #pragma warning disable CA1707 // Remove underscores from member names - xUnit allows underscores in test methods
+[Collection("ConsoleCapture")]
 public sealed class CliUtilityTests
 {
     [Theory]
@@ -54,6 +54,7 @@ public sealed class CliUtilityTests
         new()
         {
             { "status", "Usage: status" },
+            { "space-weather", "Usage: space-weather [--refresh]" },
             { "config", "Usage: config [options]" },
             { "lookup", "Usage: lookup <callsign> [--skip-cache]" }
         };
@@ -149,7 +150,7 @@ public sealed class CliUtilityTests
     [Fact]
     public void JsonOutput_Print_writes_indented_json()
     {
-        var output = CaptureConsoleOut(() => JsonOutput.Print(new GetSyncStatusResponse { LocalQsoCount = 3 }));
+        var output = ConsoleCapture.Out(() => JsonOutput.Print(new GetSyncStatusResponse { LocalQsoCount = 3 }));
 
         Assert.Contains("\"localQsoCount\": 3", output, StringComparison.Ordinal);
     }
@@ -163,7 +164,7 @@ public sealed class CliUtilityTests
             new GetSyncStatusResponse { LocalQsoCount = 2 }
         };
 
-        var output = CaptureConsoleOut(() => JsonOutput.PrintArray(messages));
+        var output = ConsoleCapture.Out(() => JsonOutput.PrintArray(messages));
 
         Assert.StartsWith("[", output, StringComparison.Ordinal);
         Assert.Contains("\"localQsoCount\": 1", output, StringComparison.Ordinal);
@@ -171,23 +172,12 @@ public sealed class CliUtilityTests
         Assert.EndsWith(Environment.NewLine + "]" + Environment.NewLine, output, StringComparison.Ordinal);
     }
 
-    private static string CaptureConsoleOut(Action action)
+    [Fact]
+    public void GetGeneralHelp_includes_space_weather_command()
     {
-        var builder = new StringBuilder();
-        using var writer = new StringWriter(builder);
-        var original = Console.Out;
+        var help = CliHelpText.GetGeneralHelp();
 
-        try
-        {
-            Console.SetOut(writer);
-            action();
-        }
-        finally
-        {
-            Console.SetOut(original);
-        }
-
-        return builder.ToString();
+        Assert.Contains("space-weather [--refresh]", help, StringComparison.Ordinal);
     }
 }
 #pragma warning restore CA1707

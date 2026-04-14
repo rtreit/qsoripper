@@ -335,6 +335,7 @@ internal sealed partial class MainWindow : Window
         }
     }
 
+
     private void ClampToCurrentScreen()
     {
         var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;

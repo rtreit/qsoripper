@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "domain/space_weather_snapshot.proto";
+
+message RefreshSpaceWeatherResponse {
+  qsoripper.domain.SpaceWeatherSnapshot snapshot = 1;
+}
