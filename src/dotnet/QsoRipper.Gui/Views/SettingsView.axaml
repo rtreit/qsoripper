@@ -5,8 +5,9 @@
         x:Class="QsoRipper.Gui.Views.SettingsView"
         x:DataType="vm:SettingsViewModel"
         Title="Settings"
-        Width="560" Height="640"
+        Width="560" Height="780"
         MinWidth="480" MinHeight="520"
+        MaxHeight="900"
         WindowStartupLocation="CenterOwner"
         CanResize="True">
 

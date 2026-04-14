@@ -145,14 +145,21 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         try
         {
             var response = await _engine.SyncWithQrzAsync();
+
+            if (!string.IsNullOrEmpty(response.Error))
+            {
+                SyncStatusText = $"Sync error: {response.Error}";
+                return;
+            }
+
             var up = response.UploadedRecords;
             var down = response.DownloadedRecords;
             SyncStatusText = $"Synced: \u2191{up} \u2193{down}";
             await RecentQsos.RefreshAsync();
         }
-        catch (Grpc.Core.RpcException)
+        catch (Grpc.Core.RpcException ex)
         {
-            SyncStatusText = "Sync failed";
+            SyncStatusText = $"Sync failed: {ex.Status.Detail}";
         }
         finally
         {

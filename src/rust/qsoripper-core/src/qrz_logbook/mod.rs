@@ -226,6 +226,25 @@ fn is_auth_error(reason: &str) -> bool {
         || lower.contains("access denied")
 }
 
+/// Extract the ADIF payload from a QRZ FETCH response body.
+///
+/// QRZ FETCH responses use the format:
+///   `RESULT=OK&COUNT=773&ADIF=<time_off:4>2328\n<qso_date_off:8>...`
+///
+/// The ADIF data starts immediately after `ADIF=` and runs to the end of
+/// the body. We cannot use `parse_kv_response` to extract it because the
+/// ADIF content contains `&` and `=` characters inside angle-bracket fields.
+fn extract_adif_from_fetch_body(body: &str) -> Option<String> {
+    // Case-insensitive search for the ADIF= marker.
+    let upper = body.to_ascii_uppercase();
+    let marker_pos = upper.find("ADIF=")?;
+    let start = marker_pos + "ADIF=".len();
+    if start >= body.len() {
+        return None;
+    }
+    Some(body[start..].to_string())
+}
+
 // ---------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------
@@ -297,12 +316,33 @@ impl QrzLogbookClient {
             .post_form(&[("ACTION", "FETCH"), ("OPTION", &option_value)])
             .await?;
 
-        // The FETCH response body is ADIF data.  If QRZ returned a kv error
-        // instead (e.g. RESULT=FAIL), detect that first.
+        // QRZ FETCH responses use the format:
+        //   RESULT=OK&COUNT=N&ADIF=<adif data here...>
+        // The ADIF key's value contains newlines and the full record set.
+        // If RESULT=FAIL, detect and report the error.
         if body.trim_start().starts_with("RESULT=") {
-            let map = parse_kv_response(&body);
+            // Extract the ADIF portion before parsing the kv header.
+            // The ADIF data starts after "ADIF=" and may contain '&' chars
+            // inside field values, so we locate the marker directly.
+            let adif_data = extract_adif_from_fetch_body(&body);
+
+            // Parse only the header portion (before the ADIF data) for
+            // RESULT/COUNT/REASON etc.
+            let header = match body.find("ADIF=") {
+                Some(pos) => &body[..pos],
+                None => &body,
+            };
+            let map = parse_kv_response(header);
             check_result(map)?;
-            // If RESULT=OK but no ADIF data, return empty.
+
+            // Parse whatever ADIF data was present.
+            if let Some(adif) = adif_data {
+                if !adif.trim().is_empty() {
+                    return adif::parse_adi_qsos(adif.as_bytes())
+                        .await
+                        .map_err(QrzLogbookError::ParseError);
+                }
+            }
             return Ok(Vec::new());
         }
 
@@ -832,6 +872,44 @@ mod tests {
         let qsos = client.fetch_qsos(None).await.expect("fetch");
 
         assert!(qsos.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fetch_qsos_parses_result_ok_with_inline_adif() {
+        // Real QRZ FETCH format: RESULT=OK&COUNT=N&ADIF=<adif records...>
+        let body = "RESULT=OK&COUNT=2&ADIF=<CALL:4>W1AW <BAND:3>20M <MODE:3>SSB \
+                    <QSO_DATE:8>20250101 <TIME_ON:4>1200 <EOR>\n\
+                    <CALL:6>N0CALL <BAND:3>40M <MODE:2>CW \
+                    <QSO_DATE:8>20250102 <TIME_ON:4>1300 <EOR>\n";
+        let (base_url, _) = spawn_logbook_server(&[("text/plain", body)]).await;
+        let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
+
+        let qsos = client.fetch_qsos(None).await.expect("fetch");
+
+        assert_eq!(qsos.len(), 2, "expected 2 QSOs from inline ADIF");
+        assert_eq!(qsos[0].worked_callsign, "W1AW");
+        assert_eq!(qsos[1].worked_callsign, "N0CALL");
+    }
+
+    #[test]
+    fn extract_adif_from_fetch_body_extracts_content() {
+        let body = "RESULT=OK&COUNT=1&ADIF=<CALL:4>W1AW <EOR>\n";
+        let adif = extract_adif_from_fetch_body(body);
+        assert_eq!(adif.as_deref(), Some("<CALL:4>W1AW <EOR>\n"));
+    }
+
+    #[test]
+    fn extract_adif_from_fetch_body_returns_none_when_missing() {
+        let body = "RESULT=OK&COUNT=0";
+        let adif = extract_adif_from_fetch_body(body);
+        assert!(adif.is_none());
+    }
+
+    #[test]
+    fn extract_adif_from_fetch_body_case_insensitive() {
+        let body = "RESULT=OK&COUNT=1&adif=<CALL:4>W1AW <EOR>\n";
+        let adif = extract_adif_from_fetch_body(body);
+        assert_eq!(adif.as_deref(), Some("<CALL:4>W1AW <EOR>\n"));
     }
 
     // -- upload_qso integration ---------------------------------------------
