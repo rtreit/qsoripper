@@ -81,7 +81,6 @@ impl SpaceWeatherMonitor {
                         fetched_at: Some(now_timestamp()),
                         status: SpaceWeatherStatus::Error as i32,
                         error_message: Some(error.to_string()),
-                        source_name: Some("NOAA SWPC".to_string()),
                         ..SpaceWeatherSnapshot::default()
                     }
                 }

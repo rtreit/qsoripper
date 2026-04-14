@@ -11,7 +11,7 @@ public sealed class SpaceWeatherCommandTests
     [Fact]
     public void HandleSnapshot_returns_error_when_snapshot_is_missing()
     {
-        var error = CaptureConsoleError(() => Assert.Equal(1, SpaceWeatherCommand.HandleSnapshot(null, false)));
+        var error = ConsoleCapture.Error(() => Assert.Equal(1, SpaceWeatherCommand.HandleSnapshot(null, false)));
 
         Assert.Contains("Space weather snapshot unavailable.", error, StringComparison.Ordinal);
     }
@@ -32,7 +32,7 @@ public sealed class SpaceWeatherCommandTests
             SourceName = "NOAA SWPC"
         };
 
-        var output = CaptureConsoleOut(() => Assert.Equal(0, SpaceWeatherCommand.HandleSnapshot(snapshot, false)));
+        var output = ConsoleCapture.Out(() => Assert.Equal(0, SpaceWeatherCommand.HandleSnapshot(snapshot, false)));
 
         Assert.Contains("Status:           current", output, StringComparison.Ordinal);
         Assert.Contains("Planetary K:      3.67", output, StringComparison.Ordinal);
@@ -52,7 +52,7 @@ public sealed class SpaceWeatherCommandTests
             ErrorMessage = "NOAA unavailable"
         };
 
-        var output = CaptureConsoleOut(() => Assert.Equal(1, SpaceWeatherCommand.HandleSnapshot(snapshot, false)));
+        var output = ConsoleCapture.Out(() => Assert.Equal(1, SpaceWeatherCommand.HandleSnapshot(snapshot, false)));
 
         Assert.Contains("Status:           error", output, StringComparison.Ordinal);
         Assert.Contains("Error:            NOAA unavailable", output, StringComparison.Ordinal);
@@ -67,48 +67,11 @@ public sealed class SpaceWeatherCommandTests
             SourceName = "NOAA SWPC"
         };
 
-        var output = CaptureConsoleOut(() => Assert.Equal(0, SpaceWeatherCommand.HandleSnapshot(snapshot, true)));
+        var output = ConsoleCapture.Out(() => Assert.Equal(0, SpaceWeatherCommand.HandleSnapshot(snapshot, true)));
 
         Assert.Contains("\"status\": \"SPACE_WEATHER_STATUS_STALE\"", output, StringComparison.Ordinal);
         Assert.Contains("\"sourceName\": \"NOAA SWPC\"", output, StringComparison.Ordinal);
     }
-
-    private static string CaptureConsoleOut(Action action)
-    {
-        var builder = new StringBuilder();
-        using var writer = new StringWriter(builder);
-        var original = Console.Out;
-
-        try
-        {
-            Console.SetOut(writer);
-            action();
-        }
-        finally
-        {
-            Console.SetOut(original);
-        }
-
-        return builder.ToString();
-    }
-
-    private static string CaptureConsoleError(Action action)
-    {
-        var builder = new StringBuilder();
-        using var writer = new StringWriter(builder);
-        var original = Console.Error;
-
-        try
-        {
-            Console.SetError(writer);
-            action();
-        }
-        finally
-        {
-            Console.SetError(original);
-        }
-
-        return builder.ToString();
-    }
 }
 #pragma warning restore CA1707
+

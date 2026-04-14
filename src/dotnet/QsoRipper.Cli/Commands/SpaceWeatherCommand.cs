@@ -70,7 +70,7 @@ internal static class SpaceWeatherCommand
 
     private static string FormatTimestamp(Timestamp? timestamp)
     {
-        return timestamp is null ? "(unavailable)" : timestamp.ToDateTime().ToUniversalTime().ToString("u");
+        return timestamp is null ? "(unavailable)" : timestamp.ToDateTime().ToString("u");
     }
 
     private static string FormatDouble(bool hasValue, double value)
