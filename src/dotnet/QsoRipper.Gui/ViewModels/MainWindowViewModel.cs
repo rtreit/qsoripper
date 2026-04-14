@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -17,6 +19,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private bool _setupCompleteBeforeWizard;
 
     [ObservableProperty]
+    private bool _isSettingsOpen;
+
+    [ObservableProperty]
     private bool _isWizardOpen;
 
     [ObservableProperty]
@@ -27,6 +32,30 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     [ObservableProperty]
     private bool _isSetupIncomplete;
+
+    [ObservableProperty]
+    private string _activeLogText = "Log: -";
+
+    [ObservableProperty]
+    private string _activeProfileText = "Profile: -";
+
+    [ObservableProperty]
+    private string _activeStationText = "Station: -";
+
+    [ObservableProperty]
+    private bool _isInspectorOpen;
+
+    [ObservableProperty]
+    private bool _isSyncing;
+
+    [ObservableProperty]
+    private string _syncStatusText = "Sync: never";
+
+    [ObservableProperty]
+    private bool _isSortChooserOpen;
+
+    [ObservableProperty]
+    private bool _isColumnChooserOpen;
 
     [ObservableProperty]
     private string _currentUtcTime = string.Empty;
@@ -57,6 +86,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     public event EventHandler? SearchFocusRequested;
 
     /// <summary>
+    /// Raised when the user requests the Settings dialog. The View subscribes to
+    /// this event and opens the modal <see cref="Views.SettingsView"/>.
+    /// </summary>
+    internal event EventHandler? SettingsRequested;
+
+    /// <summary>
     /// Called after the main window has loaded. Checks first-run state.
     /// </summary>
     public async Task CheckFirstRunAsync()
@@ -64,23 +99,22 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         try
         {
             var state = await _engine.GetWizardStateAsync();
-            if (state.Status.IsFirstRun || !state.Status.SetupComplete)
+            ApplySetupContext(state);
+            IsSetupIncomplete = !state.Status.SetupComplete;
+
+            if (state.Status.IsFirstRun)
             {
-                IsSetupIncomplete = !state.Status.SetupComplete;
-                StatusMessage = IsSetupIncomplete
-                    ? "Setup incomplete - finish settings to start logging."
-                    : "Welcome to QsoRipper.";
+                StatusMessage = "Welcome";
                 await OpenWizardAsync();
             }
             else
             {
-                IsSetupIncomplete = false;
                 await ActivateDashboardAsync(focusSearch: true);
             }
         }
         catch (Grpc.Core.RpcException)
         {
-            StatusMessage = "Cannot connect to engine at 127.0.0.1:50051. Is the engine running?";
+            StatusMessage = "Engine unavailable";
         }
     }
 
@@ -95,12 +129,113 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     [RelayCommand]
+    private void OpenSettings()
+    {
+        if (!IsWizardOpen && !IsSettingsOpen)
+        {
+            SettingsRequested?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSyncNow))]
+    private async Task SyncNowAsync()
+    {
+        IsSyncing = true;
+        SyncStatusText = "Syncing\u2026";
+        try
+        {
+            var response = await _engine.SyncWithQrzAsync();
+
+            if (!string.IsNullOrEmpty(response.Error))
+            {
+                SyncStatusText = $"Sync error: {response.Error}";
+                return;
+            }
+
+            var up = response.UploadedRecords;
+            var down = response.DownloadedRecords;
+            SyncStatusText = $"Synced: \u2191{up} \u2193{down}";
+            await RecentQsos.RefreshAsync();
+        }
+        catch (Grpc.Core.RpcException ex)
+        {
+            SyncStatusText = $"Sync failed: {ex.Status.Detail}";
+        }
+        finally
+        {
+            IsSyncing = false;
+        }
+    }
+
+    private bool CanSyncNow() => !IsSyncing && !IsWizardOpen;
+
+    partial void OnIsSyncingChanged(bool value) => SyncNowCommand.NotifyCanExecuteChanged();
+
+    partial void OnIsWizardOpenChanged(bool value)
+    {
+        SyncNowCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// Creates a <see cref="SettingsViewModel"/> wired to the shared engine client.
+    /// Called by the View layer when handling <see cref="SettingsRequested"/>.
+    /// </summary>
+    internal SettingsViewModel CreateSettingsViewModel() => new(_engine);
+
+    /// <summary>
+    /// Called by the View layer after the Settings dialog closes.
+    /// </summary>
+    internal async Task OnSettingsClosedAsync(bool didSave)
+    {
+        IsSettingsOpen = false;
+        if (didSave)
+        {
+            await RefreshSetupContextAsync();
+            await ActivateDashboardAsync(focusSearch: false);
+        }
+    }
+
+    [RelayCommand]
     private void FocusSearch()
     {
         if (!IsWizardOpen)
         {
+            CloseTransientPanels();
             SearchFocusRequested?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    [RelayCommand]
+    private void ToggleInspector()
+    {
+        IsInspectorOpen = !IsInspectorOpen;
+    }
+
+    [RelayCommand]
+    private void ToggleSortChooser()
+    {
+        IsSortChooserOpen = !IsSortChooserOpen;
+        if (IsSortChooserOpen)
+        {
+            IsColumnChooserOpen = false;
+        }
+    }
+
+    [RelayCommand]
+    private void ToggleColumnChooser()
+    {
+        IsColumnChooserOpen = !IsColumnChooserOpen;
+        if (IsColumnChooserOpen)
+        {
+            IsSortChooserOpen = false;
+        }
+    }
+
+    [RelayCommand]
+    private void CloseTransientPanels()
+    {
+        IsSortChooserOpen = false;
+        IsColumnChooserOpen = false;
     }
 
     [RelayCommand]
@@ -118,8 +253,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         WizardViewModel = null;
         IsSetupIncomplete = !_setupCompleteBeforeWizard;
         StatusMessage = _setupCompleteBeforeWizard
-            ? "Ready - setup complete."
-            : "Setup incomplete - open Settings to finish.";
+            ? "Ready"
+            : "Setup incomplete";
 
         if (_setupCompleteBeforeWizard)
         {
@@ -133,8 +268,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         WizardViewModel = null;
         IsSetupIncomplete = !setupComplete;
         StatusMessage = setupComplete
-            ? "Ready - setup complete."
-            : "Setup incomplete - open Settings to finish.";
+            ? "Ready"
+            : "Setup incomplete";
+
+        _ = RefreshSetupContextAsync();
 
         if (setupComplete)
         {
@@ -155,8 +292,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     private async Task ActivateDashboardAsync(bool focusSearch)
     {
-        StatusMessage = "Ready - setup complete.";
+        StatusMessage = "Ready";
         await RecentQsos.RefreshAsync();
+        await RefreshSyncStatusAsync();
 
         if (focusSearch && !IsWizardOpen)
         {
@@ -185,5 +323,83 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         timer.Tick += UtcTimerOnTick;
         timer.Start();
         return timer;
+    }
+
+    private async Task RefreshSetupContextAsync()
+    {
+        try
+        {
+            ApplySetupContext(await _engine.GetWizardStateAsync());
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            StatusMessage = "Engine unavailable";
+        }
+    }
+
+    private void ApplySetupContext(QsoRipper.Services.GetSetupWizardStateResponse state)
+    {
+        var activeProfile = state.StationProfiles.FirstOrDefault(profile => profile.IsActive)?.Profile
+            ?? state.Status.StationProfile;
+        ActiveLogText = BuildLogText(state.Status.LogFilePath);
+        ActiveProfileText = BuildProfileText(activeProfile);
+        ActiveStationText = BuildStationText(activeProfile);
+    }
+
+    private static string BuildLogText(string? logFilePath)
+    {
+        if (string.IsNullOrWhiteSpace(logFilePath))
+        {
+            return "Log: -";
+        }
+
+        return $"Log: {Path.GetFileNameWithoutExtension(logFilePath.Trim())}";
+    }
+
+    private static string BuildProfileText(QsoRipper.Domain.StationProfile? profile)
+    {
+        var profileName = profile?.ProfileName;
+        return string.IsNullOrWhiteSpace(profileName)
+            ? "Profile: Default"
+            : $"Profile: {profileName.Trim()}";
+    }
+
+    private static string BuildStationText(QsoRipper.Domain.StationProfile? profile)
+    {
+        var stationCallsign = profile?.StationCallsign;
+        return string.IsNullOrWhiteSpace(stationCallsign)
+            ? "Station: -"
+            : $"Station: {stationCallsign.Trim()}";
+    }
+
+    private async Task RefreshSyncStatusAsync()
+    {
+        try
+        {
+            var status = await _engine.GetSyncStatusAsync();
+            if (status.IsSyncing)
+            {
+                SyncStatusText = "Syncing\u2026";
+            }
+            else if (status.LastSync is not null)
+            {
+                var elapsed = DateTimeOffset.UtcNow - status.LastSync.ToDateTimeOffset();
+                SyncStatusText = elapsed.TotalMinutes < 1
+                    ? "Last sync: just now"
+                    : elapsed.TotalHours < 1
+                        ? $"Last sync: {(int)elapsed.TotalMinutes}m ago"
+                        : elapsed.TotalDays < 1
+                            ? $"Last sync: {(int)elapsed.TotalHours}h ago"
+                            : $"Last sync: {(int)elapsed.TotalDays}d ago";
+            }
+            else
+            {
+                SyncStatusText = "Sync: never";
+            }
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            // Sync status unavailable — leave current text unchanged.
+        }
     }
 }
