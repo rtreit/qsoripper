@@ -64,7 +64,9 @@ jobs:
         run: |
           cargo llvm-cov \
             --manifest-path src/rust/Cargo.toml \
-            --all \
+            --workspace \
+            --exclude qsoripper-stress \
+            --exclude qsoripper-stress-tui \
             --lcov \
             --output-path rust-coverage.lcov
 
@@ -72,6 +74,9 @@ jobs:
         run: |
           cargo llvm-cov report \
             --manifest-path src/rust/Cargo.toml \
+            --workspace \
+            --exclude qsoripper-stress \
+            --exclude qsoripper-stress-tui \
             --json \
             --summary-only \
             --output-path rust-coverage-summary.json
