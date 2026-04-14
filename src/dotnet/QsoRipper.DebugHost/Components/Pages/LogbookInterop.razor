@@ -219,6 +219,50 @@
     <div class="card-body">
         <div class="d-flex justify-content-between align-items-center mb-3 gap-3 flex-wrap">
             <div>
+                <h2 class="h5 mb-1">Test QRZ Logbook API Key</h2>
+                <div class="small text-muted">
+                    Validate a QRZ logbook API key via <code>TestQrzLogbookCredentials</code>.
+                    Uses the configured key if left blank.
+                </div>
+            </div>
+            <div class="d-flex gap-2 align-items-center">
+                <input type="password"
+                       class="form-control form-control-sm"
+                       style="width: 280px"
+                       placeholder="API key (blank = use configured)"
+                       @bind="testApiKey" />
+                <button class="btn btn-outline-primary"
+                        type="button"
+                        @onclick="TestLogbookCredentialsAsync"
+                        disabled="@isTestingCredentials">
+                    @(isTestingCredentials ? "Testing..." : "Test key")
+                </button>
+            </div>
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(testCredentialsError))
+        {
+            <div class="alert alert-danger">@testCredentialsError</div>
+        }
+
+        @if (testCredentialsPayload is not null)
+        {
+            <PayloadCard Title="TestQrzLogbookCredentials response"
+                         Payload="@testCredentialsPayload.Json" />
+        }
+        else if (!isTestingCredentials)
+        {
+            <p class="text-muted mb-0">
+                No credential test run yet. Enter an API key or leave blank to use the engine's configured key.
+            </p>
+        }
+    </div>
+</div>
+
+<div class="card shadow-sm mt-4">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-3 gap-3 flex-wrap">
+            <div>
                 <h2 class="h5 mb-1">QRZ sync</h2>
                 <div class="small text-muted">
                     Stream live <code>SyncWithQrz</code> progress frames and then refresh <code>GetSyncStatus</code>
@@ -347,6 +391,10 @@
     private string? importErrorMessage;
     private string? exportErrorMessage;
     private string? syncErrorMessage;
+    private string testApiKey = string.Empty;
+    private bool isTestingCredentials;
+    private string? testCredentialsError;
+    private ProtoPayloadView? testCredentialsPayload;
     private AdifImportInvocationResult? importResult;
     private AdifExportInvocationResult? exportResult;
     private QrzSyncInvocationResult? syncResult;
@@ -476,6 +524,22 @@
         var (response, errorMessage) = await LogbookInteropWorkbenchService.GetSyncStatusAsync();
         syncStatusPayload = response is null ? null : ProtoJsonService.Describe(response);
         syncErrorMessage = errorMessage;
+    }
+
+    private async Task TestLogbookCredentialsAsync()
+    {
+        isTestingCredentials = true;
+        try
+        {
+            testCredentialsError = null;
+            var (response, errorMessage) = await LogbookInteropWorkbenchService.TestLogbookCredentialsAsync(testApiKey);
+            testCredentialsPayload = response is null ? null : ProtoJsonService.Describe(response);
+            testCredentialsError = errorMessage;
+        }
+        finally
+        {
+            isTestingCredentials = false;
+        }
     }
 
     private async Task RunSyncAsync()
