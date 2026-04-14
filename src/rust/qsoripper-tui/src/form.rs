@@ -120,6 +120,8 @@ pub(crate) enum Field {
     WorkedState,
     /// Worked county.
     WorkedCounty,
+    /// Worked operator name.
+    WorkedName,
 }
 
 /// Primary navigation order for Tab/Shift-Tab in the log entry view.
@@ -150,6 +152,7 @@ const ADV_MAIN_FIELDS: &[Field] = &[
     Field::Time,
     Field::TimeOff,
     Field::Qth,
+    Field::WorkedName,
     Field::Comment,
     Field::Notes,
 ];
@@ -240,6 +243,8 @@ pub(crate) struct LogForm {
     pub(crate) worked_state: String,
     /// Worked county name.
     pub(crate) worked_county: String,
+    /// Worked operator name (from lookup or manual entry).
+    pub(crate) worked_name: String,
 }
 
 impl Default for LogForm {
@@ -282,6 +287,7 @@ impl LogForm {
             arrl_section: String::new(),
             worked_state: String::new(),
             worked_county: String::new(),
+            worked_name: String::new(),
         };
         form.on_band_change();
         form
@@ -417,6 +423,7 @@ impl LogForm {
             Field::ArrlSection => Some(&mut self.arrl_section),
             Field::WorkedState => Some(&mut self.worked_state),
             Field::WorkedCounty => Some(&mut self.worked_county),
+            Field::WorkedName => Some(&mut self.worked_name),
             Field::Band | Field::Mode => None,
         }
     }

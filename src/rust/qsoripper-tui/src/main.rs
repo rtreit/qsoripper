@@ -126,6 +126,11 @@ fn handle_event(
                         app.form.qth.clone_from(qth);
                     }
                 }
+                if app.form.worked_name.is_empty() {
+                    if let Some(ref name) = info.name {
+                        app.form.worked_name.clone_from(name);
+                    }
+                }
             }
             app.lookup_result = result;
         }
@@ -145,6 +150,21 @@ fn handle_event(
         }
         AppEvent::QsoLogFailed(err) => {
             app.set_error(format!("Log failed: {err}"));
+        }
+        AppEvent::QsoUpdated(callsign) => {
+            app.set_status(format!("QSO updated: {callsign}"));
+            let band_idx = app.form.band_idx;
+            let mode_idx = app.form.mode_idx;
+            app.form = LogForm::new();
+            app.form.band_idx = band_idx;
+            app.form.mode_idx = mode_idx;
+            app.form.on_band_change();
+            app.lookup_result = None;
+            app.editing_local_id = None;
+            refresh_recent_qsos(event_tx, endpoint);
+        }
+        AppEvent::QsoUpdateFailed(err) => {
+            app.set_error(format!("Update failed: {err}"));
         }
         AppEvent::QsoDeleted(local_id) => {
             app.set_status(format!("QSO {local_id} deleted"));
@@ -273,6 +293,7 @@ fn handle_key(
             app::View::LogEntry => {
                 app.form = LogForm::new();
                 app.lookup_result = None;
+                app.editing_local_id = None;
             }
             app::View::Help | app::View::ConfirmDeleteQso => {}
         },
@@ -483,7 +504,9 @@ fn jump_to_field(app: &mut App, ch: char) {
     app.qso_list_focused = false;
 }
 
-/// Load the QSO identified by `local_id` into the form for re-logging.
+/// Load the QSO identified by `local_id` into the form for editing.
+///
+/// Sets `editing_local_id` so that saving the form calls `UpdateQso` instead of `LogQso`.
 fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<String>) {
     let data = app
         .recent_qsos
@@ -496,9 +519,11 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
                 q.mode.clone(),
                 q.rst_sent.clone(),
                 q.rst_rcvd.clone(),
+                q.utc.clone(),
+                q.name.clone(),
             )
         });
-    let Some((callsign, band, mode, rst_sent, rst_rcvd)) = data else {
+    let Some((callsign, band, mode, rst_sent, rst_rcvd, utc, name)) = data else {
         return;
     };
     app.form.callsign = callsign;
@@ -511,21 +536,28 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
     app.form.on_band_change();
     app.form.rst_sent = rst_sent;
     app.form.rst_rcvd = rst_rcvd;
+    app.form.time = utc;
+    app.form.worked_name = name.unwrap_or_default();
     app.form.focused = Field::Callsign;
+    app.form.field_selected = true;
     app.qso_list_focused = false;
     app.qso_selected = None;
+    app.editing_local_id = Some(local_id.to_string());
     if matches!(app.view, app::View::Advanced) {
         app.view = app::View::LogEntry;
     }
     let _ = lookup_tx.send(app.form.callsign.clone());
 }
 
-/// Spawn a task to log the current form contents and forward the result to the event channel.
+/// Spawn a task to save the current form contents.
+///
+/// If `editing_local_id` is set, calls `UpdateQso`; otherwise calls `LogQso`.
 fn spawn_log_qso(app: &App, event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint: &str) {
     let tx = event_tx.clone();
     let ep = endpoint.to_string();
     let mut form_snap = app.form.clone();
-    if form_snap.time_off.is_empty() {
+    let editing_id = app.editing_local_id.clone();
+    if editing_id.is_none() && form_snap.time_off.is_empty() {
         form_snap.time_off = chrono::Utc::now().format("%H:%M").to_string();
     }
     let lookup_snap = app.lookup_result.as_ref().map(|info| {
@@ -538,14 +570,28 @@ fn spawn_log_qso(app: &App, event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint
     });
     tokio::spawn(async move {
         match grpc::create_channel(&ep).await {
-            Ok(ch) => match grpc::log_qso(ch, &form_snap, lookup_snap).await {
-                Ok(id) => {
-                    let _ = tx.send(AppEvent::QsoLogged(id));
+            Ok(ch) => {
+                if let Some(local_id) = editing_id {
+                    match grpc::update_qso(ch, &local_id, &form_snap, lookup_snap).await {
+                        Ok(()) => {
+                            let callsign = form_snap.callsign.to_uppercase();
+                            let _ = tx.send(AppEvent::QsoUpdated(callsign));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(AppEvent::QsoUpdateFailed(e.to_string()));
+                        }
+                    }
+                } else {
+                    match grpc::log_qso(ch, &form_snap, lookup_snap).await {
+                        Ok(id) => {
+                            let _ = tx.send(AppEvent::QsoLogged(id));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(AppEvent::QsoLogFailed(e.to_string()));
+                        }
+                    }
                 }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::QsoLogFailed(e.to_string()));
-                }
-            },
+            }
             Err(e) => {
                 let _ = tx.send(AppEvent::QsoLogFailed(e.to_string()));
             }

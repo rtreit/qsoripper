@@ -73,7 +73,7 @@ fn render_tab_bar(frame: &mut Frame, area: Rect, active: AdvancedTab) {
 
 #[expect(
     clippy::too_many_lines,
-    reason = "renders six field rows for the main tab"
+    reason = "renders seven field rows for the main tab"
 )]
 fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, wide: usize) {
     if area.height == 0 {
@@ -84,6 +84,7 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, w
         Constraint::Length(1), // freq / date
         Constraint::Length(1), // time / time-off / qth
         Constraint::Length(1), // rst sent / rst rcvd
+        Constraint::Length(1), // name
         Constraint::Length(1), // comment
         Constraint::Length(1), // notes
         Constraint::Fill(1),
@@ -199,6 +200,18 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, w
         );
     }
     if let Some(row) = rows.get(4).copied() {
+        let focused = form.focused == Field::WorkedName;
+        let selected = focused && form.field_selected;
+        let val = adv_field(&form.worked_name, focused, selected, wide);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                label("Name     "),
+                styled_field(val, focused, selected),
+            ])),
+            row,
+        );
+    }
+    if let Some(row) = rows.get(5).copied() {
         let focused = form.focused == Field::Comment;
         let selected = focused && form.field_selected;
         let val = adv_field(&form.comment, focused, selected, wide);
@@ -210,7 +223,7 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, w
             row,
         );
     }
-    if let Some(row) = rows.get(5).copied() {
+    if let Some(row) = rows.get(6).copied() {
         let focused = form.focused == Field::Notes;
         let selected = focused && form.field_selected;
         let val = adv_field(&form.notes, focused, selected, wide);

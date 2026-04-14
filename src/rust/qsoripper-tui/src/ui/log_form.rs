@@ -24,8 +24,13 @@ const TIME_WIDTH: usize = 8;
 
 /// Render the QSO log entry form into `area`.
 pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
+    let title = if app.editing_local_id.is_some() {
+        " Edit QSO "
+    } else {
+        " New QSO "
+    };
     let block = Block::bordered()
-        .title(" New QSO ")
+        .title(title)
         .border_style(Style::default().fg(Color::Yellow));
 
     let inner = block.inner(area);

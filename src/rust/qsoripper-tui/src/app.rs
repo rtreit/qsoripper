@@ -54,6 +54,8 @@ pub(crate) struct RecentQso {
     pub(crate) country: Option<String>,
     /// Worked grid square.
     pub(crate) grid: Option<String>,
+    /// Worked operator name.
+    pub(crate) name: Option<String>,
 }
 
 impl RecentQso {
@@ -72,6 +74,12 @@ impl RecentQso {
                 .contains(lower)
             || self
                 .grid
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(lower)
+            || self
+                .name
                 .as_deref()
                 .unwrap_or("")
                 .to_lowercase()
@@ -120,6 +128,8 @@ pub(crate) struct App {
     pub(crate) qso_list_focused: bool,
     /// Selected row index within the currently filtered QSO list (when list is focused).
     pub(crate) qso_selected: Option<usize>,
+    /// Local ID of the QSO currently being edited (`None` means a new QSO is being entered).
+    pub(crate) editing_local_id: Option<String>,
     /// Local ID of the QSO pending deletion (set when `ConfirmDeleteQso` view is active).
     pub(crate) delete_candidate_id: Option<String>,
     /// Search / filter text for the QSO list.
@@ -146,6 +156,7 @@ impl App {
             status_message: None,
             qso_list_focused: false,
             qso_selected: None,
+            editing_local_id: None,
             delete_candidate_id: None,
             search_text: String::new(),
             search_focused: false,

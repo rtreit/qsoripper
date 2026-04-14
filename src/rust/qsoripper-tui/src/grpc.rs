@@ -10,7 +10,7 @@ use qsoripper_core::proto::qsoripper::domain::{Band, LookupState, Mode, RstRepor
 use qsoripper_core::proto::qsoripper::services::{
     logbook_service_client::LogbookServiceClient, lookup_service_client::LookupServiceClient,
     space_weather_service_client::SpaceWeatherServiceClient, DeleteQsoRequest,
-    GetCurrentSpaceWeatherRequest, ListQsosRequest, LogQsoRequest, LookupRequest,
+    GetCurrentSpaceWeatherRequest, ListQsosRequest, LogQsoRequest, LookupRequest, UpdateQsoRequest,
 };
 
 use crate::app::{CallsignInfo, RecentQso, SpaceWeatherInfo};
@@ -78,6 +78,7 @@ pub(crate) async fn log_qso(
         worked_country,
         worked_cq_zone,
         worked_dxcc,
+        worked_operator_name: opt_string(&form.worked_name),
         ..Default::default()
     };
 
@@ -150,6 +151,7 @@ pub(crate) async fn list_recent_qsos(
             rst_rcvd,
             country: qso.worked_country,
             grid: qso.worked_grid,
+            name: qso.worked_operator_name,
         });
     }
 
@@ -227,6 +229,68 @@ pub(crate) async fn get_space_weather(
         solar_flux: snapshot.solar_flux_index,
         sunspot_number: snapshot.sunspot_number,
     }))
+}
+
+/// Update an existing QSO record identified by `local_id` with data from the form.
+pub(crate) async fn update_qso(
+    channel: Channel,
+    local_id: &str,
+    form: &LogForm,
+    lookup: LookupEnrichment,
+) -> anyhow::Result<()> {
+    let mut client = LogbookServiceClient::new(channel);
+
+    let band: Band = BANDS
+        .get(form.band_idx)
+        .and_then(|s| band_from_adif(s))
+        .unwrap_or(Band::Unspecified);
+
+    let mode_str = MODES.get(form.mode_idx).copied().unwrap_or("SSB");
+    let (mode, submode) = resolve_mode(mode_str);
+
+    let utc_timestamp = parse_timestamp(&form.date, &form.time).ok();
+    let frequency_khz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_khz);
+
+    let (worked_grid, worked_country, worked_cq_zone, worked_dxcc) =
+        lookup.unwrap_or((None, None, None, None));
+
+    let qso = qsoripper_core::proto::qsoripper::domain::QsoRecord {
+        local_id: local_id.to_string(),
+        worked_callsign: form.callsign.to_uppercase(),
+        band: i32::from(band),
+        mode: i32::from(mode),
+        utc_timestamp,
+        frequency_khz,
+        submode: if form.submode_override.is_empty() {
+            submode.map(str::to_string)
+        } else {
+            Some(form.submode_override.clone())
+        },
+        rst_sent: parse_rst(&form.rst_sent),
+        rst_received: parse_rst(&form.rst_rcvd),
+        comment: opt_string(&form.comment),
+        notes: opt_string(&form.notes),
+        tx_power: opt_string(&form.tx_power),
+        contest_id: opt_string(&form.contest_id),
+        serial_sent: opt_string(&form.serial_sent),
+        serial_received: opt_string(&form.serial_rcvd),
+        exchange_sent: opt_string(&form.exchange_sent),
+        exchange_received: opt_string(&form.exchange_rcvd),
+        worked_grid,
+        worked_country,
+        worked_cq_zone,
+        worked_dxcc,
+        worked_operator_name: opt_string(&form.worked_name),
+        ..Default::default()
+    };
+
+    client
+        .update_qso(UpdateQsoRequest {
+            qso: Some(qso),
+            sync_to_qrz: false,
+        })
+        .await?;
+    Ok(())
 }
 
 /// Delete a QSO by its local ID.
