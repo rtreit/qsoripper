@@ -28,7 +28,7 @@ pub(crate) fn render_ui(app: &App, frame: &mut Frame) {
         Constraint::Length(3),  // status bar
         Constraint::Length(12), // log form
         Constraint::Length(5),  // lookup panel
-        Constraint::Fill(1),    // recent QSOs
+        Constraint::Fill(1),    // recent QSOs (with embedded search)
         Constraint::Length(1),  // footer
     ])
     .split(area);

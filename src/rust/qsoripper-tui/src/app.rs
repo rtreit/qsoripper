@@ -16,7 +16,7 @@ pub(crate) enum View {
     ConfirmDeleteQso,
 }
 
-/// Resolved callsign information shown in the lookup panel.
+/// Resolved callsign information from a QRZ lookup (used for field auto-population).
 pub(crate) struct CallsignInfo {
     /// Queried callsign.
     pub(crate) callsign: String,
@@ -56,6 +56,20 @@ pub(crate) struct RecentQso {
     pub(crate) grid: Option<String>,
 }
 
+impl RecentQso {
+    /// Returns `true` if any visible column contains `lower` (case-insensitive, already lowercased).
+    pub(crate) fn matches_search(&self, lower: &str) -> bool {
+        self.callsign.to_lowercase().contains(lower)
+            || self.band.to_lowercase().contains(lower)
+            || self.mode.to_lowercase().contains(lower)
+            || self.rst_sent.to_lowercase().contains(lower)
+            || self.rst_rcvd.to_lowercase().contains(lower)
+            || self.country.as_deref().unwrap_or("").to_lowercase().contains(lower)
+            || self.grid.as_deref().unwrap_or("").to_lowercase().contains(lower)
+            || self.utc.contains(lower)
+    }
+}
+
 /// Current space weather conditions.
 pub(crate) struct SpaceWeatherInfo {
     /// Planetary K-index (0–9).
@@ -84,9 +98,9 @@ pub(crate) struct App {
     pub(crate) form: LogForm,
     /// Current UTC date+time string for the clock display (`YYYY-MM-DD HH:MM:SS`).
     pub(crate) utc_now: String,
-    /// Most recent callsign lookup result.
+    /// Most recent callsign lookup result (used for field auto-population; not displayed).
     pub(crate) lookup_result: Option<CallsignInfo>,
-    /// Recent QSOs for the history panel.
+    /// All QSOs loaded from the engine (unfiltered source of truth).
     pub(crate) recent_qsos: Vec<RecentQso>,
     /// Current space weather snapshot.
     pub(crate) space_weather: Option<SpaceWeatherInfo>,
@@ -94,10 +108,14 @@ pub(crate) struct App {
     pub(crate) status_message: Option<StatusMessage>,
     /// Whether keyboard focus is on the recent QSOs list panel.
     pub(crate) qso_list_focused: bool,
-    /// Selected row index within the recent QSOs list (when focused).
+    /// Selected row index within the currently filtered QSO list (when list is focused).
     pub(crate) qso_selected: Option<usize>,
-    /// Index of the QSO pending deletion (set when `ConfirmDeleteQso` view is active).
-    pub(crate) delete_candidate_idx: Option<usize>,
+    /// Local ID of the QSO pending deletion (set when `ConfirmDeleteQso` view is active).
+    pub(crate) delete_candidate_id: Option<String>,
+    /// Search / filter text for the QSO list.
+    pub(crate) search_text: String,
+    /// Whether keyboard focus is on the search box.
+    pub(crate) search_focused: bool,
     /// Whether the main event loop should keep running.
     pub(crate) running: bool,
     /// gRPC server endpoint URL.
@@ -118,10 +136,31 @@ impl App {
             status_message: None,
             qso_list_focused: false,
             qso_selected: None,
-            delete_candidate_idx: None,
+            delete_candidate_id: None,
+            search_text: String::new(),
+            search_focused: false,
             running: true,
             endpoint,
         }
+    }
+
+    /// Returns references to the QSOs that match the current `search_text`.
+    ///
+    /// Returns all QSOs when `search_text` is empty.
+    pub(crate) fn filtered_qsos(&self) -> Vec<&RecentQso> {
+        if self.search_text.is_empty() {
+            return self.recent_qsos.iter().collect();
+        }
+        let lower = self.search_text.to_lowercase();
+        self.recent_qsos
+            .iter()
+            .filter(|q| q.matches_search(&lower))
+            .collect()
+    }
+
+    /// Find a QSO in `recent_qsos` by its local ID.
+    pub(crate) fn find_qso_by_id(&self, id: &str) -> Option<&RecentQso> {
+        self.recent_qsos.iter().find(|q| q.local_id == id)
     }
 
     /// Set a success status message, replacing any current message.

@@ -148,7 +148,7 @@ fn handle_event(
         }
         AppEvent::QsoDeleted(local_id) => {
             app.set_status(format!("QSO {local_id} deleted"));
-            app.delete_candidate_idx = None;
+            app.delete_candidate_id = None;
             app.view = app::View::LogEntry;
             app.qso_list_focused = false;
             app.qso_selected = None;
@@ -156,11 +156,22 @@ fn handle_event(
         }
         AppEvent::QsoDeleteFailed(err) => {
             app.set_error(format!("Delete failed: {err}"));
-            app.delete_candidate_idx = None;
+            app.delete_candidate_id = None;
             app.view = app::View::LogEntry;
         }
         AppEvent::RecentQsos(qsos) => {
             app.recent_qsos = qsos;
+            // Clamp selection to the new filtered length.
+            let max = app.filtered_qsos().len().saturating_sub(1);
+            if let Some(sel) = app.qso_selected {
+                if sel > max {
+                    app.qso_selected = if app.filtered_qsos().is_empty() {
+                        None
+                    } else {
+                        Some(max)
+                    };
+                }
+            }
         }
     }
 }
@@ -175,6 +186,12 @@ fn handle_key(
 ) {
     use crossterm::event::{KeyCode, KeyModifiers};
 
+    // Ctrl+Q quits from any state.
+    if matches!(key.code, KeyCode::Char('q' | 'Q')) && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.running = false;
+        return;
+    }
+
     if matches!(app.view, app::View::Help) {
         app.view = app::View::LogEntry;
         return;
@@ -182,6 +199,11 @@ fn handle_key(
 
     if matches!(app.view, app::View::ConfirmDeleteQso) {
         handle_confirm_delete_key(app, key, event_tx, endpoint);
+        return;
+    }
+
+    if app.search_focused {
+        handle_search_key(app, key);
         return;
     }
 
@@ -218,10 +240,14 @@ fn handle_key(
                 } else {
                     Field::PropMode
                 };
-            } else if !app.recent_qsos.is_empty() {
+            } else if !app.filtered_qsos().is_empty() {
                 app.qso_list_focused = true;
                 app.qso_selected = Some(0);
             }
+        }
+        KeyCode::F(4) => {
+            app.search_focused = true;
+            app.qso_list_focused = false;
         }
         KeyCode::F(10) => spawn_log_qso(app, event_tx, endpoint),
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
@@ -238,9 +264,6 @@ fn handle_key(
             }
             app::View::Help | app::View::ConfirmDeleteQso => {}
         },
-        KeyCode::Char('q' | 'Q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.running = false;
-        }
         KeyCode::Left if app.form.is_cycle_field() => cycle_left(app),
         KeyCode::Right if app.form.is_cycle_field() => cycle_right(app),
         KeyCode::Backspace => {
@@ -261,6 +284,41 @@ fn handle_key(
     }
 }
 
+/// Handle keyboard input while the search box is focused.
+fn handle_search_key(app: &mut App, key: crossterm::event::KeyEvent) {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    match key.code {
+        KeyCode::Esc => {
+            app.search_text.clear();
+            app.search_focused = false;
+            app.qso_selected = None;
+        }
+        KeyCode::Backspace => {
+            app.search_text.pop();
+            app.qso_selected = None;
+        }
+        KeyCode::Down | KeyCode::Enter | KeyCode::F(3) => {
+            app.search_focused = false;
+            let has_results = !app.filtered_qsos().is_empty();
+            if has_results {
+                app.qso_list_focused = true;
+                app.qso_selected = Some(0);
+            }
+        }
+        KeyCode::Tab => {
+            app.search_focused = false;
+        }
+        KeyCode::Char(c)
+            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT) =>
+        {
+            app.search_text.push(c);
+            app.qso_selected = None;
+        }
+        _ => {}
+    }
+}
+
 /// Navigate the QSO list with keyboard (active when `app.qso_list_focused` is true).
 fn handle_qso_list_key(
     app: &mut App,
@@ -268,7 +326,17 @@ fn handle_qso_list_key(
     lookup_tx: &watch::Sender<String>,
 ) {
     use crossterm::event::KeyCode;
-    let max = app.recent_qsos.len().saturating_sub(1);
+    let (max, enter_id, delete_id) = {
+        let filtered = app.filtered_qsos();
+        let max = filtered.len().saturating_sub(1);
+        let enter_id = app
+            .qso_selected
+            .and_then(|i| filtered.get(i).map(|q| q.local_id.clone()));
+        let delete_id = app
+            .qso_selected
+            .and_then(|i| filtered.get(i).map(|q| q.local_id.clone()));
+        (max, enter_id, delete_id)
+    };
     match key.code {
         KeyCode::Up => {
             app.qso_selected = Some(match app.qso_selected {
@@ -283,15 +351,15 @@ fn handle_qso_list_key(
             });
         }
         KeyCode::Enter => {
-            if let Some(idx) = app.qso_selected {
-                load_qso_into_form(app, idx, lookup_tx);
+            if let Some(id) = enter_id {
+                load_qso_into_form(app, &id, lookup_tx);
             } else {
                 app.qso_list_focused = false;
             }
         }
         KeyCode::Char('d' | 'D') | KeyCode::Delete => {
-            if let Some(idx) = app.qso_selected {
-                app.delete_candidate_idx = Some(idx);
+            if let Some(id) = delete_id {
+                app.delete_candidate_id = Some(id);
                 app.view = app::View::ConfirmDeleteQso;
             }
         }
@@ -313,14 +381,12 @@ fn handle_confirm_delete_key(
     use crossterm::event::KeyCode;
     match key.code {
         KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
-            if let Some(idx) = app.delete_candidate_idx {
-                if let Some(qso) = app.recent_qsos.get(idx) {
-                    spawn_delete_qso(&qso.local_id, event_tx, endpoint);
-                }
+            if let Some(ref id) = app.delete_candidate_id.clone() {
+                spawn_delete_qso(id, event_tx, endpoint);
             }
         }
         KeyCode::Char('n' | 'N') | KeyCode::Esc => {
-            app.delete_candidate_idx = None;
+            app.delete_candidate_id = None;
             app.view = app::View::LogEntry;
         }
         _ => {}
@@ -393,21 +459,34 @@ fn jump_to_field(app: &mut App, ch: char) {
     app.qso_list_focused = false;
 }
 
-/// Load the QSO at `idx` in `recent_qsos` into the form for re-logging.
-fn load_qso_into_form(app: &mut App, idx: usize, lookup_tx: &watch::Sender<String>) {
-    let Some(qso) = app.recent_qsos.get(idx) else {
+/// Load the QSO identified by `local_id` into the form for re-logging.
+fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<String>) {
+    let data = app
+        .recent_qsos
+        .iter()
+        .find(|q| q.local_id == local_id)
+        .map(|q| {
+            (
+                q.callsign.clone(),
+                q.band.clone(),
+                q.mode.clone(),
+                q.rst_sent.clone(),
+                q.rst_rcvd.clone(),
+            )
+        });
+    let Some((callsign, band, mode, rst_sent, rst_rcvd)) = data else {
         return;
     };
-    app.form.callsign = qso.callsign.clone();
-    if let Some(bi) = BANDS.iter().position(|&b| b == qso.band.as_str()) {
+    app.form.callsign = callsign;
+    if let Some(bi) = BANDS.iter().position(|&b| b == band.as_str()) {
         app.form.band_idx = bi;
     }
-    if let Some(mi) = MODES.iter().position(|&m| m == qso.mode.as_str()) {
+    if let Some(mi) = MODES.iter().position(|&m| m == mode.as_str()) {
         app.form.mode_idx = mi;
     }
     app.form.on_band_change();
-    app.form.rst_sent = qso.rst_sent.clone();
-    app.form.rst_rcvd = qso.rst_rcvd.clone();
+    app.form.rst_sent = rst_sent;
+    app.form.rst_rcvd = rst_rcvd;
     app.form.focused = Field::Callsign;
     app.qso_list_focused = false;
     app.qso_selected = None;

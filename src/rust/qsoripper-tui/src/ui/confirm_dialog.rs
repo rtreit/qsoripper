@@ -13,8 +13,9 @@ use crate::app::App;
 /// Render a "are you sure?" popup over whatever is already drawn.
 pub(super) fn render(app: &App, frame: &mut Frame) {
     let subject = app
-        .delete_candidate_idx
-        .and_then(|i| app.recent_qsos.get(i))
+        .delete_candidate_id
+        .as_deref()
+        .and_then(|id| app.find_qso_by_id(id))
         .map_or_else(
             || "this QSO".to_string(),
             |q| format!("{} on {} {}", q.callsign, q.band, q.mode),

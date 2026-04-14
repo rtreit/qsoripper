@@ -16,6 +16,7 @@ pub(super) fn render(frame: &mut Frame, area: Rect) {
         ("F1", "Help"),
         ("F2", "Advanced"),
         ("F3", "QSO List"),
+        ("F4", "Search"),
         ("F10", "Log QSO (Alt+Enter)"),
         ("Esc", "Clear"),
         ("Ctrl+Q", "Quit"),
