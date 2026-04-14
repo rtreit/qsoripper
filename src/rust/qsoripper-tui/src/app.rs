@@ -31,7 +31,6 @@ pub(crate) struct CallsignInfo {
     /// CQ zone number.
     pub(crate) cq_zone: Option<u32>,
     /// DXCC entity ID.
-    #[expect(dead_code, reason = "reserved for future DX scoring display")]
     pub(crate) dxcc: Option<u32>,
 }
 

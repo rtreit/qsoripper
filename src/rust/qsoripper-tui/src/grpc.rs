@@ -16,6 +16,9 @@ use qsoripper_core::proto::qsoripper::services::{
 use crate::app::{CallsignInfo, RecentQso, SpaceWeatherInfo};
 use crate::form::{LogForm, BANDS, MODES};
 
+/// Enrichment snapshot from a callsign lookup: `(grid, country, cq_zone, dxcc)`.
+type LookupEnrichment = Option<(Option<String>, Option<String>, Option<u32>, Option<u32>)>;
+
 /// Create a tonic transport channel connected to the given endpoint URI.
 pub(crate) async fn create_channel(endpoint: &str) -> anyhow::Result<Channel> {
     Channel::from_shared(endpoint.to_string())
@@ -26,7 +29,13 @@ pub(crate) async fn create_channel(endpoint: &str) -> anyhow::Result<Channel> {
 }
 
 /// Log a QSO from the form and return the engine-assigned `local_id`.
-pub(crate) async fn log_qso(channel: Channel, form: &LogForm) -> anyhow::Result<String> {
+///
+/// `lookup` carries enrichment from the callsign lookup: `(grid, country, cq_zone, dxcc)`.
+pub(crate) async fn log_qso(
+    channel: Channel,
+    form: &LogForm,
+    lookup: LookupEnrichment,
+) -> anyhow::Result<String> {
     let mut client = LogbookServiceClient::new(channel);
 
     let band: Band = BANDS
@@ -40,6 +49,9 @@ pub(crate) async fn log_qso(channel: Channel, form: &LogForm) -> anyhow::Result<
     let utc_timestamp = parse_timestamp(&form.date, &form.time).ok();
 
     let frequency_khz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_khz);
+
+    let (worked_grid, worked_country, worked_cq_zone, worked_dxcc) =
+        lookup.unwrap_or((None, None, None, None));
 
     let qso = qsoripper_core::proto::qsoripper::domain::QsoRecord {
         worked_callsign: form.callsign.to_uppercase(),
@@ -62,6 +74,10 @@ pub(crate) async fn log_qso(channel: Channel, form: &LogForm) -> anyhow::Result<
         serial_received: opt_string(&form.serial_rcvd),
         exchange_sent: opt_string(&form.exchange_sent),
         exchange_received: opt_string(&form.exchange_rcvd),
+        worked_grid,
+        worked_country,
+        worked_cq_zone,
+        worked_dxcc,
         ..Default::default()
     };
 

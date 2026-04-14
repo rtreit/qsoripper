@@ -425,9 +425,17 @@ fn spawn_log_qso(app: &App, event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint
     if form_snap.time_off.is_empty() {
         form_snap.time_off = chrono::Utc::now().format("%H:%M").to_string();
     }
+    let lookup_snap = app.lookup_result.as_ref().map(|info| {
+        (
+            info.grid.clone(),
+            info.country.clone(),
+            info.cq_zone,
+            info.dxcc,
+        )
+    });
     tokio::spawn(async move {
         match grpc::create_channel(&ep).await {
-            Ok(ch) => match grpc::log_qso(ch, &form_snap).await {
+            Ok(ch) => match grpc::log_qso(ch, &form_snap, lookup_snap).await {
                 Ok(id) => {
                     let _ = tx.send(AppEvent::QsoLogged(id));
                 }
