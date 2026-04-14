@@ -9,6 +9,8 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
+use std::io::Write;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -44,8 +46,9 @@ const CORE_VECTORS: [(&str, &str); 5] = [
     ("core-ffi", "FFI Abuse"),
 ];
 
-const GRPC_VECTORS: [(&str, &str); 10] = [
+const GRPC_VECTORS: [(&str, &str); 12] = [
     ("grpc-logqso-adversarial", "LogQso Adversarial"),
+    ("grpc-logqso-oversized", "LogQso Oversized Payload"),
     ("grpc-logqso-missing", "LogQso Missing Fields"),
     ("grpc-updateqso-garbage", "UpdateQso Garbage"),
     ("grpc-deleteqso-garbage", "DeleteQso Garbage"),
@@ -53,6 +56,7 @@ const GRPC_VECTORS: [(&str, &str); 10] = [
     ("grpc-listqsos-chaos", "ListQsos Chaos"),
     ("grpc-lookup-adversarial", "Lookup Adversarial"),
     ("grpc-streamlookup-adversarial", "StreamLookup Adversarial"),
+    ("grpc-streamlookup-cancel", "StreamLookup Cancel Storm"),
     ("grpc-importadif-garbage", "ImportAdif Garbage"),
     ("grpc-exportadif-chaos", "ExportAdif Chaos"),
 ];
@@ -101,6 +105,7 @@ pub(crate) struct HarnessState {
     vectors: BTreeMap<String, VectorEntry>,
     processes: BTreeMap<String, StressProcessMetrics>,
     events: VecDeque<StressLogEntry>,
+    event_log_path: Option<PathBuf>,
     recent_event_limit: usize,
     last_publish_instant: Instant,
     last_published_total_operations: u64,
@@ -122,6 +127,7 @@ impl HarnessState {
             vectors: BTreeMap::new(),
             processes: BTreeMap::new(),
             events: VecDeque::new(),
+            event_log_path: None,
             recent_event_limit: 50,
             last_publish_instant: Instant::now(),
             last_published_total_operations: 0,
@@ -141,6 +147,7 @@ impl HarnessState {
         self.vectors.clear();
         self.processes.clear();
         self.events.clear();
+        self.event_log_path = create_event_log(profile_name, self.snapshot.run_id.as_str()).ok();
         self.recent_event_limit = usize::try_from(configuration.recent_event_limit).unwrap_or(50);
         if self.recent_event_limit == 0 {
             self.recent_event_limit = 50;
@@ -202,6 +209,8 @@ impl HarnessState {
         reason = "Callers already own the error text produced by async task joins and tonic failures."
     )]
     fn record_error(&mut self, vector_id: &str, sample: String, message: String, internal: bool) {
+        let sample_summary = preview_string(sample.as_str());
+        let noteworthy = is_noteworthy_failure(message.as_str(), internal);
         self.record_attempt(vector_id, sample);
         self.snapshot.error_count = self.snapshot.error_count.saturating_add(1);
         if internal {
@@ -217,6 +226,14 @@ impl HarnessState {
             }
             entry.status.last_error_message = Some(message.clone());
         }
+
+        if noteworthy {
+            self.push_event(
+                StressLogLevel::Error,
+                format!("Vector {vector_id} failure on {sample_summary}: {message}"),
+                Some(vector_id),
+            );
+        }
     }
 
     fn update_process(&mut self, process_name: &str, metrics: StressProcessMetrics) {
@@ -229,14 +246,18 @@ impl HarnessState {
         message: impl Into<String>,
         vector_id: Option<&str>,
     ) {
-        self.events.push_back(StressLogEntry {
+        let entry = StressLogEntry {
             occurred_at_utc: timestamp_now(),
             level: level as i32,
             message: message.into(),
             vector_id: vector_id.map(ToString::to_string),
-        });
+        };
+        self.events.push_back(entry.clone());
         while self.events.len() > self.recent_event_limit {
             self.events.pop_front();
+        }
+        if let Some(path) = &self.event_log_path {
+            let _ = append_event_log(path, &entry);
         }
     }
 
@@ -301,6 +322,13 @@ pub(crate) async fn run_session(
                     state.register_vector(vector_id, display_name);
                 }
             }
+            if let Some(path) = &state.event_log_path {
+                state.push_event(
+                    StressLogLevel::Info,
+                    format!("Persistent stress event log: {}.", path.display()),
+                    None,
+                );
+            }
             state.push_event(
                 StressLogLevel::Info,
                 format!("Profile '{profile_name}' selected."),
@@ -313,11 +341,15 @@ pub(crate) async fn run_session(
     let mut managed_engine = if configuration.auto_start_engine {
         match start_engine(configuration.engine_endpoint.as_str()) {
             Ok(engine) => {
+                let sqlite_path = engine.sqlite_path.display().to_string();
                 shared
                     .with_state(|state| {
                         state.push_event(
                             StressLogLevel::Info,
-                            format!("Started engine on {}.", configuration.engine_endpoint),
+                            format!(
+                                "Started isolated engine on {} with stress log {}.",
+                                configuration.engine_endpoint, sqlite_path
+                            ),
                             None,
                         );
                     })
@@ -831,6 +863,7 @@ fn process_metrics(
 struct ManagedEngine {
     child: Child,
     process_id: Option<u32>,
+    sqlite_path: PathBuf,
 }
 
 fn start_engine(engine_endpoint: &str) -> Result<ManagedEngine, String> {
@@ -845,9 +878,19 @@ fn start_engine(engine_endpoint: &str) -> Result<ManagedEngine, String> {
     };
 
     let listen = endpoint_to_listen_argument(engine_endpoint)?;
+    let sqlite_path = stress_storage_path()?;
     let mut command = if server_executable.exists() {
         let mut command = Command::new(server_executable);
-        command.args(["--storage", "memory", "--listen", listen.as_str()]);
+        command.args([
+            "--storage",
+            "sqlite",
+            "--sqlite-path",
+            sqlite_path
+                .to_str()
+                .ok_or_else(|| "Stress sqlite path is not valid UTF-8.".to_string())?,
+            "--listen",
+            listen.as_str(),
+        ]);
         command
     } else {
         let workspace_manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -865,7 +908,11 @@ fn start_engine(engine_endpoint: &str) -> Result<ManagedEngine, String> {
             "qsoripper-server",
             "--",
             "--storage",
-            "memory",
+            "sqlite",
+            "--sqlite-path",
+            sqlite_path
+                .to_str()
+                .ok_or_else(|| "Stress sqlite path is not valid UTF-8.".to_string())?,
             "--listen",
             listen.as_str(),
         ]);
@@ -877,7 +924,11 @@ fn start_engine(engine_endpoint: &str) -> Result<ManagedEngine, String> {
     command.stdin(Stdio::null());
     let child = command.spawn().map_err(|error| error.to_string())?;
     let process_id = child.id();
-    Ok(ManagedEngine { child, process_id })
+    Ok(ManagedEngine {
+        child,
+        process_id,
+        sqlite_path,
+    })
 }
 
 async fn stop_engine(engine: &mut ManagedEngine) {
@@ -920,6 +971,106 @@ fn endpoint_to_listen_argument(engine_endpoint: &str) -> Result<String, String> 
     }
 
     Ok(trimmed.to_string())
+}
+
+fn stress_storage_path() -> Result<PathBuf, String> {
+    let mut directory = workspace_root().unwrap_or_else(std::env::temp_dir);
+    directory.push("artifacts");
+    directory.push("stress");
+    directory.push("storage");
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        format!(
+            "Unable to create stress storage directory '{}': {error}",
+            directory.display()
+        )
+    })?;
+
+    let file_name = format!("stress-{}.db", Uuid::new_v4());
+    Ok(directory.join(file_name))
+}
+
+fn create_event_log(profile_name: &str, run_id: &str) -> Result<PathBuf, String> {
+    let mut directory = workspace_root().unwrap_or_else(std::env::temp_dir);
+    directory.push("artifacts");
+    directory.push("stress");
+    directory.push("logs");
+    std::fs::create_dir_all(&directory).map_err(|error| {
+        format!(
+            "Unable to create stress log directory '{}': {error}",
+            directory.display()
+        )
+    })?;
+
+    let path = directory.join(format!("stress-run-{run_id}.log"));
+    let header = format!(
+        "QsoRipper stress run log\nrun_id={run_id}\nprofile={profile_name}\nstarted_at={}\n\n",
+        format_timestamp(timestamp_now().as_ref())
+    );
+    std::fs::write(&path, header).map_err(|error| {
+        format!(
+            "Unable to initialize stress event log '{}': {error}",
+            path.display()
+        )
+    })?;
+
+    Ok(path)
+}
+
+fn append_event_log(path: &PathBuf, entry: &StressLogEntry) -> Result<(), String> {
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .map_err(|error| {
+            format!(
+                "Unable to open stress event log '{}': {error}",
+                path.display()
+            )
+        })?;
+    let vector = entry.vector_id.as_deref().unwrap_or("-");
+    let line = format!(
+        "{} [{}] [{}] {}\n",
+        format_timestamp(entry.occurred_at_utc.as_ref()),
+        format_log_level(entry.level),
+        vector,
+        entry.message
+    );
+    file.write_all(line.as_bytes()).map_err(|error| {
+        format!(
+            "Unable to append to stress event log '{}': {error}",
+            path.display()
+        )
+    })
+}
+
+fn workspace_root() -> Option<PathBuf> {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|path| path.parent())
+        .and_then(|path| path.parent())
+        .map(std::path::Path::to_path_buf)
+}
+
+fn format_timestamp(timestamp: Option<&Timestamp>) -> String {
+    timestamp.map_or_else(
+        || "unknown-time".to_string(),
+        |timestamp| format!("{}.{:09}Z", timestamp.seconds, timestamp.nanos.max(0)),
+    )
+}
+
+fn format_log_level(level: i32) -> &'static str {
+    match StressLogLevel::try_from(level).unwrap_or(StressLogLevel::Unspecified) {
+        StressLogLevel::Info => "INFO",
+        StressLogLevel::Warning => "WARN",
+        StressLogLevel::Error => "ERROR",
+        StressLogLevel::Unspecified => "UNKNOWN",
+    }
+}
+
+fn is_noteworthy_failure(message: &str, internal: bool) -> bool {
+    internal
+        || message.contains("panic")
+        || message.contains("task join error")
+        || message.contains("Failed to connect")
 }
 
 fn executable_name(base_name: &str) -> OsString {
@@ -967,8 +1118,22 @@ fn adversarial_adif_payloads() -> Vec<Vec<u8>> {
             .to_vec(),
         b"<CALL:-1>W1AW<eor>".to_vec(),
         b"<CALL:999999999>W1AW<eor>".to_vec(),
+        b"<EOH><CALL:4>W1AW<CALL:999999999>W1AW<EOR>".to_vec(),
+        b"<CALL:12>TRUNCATED<EOR><QSO_DATE:999999999>20250115".to_vec(),
         vec![b'A'; 16_384],
+        vec![b'Z'; 262_144],
         "<CALL:4>\u{1F4A9}<eor>".as_bytes().to_vec(),
+    ]
+}
+
+fn stream_lookup_churn_callsigns() -> [&'static str; 6] {
+    [
+        "W1AW",
+        "K7DBG/P",
+        "VE3/W1AW/QRP",
+        "",
+        "99991399",
+        "\u{200F}\u{202E}",
     ]
 }
 
@@ -1079,6 +1244,18 @@ fn make_adversarial_qso(step: usize) -> QsoRecord {
     qso
 }
 
+fn make_oversized_qso(step: usize) -> QsoRecord {
+    let mut qso = make_adversarial_qso(step);
+    qso.comment = Some("X".repeat(131_072));
+    qso.notes = Some("\u{1F4A9}".repeat(65_536));
+    for index in 0..32 {
+        qso.extra_fields
+            .insert(format!("OVERSIZED_{index}"), "Q".repeat(8_192));
+    }
+
+    qso
+}
+
 fn preview_string(value: &str) -> String {
     let sanitized = value.replace('\0', "\\0").replace('\n', "\\n");
     if sanitized.len() > 80 {
@@ -1125,6 +1302,7 @@ fn system_time_to_timestamp(time: SystemTime) -> Option<Timestamp> {
 #[derive(Clone, Copy)]
 enum GrpcVectorKind {
     LogQsoAdversarial,
+    LogQsoOversized,
     LogQsoMissingFields,
     UpdateQsoGarbage,
     DeleteQsoGarbage,
@@ -1132,6 +1310,7 @@ enum GrpcVectorKind {
     ListQsosChaos,
     LookupAdversarial,
     StreamLookupAdversarial,
+    StreamLookupCancelStorm,
     ImportAdifGarbage,
     ExportAdifChaos,
 }
@@ -1140,6 +1319,7 @@ impl GrpcVectorKind {
     fn from_id(vector_id: &str) -> Self {
         match vector_id {
             "grpc-logqso-adversarial" => Self::LogQsoAdversarial,
+            "grpc-logqso-oversized" => Self::LogQsoOversized,
             "grpc-logqso-missing" => Self::LogQsoMissingFields,
             "grpc-updateqso-garbage" => Self::UpdateQsoGarbage,
             "grpc-deleteqso-garbage" => Self::DeleteQsoGarbage,
@@ -1147,6 +1327,7 @@ impl GrpcVectorKind {
             "grpc-listqsos-chaos" => Self::ListQsosChaos,
             "grpc-lookup-adversarial" => Self::LookupAdversarial,
             "grpc-streamlookup-adversarial" => Self::StreamLookupAdversarial,
+            "grpc-streamlookup-cancel" => Self::StreamLookupCancelStorm,
             "grpc-importadif-garbage" => Self::ImportAdifGarbage,
             _ => Self::ExportAdifChaos,
         }
@@ -1157,6 +1338,7 @@ impl GrpcVectorKind {
         let value = strings[iteration % strings.len()].clone();
         match self {
             Self::LogQsoAdversarial => format!("QSO {}", preview_string(value.as_str())),
+            Self::LogQsoOversized => "comment=128KiB notes=64KiB extras=32x8KiB".to_string(),
             Self::LogQsoMissingFields => "default QsoRecord".to_string(),
             Self::UpdateQsoGarbage
             | Self::DeleteQsoGarbage
@@ -1164,6 +1346,14 @@ impl GrpcVectorKind {
             | Self::ListQsosChaos
             | Self::LookupAdversarial
             | Self::StreamLookupAdversarial => preview_string(value.as_str()),
+            Self::StreamLookupCancelStorm => {
+                let callsigns = stream_lookup_churn_callsigns();
+                format!(
+                    "burst={} callsign={}",
+                    (iteration % 4) + 1,
+                    preview_string(callsigns[iteration % callsigns.len()])
+                )
+            }
             Self::ImportAdifGarbage => preview_bytes(
                 adversarial_adif_payloads()[iteration % adversarial_adif_payloads().len()]
                     .as_slice(),
@@ -1186,6 +1376,14 @@ impl GrpcVectorKind {
             Self::LogQsoAdversarial => logbook
                 .log_qso(LogQsoRequest {
                     qso: Some(make_adversarial_qso(iteration)),
+                    sync_to_qrz: false,
+                })
+                .await
+                .map(|_| ())
+                .map_err(|status| VectorError::from_status(&status)),
+            Self::LogQsoOversized => logbook
+                .log_qso(LogQsoRequest {
+                    qso: Some(make_oversized_qso(iteration)),
                     sync_to_qrz: false,
                 })
                 .await
@@ -1289,6 +1487,29 @@ impl GrpcVectorKind {
                 {}
                 Ok(())
             }
+            Self::StreamLookupCancelStorm => {
+                let callsigns = stream_lookup_churn_callsigns();
+                let callsign = callsigns[iteration % callsigns.len()].to_string();
+                for burst_index in 0..=(iteration % 4) {
+                    let mut response = lookup
+                        .stream_lookup(StreamLookupRequest {
+                            callsign: callsign.clone(),
+                            skip_cache: true,
+                        })
+                        .await
+                        .map_err(|status| VectorError::from_status(&status))?
+                        .into_inner();
+                    if (iteration + burst_index).is_multiple_of(2) {
+                        let _ = response
+                            .message()
+                            .await
+                            .map_err(|status| VectorError::from_status(&status))?;
+                    }
+                    drop(response);
+                    tokio::task::yield_now().await;
+                }
+                Ok(())
+            }
             Self::ImportAdifGarbage => {
                 let payloads = adversarial_adif_payloads();
                 let payload = payloads[iteration % payloads.len()].clone();
@@ -1345,8 +1566,8 @@ impl VectorError {
 #[cfg(test)]
 mod tests {
     use super::{
-        distribute_workers, endpoint_to_listen_argument, executable_name, HarnessState,
-        SharedHarness,
+        create_event_log, distribute_workers, endpoint_to_listen_argument, executable_name,
+        workspace_root, HarnessState, SharedHarness,
     };
     use qsoripper_core::proto::qsoripper::services::StressRunState;
 
@@ -1380,6 +1601,40 @@ mod tests {
         } else {
             assert_eq!("qsoripper-server", value.to_string_lossy());
         }
+    }
+
+    #[expect(
+        clippy::panic,
+        reason = "This unit test intentionally panics if repository root resolution regresses."
+    )]
+    #[test]
+    fn workspace_root_resolves_repository_root() {
+        let root = workspace_root()
+            .unwrap_or_else(|| panic!("workspace root should resolve from cargo manifest dir"));
+        assert_eq!(
+            Some("qsoripper"),
+            root.file_name().and_then(|name| name.to_str())
+        );
+    }
+
+    #[expect(
+        clippy::panic,
+        reason = "This unit test intentionally panics if stress event log creation regresses."
+    )]
+    #[test]
+    fn create_event_log_writes_file_under_artifacts_stress_logs() {
+        let path = create_event_log("long-haul", "unit-test-run")
+            .unwrap_or_else(|error| panic!("event log should be created: {error}"));
+        let contents = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("event log should be readable: {error}"));
+
+        assert!(path.to_string_lossy().contains("artifacts"));
+        assert!(path.to_string_lossy().contains("stress"));
+        assert!(path.to_string_lossy().contains("logs"));
+        assert!(contents.contains("run_id=unit-test-run"));
+        assert!(contents.contains("profile=long-haul"));
+
+        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]

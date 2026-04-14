@@ -14,6 +14,8 @@ use tonic::{Request, Response, Status};
 
 use crate::runner::{run_session, SharedHarness};
 
+const DEFAULT_STRESS_ENGINE_ENDPOINT: &str = "http://127.0.0.1:55051";
+
 #[derive(Clone)]
 pub(crate) struct StressController {
     shared: Arc<SharedHarness>,
@@ -219,7 +221,7 @@ fn default_profiles() -> Vec<StressProfile> {
             name: "long-haul".to_string(),
             description: "Runs core and gRPC vectors until stopped.".to_string(),
             configuration: Some(StressRunConfiguration {
-                engine_endpoint: "http://127.0.0.1:50051".to_string(),
+                engine_endpoint: DEFAULT_STRESS_ENGINE_ENDPOINT.to_string(),
                 duration_seconds: 0,
                 grpc_parallelism: 24,
                 metrics_interval_ms: 1000,
@@ -233,7 +235,7 @@ fn default_profiles() -> Vec<StressProfile> {
             name: "quick-smoke".to_string(),
             description: "Runs a shorter smoke pass with lighter gRPC pressure.".to_string(),
             configuration: Some(StressRunConfiguration {
-                engine_endpoint: "http://127.0.0.1:50051".to_string(),
+                engine_endpoint: DEFAULT_STRESS_ENGINE_ENDPOINT.to_string(),
                 duration_seconds: 30,
                 grpc_parallelism: 8,
                 metrics_interval_ms: 1000,
@@ -305,7 +307,9 @@ fn merge_configuration(
 
 #[cfg(test)]
 mod tests {
-    use super::{default_profiles, merge_configuration, resolve_profile};
+    use super::{
+        default_profiles, merge_configuration, resolve_profile, DEFAULT_STRESS_ENGINE_ENDPOINT,
+    };
     use qsoripper_core::proto::qsoripper::services::StressRunConfiguration;
     use tonic::Code;
 
@@ -376,5 +380,16 @@ mod tests {
         assert!(merged.include_core_vectors);
         assert!(merged.include_grpc_vectors);
         assert!(merged.auto_start_engine);
+    }
+
+    #[test]
+    fn default_profiles_use_isolated_engine_endpoint() {
+        let profiles = default_profiles();
+
+        assert!(profiles.iter().all(|profile| {
+            profile.configuration.as_ref().is_some_and(|configuration| {
+                configuration.engine_endpoint == DEFAULT_STRESS_ENGINE_ENDPOINT
+            })
+        }));
     }
 }

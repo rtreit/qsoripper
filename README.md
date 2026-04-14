@@ -149,6 +149,10 @@ cargo run -p qsoripper-stress-tui
 
 The stress host listens on `127.0.0.1:50061` by default and exposes a developer-only gRPC control surface for starting, stopping, and monitoring long-haul stress runs. The TUI connects to that endpoint, renders per-vector activity, shows rolling calls-per-second plus process CPU and memory, and keeps a bounded recent-event log with representative sample inputs from the active vectors.
 
+Built-in stress profiles now use a dedicated engine endpoint at `127.0.0.1:55051`, and when the harness auto-starts that engine it points it at a separate stress-owned SQLite file under `artifacts\stress\storage\`. Stress runs should not reuse or mutate your normal logbook.
+
+Each stress run also writes a persistent event log under `artifacts\stress\logs\stress-run-<run-id>.log`. The dashboard still shows a bounded in-memory event pane, but the file is the durable place to check overnight panic, crash, and notable internal-failure details.
+
 When the dashboard targets a local loopback endpoint and no stress host is running yet, it now auto-starts a local `qsoripper-stress` instance before entering the UI. Remote endpoints still need an already-running host.
 
 Use `cargo run -p qsoripper-stress -- --help` and `cargo run -p qsoripper-stress-tui -- --help` for alternate endpoints. The dashboard keymap is:
