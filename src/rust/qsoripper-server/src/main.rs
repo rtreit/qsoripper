@@ -3,6 +3,8 @@
 mod runtime_config;
 mod setup;
 mod station_profile_support;
+mod sync;
+mod sync_scheduler;
 
 use std::{fs, future::Future, io, net::SocketAddr, path::PathBuf, sync::Arc};
 
@@ -16,22 +18,25 @@ use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
-use qsoripper_core::proto::qsoripper::domain::{Band, Mode};
+use qsoripper_core::proto::qsoripper::domain::{Band, ConflictPolicy, Mode};
 use qsoripper_core::proto::qsoripper::services::{
     developer_control_service_server::{DeveloperControlService, DeveloperControlServiceServer},
     logbook_service_server::{LogbookService, LogbookServiceServer},
     lookup_service_server::{LookupService, LookupServiceServer},
     setup_service_server::SetupServiceServer,
+    space_weather_service_server::{SpaceWeatherService, SpaceWeatherServiceServer},
     station_profile_service_server::StationProfileServiceServer,
     AdifChunk, ApplyRuntimeConfigRequest, ApplyRuntimeConfigResponse, BatchLookupRequest,
     BatchLookupResponse, DeleteQsoRequest, DeleteQsoResponse, ExportAdifRequest,
-    ExportAdifResponse, GetCachedCallsignRequest, GetCachedCallsignResponse, GetDxccEntityRequest,
+    ExportAdifResponse, GetCachedCallsignRequest, GetCachedCallsignResponse,
+    GetCurrentSpaceWeatherRequest, GetCurrentSpaceWeatherResponse, GetDxccEntityRequest,
     GetDxccEntityResponse, GetQsoRequest, GetQsoResponse, GetRuntimeConfigRequest,
     GetRuntimeConfigResponse, GetSyncStatusRequest, GetSyncStatusResponse, ImportAdifRequest,
     ImportAdifResponse, ListQsosRequest, ListQsosResponse, LogQsoRequest, LogQsoResponse,
-    LookupRequest, LookupResponse, QsoSortOrder as ProtoQsoSortOrder, ResetRuntimeConfigRequest,
-    ResetRuntimeConfigResponse, StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest,
-    SyncWithQrzResponse, UpdateQsoRequest, UpdateQsoResponse,
+    LookupRequest, LookupResponse, QsoSortOrder as ProtoQsoSortOrder, RefreshSpaceWeatherRequest,
+    RefreshSpaceWeatherResponse, ResetRuntimeConfigRequest, ResetRuntimeConfigResponse,
+    StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse,
+    UpdateQsoRequest, UpdateQsoResponse,
 };
 use runtime_config::RuntimeConfigManager;
 use setup::{
@@ -62,12 +67,16 @@ where
             &options.runtime_config_cli_storage_overrides(),
         )?,
     );
-    let logbook_service = DeveloperLogbookService::new(runtime_config.clone());
+    let sync_scheduler = Arc::new(sync_scheduler::SyncScheduler::new());
+    sync_scheduler.start(runtime_config.clone());
+    let logbook_service =
+        DeveloperLogbookService::new(runtime_config.clone(), sync_scheduler.clone());
     let lookup_service = DeveloperLookupService::new(runtime_config.clone());
     let developer_control_service = DeveloperControlSurface::new(runtime_config.clone());
     let setup_service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
     let station_profile_service =
         StationProfileControlSurface::new(setup_state.clone(), runtime_config.clone());
+    let space_weather_service = SpaceWeatherControlSurface::new(runtime_config.clone());
     let active_storage_backend = runtime_config.active_storage_backend().await;
     let setup_status = setup_state.status().await;
     let setup_completion = setup_completion_label(setup_status.setup_complete);
@@ -102,6 +111,7 @@ where
         .add_service(LookupServiceServer::new(lookup_service))
         .add_service(SetupServiceServer::new(setup_service))
         .add_service(StationProfileServiceServer::new(station_profile_service))
+        .add_service(SpaceWeatherServiceServer::new(space_weather_service))
         .add_service(DeveloperControlServiceServer::new(
             developer_control_service,
         ))
@@ -118,6 +128,7 @@ where
         signal_result = &mut shutdown_signal => {
             signal_result?;
             println!("Shutting down.");
+            sync_scheduler.stop();
             let _ = shutdown_sender.send(());
             server.await?;
         }
@@ -247,11 +258,18 @@ fn find_dotenv_path() -> io::Result<Option<PathBuf>> {
 #[derive(Clone)]
 struct DeveloperLogbookService {
     runtime_config: Arc<RuntimeConfigManager>,
+    sync_scheduler: Arc<sync_scheduler::SyncScheduler>,
 }
 
 impl DeveloperLogbookService {
-    fn new(runtime_config: Arc<RuntimeConfigManager>) -> Self {
-        Self { runtime_config }
+    fn new(
+        runtime_config: Arc<RuntimeConfigManager>,
+        sync_scheduler: Arc<sync_scheduler::SyncScheduler>,
+    ) -> Self {
+        Self {
+            runtime_config,
+            sync_scheduler,
+        }
     }
 }
 
@@ -364,9 +382,53 @@ impl LogbookService for DeveloperLogbookService {
 
     async fn sync_with_qrz(
         &self,
-        _request: Request<SyncWithQrzRequest>,
+        request: Request<SyncWithQrzRequest>,
     ) -> Result<Response<Self::SyncWithQrzStream>, Status> {
-        Err(Status::unimplemented("SyncWithQrz is not implemented yet."))
+        let request = request.into_inner();
+        let effective = self.runtime_config.effective_values().await;
+
+        let api_key = effective
+            .get(runtime_config::QRZ_LOGBOOK_API_KEY_ENV_VAR)
+            .cloned()
+            .unwrap_or_default();
+        if api_key.trim().is_empty() {
+            return Err(Status::failed_precondition(
+                "QRZ Logbook API key is not configured. Set it via setup or runtime config.",
+            ));
+        }
+
+        let base_url = effective
+            .get(runtime_config::QRZ_LOGBOOK_BASE_URL_ENV_VAR)
+            .cloned()
+            .unwrap_or_else(|| runtime_config::DEFAULT_QRZ_LOGBOOK_BASE_URL.to_string());
+
+        let config = qsoripper_core::qrz_logbook::QrzLogbookConfig::new(
+            api_key,
+            base_url,
+            "QsoRipper/1.0".to_string(),
+        );
+
+        let client = qsoripper_core::qrz_logbook::QrzLogbookClient::new(config).map_err(|err| {
+            Status::internal(format!("Failed to create QRZ logbook client: {err}"))
+        })?;
+
+        let conflict_policy = match effective
+            .get(runtime_config::SYNC_CONFLICT_POLICY_ENV_VAR)
+            .map(String::as_str)
+        {
+            Some("flag_for_review") => ConflictPolicy::FlagForReview,
+            _ => ConflictPolicy::LastWriteWins,
+        };
+
+        let engine = self.runtime_config.logbook_engine().await;
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+
+        tokio::spawn(async move {
+            let store = engine.logbook_store();
+            sync::execute_sync(&client, store, request.full_sync, conflict_policy, &tx).await;
+        });
+
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 
     async fn get_sync_status(
@@ -381,12 +443,21 @@ impl LogbookService for DeveloperLogbookService {
             .await
             .map_err(map_logbook_error)?;
 
+        let effective = self.runtime_config.effective_values().await;
+        let auto_sync_enabled = effective
+            .get(runtime_config::SYNC_AUTO_ENABLED_ENV_VAR)
+            .is_some_and(|v| v == "true");
+
         Ok(Response::new(GetSyncStatusResponse {
             local_qso_count: sync_status.local_qso_count,
             qrz_qso_count: sync_status.qrz_qso_count,
             pending_upload: sync_status.pending_upload,
             last_sync: sync_status.last_sync,
             qrz_logbook_owner: sync_status.qrz_logbook_owner,
+            is_syncing: self.sync_scheduler.is_syncing().await,
+            next_sync: self.sync_scheduler.next_sync().await,
+            auto_sync_enabled,
+            last_sync_error: self.sync_scheduler.last_error().await,
         }))
     }
 
@@ -585,6 +656,50 @@ impl DeveloperControlService for DeveloperControlSurface {
             .await
             .map_err(Status::invalid_argument)?;
         Ok(Response::new(ResetRuntimeConfigResponse {
+            snapshot: Some(snapshot),
+        }))
+    }
+}
+
+#[derive(Clone)]
+struct SpaceWeatherControlSurface {
+    runtime_config: Arc<RuntimeConfigManager>,
+}
+
+impl SpaceWeatherControlSurface {
+    fn new(runtime_config: Arc<RuntimeConfigManager>) -> Self {
+        Self { runtime_config }
+    }
+}
+
+#[tonic::async_trait]
+impl SpaceWeatherService for SpaceWeatherControlSurface {
+    async fn get_current_space_weather(
+        &self,
+        _request: Request<GetCurrentSpaceWeatherRequest>,
+    ) -> Result<Response<GetCurrentSpaceWeatherResponse>, Status> {
+        let snapshot = self
+            .runtime_config
+            .space_weather_monitor()
+            .await
+            .current_snapshot()
+            .await;
+        Ok(Response::new(GetCurrentSpaceWeatherResponse {
+            snapshot: Some(snapshot),
+        }))
+    }
+
+    async fn refresh_space_weather(
+        &self,
+        _request: Request<RefreshSpaceWeatherRequest>,
+    ) -> Result<Response<RefreshSpaceWeatherResponse>, Status> {
+        let snapshot = self
+            .runtime_config
+            .space_weather_monitor()
+            .await
+            .refresh_snapshot()
+            .await;
+        Ok(Response::new(RefreshSpaceWeatherResponse {
             snapshot: Some(snapshot),
         }))
     }
@@ -816,8 +931,9 @@ mod tests {
     use super::{
         build_storage, legacy_qrz_user_agent_line_compatibility, load_dotenv_if_present,
         parse_storage_backend, run_server, sanitize_legacy_qrz_user_agent_contents,
-        server_ready_message, server_starting_message, DeveloperLogbookService,
-        DeveloperLookupService, Server, ServerOptions, StorageBackendKind, StorageOptions,
+        server_ready_message, server_starting_message, sync_scheduler, DeveloperLogbookService,
+        DeveloperLookupService, Server, ServerOptions, SpaceWeatherControlSurface,
+        StorageBackendKind, StorageOptions,
     };
     use crate::runtime_config::{
         RuntimeConfigManager, SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR, STATION_GRID_ENV_VAR,
@@ -827,6 +943,7 @@ mod tests {
     use qsoripper_core::lookup::{
         QRZ_USER_AGENT_ENV_VAR, QRZ_XML_PASSWORD_ENV_VAR, QRZ_XML_USERNAME_ENV_VAR,
     };
+    use qsoripper_core::proto::qsoripper::domain::SpaceWeatherStatus;
     use qsoripper_core::proto::qsoripper::domain::{
         Band, LookupResult, LookupState, Mode, QsoRecord,
     };
@@ -835,10 +952,12 @@ mod tests {
         logbook_service_client::LogbookServiceClient,
         logbook_service_server::{LogbookService, LogbookServiceServer},
         lookup_service_server::LookupService,
+        space_weather_service_server::SpaceWeatherService,
         AdifChunk, BatchLookupRequest, DeleteQsoRequest, ExportAdifRequest,
-        GetCachedCallsignRequest, GetDxccEntityRequest, GetQsoRequest, GetSyncStatusRequest,
-        ImportAdifRequest, ImportAdifResponse, ListQsosRequest, LogQsoRequest, LookupRequest,
-        QsoSortOrder, StreamLookupRequest, UpdateQsoRequest,
+        GetCachedCallsignRequest, GetCurrentSpaceWeatherRequest, GetDxccEntityRequest,
+        GetQsoRequest, GetSyncStatusRequest, ImportAdifRequest, ImportAdifResponse,
+        ListQsosRequest, LogQsoRequest, LookupRequest, QsoSortOrder, RefreshSpaceWeatherRequest,
+        StreamLookupRequest, UpdateQsoRequest,
     };
     use tokio_stream::StreamExt;
     use tonic::transport::Channel;
@@ -846,11 +965,17 @@ mod tests {
 
     static PROCESS_STATE_LOCK: Mutex<()> = Mutex::new(());
 
-    const PROCESS_ENV_KEYS: [&str; 4] = [
+    const PROCESS_ENV_KEYS: [&str; 10] = [
         "QSORIPPER_SERVER_ADDR",
         "QSORIPPER_CONFIG_PATH",
         "QSORIPPER_STORAGE_BACKEND",
         "QSORIPPER_SQLITE_PATH",
+        "QSORIPPER_NOAA_SPACE_WEATHER_ENABLED",
+        "QSORIPPER_NOAA_KP_INDEX_URL",
+        "QSORIPPER_NOAA_SOLAR_INDICES_URL",
+        "QSORIPPER_NOAA_HTTP_TIMEOUT_SECONDS",
+        "QSORIPPER_NOAA_REFRESH_INTERVAL_SECONDS",
+        "QSORIPPER_NOAA_STALE_AFTER_SECONDS",
     ];
 
     struct ProcessStateGuard {
@@ -901,6 +1026,14 @@ mod tests {
         DeveloperLookupService::new(test_runtime_config())
     }
 
+    fn test_sync_scheduler() -> Arc<sync_scheduler::SyncScheduler> {
+        Arc::new(sync_scheduler::SyncScheduler::new())
+    }
+
+    fn test_logbook_service(config: Arc<RuntimeConfigManager>) -> DeveloperLogbookService {
+        DeveloperLogbookService::new(config, test_sync_scheduler())
+    }
+
     fn test_runtime_config() -> Arc<RuntimeConfigManager> {
         Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime config"))
     }
@@ -937,6 +1070,56 @@ mod tests {
         }
 
         Arc::new(RuntimeConfigManager::new(startup_values).expect("runtime config"))
+    }
+
+    fn test_runtime_config_with_space_weather_enabled(enabled: bool) -> Arc<RuntimeConfigManager> {
+        let mut startup_values = BTreeMap::new();
+        startup_values.insert(
+            qsoripper_core::space_weather::NOAA_SPACE_WEATHER_ENABLED_ENV_VAR.to_string(),
+            enabled.to_string(),
+        );
+
+        Arc::new(RuntimeConfigManager::new(startup_values).expect("runtime config"))
+    }
+
+    #[tokio::test]
+    async fn get_current_space_weather_returns_disabled_snapshot_when_provider_is_disabled() {
+        let service =
+            SpaceWeatherControlSurface::new(test_runtime_config_with_space_weather_enabled(false));
+
+        let response = service
+            .get_current_space_weather(Request::new(GetCurrentSpaceWeatherRequest {}))
+            .await
+            .expect("space weather response")
+            .into_inner();
+        let snapshot = response.snapshot.expect("space weather snapshot");
+        let error_message = snapshot.error_message.expect("error message");
+
+        assert_eq!(SpaceWeatherStatus::Error as i32, snapshot.status);
+        assert!(
+            error_message.contains("disabled"),
+            "unexpected error message: {error_message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_space_weather_returns_disabled_snapshot_when_provider_is_disabled() {
+        let service =
+            SpaceWeatherControlSurface::new(test_runtime_config_with_space_weather_enabled(false));
+
+        let response = service
+            .refresh_space_weather(Request::new(RefreshSpaceWeatherRequest {}))
+            .await
+            .expect("space weather response")
+            .into_inner();
+        let snapshot = response.snapshot.expect("space weather snapshot");
+        let error_message = snapshot.error_message.expect("error message");
+
+        assert_eq!(SpaceWeatherStatus::Error as i32, snapshot.status);
+        assert!(
+            error_message.contains("disabled"),
+            "unexpected error message: {error_message}"
+        );
     }
 
     fn unique_sqlite_test_path(label: &str) -> PathBuf {
@@ -1531,7 +1714,7 @@ mod tests {
 
     #[tokio::test]
     async fn logbook_crud_flow_works_through_memory_grpc_surface() {
-        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+        let service = test_logbook_service(test_runtime_config_with_logbook(
             StorageBackendKind::Memory,
             None,
             true,
@@ -1543,7 +1726,7 @@ mod tests {
     #[tokio::test]
     async fn logbook_crud_flow_works_through_sqlite_grpc_surface() {
         let sqlite_path = unique_sqlite_test_path("logbook-grpc");
-        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+        let service = test_logbook_service(test_runtime_config_with_logbook(
             StorageBackendKind::Sqlite,
             Some(&sqlite_path),
             true,
@@ -1559,7 +1742,7 @@ mod tests {
 
     #[tokio::test]
     async fn logbook_sync_status_reports_live_local_counts() {
-        let service = DeveloperLogbookService::new(test_runtime_config());
+        let service = test_logbook_service(test_runtime_config());
 
         let logged = LogbookService::log_qso(
             &service,
@@ -1630,7 +1813,7 @@ mod tests {
 
     #[tokio::test]
     async fn adif_import_preserves_station_history_and_reports_duplicates() {
-        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+        let service = test_logbook_service(test_runtime_config_with_logbook(
             StorageBackendKind::Memory,
             None,
             true,
@@ -1691,7 +1874,7 @@ mod tests {
 
     #[tokio::test]
     async fn adif_import_uses_active_station_profile_only_as_explicit_fallback() {
-        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+        let service = test_logbook_service(test_runtime_config_with_logbook(
             StorageBackendKind::Memory,
             None,
             true,
@@ -1739,7 +1922,7 @@ mod tests {
 
     #[tokio::test]
     async fn adif_import_reports_invalid_records_without_active_station_fallback() {
-        let service = DeveloperLogbookService::new(test_runtime_config());
+        let service = test_logbook_service(test_runtime_config());
         let (mut client, server_handle) = grpc_logbook_client(service).await;
         let payload = b"<CALL:5>DL1AA<STATION_CALLSIGN:5>K1ABC<QSO_DATE:8>20250103<TIME_ON:6>030405<BAND:3>11M<MODE:2>CW<EOR>\n";
 
@@ -1757,7 +1940,7 @@ mod tests {
 
     #[tokio::test]
     async fn adif_import_refresh_updates_existing_records() {
-        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+        let service = test_logbook_service(test_runtime_config_with_logbook(
             StorageBackendKind::Memory,
             None,
             true,
@@ -1827,7 +2010,7 @@ mod tests {
 
     #[tokio::test]
     async fn adif_import_refresh_preserves_fields_absent_from_import() {
-        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+        let service = test_logbook_service(test_runtime_config_with_logbook(
             StorageBackendKind::Memory,
             None,
             true,
@@ -1877,7 +2060,7 @@ mod tests {
 
     #[tokio::test]
     async fn adif_import_refresh_handles_mixed_new_and_existing() {
-        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+        let service = test_logbook_service(test_runtime_config_with_logbook(
             StorageBackendKind::Memory,
             None,
             true,
@@ -1912,7 +2095,7 @@ mod tests {
 
     #[tokio::test]
     async fn adif_export_streams_filtered_qsos_in_adif_order() {
-        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+        let service = test_logbook_service(test_runtime_config_with_logbook(
             StorageBackendKind::Memory,
             None,
             true,
@@ -1988,7 +2171,7 @@ mod tests {
 
     #[tokio::test]
     async fn logbook_requires_station_context_when_station_callsign_is_missing() {
-        let service = DeveloperLogbookService::new(test_runtime_config());
+        let service = test_logbook_service(test_runtime_config());
 
         let error = LogbookService::log_qso(
             &service,
@@ -2006,7 +2189,7 @@ mod tests {
 
     #[tokio::test]
     async fn logbook_requires_timestamp_band_and_mode() {
-        let service = DeveloperLogbookService::new(test_runtime_config_with_logbook(
+        let service = test_logbook_service(test_runtime_config_with_logbook(
             StorageBackendKind::Memory,
             None,
             true,

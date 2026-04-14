@@ -16,6 +16,13 @@ use qsoripper_core::proto::qsoripper::services::{
     RuntimeConfigMutation, RuntimeConfigMutationKind, RuntimeConfigSnapshot, RuntimeConfigValue,
     RuntimeConfigValueKind,
 };
+use qsoripper_core::space_weather::{
+    DisabledSpaceWeatherProvider, NoaaSpaceWeatherConfig, NoaaSpaceWeatherProvider,
+    SpaceWeatherMonitor, SpaceWeatherProvider, NOAA_HTTP_TIMEOUT_SECONDS_ENV_VAR,
+    NOAA_KP_INDEX_URL_ENV_VAR, NOAA_REFRESH_INTERVAL_SECONDS_ENV_VAR,
+    NOAA_SOLAR_INDICES_URL_ENV_VAR, NOAA_SPACE_WEATHER_ENABLED_ENV_VAR,
+    NOAA_STALE_AFTER_SECONDS_ENV_VAR,
+};
 use tokio::sync::RwLock;
 
 use crate::station_profile_support::{
@@ -39,14 +46,28 @@ pub(crate) const STATION_CQ_ZONE_ENV_VAR: &str = "QSORIPPER_STATION_CQ_ZONE";
 pub(crate) const STATION_ITU_ZONE_ENV_VAR: &str = "QSORIPPER_STATION_ITU_ZONE";
 pub(crate) const STATION_LATITUDE_ENV_VAR: &str = "QSORIPPER_STATION_LATITUDE";
 pub(crate) const STATION_LONGITUDE_ENV_VAR: &str = "QSORIPPER_STATION_LONGITUDE";
+pub(crate) const QRZ_LOGBOOK_API_KEY_ENV_VAR: &str = "QSORIPPER_QRZ_LOGBOOK_API_KEY";
+pub(crate) const QRZ_LOGBOOK_BASE_URL_ENV_VAR: &str = "QSORIPPER_QRZ_LOGBOOK_BASE_URL";
+pub(crate) const SYNC_AUTO_ENABLED_ENV_VAR: &str = "QSORIPPER_SYNC_AUTO_ENABLED";
+pub(crate) const SYNC_INTERVAL_SECONDS_ENV_VAR: &str = "QSORIPPER_SYNC_INTERVAL_SECONDS";
+pub(crate) const SYNC_CONFLICT_POLICY_ENV_VAR: &str = "QSORIPPER_SYNC_CONFLICT_POLICY";
+
+pub(crate) const DEFAULT_QRZ_LOGBOOK_BASE_URL: &str = "https://logbook.qrz.com/api";
+const DEFAULT_SYNC_AUTO_ENABLED: &str = "false";
+const DEFAULT_SYNC_INTERVAL_SECONDS: &str = "300";
+const DEFAULT_SYNC_CONFLICT_POLICY: &str = "last_write_wins";
+
 const DEFAULT_STORAGE_BACKEND: &str = "memory";
 const DEFAULT_SQLITE_PATH: &str = "qsoripper.db";
 const REDACTED_VALUE: &str = "<redacted>";
+
+const CONFLICT_POLICY_ALLOWED_VALUES: &[&str] = &["last_write_wins", "flag_for_review"];
 
 #[derive(Clone)]
 struct RuntimeBindings {
     logbook_engine: LogbookEngine,
     lookup_coordinator: Arc<LookupCoordinator>,
+    space_weather_monitor: Arc<SpaceWeatherMonitor>,
     active_storage_backend: String,
     lookup_provider_summary: String,
     active_station_profile: Option<StationProfile>,
@@ -152,6 +173,10 @@ impl RuntimeConfigManager {
 
     pub(crate) async fn lookup_coordinator(&self) -> Arc<LookupCoordinator> {
         self.bindings.read().await.lookup_coordinator.clone()
+    }
+
+    pub(crate) async fn space_weather_monitor(&self) -> Arc<SpaceWeatherMonitor> {
+        self.bindings.read().await.space_weather_monitor.clone()
     }
 
     pub(crate) async fn active_storage_backend(&self) -> String {
@@ -501,6 +526,107 @@ const SUPPORTED_FIELDS: &[ConfigFieldSpec] = &[
         allowed_values: BOOLEAN_ALLOWED_VALUES,
         default_value: Some("false"),
     },
+    ConfigFieldSpec {
+        key: QRZ_LOGBOOK_API_KEY_ENV_VAR,
+        label: "QRZ logbook API key",
+        description: "API key for bidirectional sync with the QRZ logbook.",
+        kind: RuntimeConfigValueKind::String,
+        secret: true,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: QRZ_LOGBOOK_BASE_URL_ENV_VAR,
+        label: "QRZ logbook base URL",
+        description: "QRZ logbook API endpoint URL.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(DEFAULT_QRZ_LOGBOOK_BASE_URL),
+    },
+    ConfigFieldSpec {
+        key: SYNC_AUTO_ENABLED_ENV_VAR,
+        label: "Sync auto-enabled",
+        description: "Whether the engine should automatically sync with the QRZ logbook on a periodic schedule.",
+        kind: RuntimeConfigValueKind::Boolean,
+        secret: false,
+        allowed_values: BOOLEAN_ALLOWED_VALUES,
+        default_value: Some(DEFAULT_SYNC_AUTO_ENABLED),
+    },
+    ConfigFieldSpec {
+        key: SYNC_INTERVAL_SECONDS_ENV_VAR,
+        label: "Sync interval seconds",
+        description: "Interval between automatic QRZ logbook syncs, in seconds.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(DEFAULT_SYNC_INTERVAL_SECONDS),
+    },
+    ConfigFieldSpec {
+        key: SYNC_CONFLICT_POLICY_ENV_VAR,
+        label: "Sync conflict policy",
+        description: "How to handle conflicting records during QRZ logbook sync.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: CONFLICT_POLICY_ALLOWED_VALUES,
+        default_value: Some(DEFAULT_SYNC_CONFLICT_POLICY),
+    },
+    ConfigFieldSpec {
+        key: NOAA_SPACE_WEATHER_ENABLED_ENV_VAR,
+        label: "NOAA space weather enabled",
+        description: "Enable live NOAA SWPC current space weather fetching.",
+        kind: RuntimeConfigValueKind::Boolean,
+        secret: false,
+        allowed_values: BOOLEAN_ALLOWED_VALUES,
+        default_value: Some("true"),
+    },
+    ConfigFieldSpec {
+        key: NOAA_KP_INDEX_URL_ENV_VAR,
+        label: "NOAA K-index URL",
+        description: "NOAA SWPC endpoint used for planetary K-index and running A-index data.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(qsoripper_core::space_weather::DEFAULT_NOAA_KP_INDEX_URL),
+    },
+    ConfigFieldSpec {
+        key: NOAA_SOLAR_INDICES_URL_ENV_VAR,
+        label: "NOAA solar indices URL",
+        description: "NOAA SWPC endpoint used for daily solar flux and sunspot data.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(qsoripper_core::space_weather::DEFAULT_NOAA_SOLAR_INDICES_URL),
+    },
+    ConfigFieldSpec {
+        key: NOAA_HTTP_TIMEOUT_SECONDS_ENV_VAR,
+        label: "NOAA HTTP timeout seconds",
+        description: "HTTP timeout used by live NOAA SWPC requests.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some("8"),
+    },
+    ConfigFieldSpec {
+        key: NOAA_REFRESH_INTERVAL_SECONDS_ENV_VAR,
+        label: "NOAA refresh interval seconds",
+        description:
+            "How long the engine caches a current space weather snapshot before refreshing.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some("900"),
+    },
+    ConfigFieldSpec {
+        key: NOAA_STALE_AFTER_SECONDS_ENV_VAR,
+        label: "NOAA stale after seconds",
+        description:
+            "When cached space weather data should be marked stale if refreshes fail or lag.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some("3600"),
+    },
 ];
 
 fn capture_supported_env() -> BTreeMap<String, String> {
@@ -582,12 +708,53 @@ fn normalize_value(key: &'static str, raw_value: &str) -> Result<String, String>
             .parse::<u32>()
             .map(|value| value.to_string())
             .map_err(|_| format!("'{key}' expects an integer value."))
+    } else if matches!(
+        key,
+        NOAA_HTTP_TIMEOUT_SECONDS_ENV_VAR
+            | NOAA_REFRESH_INTERVAL_SECONDS_ENV_VAR
+            | NOAA_STALE_AFTER_SECONDS_ENV_VAR
+    ) {
+        trimmed
+            .parse::<u64>()
+            .map(|value| value.to_string())
+            .map_err(|_| format!("'{key}' expects an integer value."))
+    } else if key == NOAA_SPACE_WEATHER_ENABLED_ENV_VAR {
+        parse_bool(trimmed).map(|value| {
+            if value {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        })
     } else if is_station_positive_integer_key(key) {
         parse_positive_integer(key, trimmed).map(|value| value.to_string())
     } else if key == STATION_LATITUDE_ENV_VAR {
         parse_bounded_f64(key, trimmed, -90.0, 90.0).map(|value| value.to_string())
     } else if key == STATION_LONGITUDE_ENV_VAR {
         parse_bounded_f64(key, trimmed, -180.0, 180.0).map(|value| value.to_string())
+    } else if key == SYNC_AUTO_ENABLED_ENV_VAR {
+        parse_bool(trimmed).map(|value| {
+            if value {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            }
+        })
+    } else if key == SYNC_INTERVAL_SECONDS_ENV_VAR {
+        trimmed
+            .parse::<u32>()
+            .map(|value| value.to_string())
+            .map_err(|_| format!("'{key}' expects an integer value."))
+    } else if key == SYNC_CONFLICT_POLICY_ENV_VAR {
+        let lower = trimmed.to_ascii_lowercase();
+        if CONFLICT_POLICY_ALLOWED_VALUES.contains(&lower.as_str()) {
+            Ok(lower)
+        } else {
+            Err(format!(
+                "'{key}' must be one of: {}.",
+                CONFLICT_POLICY_ALLOWED_VALUES.join(", ")
+            ))
+        }
     } else {
         Ok(trimmed.to_string())
     }
@@ -679,11 +846,13 @@ fn build_runtime_bindings(values: &BTreeMap<String, String>) -> Result<RuntimeBi
         provider,
         LookupCoordinatorConfig::default(),
     ));
+    let space_weather_monitor = build_space_weather_monitor(values);
     let active_station_profile = build_active_station_profile(values)?;
 
     Ok(RuntimeBindings {
         logbook_engine,
         lookup_coordinator,
+        space_weather_monitor,
         active_storage_backend,
         lookup_provider_summary,
         active_station_profile,
@@ -784,6 +953,33 @@ fn build_lookup_provider(values: &BTreeMap<String, String>) -> (Arc<dyn Callsign
                 format!("Disabled: {reason}"),
             )
         }
+    }
+}
+
+fn build_space_weather_monitor(values: &BTreeMap<String, String>) -> Arc<SpaceWeatherMonitor> {
+    match NoaaSpaceWeatherConfig::from_value_provider(|name| values.get(name).cloned()) {
+        Ok(config) => {
+            let provider: Arc<dyn SpaceWeatherProvider> = if config.enabled() {
+                match NoaaSpaceWeatherProvider::new(config.clone()) {
+                    Ok(provider) => Arc::new(provider),
+                    Err(error) => Arc::new(DisabledSpaceWeatherProvider::new(error.to_string())),
+                }
+            } else {
+                Arc::new(DisabledSpaceWeatherProvider::new(
+                    "NOAA space weather fetching is disabled.",
+                ))
+            };
+            Arc::new(SpaceWeatherMonitor::new(
+                provider,
+                config.refresh_interval(),
+                config.stale_after(),
+            ))
+        }
+        Err(error) => Arc::new(SpaceWeatherMonitor::new(
+            Arc::new(DisabledSpaceWeatherProvider::new(error.to_string())),
+            std::time::Duration::from_secs(900),
+            std::time::Duration::from_secs(3600),
+        )),
     }
 }
 

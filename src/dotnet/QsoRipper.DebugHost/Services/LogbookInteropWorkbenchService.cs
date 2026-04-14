@@ -219,6 +219,28 @@ internal sealed class LogbookInteropWorkbenchService
         }
     }
 
+    public async Task<(TestQrzLogbookCredentialsResponse? Response, string? ErrorMessage)> TestLogbookCredentialsAsync(
+        string apiKey,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var client = _clientFactory.CreateSetupClient();
+            var response = await client.TestQrzLogbookCredentialsAsync(
+                new TestQrzLogbookCredentialsRequest { ApiKey = apiKey },
+                cancellationToken: cancellationToken);
+            return (response, null);
+        }
+        catch (RpcException ex)
+        {
+            return (null, ex.Status.Detail);
+        }
+        catch (OperationCanceledException ex)
+        {
+            return (null, ex.Message);
+        }
+    }
+
     internal static async IAsyncEnumerable<ImportAdifRequest> CreateImportRequestsAsync(
         Stream input,
         bool refresh = false,
