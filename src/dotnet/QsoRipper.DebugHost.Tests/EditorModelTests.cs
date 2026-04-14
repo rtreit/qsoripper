@@ -129,6 +129,48 @@ public class EditorModelTests
         Assert.Contains(results, result => result.MemberNames.Contains(nameof(StationProfileEditorModel.ItuZone), StringComparer.Ordinal));
     }
 
+    [Fact]
+    public void AdifExportEditorModel_to_request_trims_values_and_parses_utc_filters()
+    {
+        var model = new AdifExportEditorModel
+        {
+            AfterUtc = " 2026-04-10T00:00:00Z ",
+            BeforeUtc = "2026-04-11T12:30:00Z",
+            ContestId = "  ARRL-DX-SSB  ",
+            IncludeHeader = true
+        };
+
+        var request = model.ToRequest();
+
+        Assert.True(request.IncludeHeader);
+        Assert.NotNull(request.After);
+        Assert.NotNull(request.Before);
+        Assert.Equal("ARRL-DX-SSB", request.ContestId);
+    }
+
+    [Fact]
+    public void AdifExportEditorModel_validate_rejects_invalid_and_reversed_ranges()
+    {
+        var invalid = new AdifExportEditorModel
+        {
+            AfterUtc = "not-a-time"
+        };
+
+        var invalidResults = Validate(invalid);
+
+        Assert.Contains(invalidResults, result => result.MemberNames.Contains(nameof(AdifExportEditorModel.AfterUtc), StringComparer.Ordinal));
+
+        var reversed = new AdifExportEditorModel
+        {
+            AfterUtc = "2026-04-12T00:00:00Z",
+            BeforeUtc = "2026-04-11T00:00:00Z"
+        };
+
+        var reversedResults = Validate(reversed);
+
+        Assert.Contains(reversedResults, result => result.MemberNames.Contains(nameof(AdifExportEditorModel.BeforeUtc), StringComparer.Ordinal));
+    }
+
     private static List<ValidationResult> Validate(object model)
     {
         var results = new List<ValidationResult>();

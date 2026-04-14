@@ -38,6 +38,7 @@ Primary goals:
 - Use `buf lint` to validate proto files. Use `buf breaking` to guard against incompatible schema changes.
 - ADIF is for external interchange (QRZ API, file I/O) only — internal IPC uses protobuf.
 - Keep shared proto messages discoverable in the Debug Host Protobuf Lab; prefer auto-discovered message catalogs over hand-maintained UI enums or lists.
+- In .NET UI and DebugHost surfaces, do not hand-format generated proto enum names with `ToString()`/string replacement. Use shared display helpers such as `src/dotnet/QsoRipper.DebugHost/Utilities/ProtoEnumDisplay.cs` so labels stay aligned with protobuf original names.
 - See `docs/architecture/data-model.md` for full conventions.
 
 ## Domain Guidance
