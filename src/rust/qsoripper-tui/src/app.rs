@@ -12,6 +12,8 @@ pub(crate) enum View {
     Advanced,
     /// Full-screen help overlay.
     Help,
+    /// Confirmation dialog before deleting a QSO.
+    ConfirmDeleteQso,
 }
 
 /// Resolved callsign information shown in the lookup panel.
@@ -36,7 +38,6 @@ pub(crate) struct CallsignInfo {
 /// Display-ready row for the recent QSOs list.
 pub(crate) struct RecentQso {
     /// QsoRipper-assigned local UUID.
-    #[expect(dead_code, reason = "reserved for future QSO edit/delete actions")]
     pub(crate) local_id: String,
     /// UTC time formatted as `HH:MM`.
     pub(crate) utc: String,
@@ -96,6 +97,8 @@ pub(crate) struct App {
     pub(crate) qso_list_focused: bool,
     /// Selected row index within the recent QSOs list (when focused).
     pub(crate) qso_selected: Option<usize>,
+    /// Index of the QSO pending deletion (set when `ConfirmDeleteQso` view is active).
+    pub(crate) delete_candidate_idx: Option<usize>,
     /// Whether the main event loop should keep running.
     pub(crate) running: bool,
     /// gRPC server endpoint URL.
@@ -114,6 +117,7 @@ impl App {
             status_message: None,
             qso_list_focused: false,
             qso_selected: None,
+            delete_candidate_idx: None,
             running: true,
             endpoint,
         }

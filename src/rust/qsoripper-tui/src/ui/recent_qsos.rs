@@ -14,7 +14,7 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let (border_color, title) = if app.qso_list_focused {
         (
             Color::Yellow,
-            " Recent QSOs  \u{2191}\u{2193} navigate  Enter load  Esc exit ",
+            " Recent QSOs  \u{2191}\u{2193} navigate  Enter load  D delete  Esc exit ",
         )
     } else {
         (Color::Cyan, " Recent QSOs  (F3 to focus) ")

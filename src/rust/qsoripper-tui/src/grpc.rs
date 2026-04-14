@@ -9,8 +9,8 @@ use qsoripper_core::domain::mode::{mode_from_adif, mode_to_adif};
 use qsoripper_core::proto::qsoripper::domain::{Band, LookupState, Mode, RstReport};
 use qsoripper_core::proto::qsoripper::services::{
     logbook_service_client::LogbookServiceClient, lookup_service_client::LookupServiceClient,
-    space_weather_service_client::SpaceWeatherServiceClient, GetCurrentSpaceWeatherRequest,
-    ListQsosRequest, LogQsoRequest, LookupRequest,
+    space_weather_service_client::SpaceWeatherServiceClient, DeleteQsoRequest,
+    GetCurrentSpaceWeatherRequest, ListQsosRequest, LogQsoRequest, LookupRequest,
 };
 
 use crate::app::{CallsignInfo, RecentQso, SpaceWeatherInfo};
@@ -220,6 +220,17 @@ pub(crate) async fn get_space_weather(
         sunspot_number: snapshot.sunspot_number,
         status,
     }))
+}
+
+/// Delete a QSO by its local ID.
+pub(crate) async fn delete_qso(channel: Channel, local_id: &str) -> anyhow::Result<()> {
+    let mut client = LogbookServiceClient::new(channel);
+    let request = DeleteQsoRequest {
+        local_id: local_id.to_string(),
+        delete_from_qrz: false,
+    };
+    client.delete_qso(request).await?;
+    Ok(())
 }
 
 /// Convert a frequency in MHz to kHz as a `u64`.

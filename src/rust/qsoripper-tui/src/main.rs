@@ -17,7 +17,7 @@ use tokio::sync::{mpsc, watch};
 
 use app::App;
 use events::{spawn_clock_task, spawn_key_task, spawn_lookup_task, AppEvent};
-use form::{Field, LogForm, BANDS, MODES};
+use form::{is_advanced_page2, Field, LogForm, BANDS, MODES};
 
 /// Application entry point.
 #[tokio::main]
@@ -116,11 +116,15 @@ fn handle_event(
 ) {
     match event {
         AppEvent::Key(key) => handle_key(app, key, event_tx, lookup_tx, endpoint),
-        AppEvent::Tick => {
-            let now = chrono::Utc::now();
-            app.form.time = now.format("%H:%M").to_string();
-        }
+        AppEvent::Tick => {}
         AppEvent::LookupResult(result) => {
+            if let Some(ref info) = result {
+                if app.form.qth.is_empty() {
+                    if let Some(ref qth) = info.qth {
+                        app.form.qth.clone_from(qth);
+                    }
+                }
+            }
             app.lookup_result = result;
         }
         AppEvent::SpaceWeather(sw) => {
@@ -134,6 +138,19 @@ fn handle_event(
         }
         AppEvent::QsoLogFailed(err) => {
             app.set_error(format!("Log failed: {err}"));
+        }
+        AppEvent::QsoDeleted(local_id) => {
+            app.set_status(format!("QSO {local_id} deleted"));
+            app.delete_candidate_idx = None;
+            app.view = app::View::LogEntry;
+            app.qso_list_focused = false;
+            app.qso_selected = None;
+            refresh_recent_qsos(event_tx, endpoint);
+        }
+        AppEvent::QsoDeleteFailed(err) => {
+            app.set_error(format!("Delete failed: {err}"));
+            app.delete_candidate_idx = None;
+            app.view = app::View::LogEntry;
         }
         AppEvent::RecentQsos(qsos) => {
             app.recent_qsos = qsos;
@@ -153,6 +170,11 @@ fn handle_key(
 
     if matches!(app.view, app::View::Help) {
         app.view = app::View::LogEntry;
+        return;
+    }
+
+    if matches!(app.view, app::View::ConfirmDeleteQso) {
+        handle_confirm_delete_key(app, key, event_tx, endpoint);
         return;
     }
 
@@ -180,15 +202,24 @@ fn handle_key(
                 app.view = app::View::Advanced;
                 app.form.focused = Field::TxPower;
             }
-            app::View::Help => {}
+            app::View::Help | app::View::ConfirmDeleteQso => {}
         },
         KeyCode::F(3) => {
-            if !app.recent_qsos.is_empty() {
+            if matches!(app.view, app::View::Advanced) {
+                app.form.focused = if is_advanced_page2(&app.form.focused) {
+                    Field::TxPower
+                } else {
+                    Field::PropMode
+                };
+            } else if !app.recent_qsos.is_empty() {
                 app.qso_list_focused = true;
                 app.qso_selected = Some(0);
             }
         }
         KeyCode::F(10) => spawn_log_qso(app, event_tx, endpoint),
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+            spawn_log_qso(app, event_tx, endpoint);
+        }
         KeyCode::Esc => match app.view {
             app::View::Advanced => {
                 app.view = app::View::LogEntry;
@@ -198,7 +229,7 @@ fn handle_key(
                 app.form = LogForm::new();
                 app.lookup_result = None;
             }
-            app::View::Help => {}
+            app::View::Help | app::View::ConfirmDeleteQso => {}
         },
         KeyCode::Char('q' | 'Q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             app.running = false;
@@ -251,12 +282,64 @@ fn handle_qso_list_key(
                 app.qso_list_focused = false;
             }
         }
+        KeyCode::Char('d' | 'D') => {
+            if let Some(idx) = app.qso_selected {
+                app.delete_candidate_idx = Some(idx);
+                app.view = app::View::ConfirmDeleteQso;
+            }
+        }
         KeyCode::Esc | KeyCode::F(3) => {
             app.qso_list_focused = false;
             app.qso_selected = None;
         }
         _ => {}
     }
+}
+
+/// Handle key input while the delete-confirmation dialog is showing.
+fn handle_confirm_delete_key(
+    app: &mut App,
+    key: crossterm::event::KeyEvent,
+    event_tx: &mpsc::UnboundedSender<AppEvent>,
+    endpoint: &str,
+) {
+    use crossterm::event::KeyCode;
+    match key.code {
+        KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+            if let Some(idx) = app.delete_candidate_idx {
+                if let Some(qso) = app.recent_qsos.get(idx) {
+                    spawn_delete_qso(&qso.local_id, event_tx, endpoint);
+                }
+            }
+        }
+        KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+            app.delete_candidate_idx = None;
+            app.view = app::View::LogEntry;
+        }
+        _ => {}
+    }
+}
+
+/// Spawn a task to delete a QSO by its local ID and forward the result to the event channel.
+fn spawn_delete_qso(local_id: &str, event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint: &str) {
+    let tx = event_tx.clone();
+    let ep = endpoint.to_string();
+    let id = local_id.to_string();
+    tokio::spawn(async move {
+        match grpc::create_channel(&ep).await {
+            Ok(ch) => match grpc::delete_qso(ch, &id).await {
+                Ok(()) => {
+                    let _ = tx.send(AppEvent::QsoDeleted(id));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::QsoDeleteFailed(e.to_string()));
+                }
+            },
+            Err(e) => {
+                let _ = tx.send(AppEvent::QsoDeleteFailed(e.to_string()));
+            }
+        }
+    });
 }
 
 /// Handle a plain character key press — type-selects Band/Mode, or appends to text fields.
@@ -331,7 +414,10 @@ fn load_qso_into_form(app: &mut App, idx: usize, lookup_tx: &watch::Sender<Strin
 fn spawn_log_qso(app: &App, event_tx: &mpsc::UnboundedSender<AppEvent>, endpoint: &str) {
     let tx = event_tx.clone();
     let ep = endpoint.to_string();
-    let form_snap = app.form.clone();
+    let mut form_snap = app.form.clone();
+    if form_snap.time_off.is_empty() {
+        form_snap.time_off = chrono::Utc::now().format("%H:%M").to_string();
+    }
     tokio::spawn(async move {
         match grpc::create_channel(&ep).await {
             Ok(ch) => match grpc::log_qso(ch, &form_snap).await {

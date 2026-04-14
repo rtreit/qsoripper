@@ -22,6 +22,10 @@ pub(crate) enum AppEvent {
     QsoLogged(String),
     /// A QSO log attempt failed; value is the human-readable error message.
     QsoLogFailed(String),
+    /// A QSO was successfully deleted; value is the deleted local ID.
+    QsoDeleted(String),
+    /// A QSO deletion attempt failed; value is the human-readable error message.
+    QsoDeleteFailed(String),
     /// Refreshed snapshot of recent QSOs.
     RecentQsos(Vec<RecentQso>),
 }

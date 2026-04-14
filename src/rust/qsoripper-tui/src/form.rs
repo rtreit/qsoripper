@@ -40,8 +40,12 @@ pub(crate) enum Field {
     FrequencyMhz,
     /// UTC date (`YYYY-MM-DD`).
     Date,
-    /// UTC time (`HH:MM`).
+    /// UTC time on / start (`HH:MM`).
     Time,
+    /// UTC time off / end (`HH:MM`).
+    TimeOff,
+    /// Worked station QTH (city/location).
+    Qth,
     // Advanced fields shown in the advanced view.
     /// Transmitter power.
     TxPower,
@@ -57,6 +61,21 @@ pub(crate) enum Field {
     ExchangeSent,
     /// Exchange received.
     ExchangeRcvd,
+    // Advanced page 2
+    /// Propagation mode (ADIF `PROP_MODE`).
+    PropMode,
+    /// Satellite name.
+    SatName,
+    /// Satellite mode.
+    SatMode,
+    /// IOTA designator.
+    Iota,
+    /// ARRL section.
+    ArrlSection,
+    /// Worked state (US state abbreviation).
+    WorkedState,
+    /// Worked county.
+    WorkedCounty,
 }
 
 /// Primary navigation order for Tab/Shift-Tab in the log entry view.
@@ -71,10 +90,13 @@ const FIELD_ORDER: &[Field] = &[
     Field::FrequencyMhz,
     Field::Date,
     Field::Time,
+    Field::TimeOff,
+    Field::Qth,
 ];
 
-/// Navigation order for Tab/Shift-Tab in the advanced view.
+/// Navigation order for Tab/Shift-Tab in the advanced view (both pages combined).
 const ADVANCED_FIELD_ORDER: &[Field] = &[
+    // Page 1 — power, contest
     Field::TxPower,
     Field::Submode,
     Field::ContestId,
@@ -82,6 +104,14 @@ const ADVANCED_FIELD_ORDER: &[Field] = &[
     Field::SerialRcvd,
     Field::ExchangeSent,
     Field::ExchangeRcvd,
+    // Page 2 — propagation, awards
+    Field::PropMode,
+    Field::SatName,
+    Field::SatMode,
+    Field::Iota,
+    Field::ArrlSection,
+    Field::WorkedState,
+    Field::WorkedCounty,
 ];
 
 /// State of the QSO entry form (basic + advanced fields).
@@ -99,8 +129,12 @@ pub(crate) struct LogForm {
     pub(crate) frequency_mhz: String,
     /// Date in `YYYY-MM-DD` format.
     pub(crate) date: String,
-    /// Time in `HH:MM` format.
+    /// Time on (start) in `HH:MM` format.
     pub(crate) time: String,
+    /// Time off (end) in `HH:MM` format; empty means same as time on.
+    pub(crate) time_off: String,
+    /// Worked station QTH (city/location).
+    pub(crate) qth: String,
     /// RST sent report string.
     pub(crate) rst_sent: String,
     /// RST received report string.
@@ -109,7 +143,7 @@ pub(crate) struct LogForm {
     pub(crate) comment: String,
     /// Operator notes.
     pub(crate) notes: String,
-    // Advanced fields
+    // Advanced fields — page 1
     /// Transmitter power (e.g., "100W", "5W").
     pub(crate) tx_power: String,
     /// Submode override supplied by operator (overrides mode-derived submode).
@@ -124,6 +158,21 @@ pub(crate) struct LogForm {
     pub(crate) exchange_sent: String,
     /// Full exchange received string.
     pub(crate) exchange_rcvd: String,
+    // Advanced fields — page 2
+    /// Propagation mode (ADIF `PROP_MODE` value, e.g., "ES", "TEP", "SAT").
+    pub(crate) prop_mode: String,
+    /// Satellite name (e.g., "AO-7").
+    pub(crate) sat_name: String,
+    /// Satellite mode (e.g., "V/U").
+    pub(crate) sat_mode: String,
+    /// IOTA designator (e.g., "EU-005").
+    pub(crate) iota: String,
+    /// ARRL section abbreviation (e.g., "WWA", "ENY").
+    pub(crate) arrl_section: String,
+    /// Worked US state abbreviation.
+    pub(crate) worked_state: String,
+    /// Worked county name.
+    pub(crate) worked_county: String,
 }
 
 impl Default for LogForm {
@@ -144,6 +193,8 @@ impl LogForm {
             frequency_mhz: String::new(),
             date: now.format("%Y-%m-%d").to_string(),
             time: now.format("%H:%M").to_string(),
+            time_off: String::new(),
+            qth: String::new(),
             rst_sent: String::new(),
             rst_rcvd: String::new(),
             comment: String::new(),
@@ -155,6 +206,13 @@ impl LogForm {
             serial_rcvd: String::new(),
             exchange_sent: String::new(),
             exchange_rcvd: String::new(),
+            prop_mode: String::new(),
+            sat_name: String::new(),
+            sat_mode: String::new(),
+            iota: String::new(),
+            arrl_section: String::new(),
+            worked_state: String::new(),
+            worked_county: String::new(),
         };
         form.on_band_change();
         form
@@ -241,6 +299,8 @@ impl LogForm {
             Field::FrequencyMhz => Some(&mut self.frequency_mhz),
             Field::Date => Some(&mut self.date),
             Field::Time => Some(&mut self.time),
+            Field::TimeOff => Some(&mut self.time_off),
+            Field::Qth => Some(&mut self.qth),
             Field::RstSent => Some(&mut self.rst_sent),
             Field::RstRcvd => Some(&mut self.rst_rcvd),
             Field::Comment => Some(&mut self.comment),
@@ -252,6 +312,13 @@ impl LogForm {
             Field::SerialRcvd => Some(&mut self.serial_rcvd),
             Field::ExchangeSent => Some(&mut self.exchange_sent),
             Field::ExchangeRcvd => Some(&mut self.exchange_rcvd),
+            Field::PropMode => Some(&mut self.prop_mode),
+            Field::SatName => Some(&mut self.sat_name),
+            Field::SatMode => Some(&mut self.sat_mode),
+            Field::Iota => Some(&mut self.iota),
+            Field::ArrlSection => Some(&mut self.arrl_section),
+            Field::WorkedState => Some(&mut self.worked_state),
+            Field::WorkedCounty => Some(&mut self.worked_county),
             Field::Band | Field::Mode => None,
         }
     }
@@ -322,4 +389,18 @@ fn default_rst_for_mode(mode_idx: usize) -> &'static str {
         "SSB" | "AM" | "FM" => "59",
         _ => "599",
     }
+}
+
+/// Returns `true` if `field` belongs to the advanced form page 2 (propagation / awards).
+pub(crate) fn is_advanced_page2(field: &Field) -> bool {
+    matches!(
+        field,
+        Field::PropMode
+            | Field::SatName
+            | Field::SatMode
+            | Field::Iota
+            | Field::ArrlSection
+            | Field::WorkedState
+            | Field::WorkedCounty
+    )
 }

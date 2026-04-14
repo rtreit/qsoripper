@@ -1,6 +1,7 @@
 //! UI rendering — header, form, lookup panel, recent QSOs, footer, and help overlay.
 
 mod advanced_form;
+mod confirm_dialog;
 mod footer;
 mod header;
 mod help;
@@ -49,6 +50,10 @@ pub(crate) fn render_ui(app: &App, frame: &mut Frame) {
 
     if matches!(app.view, View::Help) {
         help::render(frame, area);
+    }
+
+    if matches!(app.view, View::ConfirmDeleteQso) {
+        confirm_dialog::render(app, frame);
     }
 }
 
