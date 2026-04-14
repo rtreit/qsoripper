@@ -54,6 +54,7 @@ public sealed class CliUtilityTests
         new()
         {
             { "status", "Usage: status" },
+            { "space-weather", "Usage: space-weather [--refresh]" },
             { "config", "Usage: config [options]" },
             { "lookup", "Usage: lookup <callsign> [--skip-cache]" }
         };
@@ -169,6 +170,14 @@ public sealed class CliUtilityTests
         Assert.Contains("\"localQsoCount\": 1", output, StringComparison.Ordinal);
         Assert.Contains("\"localQsoCount\": 2", output, StringComparison.Ordinal);
         Assert.EndsWith(Environment.NewLine + "]" + Environment.NewLine, output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetGeneralHelp_includes_space_weather_command()
+    {
+        var help = CliHelpText.GetGeneralHelp();
+
+        Assert.Contains("space-weather [--refresh]", help, StringComparison.Ordinal);
     }
 
     private static string CaptureConsoleOut(Action action)

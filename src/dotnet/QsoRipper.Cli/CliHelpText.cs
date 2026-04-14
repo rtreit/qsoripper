@@ -27,6 +27,7 @@ internal static class CliHelpText
 
             Engine:
               status                           Show sync status and QSO counts
+              space-weather [--refresh]        Show current NOAA space weather snapshot
               config [--set KEY=VALUE]         View or modify runtime config
               setup [--status | --from-env]    Interactive setup wizard or headless config
 
@@ -175,6 +176,14 @@ internal static class CliHelpText
                 Usage: status
 
                 Show engine sync status and QSO counts.
+                """,
+            "space-weather" => """
+                Usage: space-weather [--refresh]
+
+                Show the current engine-backed NOAA space weather snapshot.
+
+                  --refresh          Force an immediate refresh before printing
+                  --json             Output the snapshot as JSON
                 """,
             _ => $"No help available for '{command}'."
         };
