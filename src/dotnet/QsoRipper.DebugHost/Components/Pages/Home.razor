@@ -57,6 +57,24 @@
     <div class="col-md-6 col-xl-3">
         <div class="card h-100 shadow-sm">
             <div class="card-body">
+                <h2 class="h5">ADIF &amp; Sync</h2>
+                <p class="text-muted">Import/export ADIF, run QRZ logbook sync, and inspect streamed interop/status payloads through the live logbook service.</p>
+                <a class="btn btn-primary" href="logbook-interop">Open ADIF &amp; sync tools</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3">
+        <div class="card h-100 shadow-sm">
+            <div class="card-body">
+                <h2 class="h5">QSO Viewer</h2>
+                <p class="text-muted">Inspect stored QSOs through the shared gRPC surface with filters and side-by-side record detail output.</p>
+                <a class="btn btn-primary" href="qso-viewer">Open QSO viewer</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3">
+        <div class="card h-100 shadow-sm">
+            <div class="card-body">
                 <h2 class="h5">Commands & Tests</h2>
                 <p class="text-muted">Run curated Rust/.NET validation commands from an allowlisted catalog and capture their output.</p>
                 <a class="btn btn-primary" href="commands">Open command runner</a>
@@ -72,7 +90,7 @@
             <li>A permanent Blazor Server host under <code>src/dotnet/</code>.</li>
             <li>Real C# protobuf and gRPC client generation from the shared <code>proto/</code> contracts.</li>
             <li>Developer tooling that stays on the engine boundary instead of recreating business logic in .NET.</li>
-            <li>A foundation that can absorb future QRZ, logbook, ADIF, and diagnostics workbenches.</li>
+            <li>Dedicated workbenches for runtime config, lookup, storage, ADIF interchange, and logbook sync workflows.</li>
         </ul>
     </div>
 </div>
