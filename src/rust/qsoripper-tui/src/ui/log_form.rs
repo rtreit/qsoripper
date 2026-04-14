@@ -20,7 +20,7 @@ const FREQ_WIDTH: usize = 9;
 /// Fixed display width for the date field.
 const DATE_WIDTH: usize = 10;
 /// Fixed display width for the time field.
-const TIME_WIDTH: usize = 5;
+const TIME_WIDTH: usize = 8;
 
 /// Render the QSO log entry form into `area`.
 pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
@@ -31,7 +31,7 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.height < 8 {
+    if inner.height < 7 {
         return;
     }
 
@@ -43,7 +43,6 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
         Constraint::Length(1), // freq / date / time
         Constraint::Fill(1),   // padding
         Constraint::Length(1), // action hints
-        Constraint::Length(1), // Alt+key field jump hints
     ])
     .split(inner);
 
@@ -53,7 +52,6 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let notes_area = layout.get(3).copied().unwrap_or(inner);
     let freq_area = layout.get(4).copied().unwrap_or(inner);
     let hints_area = layout.get(6).copied().unwrap_or(inner);
-    let alt_hints_area = layout.get(7).copied().unwrap_or(inner);
 
     let form = &app.form;
 
@@ -63,7 +61,6 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     render_notes_row(frame, notes_area, form);
     render_freq_row(frame, freq_area, form);
     render_hints_row(frame, hints_area);
-    render_alt_hints_row(frame, alt_hints_area);
 }
 
 /// Render the callsign / band / mode row.
@@ -173,33 +170,6 @@ fn render_hints_row(frame: &mut Frame, area: Rect) {
         ])),
         area,
     );
-}
-
-/// Render the Alt+key field-jump hints row.
-fn render_alt_hints_row(frame: &mut Frame, area: Rect) {
-    let key_style = Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD);
-    let sep = Style::default().fg(Color::DarkGray);
-    let pairs: &[(char, &str)] = &[
-        ('C', "=Cs"),
-        ('B', "=Bnd"),
-        ('M', "=Md"),
-        ('S', "=Snt\u{2191}"),
-        ('R', "=Rcvd\u{2193}"),
-        ('O', "=Cmt"),
-        ('N', "=Nts"),
-        ('F', "=Frq"),
-        ('D', "=Dt"),
-        ('T', "=Tm"),
-    ];
-    let mut spans: Vec<Span<'static>> = vec![Span::styled(" Alt:", sep)];
-    for (key, desc) in pairs {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(key.to_string(), key_style));
-        spans.push(Span::styled(*desc, sep));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Create three spans for a label with one underlined mnemonic character.

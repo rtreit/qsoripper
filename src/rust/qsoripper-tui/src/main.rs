@@ -116,7 +116,9 @@ fn handle_event(
 ) {
     match event {
         AppEvent::Key(key) => handle_key(app, key, event_tx, lookup_tx, endpoint),
-        AppEvent::Tick => {}
+        AppEvent::Tick => {
+            app.utc_now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        }
         AppEvent::LookupResult(result) => {
             if let Some(ref info) = result {
                 if app.form.qth.is_empty() {
@@ -132,7 +134,12 @@ fn handle_event(
         }
         AppEvent::QsoLogged(local_id) => {
             app.set_status(format!("QSO logged: {local_id}"));
+            let band_idx = app.form.band_idx;
+            let mode_idx = app.form.mode_idx;
             app.form = LogForm::new();
+            app.form.band_idx = band_idx;
+            app.form.mode_idx = mode_idx;
+            app.form.on_band_change();
             app.lookup_result = None;
             refresh_recent_qsos(event_tx, endpoint);
         }
@@ -282,7 +289,7 @@ fn handle_qso_list_key(
                 app.qso_list_focused = false;
             }
         }
-        KeyCode::Char('d' | 'D') => {
+        KeyCode::Char('d' | 'D') | KeyCode::Delete => {
             if let Some(idx) = app.qso_selected {
                 app.delete_candidate_idx = Some(idx);
                 app.view = app::View::ConfirmDeleteQso;

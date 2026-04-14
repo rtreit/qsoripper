@@ -85,6 +85,8 @@ pub(crate) struct App {
     pub(crate) view: View,
     /// QSO entry form state.
     pub(crate) form: LogForm,
+    /// Current UTC date+time string for the clock display (`YYYY-MM-DD HH:MM:SS`).
+    pub(crate) utc_now: String,
     /// Most recent callsign lookup result.
     pub(crate) lookup_result: Option<CallsignInfo>,
     /// Recent QSOs for the history panel.
@@ -108,9 +110,11 @@ pub(crate) struct App {
 impl App {
     /// Create a new `App` targeting the given gRPC endpoint.
     pub(crate) fn new(endpoint: String) -> Self {
+        let now = chrono::Utc::now();
         Self {
             view: View::LogEntry,
             form: LogForm::new(),
+            utc_now: now.format("%Y-%m-%d %H:%M:%S").to_string(),
             lookup_result: None,
             recent_qsos: Vec::new(),
             space_weather: None,

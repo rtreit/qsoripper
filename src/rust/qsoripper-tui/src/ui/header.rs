@@ -12,7 +12,7 @@ use crate::app::App;
 
 /// Render the header bar into `area`.
 pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
-    let halves = Layout::horizontal([Constraint::Fill(1), Constraint::Length(20)]).split(area);
+    let halves = Layout::horizontal([Constraint::Fill(1), Constraint::Length(28)]).split(area);
 
     let title_area = halves.first().copied().unwrap_or(area);
     let clock_area = halves.get(1).copied().unwrap_or(area);
@@ -47,7 +47,7 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let utc_text = Line::from(vec![
         Span::styled("UTC ", Style::default().fg(Color::DarkGray)),
         Span::styled(
-            format!("{} ", app.form.time),
+            format!("{} ", app.utc_now),
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
