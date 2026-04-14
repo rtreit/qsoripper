@@ -1,0 +1,40 @@
+//! Footer bar showing key binding hints.
+
+use ratatui::{
+    layout::Rect,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
+    Frame,
+};
+
+/// Render the key-binding hint footer into `area`.
+pub(super) fn render(frame: &mut Frame, area: Rect) {
+    let hints: &[(&str, &str)] = &[
+        ("Tab", "Next field"),
+        ("←/→", "Cycle Band/Mode"),
+        ("F1", "Help"),
+        ("F5", "Weather"),
+        ("F10", "Log QSO"),
+        ("Esc", "Clear"),
+        ("Q", "Quit"),
+    ];
+
+    let mut spans: Vec<Span> = Vec::new();
+    for (i, (key, desc)) in hints.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("  "));
+        }
+        spans.push(Span::styled(
+            *key,
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(*desc, Style::default().fg(Color::DarkGray)));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
