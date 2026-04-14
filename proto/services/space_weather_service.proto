@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/get_current_space_weather_request.proto";
+import "services/get_current_space_weather_response.proto";
+import "services/refresh_space_weather_request.proto";
+import "services/refresh_space_weather_response.proto";
+
+service SpaceWeatherService {
+  rpc GetCurrentSpaceWeather(GetCurrentSpaceWeatherRequest) returns (GetCurrentSpaceWeatherResponse);
+  rpc RefreshSpaceWeather(RefreshSpaceWeatherRequest) returns (RefreshSpaceWeatherResponse);
+}

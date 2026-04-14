@@ -53,6 +53,7 @@ Proto files under `proto/` are the **single source of truth** for all shared typ
 | **StationProfileService** | Persisted station profile CRUD, active profile selection, bounded session overrides |
 | **LookupService** | Callsign lookups -- single, streaming, batch, cached, DXCC |
 | **LogbookService** | QSO CRUD, QRZ logbook sync, ADIF import/export |
+| **SpaceWeatherService** | Current NOAA SWPC snapshot reads and explicit refresh for engine clients |
 
 **Building a client?** See the [Engine API Documentation](docs/api/README.md) for a client-facing reference covering service contracts, implementation status, stub generation, transport options, and workflow examples.
 
@@ -199,6 +200,17 @@ The QRZ credentials are easy to mix up, so keep this split in mind:
 | `QSORIPPER_QRZ_LOGBOOK_API_KEY` | Your separate **QRZ Logbook API access key** from the QRZ website |
 
 **Important:** `QSORIPPER_QRZ_XML_PASSWORD` and `QSORIPPER_QRZ_LOGBOOK_API_KEY` are **not** the same value and are **not** interchangeable. Using the logbook API key as the XML password will cause QRZ XML login failures and may trigger a temporary lockout.
+
+Current space weather can also be enabled for engine clients through the NOAA SWPC-backed service:
+
+```powershell
+QSORIPPER_NOAA_SPACE_WEATHER_ENABLED=true
+QSORIPPER_NOAA_HTTP_TIMEOUT_SECONDS=8
+QSORIPPER_NOAA_REFRESH_INTERVAL_SECONDS=900
+QSORIPPER_NOAA_STALE_AFTER_SECONDS=3600
+```
+
+Optional endpoint overrides are available with `QSORIPPER_NOAA_KP_INDEX_URL` and `QSORIPPER_NOAA_SOLAR_INDICES_URL` if you need to point the engine at alternate NOAA-compatible feeds during local testing.
 
 For lockout-safe debugging, you can temporarily set:
 

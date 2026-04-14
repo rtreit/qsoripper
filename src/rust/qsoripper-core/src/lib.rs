@@ -13,5 +13,7 @@ pub mod ffi;
 pub mod lookup;
 /// Generated protobuf and gRPC bindings.
 pub mod proto;
+/// Space weather providers, caching, and normalization.
+pub mod space_weather;
 /// Storage ports, errors, and query types for engine-owned persistence.
 pub mod storage;

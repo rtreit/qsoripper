@@ -142,6 +142,17 @@ public class CliArgumentParserTests
         Assert.True(arguments.SetupFromEnv);
     }
 
+    [Fact]
+    public void Parse_space_weather_refresh_with_json()
+    {
+        var arguments = CliArgumentParser.Parse(["space-weather", "--refresh", "--json"]);
+
+        Assert.Equal("space-weather", arguments.Command);
+        Assert.True(arguments.Refresh);
+        Assert.True(arguments.JsonOutput);
+        Assert.Null(arguments.Callsign);
+    }
+
     [Theory]
     [InlineData("http://localhost:50051", true)]
     [InlineData("https://example.com:7443", true)]
