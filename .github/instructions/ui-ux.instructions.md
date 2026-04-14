@@ -9,6 +9,7 @@ Design for keyboard-first operation with fast operator feedback.
 - Make form navigation efficient for rapid QSO entry.
 - Use consistent keymaps across TUI and GUI where practical.
 - Surface validation errors clearly and immediately.
+- For labels sourced from shared proto enums (for example band/mode in DebugHost), use shared display helpers rather than page-local string munging of generated enum names.
 
 ## Workflow Focus
 
