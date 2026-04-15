@@ -2578,6 +2578,8 @@ static void OnTimer(HWND hwnd)
         ULONGLONG elapsed = GetTickCount64() - g_state.last_callsign_change;
         if (elapsed >= LOOKUP_DEBOUNCE_MS) {
             if (_stricmp(g_state.callsign, g_state.last_looked_up) != 0) {
+                g_state.worked_name[0] = 0;
+                g_state.qth[0] = 0;
                 LookupCallsign(g_state.callsign);
             }
             g_state.last_callsign_change = 0;
