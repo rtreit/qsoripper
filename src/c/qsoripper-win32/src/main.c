@@ -43,8 +43,8 @@
 #define CLR_YELLOW      RGB(255, 255, 0)
 #define CLR_ORANGE      RGB(220, 100, 0)
 #define CLR_WHITE       RGB(255, 255, 255)
-#define CLR_GRAY        RGB(128, 128, 128)
-#define CLR_DARKGRAY    RGB(80, 80, 80)
+#define CLR_GRAY        RGB(50, 50, 50)
+#define CLR_DARKGRAY    RGB(20, 20, 20)
 #define CLR_GREEN       RGB(0, 128, 0)
 #define CLR_RED         RGB(192, 0, 0)
 #define CLR_BLUE_BG     RGB(0, 0, 128)      /* Navy selection */
@@ -1321,7 +1321,7 @@ static void PaintHeader(HDC hdc, RECT *rc)
         DrawText_A_BG(hdc, cx + kw, ch, CLR_HEADER_FG, CLR_HEADER_BG, rest);
     } else {
         int cx = (w - 22 * cw) / 2;
-        DrawText_A_BG(hdc, cx, ch, CLR_GRAY, CLR_HEADER_BG, "Loading space weather...");
+        DrawText_A_BG(hdc, cx, ch, CLR_HEADER_FG, CLR_HEADER_BG, "Loading space weather...");
     }
 
     /* Right: UTC clock */
@@ -1621,7 +1621,7 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
         for (t = 0; t < ADV_TAB_COUNT; t++) {
             char tab_label[32];
             COLORREF bg = (t == tab) ? CLR_CYAN : CLR_DARKGRAY;
-            COLORREF fg = (t == tab) ? CLR_BG : CLR_GRAY;
+            COLORREF fg = (t == tab) ? CLR_BG : CLR_WHITE;
             _snprintf(tab_label, sizeof(tab_label), " %s ", ADV_TAB_NAMES[t]);
             DrawChip(hdc, tx, y, bg, fg, tab_label, cw, ch);
             tx += (int)strlen(tab_label) * cw + 12;
@@ -2694,9 +2694,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_SYSKEYDOWN:
         /* VK_MENU (Alt key itself), Space, F4, F, H must reach DefWindowProc
            so the menu bar, Alt+F4 close, and system menu work correctly.
+           Kill the timer first so the 100ms tick and any pending lookup
+           subprocess cannot block DefWindowProc's modal menu loop.
            NOTE: break exits to return 0 — must use explicit DefWindowProcW. */
         if (wParam == VK_MENU || wParam == VK_SPACE || wParam == VK_F4 ||
             wParam == 'F'     || wParam == 'H') {
+            KillTimer(hwnd, TIMER_ID);
             return DefWindowProcW(hwnd, msg, wParam, lParam);
         }
         /* Handle our custom Alt+key field-navigation shortcuts */
@@ -2714,6 +2717,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_MENUCHAR:
         /* Suppress the error beep when an Alt+key has no matching menu item */
         return MAKELRESULT(0, MNC_CLOSE);
+
+    case WM_EXITMENULOOP:
+        /* Restart the timer that was suspended in WM_SYSKEYDOWN */
+        SetTimer(hwnd, TIMER_ID, TIMER_MS, NULL);
+        break;
 
     case WM_MOUSEWHEEL:
         if (g_state.qso_list_focused) {
