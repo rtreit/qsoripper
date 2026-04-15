@@ -85,6 +85,11 @@ version = "=0.52.0"
 reason = "Legacy transitive requirement from tonic 0.12/socket2 0.5 and ring on Windows; newer crates resolve windows-sys 0.61."
 
 [[bans.skip]]
+name = "windows-sys"
+version = "=0.59.0"
+reason = "Required by rustix 0.38 via crossterm (qsoripper-tui, qsoripper-stress-tui); newer crates use windows-sys 0.61.x."
+
+[[bans.skip]]
 name = "windows-result"
 version = "=0.1.2"
 reason = "sysinfo 0.33 via qsoripper-stress uses windows 0.57 which requires windows-result 0.1.2; other crates resolve windows-result 0.4.x via newer windows-core."
