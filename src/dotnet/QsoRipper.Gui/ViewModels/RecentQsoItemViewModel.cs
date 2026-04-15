@@ -43,6 +43,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     private string _ituZone = "-";
     private string _qth = "-";
     private string _syncStatus = "-";
+    private string _continent = "-";
     private bool _isDirty;
 
     public string LocalId => _sourceQso.LocalId;
@@ -163,6 +164,12 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     {
         get => _syncStatus;
         private set => SetProperty(ref _syncStatus, value);
+    }
+
+    public string Continent
+    {
+        get => _continent;
+        private set => SetProperty(ref _continent, value);
     }
 
     public bool IsDirty
@@ -394,6 +401,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         ApplyState(EditableQsoState.FromQso(_sourceQso));
         Qth = BuildQth(_sourceQso);
         SyncStatus = BuildSyncStatus(_sourceQso.SyncStatus);
+        Continent = NoteOrNull(_sourceQso.WorkedContinent) ?? "-";
         RecomputeDirty();
     }
 

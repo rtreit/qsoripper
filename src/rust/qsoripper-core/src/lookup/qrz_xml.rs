@@ -645,6 +645,8 @@ struct QrzCallsign {
     iota: Option<String>,
     #[serde(rename = "land")]
     dxcc_country_name: Option<String>,
+    #[serde(rename = "continent")]
+    continent: Option<String>,
     #[serde(rename = "born")]
     birth_year: Option<String>,
     #[serde(rename = "serial")]
@@ -717,7 +719,7 @@ fn map_callsign_record(queried_callsign: &str, qrz: &QrzCallsign) -> CallsignRec
         itu_zone: parse_u32(qrz.itu_zone.as_deref()),
         iota: optional_string(qrz.iota.as_deref()),
         dxcc_country_name: optional_string(qrz.dxcc_country_name.as_deref()),
-        dxcc_continent: None,
+        dxcc_continent: optional_string(qrz.continent.as_deref()),
         birth_year: parse_u32(qrz.birth_year.as_deref()),
         qrz_serial: parse_u64(qrz.qrz_serial.as_deref()),
         last_modified: parse_datetime_timestamp(qrz.last_modified.as_deref()),
@@ -1204,6 +1206,8 @@ mod tests {
     <mqsl>0</mqsl>
     <cqzone>5</cqzone>
     <ituzone>8</ituzone>
+    <land>United States</land>
+    <continent>NA</continent>
     <serial>1234</serial>
     <moddate>2025-01-01 12:34:56</moddate>
     <bio>2048/2024-06-10</bio>
@@ -1304,6 +1308,10 @@ mod tests {
         assert_eq!(mapped.paper_qsl, QslPreference::No as i32);
         assert_eq!(mapped.profile_views, Some(77));
         assert_eq!(mapped.bio_length, Some(2048));
+        assert_eq!(mapped.cq_zone, Some(5));
+        assert_eq!(mapped.itu_zone, Some(8));
+        assert_eq!(mapped.dxcc_country_name.as_deref(), Some("United States"));
+        assert_eq!(mapped.dxcc_continent.as_deref(), Some("NA"));
     }
 
     #[test]

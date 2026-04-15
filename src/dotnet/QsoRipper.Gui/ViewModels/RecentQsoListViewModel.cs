@@ -751,6 +751,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.ItuZone, "ITU", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Qth, "QTH", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Sync, "Sync", false);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Continent, "Cont", false);
     }
 
     private readonly record struct SearchToken(string Key, string Value);

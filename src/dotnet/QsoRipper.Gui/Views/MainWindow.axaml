@@ -478,6 +478,13 @@
                                       SortMemberPath="SyncStatus"
                                       IsReadOnly="True"
                                       IsVisible="False" />
+                  <DataGridTextColumn Header="Cont"
+                                      Width="56"
+                                      MinWidth="48"
+                                      Binding="{ReflectionBinding Continent}"
+                                      SortMemberPath="Continent"
+                                      IsReadOnly="True"
+                                      IsVisible="False" />
                 </DataGrid.Columns>
               </DataGrid>
 
@@ -519,7 +526,7 @@
                     IsVisible="{Binding IsInspectorOpen}">
               <ScrollViewer>
                 <StackPanel Spacing="10"
-                            DataContext="{Binding RecentQsos.SelectedQso}">
+                            DataContext="{Binding InspectorQso}">
                   <TextBlock Text="Inspector"
                              FontSize="13"
                              FontWeight="SemiBold" />
