@@ -172,7 +172,7 @@
                     Command="{Binding OpenWizardCommand}"
                     Classes="accent"
                     MinWidth="62"
-                    Height="28"
+                    MinHeight="28"
                     IsVisible="{Binding IsSetupIncomplete}" />
             <TextBlock Classes="commandCaption"
                        Text="{Binding RecentQsos.RefreshIndicatorText}"
@@ -182,7 +182,7 @@
                     AutomationProperties.AutomationId="SyncNowButton"
                     Content="⟳ Sync"
                     Command="{Binding SyncNowCommand}"
-                    Height="28"
+                    MinHeight="28"
                     MinWidth="54"
                     ToolTip.Tip="Sync with QRZ (F6)" />
             <TextBlock Text="{Binding CurrentUtcTime}"
@@ -196,13 +196,13 @@
                     AutomationProperties.AutomationId="SortButton"
                     Content="Sort"
                     Command="{Binding ToggleSortChooserCommand}"
-                    Height="28"
+                    MinHeight="28"
                     MinWidth="54" />
             <Button x:Name="ColumnsButton"
                     AutomationProperties.AutomationId="ColumnsButton"
                     Content="Cols"
                     Command="{Binding ToggleColumnChooserCommand}"
-                    Height="28"
+                    MinHeight="28"
                     MinWidth="54" />
           </StackPanel>
         </Grid>
