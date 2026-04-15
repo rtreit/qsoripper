@@ -750,6 +750,7 @@ static void ClearForm(void)
 {
     g_state.callsign[0] = 0;
     g_state.comment[0] = 0;
+    g_state.notes[0] = 0;
     _snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
               "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
     SetCurrentDateTime();
@@ -1021,6 +1022,7 @@ static void ClearLookupDisplay(void)
     g_state.lookup_grid[0] = 0;
     g_state.lookup_country[0] = 0;
     g_state.lookup_cq_zone = 0;
+    g_state.last_looked_up[0] = 0;
 }
 
 static void LookupCallsign(const char *call)
@@ -2298,16 +2300,17 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         return;
     }
 
-    /* F7: reset QSO timer */
+    /* F7: reset QSO timer and update Time field to now */
     if (vk == VK_F7) {
         g_state.qso_timer_active = 1;
         g_state.qso_started_at = GetTickCount64();
+        SetCurrentDateTime();
         InvalidateRect(hwnd, NULL, FALSE);
         return;
     }
 
-    /* F10 or Alt+Enter: log/update QSO */
-    if (vk == VK_F10 || (alt_down && vk == VK_RETURN)) {
+    /* F10, Shift+Enter, or Alt+Enter: log/update QSO */
+    if (vk == VK_F10 || (shift_down && vk == VK_RETURN) || (alt_down && vk == VK_RETURN)) {
         LogQso();
         InvalidateRect(hwnd, NULL, FALSE);
         return;
