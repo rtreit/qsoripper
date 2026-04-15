@@ -90,6 +90,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     private HelpOverlayViewModel? _helpOverlay;
 
+    [ObservableProperty]
+    private bool _isFullQsoCardOpen;
+
+    [ObservableProperty]
+    private FullQsoCardViewModel? _fullQsoCard;
+
+    [ObservableProperty]
+    private bool _isLoggerFocused;
+
     internal MainWindowViewModel(string endpoint)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
@@ -324,6 +333,21 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     [RelayCommand]
+    private void ToggleFullQsoCard()
+    {
+        if (IsFullQsoCardOpen)
+        {
+            CloseFullQsoCard();
+            return;
+        }
+
+        var vm = new FullQsoCardViewModel(Logger);
+        vm.CloseRequested += OnFullQsoCardCloseRequested;
+        FullQsoCard = vm;
+        IsFullQsoCardOpen = true;
+    }
+
+    [RelayCommand]
     private void ToggleInspector()
     {
         IsInspectorOpen = !IsInspectorOpen;
@@ -362,8 +386,22 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             return;
         }
 
-        var selectedQso = RecentQsos.SelectedQso;
-        if (selectedQso is null || string.IsNullOrWhiteSpace(selectedQso.WorkedCallsign))
+        // If logger has focus and has a callsign, use that
+        string? callsign = null;
+        if (IsLoggerFocused && !string.IsNullOrWhiteSpace(Logger.Callsign))
+        {
+            callsign = Logger.Callsign.Trim().ToUpperInvariant();
+        }
+        else
+        {
+            var selectedQso = RecentQsos.SelectedQso;
+            if (selectedQso is not null && !string.IsNullOrWhiteSpace(selectedQso.WorkedCallsign))
+            {
+                callsign = selectedQso.WorkedCallsign;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(callsign))
         {
             return;
         }
@@ -372,7 +410,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         vm.CloseRequested += OnCallsignCardCloseRequested;
         CallsignCard = vm;
         IsCallsignCardOpen = true;
-        _ = vm.LoadAsync(selectedQso.WorkedCallsign);
+        _ = vm.LoadAsync(callsign);
     }
 
     [RelayCommand]
@@ -383,9 +421,18 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             card.CloseRequested -= OnCallsignCardCloseRequested;
         }
 
+        var wasLoggerFocused = IsLoggerFocused;
         IsCallsignCardOpen = false;
         CallsignCard = null;
-        GridFocusRequested?.Invoke(this, EventArgs.Empty);
+
+        if (wasLoggerFocused)
+        {
+            Logger.FocusLogger();
+        }
+        else
+        {
+            GridFocusRequested?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     private void OnCallsignCardCloseRequested(object? sender, EventArgs e)
@@ -408,6 +455,23 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private void OnHelpCloseRequested(object? sender, EventArgs e)
     {
         CloseHelp();
+    }
+
+    private void CloseFullQsoCard()
+    {
+        if (FullQsoCard is { } card)
+        {
+            card.CloseRequested -= OnFullQsoCardCloseRequested;
+        }
+
+        IsFullQsoCardOpen = false;
+        FullQsoCard = null;
+        Logger.FocusLogger();
+    }
+
+    private void OnFullQsoCardCloseRequested(object? sender, EventArgs e)
+    {
+        CloseFullQsoCard();
     }
 
     private async void OnQsoLogged(object? sender, EventArgs e)
@@ -573,7 +637,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         }
         else
         {
-            GridFocusRequested?.Invoke(this, EventArgs.Empty);
+            // Default: focus the QSO logger callsign field for immediate entry
+            Logger.FocusLogger();
         }
     }
 

@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
+using Avalonia.Media;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
@@ -97,7 +98,14 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     public string Rst
     {
         get => _rst;
-        set => SetProperty(ref _rst, value);
+        set
+        {
+            if (SetProperty(ref _rst, value))
+            {
+                OnPropertyChanged(nameof(RstSent));
+                OnPropertyChanged(nameof(RstReceived));
+            }
+        }
     }
 
     public string RstSent => SplitCombinedReport(Rst).Sent;
@@ -179,8 +187,26 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     public string Continent
     {
         get => _continent;
-        private set => SetProperty(ref _continent, value);
+        private set
+        {
+            if (SetProperty(ref _continent, value))
+            {
+                OnPropertyChanged(nameof(ContinentBrush));
+            }
+        }
     }
+
+    public IBrush ContinentBrush => Continent switch
+    {
+        "NA" => new SolidColorBrush(Color.Parse("#18FFB347")),
+        "EU" => new SolidColorBrush(Color.Parse("#184488FF")),
+        "AS" => new SolidColorBrush(Color.Parse("#18FF6B6B")),
+        "AF" => new SolidColorBrush(Color.Parse("#1877DD77")),
+        "SA" => new SolidColorBrush(Color.Parse("#18FFD700")),
+        "OC" => new SolidColorBrush(Color.Parse("#1800CED1")),
+        "AN" => new SolidColorBrush(Color.Parse("#18E0E0E0")),
+        _ => Brushes.Transparent,
+    };
 
     public string State
     {

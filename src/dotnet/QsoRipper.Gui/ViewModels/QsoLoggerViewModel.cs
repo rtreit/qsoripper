@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -21,6 +23,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     private readonly DispatcherTimer _elapsedTimer;
     private DateTimeOffset _qsoStartTime;
     private bool _timerRunning;
+    private CancellationTokenSource? _lookupCts;
 
     // Manual-override tracking: when true the field was explicitly typed by
     // the operator and should not be overwritten by band/mode defaults or
@@ -61,6 +64,18 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
     [ObservableProperty]
     private string _logStatusText = string.Empty;
+
+    [ObservableProperty]
+    private string _lookupName = string.Empty;
+
+    [ObservableProperty]
+    private string _lookupGrid = string.Empty;
+
+    [ObservableProperty]
+    private string _lookupCountry = string.Empty;
+
+    [ObservableProperty]
+    private string _lookupStatusText = string.Empty;
 
     // ── Constructor ──────────────────────────────────────────────────────
 
@@ -110,6 +125,19 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         {
             StopTimer();
         }
+
+        // Cancel any pending lookup
+        _lookupCts?.Cancel();
+
+        if (string.IsNullOrWhiteSpace(value) || value.Trim().Length < 3)
+        {
+            ClearLookupFields();
+            return;
+        }
+
+        // Debounced lookup
+        _lookupCts = new CancellationTokenSource();
+        _ = DebouncedLookupAsync(value.Trim().ToUpperInvariant(), _lookupCts.Token);
     }
 
     partial void OnSelectedBandIndexChanged(int value)
@@ -235,9 +263,11 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     [RelayCommand]
     private void Clear()
     {
+        _lookupCts?.Cancel();
         Callsign = string.Empty;
         Comment = string.Empty;
         LogStatusText = string.Empty;
+        ClearLookupFields();
         _frequencyManuallySet = false;
         _rstManuallySet = false;
         _bandManuallySet = false;
@@ -315,6 +345,90 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     public void FocusLogger()
     {
         LoggerFocusRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    // ── Debounced callsign lookup ───────────────────────────────────────
+
+    private async Task DebouncedLookupAsync(string callsign, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(800, ct);
+        }
+        catch (TaskCanceledException)
+        {
+            return;
+        }
+
+        if (ct.IsCancellationRequested)
+        {
+            return;
+        }
+
+        LookupStatusText = "Looking up\u2026";
+
+        try
+        {
+            var response = await _engine.LookupCallsignAsync(callsign, ct);
+            if (ct.IsCancellationRequested)
+            {
+                return;
+            }
+
+            var result = response.Result;
+            if (result is not null && result.State == LookupState.Found)
+            {
+                var record = result.Record;
+                if (record is not null)
+                {
+                    LookupName = BuildName(record.FirstName, record.LastName);
+                    LookupGrid = record.GridSquare ?? string.Empty;
+                    LookupCountry = record.Country ?? string.Empty;
+                    LookupStatusText = string.Empty;
+                }
+                else
+                {
+                    LookupStatusText = "No data";
+                }
+            }
+            else
+            {
+                ClearLookupFields();
+                LookupStatusText = "Not found";
+            }
+        }
+        catch (TaskCanceledException)
+        {
+            // Lookup was cancelled — expected when user keeps typing
+        }
+        catch (Grpc.Core.RpcException)
+        {
+            LookupStatusText = "Lookup error";
+        }
+    }
+
+    private void ClearLookupFields()
+    {
+        LookupName = string.Empty;
+        LookupGrid = string.Empty;
+        LookupCountry = string.Empty;
+        LookupStatusText = string.Empty;
+    }
+
+    private static string BuildName(string? first, string? last)
+    {
+        var parts = new List<string>(2);
+        if (!string.IsNullOrWhiteSpace(first))
+        {
+            parts.Add(first.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(last))
+        {
+            parts.Add(last.Trim());
+        }
+
+        return string.Join(" ", parts);
     }
 
     // ── Timer helpers ────────────────────────────────────────────────────

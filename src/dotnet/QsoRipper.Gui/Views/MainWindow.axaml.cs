@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using QsoRipper.Gui.Utilities;
@@ -38,6 +40,11 @@ internal sealed partial class MainWindow : Window
         _fileMenuItem = this.FindControl<MenuItem>("FileMenuItem");
         _recentQsoSearchBox = this.FindControl<TextBox>("RecentQsoSearchBox");
         _recentQsoGrid = this.FindControl<DataGrid>("RecentQsoGrid");
+        if (_recentQsoGrid is not null)
+        {
+            _recentQsoGrid.LoadingRow += OnRecentQsoGridLoadingRow;
+        }
+
         DataContextChanged += OnDataContextChanged;
         BuildColumnMap();
     }
@@ -95,6 +102,11 @@ internal sealed partial class MainWindow : Window
             return;
         }
 
+        if (TryHandleLoggerKeyDown(e))
+        {
+            return;
+        }
+
         if (TryHandleRecentQsoZoomKey(e))
         {
             return;
@@ -123,6 +135,13 @@ internal sealed partial class MainWindow : Window
 
         if (e.Key == Key.Escape)
         {
+            if (_viewModel.IsFullQsoCardOpen)
+            {
+                _viewModel.ToggleFullQsoCardCommand.Execute(null);
+                e.Handled = true;
+                return;
+            }
+
             if (_viewModel.IsHelpOpen)
             {
                 _viewModel.ToggleHelpCommand.Execute(null);
@@ -208,6 +227,56 @@ internal sealed partial class MainWindow : Window
         return false;
     }
 
+    private bool TryHandleLoggerKeyDown(KeyEventArgs e)
+    {
+        if (_viewModel is null)
+        {
+            return false;
+        }
+
+        var source = e.Source as Control;
+        var bandButton = this.FindControl<Button>("LoggerBandButton");
+        var modeButton = this.FindControl<Button>("LoggerModeButton");
+
+        // Left/Right on band button cycles bands
+        if (source == bandButton)
+        {
+            if (e.Key == Key.Left)
+            {
+                _viewModel.Logger.CycleBandBackwardCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            }
+
+            if (e.Key == Key.Right)
+            {
+                _viewModel.Logger.CycleBandForwardCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            }
+        }
+
+        // Left/Right on mode button cycles modes
+        if (source == modeButton)
+        {
+            if (e.Key == Key.Left)
+            {
+                _viewModel.Logger.CycleModeBackwardCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            }
+
+            if (e.Key == Key.Right)
+            {
+                _viewModel.Logger.CycleModeForwardCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private bool TryHandleRecentQsoZoomKey(KeyEventArgs e)
     {
         if (_viewModel is null || !e.KeyModifiers.HasFlag(KeyModifiers.Control))
@@ -286,6 +355,7 @@ internal sealed partial class MainWindow : Window
             _viewModel.LoggerFocusRequested += OnLoggerFocusRequested;
             SubscribeColumnOptions(_viewModel.RecentQsos);
             ApplyDefaultColumnVisibility();
+            WireLoggerFocusTracking();
             if (!IsInspectionMode)
             {
                 ApplyPersistedGridLayout();
@@ -319,6 +389,68 @@ internal sealed partial class MainWindow : Window
                 loggerBox.SelectAll();
             }, DispatcherPriority.Input);
         }
+    }
+
+    private void WireLoggerFocusTracking()
+    {
+        var loggerBox = this.FindControl<TextBox>("LoggerCallsignBox");
+        if (loggerBox is not null)
+        {
+            loggerBox.GotFocus += OnLoggerGotFocus;
+            loggerBox.LostFocus += OnLoggerLostFocus;
+        }
+
+        var bandButton = this.FindControl<Button>("LoggerBandButton");
+        var modeButton = this.FindControl<Button>("LoggerModeButton");
+        if (bandButton is not null)
+        {
+            bandButton.GotFocus += OnLoggerGotFocus;
+            bandButton.LostFocus += OnLoggerLostFocus;
+        }
+
+        if (modeButton is not null)
+        {
+            modeButton.GotFocus += OnLoggerGotFocus;
+            modeButton.LostFocus += OnLoggerLostFocus;
+        }
+    }
+
+    private void OnLoggerGotFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_viewModel is not null)
+        {
+            _viewModel.IsLoggerFocused = true;
+        }
+    }
+
+    private void OnLoggerLostFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        // Delay slightly — focus may be transitioning between logger fields
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_viewModel is null)
+            {
+                return;
+            }
+
+            var focused = FocusManager?.GetFocusedElement() as Control;
+            var loggerPanel = this.FindControl<Border>("LoggerPanel");
+            // Check if focus moved to another control within the logger panel
+            bool isStillInLogger = false;
+            var parent = focused;
+            while (parent is not null)
+            {
+                if (parent == loggerPanel)
+                {
+                    isStillInLogger = true;
+                    break;
+                }
+
+                parent = parent.Parent as Control;
+            }
+
+            _viewModel.IsLoggerFocused = isStillInLogger;
+        }, DispatcherPriority.Background);
     }
 
     private void FocusRecentQsoSearchBox()
@@ -399,6 +531,14 @@ internal sealed partial class MainWindow : Window
         if (_viewModel.RecentQsos.AdjustZoom(Math.Sign(e.Delta.Y)))
         {
             e.Handled = true;
+        }
+    }
+
+    private void OnRecentQsoGridLoadingRow(object? sender, DataGridRowEventArgs e)
+    {
+        if (e.Row.DataContext is RecentQsoItemViewModel item)
+        {
+            e.Row.Background = item.ContinentBrush;
         }
     }
 

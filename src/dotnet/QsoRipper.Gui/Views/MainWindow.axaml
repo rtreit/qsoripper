@@ -30,6 +30,7 @@
     <KeyBinding Gesture="Ctrl+N" Command="{Binding FocusLoggerCommand}" />
     <KeyBinding Gesture="Ctrl+R" Command="{Binding ToggleRigControlCommand}" />
     <KeyBinding Gesture="Ctrl+W" Command="{Binding ToggleSpaceWeatherCommand}" />
+    <KeyBinding Gesture="Ctrl+L" Command="{Binding ToggleFullQsoCardCommand}" />
   </Window.KeyBindings>
 
   <Window.Styles>
@@ -83,6 +84,11 @@
     <Style Selector="DataGrid#RecentQsoGrid DataGridCell:editing TextBox">
       <Setter Property="Padding" Value="4,2" />
       <Setter Property="VerticalContentAlignment" Value="Center" />
+    </Style>
+
+    <!-- Consistent text styling for data grid content -->
+    <Style Selector="DataGrid#RecentQsoGrid DataGridCell TextBlock">
+      <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
 
   </Window.Styles>
@@ -238,7 +244,8 @@
         </Grid>
 
         <!-- QSO Logger Panel -->
-        <Border Grid.Row="1"
+        <Border x:Name="LoggerPanel"
+                Grid.Row="1"
                 Margin="10,0,10,4"
                 Padding="8,4"
                 CornerRadius="4"
@@ -248,7 +255,7 @@
           <Grid RowDefinitions="Auto,Auto" RowSpacing="2">
             <!-- Row 1: Input fields -->
             <Grid Grid.Row="0"
-                  ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                  ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
                   ColumnSpacing="8"
                   VerticalAlignment="Center">
               <StackPanel Grid.Column="0" Spacing="1">
@@ -261,27 +268,35 @@
               </StackPanel>
 
               <StackPanel Grid.Column="1" Spacing="1">
-                <TextBlock Text="Band" FontSize="10" Opacity="0.6" />
-                <Border Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
-                        CornerRadius="3" Padding="6,3" Height="28"
-                        VerticalAlignment="Bottom">
+                <TextBlock Text="Band ◄►" FontSize="10" Opacity="0.6" />
+                <Button x:Name="LoggerBandButton"
+                        AutomationProperties.AutomationId="LoggerBandButton"
+                        Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
+                        BorderThickness="0" CornerRadius="3"
+                        Padding="6,3" Height="28" MinWidth="52"
+                        VerticalAlignment="Bottom"
+                        ToolTip.Tip="← → to cycle band"
+                        Focusable="True">
                   <TextBlock Text="{Binding Logger.BandLabel}"
                              FontSize="13" Foreground="#FFB347"
-                             VerticalAlignment="Center"
-                             ToolTip.Tip="← → to cycle" />
-                </Border>
+                             VerticalAlignment="Center" />
+                </Button>
               </StackPanel>
 
               <StackPanel Grid.Column="2" Spacing="1">
-                <TextBlock Text="Mode" FontSize="10" Opacity="0.6" />
-                <Border Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
-                        CornerRadius="3" Padding="6,3" Height="28"
-                        VerticalAlignment="Bottom">
+                <TextBlock Text="Mode ◄►" FontSize="10" Opacity="0.6" />
+                <Button x:Name="LoggerModeButton"
+                        AutomationProperties.AutomationId="LoggerModeButton"
+                        Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
+                        BorderThickness="0" CornerRadius="3"
+                        Padding="6,3" Height="28" MinWidth="52"
+                        VerticalAlignment="Bottom"
+                        ToolTip.Tip="← → to cycle mode"
+                        Focusable="True">
                   <TextBlock Text="{Binding Logger.ModeLabel}"
                              FontSize="13" Foreground="#77DD77"
-                             VerticalAlignment="Center"
-                             ToolTip.Tip="← → to cycle" />
-                </Border>
+                             VerticalAlignment="Center" />
+                </Button>
               </StackPanel>
 
               <StackPanel Grid.Column="3" Spacing="1">
@@ -324,6 +339,13 @@
                       MinHeight="28" MinWidth="48"
                       VerticalAlignment="Bottom"
                       ToolTip.Tip="Clear form (Esc)" />
+
+              <Button Grid.Column="9"
+                      Content="▼"
+                      Command="{Binding ToggleFullQsoCardCommand}"
+                      MinHeight="28" MinWidth="28"
+                      VerticalAlignment="Bottom"
+                      ToolTip.Tip="Full QSO entry (Ctrl+L)" />
             </Grid>
 
             <!-- Row 2: Status line (rig, space weather, timer, log status) -->
@@ -331,9 +353,14 @@
                         Orientation="Horizontal"
                         Spacing="12"
                         Margin="0,1,0,0">
-              <TextBlock Text="{Binding RigStatusText}"
-                         FontSize="11" Opacity="0.7"
-                         FontFamily="Cascadia Mono, Consolas, monospace" />
+              <Button Command="{Binding ToggleRigControlCommand}"
+                      Background="Transparent" BorderThickness="0"
+                      Padding="2,0" Cursor="Hand"
+                      ToolTip.Tip="Toggle rig control (Ctrl+R)">
+                <TextBlock Text="{Binding RigStatusText}"
+                           FontSize="11" Opacity="0.7"
+                           FontFamily="Cascadia Mono, Consolas, monospace" />
+              </Button>
               <TextBlock Text="{Binding SpaceWeatherText}"
                          FontSize="11" Opacity="0.7"
                          IsVisible="{Binding IsSpaceWeatherVisible}"
@@ -342,6 +369,19 @@
               <TextBlock FontSize="11" Opacity="0.7"
                          FontFamily="Cascadia Mono, Consolas, monospace"
                          Text="{Binding Logger.ElapsedTimeText, StringFormat='Timer: {0}'}" />
+              <TextBlock Text="{Binding Logger.LookupName}"
+                         FontSize="11" Opacity="0.8"
+                         IsVisible="{Binding Logger.LookupName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              <TextBlock Text="{Binding Logger.LookupGrid}"
+                         FontSize="11" Opacity="0.6"
+                         FontFamily="Cascadia Mono, Consolas, monospace"
+                         IsVisible="{Binding Logger.LookupGrid, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              <TextBlock Text="{Binding Logger.LookupCountry}"
+                         FontSize="11" Opacity="0.6"
+                         IsVisible="{Binding Logger.LookupCountry, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              <TextBlock Text="{Binding Logger.LookupStatusText}"
+                         FontSize="11" Opacity="0.5"
+                         IsVisible="{Binding Logger.LookupStatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
               <TextBlock Text="{Binding Logger.LogStatusText}"
                          FontSize="11"
                          Foreground="#77DD77" />
@@ -471,6 +511,7 @@
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
                         <TextBlock Text="{Binding Country}"
+                                   Foreground="#C0C0C0"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center"
@@ -492,6 +533,7 @@
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
                         <TextBlock Text="{Binding OperatorName}"
+                                   Foreground="#D0D0D0"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center"
@@ -523,6 +565,7 @@
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
                         <TextBlock Text="{Binding Contest}"
+                                   Foreground="#C0C0C0"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center"
@@ -549,6 +592,7 @@
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
                         <TextBlock Text="{Binding Note}"
+                                   Foreground="#C0C0C0"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center"
@@ -858,7 +902,7 @@
             </StackPanel>
 
             <TextBlock Grid.Column="1"
-                       Text="Ctrl+Enter Log • F1 Help • F3 Grid • F4 Search • Ctrl+N Logger • Ctrl+R Rig • Ctrl+W Weather"
+                       Text="Ctrl+Enter Log &#x2022; Ctrl+L Expand &#x2022; F1 Help &#x2022; F3 Grid &#x2022; F4 Search &#x2022; Ctrl+N Logger &#x2022; Ctrl+R Rig &#x2022; Ctrl+W Weather"
                        FontSize="11.5"
                        Opacity="0.68"
                        VerticalAlignment="Center"
@@ -904,6 +948,18 @@
             </StackPanel>
           </StackPanel>
         </Border>
+      </Border>
+
+      <!-- Full QSO Card overlay -->
+      <Border x:Name="FullQsoCardOverlay"
+              AutomationProperties.AutomationId="FullQsoCardOverlay"
+              IsVisible="{Binding IsFullQsoCardOpen}"
+              Background="#80000000"
+              HorizontalAlignment="Stretch"
+              VerticalAlignment="Stretch">
+        <v:FullQsoCardView DataContext="{Binding FullQsoCard}"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
       </Border>
 
       <!-- Help overlay -->
