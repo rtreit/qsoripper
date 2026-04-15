@@ -35,6 +35,7 @@
 #define CLR_TEXT        RGB(0, 0, 0)        /* Black text */
 #define CLR_CYAN        RGB(0, 128, 128)    /* Teal for accents */
 #define CLR_YELLOW      RGB(255, 255, 0)
+#define CLR_ORANGE      RGB(220, 100, 0)
 #define CLR_WHITE       RGB(255, 255, 255)
 #define CLR_GRAY        RGB(128, 128, 128)
 #define CLR_DARKGRAY    RGB(80, 80, 80)
@@ -259,6 +260,7 @@ static char *FieldBuffer(enum Field f);
 static int   FieldMaxLen(enum Field f);
 static void  DrawField(HDC, int, int, int, const char *, int, int, int, int);
 static void  DrawCycleField(HDC, int, int, int, const char *, int, int, int);
+static void  ApplyModeDefaults(void);
 
 /* ── Utility: safe string helpers ──────────────────────────────────────── */
 
@@ -725,10 +727,7 @@ static void InitState(void)
 static void ClearForm(void)
 {
     g_state.callsign[0] = 0;
-    safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
-    safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
     g_state.comment[0] = 0;
-    g_state.notes[0] = 0;
     _snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
               "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
     SetCurrentDateTime();
@@ -742,8 +741,7 @@ static void ClearForm(void)
     g_state.qso_list_focused = 0;
     g_state.search_focused = 0;
     memset(g_state.cursor_pos, 0, sizeof(g_state.cursor_pos));
-    g_state.cursor_pos[FIELD_RST_SENT] = 2;
-    g_state.cursor_pos[FIELD_RST_RCVD] = 2;
+    ApplyModeDefaults();
 
     /* Clear advanced field buffers */
     g_state.time_off[0] = 0;
@@ -765,6 +763,18 @@ static void ClearForm(void)
     g_state.worked_county[0] = 0;
     g_state.skcc[0] = 0;
 }
+
+static void ApplyModeDefaults(void)
+{
+    const char *mode = MODES[g_state.mode_idx];
+    const char *rst = (_stricmp(mode, "CW") == 0 || _stricmp(mode, "RTTY") == 0)
+                      ? "599" : "59";
+    safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), rst);
+    safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), rst);
+    g_state.cursor_pos[FIELD_RST_SENT] = (int)strlen(rst);
+    g_state.cursor_pos[FIELD_RST_RCVD] = (int)strlen(rst);
+}
+
 
 static void SetStatus(const char *msg, int is_error)
 {
@@ -1010,13 +1020,20 @@ static void LookupCallsign(const char *call)
     if (!v) v = json_get_string(record_pos, "firstName");
     if (v) {
         safe_strcpy(g_state.lookup_name, sizeof(g_state.lookup_name), v);
+        if (g_state.worked_name[0] == 0)
+            safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), v);
         g_state.has_lookup = 1;
         free(v);
     }
 
     v = json_get_string(record_pos, "addr2");
     if (!v) v = json_get_string(record_pos, "qth");
-    if (v) { safe_strcpy(g_state.lookup_qth, sizeof(g_state.lookup_qth), v); free(v); }
+    if (v) {
+        safe_strcpy(g_state.lookup_qth, sizeof(g_state.lookup_qth), v);
+        if (g_state.qth[0] == 0)
+            safe_strcpy(g_state.qth, sizeof(g_state.qth), v);
+        free(v);
+    }
 
     v = json_get_string(record_pos, "gridSquare");
     if (!v) v = json_get_string(record_pos, "grid");
@@ -1354,7 +1371,8 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
     /* Title */
     {
         const char *title = g_state.editing_local_id[0] ? " Edit QSO " : " Log QSO ";
-        DrawText_A_BG(hdc, pad, y_start, CLR_YELLOW, CLR_BG, title);
+        COLORREF title_clr = g_state.editing_local_id[0] ? CLR_ORANGE : CLR_CYAN;
+        DrawText_A_BG(hdc, pad, y_start, title_clr, CLR_BG, title);
     }
 
     int y = y_start + ch + 4;
@@ -2419,6 +2437,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
             g_state.mode_idx = (g_state.mode_idx + NUM_MODES - 1) % NUM_MODES;
+            ApplyModeDefaults();
         } else {
             enum Field f = g_state.focused_field;
             if (g_state.cursor_pos[f] > 0)
@@ -2435,6 +2454,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
             g_state.mode_idx = (g_state.mode_idx + 1) % NUM_MODES;
+            ApplyModeDefaults();
         } else {
             enum Field f = g_state.focused_field;
             char *buf = FieldBuffer(f);
