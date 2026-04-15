@@ -142,6 +142,7 @@ typedef struct {
     int band_idx, mode_idx;
     int qso_list_focused;
     int search_focused;
+    int field_all_selected;   /* 1 = next keypress replaces entire field */
     int qso_selected;        /* -1 = none */
     int running;
     int help_visible;
@@ -647,18 +648,24 @@ static void DrawField(HDC hdc, int x, int y, int width_chars,
         DeleteObject(dark); DeleteObject(light);
     }
 
-    /* Text */
-    DrawText_A_BG(hdc, x + 3, y + 2, fg, bg, value);
+    /* Text and cursor */
+    if (focused && g_state.field_all_selected && value && value[0]) {
+        int text_w = (int)strlen(value) * cw;
+        FillRect_Color(hdc, x + 3, y + 2, text_w, ch, CLR_HIGHLIGHT);
+        DrawText_A_BG(hdc, x + 3, y + 2, CLR_HILITE_FG, CLR_HIGHLIGHT, value);
+    } else {
+        DrawText_A_BG(hdc, x + 3, y + 2, fg, bg, value);
 
-    /* Cursor */
-    if (focused) {
-        int cx = x + 3 + cursor * cw;
-        HPEN pen = CreatePen(PS_SOLID, 2, CLR_TEXT);
-        HPEN old = (HPEN)SelectObject(hdc, pen);
-        MoveToEx(hdc, cx, y + 2, NULL);
-        LineTo(hdc, cx, y + 2 + ch);
-        SelectObject(hdc, old);
-        DeleteObject(pen);
+        /* Cursor */
+        if (focused) {
+            int cx = x + 3 + cursor * cw;
+            HPEN pen = CreatePen(PS_SOLID, 2, CLR_TEXT);
+            HPEN old = (HPEN)SelectObject(hdc, pen);
+            MoveToEx(hdc, cx, y + 2, NULL);
+            LineTo(hdc, cx, y + 2 + ch);
+            SelectObject(hdc, old);
+            DeleteObject(pen);
+        }
     }
 }
 
@@ -711,12 +718,21 @@ static void SetCurrentDateTime(void)
               "%02d:%02d", st.wHour, st.wMinute);
 }
 
+/* ── Set focused field with select-all ──────────────────────────────────── */
+
+static void SetFocusField(enum Field f)
+{
+    g_state.focused_field = f;
+    g_state.field_all_selected = (f != FIELD_BAND && f != FIELD_MODE);
+}
+
 /* ── Initialize application state ──────────────────────────────────────── */
 
 static void InitState(void)
 {
     memset(&g_state, 0, sizeof(g_state));
     g_state.focused_field = FIELD_CALLSIGN;
+    g_state.field_all_selected = 1;
     g_state.band_idx = DEFAULT_BAND_IDX;
     g_state.mode_idx = 0;
     g_state.qso_selected = -1;
@@ -743,7 +759,7 @@ static void ClearForm(void)
     g_state.qso_timer_active = 0;
     g_state.qso_started_at = 0;
     g_state.last_looked_up[0] = 0;
-    g_state.focused_field = FIELD_CALLSIGN;
+    SetFocusField(FIELD_CALLSIGN);
     g_state.qso_list_focused = 0;
     g_state.search_focused = 0;
     memset(g_state.cursor_pos, 0, sizeof(g_state.cursor_pos));
@@ -1247,7 +1263,7 @@ static void LoadSelectedQso(void)
     g_state.cursor_pos[FIELD_TIME]     = (int)strlen(g_state.time_str);
 
     g_state.qso_list_focused = 0;
-    g_state.focused_field = FIELD_CALLSIGN;
+    SetFocusField(FIELD_CALLSIGN);
     free(result);
 
     SetStatus("QSO loaded for editing", 0);
@@ -2087,6 +2103,13 @@ static void PaintAll(HWND hwnd, HDC hdc_screen, RECT *rc)
 
 static void InsertChar(enum Field f, char c)
 {
+    if (g_state.field_all_selected) {
+        char *clrbuf = FieldBuffer(f);
+        if (clrbuf) clrbuf[0] = '\0';
+        g_state.cursor_pos[f] = 0;
+        g_state.field_all_selected = 0;
+    }
+
     char *buf = FieldBuffer(f);
     if (!buf) return;
     int maxlen = FieldMaxLen(f);
@@ -2110,6 +2133,14 @@ static void InsertChar(enum Field f, char c)
 
 static void DeleteChar(enum Field f)
 {
+    if (g_state.field_all_selected) {
+        char *clrbuf = FieldBuffer(f);
+        if (clrbuf) clrbuf[0] = '\0';
+        g_state.cursor_pos[f] = 0;
+        g_state.field_all_selected = 0;
+        return;
+    }
+
     char *buf = FieldBuffer(f);
     if (!buf) return;
     int pos = g_state.cursor_pos[f];
@@ -2206,12 +2237,12 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
                 int cnt;
                 const enum Field *flds =
                     AdvTabFields(g_state.advanced_tab, &cnt);
-                g_state.focused_field = flds[0];
+                SetFocusField(flds[0]);
             }
         } else {
             /* Return to basic: ensure field is in basic range */
             if (g_state.focused_field > FIELD_TIME)
-                g_state.focused_field = FIELD_CALLSIGN;
+                SetFocusField(FIELD_CALLSIGN);
         }
         g_state.qso_list_focused = 0;
         g_state.search_focused = 0;
@@ -2225,7 +2256,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         const enum Field *flds;
         g_state.advanced_tab = (g_state.advanced_tab + 1) % ADV_TAB_COUNT;
         flds = AdvTabFields(g_state.advanced_tab, &cnt);
-        g_state.focused_field = flds[0];
+        SetFocusField(flds[0]);
         InvalidateRect(hwnd, NULL, FALSE);
         return;
     }
@@ -2237,7 +2268,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         g_state.advanced_tab =
             (g_state.advanced_tab + ADV_TAB_COUNT - 1) % ADV_TAB_COUNT;
         flds = AdvTabFields(g_state.advanced_tab, &cnt);
-        g_state.focused_field = flds[0];
+        SetFocusField(flds[0]);
         InvalidateRect(hwnd, NULL, FALSE);
         return;
     }
@@ -2303,7 +2334,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         case 'K': target = FIELD_SKCC; break;
         }
         if (target != FIELD_COUNT) {
-            g_state.focused_field = target;
+            SetFocusField(target);
             g_state.qso_list_focused = 0;
             g_state.search_focused = 0;
             InvalidateRect(hwnd, NULL, FALSE);
@@ -2389,7 +2420,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         }
         if (vk == VK_TAB) {
             g_state.qso_list_focused = 0;
-            g_state.focused_field = FIELD_CALLSIGN;
+            SetFocusField(FIELD_CALLSIGN);
             InvalidateRect(hwnd, NULL, FALSE);
             return;
         }
@@ -2403,7 +2434,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         if (g_state.advanced_view) {
             g_state.advanced_view = 0;
             if (g_state.focused_field > FIELD_TIME)
-                g_state.focused_field = FIELD_CALLSIGN;
+                SetFocusField(FIELD_CALLSIGN);
         } else {
             ClearForm();
         }
@@ -2425,22 +2456,20 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
                 idx = (idx + cnt - 1) % cnt;
             else
                 idx = (idx + 1) % cnt;
-            g_state.focused_field = flds[idx];
+            SetFocusField(flds[idx]);
         } else {
             /* Basic view: cycle through basic fields only */
+            enum Field nf;
             if (shift_down) {
-                if (g_state.focused_field > FIELD_CALLSIGN)
-                    g_state.focused_field =
-                        (enum Field)(g_state.focused_field - 1);
-                else
-                    g_state.focused_field = FIELD_TIME;
+                nf = (g_state.focused_field > FIELD_CALLSIGN)
+                    ? (enum Field)(g_state.focused_field - 1)
+                    : FIELD_TIME;
             } else {
-                if (g_state.focused_field < FIELD_TIME)
-                    g_state.focused_field =
-                        (enum Field)(g_state.focused_field + 1);
-                else
-                    g_state.focused_field = FIELD_CALLSIGN;
+                nf = (g_state.focused_field < FIELD_TIME)
+                    ? (enum Field)(g_state.focused_field + 1)
+                    : FIELD_CALLSIGN;
             }
+            SetFocusField(nf);
         }
         InvalidateRect(hwnd, NULL, FALSE);
         return;
@@ -2458,8 +2487,12 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
             ApplyModeDefaults();
         } else {
             enum Field f = g_state.focused_field;
-            if (g_state.cursor_pos[f] > 0)
+            if (g_state.field_all_selected) {
+                g_state.field_all_selected = 0;
+                g_state.cursor_pos[f] = 0;
+            } else if (g_state.cursor_pos[f] > 0) {
                 g_state.cursor_pos[f]--;
+            }
         }
         InvalidateRect(hwnd, NULL, FALSE);
         return;
@@ -2476,8 +2509,12 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         } else {
             enum Field f = g_state.focused_field;
             char *buf = FieldBuffer(f);
-            if (buf && g_state.cursor_pos[f] < (int)strlen(buf))
+            if (g_state.field_all_selected) {
+                g_state.field_all_selected = 0;
+                if (buf) g_state.cursor_pos[f] = (int)strlen(buf);
+            } else if (buf && g_state.cursor_pos[f] < (int)strlen(buf)) {
                 g_state.cursor_pos[f]++;
+            }
         }
         InvalidateRect(hwnd, NULL, FALSE);
         return;
@@ -2500,11 +2537,13 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
 
     /* Home / End */
     if (vk == VK_HOME) {
+        g_state.field_all_selected = 0;
         g_state.cursor_pos[g_state.focused_field] = 0;
         InvalidateRect(hwnd, NULL, FALSE);
         return;
     }
     if (vk == VK_END) {
+        g_state.field_all_selected = 0;
         char *buf = FieldBuffer(g_state.focused_field);
         if (buf)
             g_state.cursor_pos[g_state.focused_field] = (int)strlen(buf);
