@@ -28,6 +28,12 @@
 #define MAX_RECENT      50
 #define MAX_FIELD_LEN   256
 
+/* ── Menu item IDs ─────────────────────────────────────────────────────── */
+
+#define IDM_FILE_EXIT        1001
+#define IDM_HELP_KEYBOARD    1101
+#define IDM_HELP_ABOUT       1102
+
 /* ── Color palette (Win2K classic theme) ────────────────────────────────── */
 
 #define CLR_BG          RGB(212, 208, 200)  /* COLOR_BTNFACE */
@@ -35,9 +41,10 @@
 #define CLR_TEXT        RGB(0, 0, 0)        /* Black text */
 #define CLR_CYAN        RGB(0, 128, 128)    /* Teal for accents */
 #define CLR_YELLOW      RGB(255, 255, 0)
+#define CLR_ORANGE      RGB(220, 100, 0)
 #define CLR_WHITE       RGB(255, 255, 255)
-#define CLR_GRAY        RGB(128, 128, 128)
-#define CLR_DARKGRAY    RGB(80, 80, 80)
+#define CLR_GRAY        RGB(50, 50, 50)
+#define CLR_DARKGRAY    RGB(20, 20, 20)
 #define CLR_GREEN       RGB(0, 128, 0)
 #define CLR_RED         RGB(192, 0, 0)
 #define CLR_BLUE_BG     RGB(0, 0, 128)      /* Navy selection */
@@ -135,6 +142,7 @@ typedef struct {
     int band_idx, mode_idx;
     int qso_list_focused;
     int search_focused;
+    int field_all_selected;   /* 1 = next keypress replaces entire field */
     int qso_selected;        /* -1 = none */
     int running;
     int help_visible;
@@ -259,6 +267,7 @@ static char *FieldBuffer(enum Field f);
 static int   FieldMaxLen(enum Field f);
 static void  DrawField(HDC, int, int, int, const char *, int, int, int, int);
 static void  DrawCycleField(HDC, int, int, int, const char *, int, int, int);
+static void  ApplyModeDefaults(void);
 
 /* ── Utility: safe string helpers ──────────────────────────────────────── */
 
@@ -569,7 +578,7 @@ static char FieldHotkey(enum Field f)
     case FIELD_RST_RCVD:      return 'R';
     case FIELD_COMMENT:       return 'O';
     case FIELD_NOTES:         return 'N';
-    case FIELD_FREQ:          return 'F';
+    case FIELD_FREQ:          return 'Z';
     case FIELD_DATE:          return 'D';
     case FIELD_TIME:          return 'T';
     case FIELD_WORKED_NAME:   return 'A';
@@ -639,18 +648,24 @@ static void DrawField(HDC hdc, int x, int y, int width_chars,
         DeleteObject(dark); DeleteObject(light);
     }
 
-    /* Text */
-    DrawText_A_BG(hdc, x + 3, y + 2, fg, bg, value);
+    /* Text and cursor */
+    if (focused && g_state.field_all_selected && value && value[0]) {
+        int text_w = (int)strlen(value) * cw;
+        FillRect_Color(hdc, x + 3, y + 2, text_w, ch, CLR_HIGHLIGHT);
+        DrawText_A_BG(hdc, x + 3, y + 2, CLR_HILITE_FG, CLR_HIGHLIGHT, value);
+    } else {
+        DrawText_A_BG(hdc, x + 3, y + 2, fg, bg, value);
 
-    /* Cursor */
-    if (focused) {
-        int cx = x + 3 + cursor * cw;
-        HPEN pen = CreatePen(PS_SOLID, 2, CLR_TEXT);
-        HPEN old = (HPEN)SelectObject(hdc, pen);
-        MoveToEx(hdc, cx, y + 2, NULL);
-        LineTo(hdc, cx, y + 2 + ch);
-        SelectObject(hdc, old);
-        DeleteObject(pen);
+        /* Cursor */
+        if (focused) {
+            int cx = x + 3 + cursor * cw;
+            HPEN pen = CreatePen(PS_SOLID, 2, CLR_TEXT);
+            HPEN old = (HPEN)SelectObject(hdc, pen);
+            MoveToEx(hdc, cx, y + 2, NULL);
+            LineTo(hdc, cx, y + 2 + ch);
+            SelectObject(hdc, old);
+            DeleteObject(pen);
+        }
     }
 }
 
@@ -684,7 +699,7 @@ static void DrawCycleField(HDC hdc, int x, int y, int width_chars,
     /* Arrow indicators */
     if (focused) {
         char buf[64];
-        _snprintf(buf, sizeof(buf), "\x11 %s \x10", value);
+        _snprintf(buf, sizeof(buf), "< %s >", value);
         DrawText_A_BG(hdc, x + 3, y + 2, fg, bg, buf);
     } else {
         DrawText_A_BG(hdc, x + 3, y + 2, fg, bg, value);
@@ -703,12 +718,21 @@ static void SetCurrentDateTime(void)
               "%02d:%02d", st.wHour, st.wMinute);
 }
 
+/* ── Set focused field with select-all ──────────────────────────────────── */
+
+static void SetFocusField(enum Field f)
+{
+    g_state.focused_field = f;
+    g_state.field_all_selected = (f != FIELD_BAND && f != FIELD_MODE);
+}
+
 /* ── Initialize application state ──────────────────────────────────────── */
 
 static void InitState(void)
 {
     memset(&g_state, 0, sizeof(g_state));
     g_state.focused_field = FIELD_CALLSIGN;
+    g_state.field_all_selected = 1;
     g_state.band_idx = DEFAULT_BAND_IDX;
     g_state.mode_idx = 0;
     g_state.qso_selected = -1;
@@ -725,10 +749,7 @@ static void InitState(void)
 static void ClearForm(void)
 {
     g_state.callsign[0] = 0;
-    safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
-    safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
     g_state.comment[0] = 0;
-    g_state.notes[0] = 0;
     _snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
               "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
     SetCurrentDateTime();
@@ -738,12 +759,11 @@ static void ClearForm(void)
     g_state.qso_timer_active = 0;
     g_state.qso_started_at = 0;
     g_state.last_looked_up[0] = 0;
-    g_state.focused_field = FIELD_CALLSIGN;
+    SetFocusField(FIELD_CALLSIGN);
     g_state.qso_list_focused = 0;
     g_state.search_focused = 0;
     memset(g_state.cursor_pos, 0, sizeof(g_state.cursor_pos));
-    g_state.cursor_pos[FIELD_RST_SENT] = 2;
-    g_state.cursor_pos[FIELD_RST_RCVD] = 2;
+    ApplyModeDefaults();
 
     /* Clear advanced field buffers */
     g_state.time_off[0] = 0;
@@ -765,6 +785,18 @@ static void ClearForm(void)
     g_state.worked_county[0] = 0;
     g_state.skcc[0] = 0;
 }
+
+static void ApplyModeDefaults(void)
+{
+    const char *mode = MODES[g_state.mode_idx];
+    const char *rst = (_stricmp(mode, "CW") == 0 || _stricmp(mode, "RTTY") == 0)
+                      ? "599" : "59";
+    safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), rst);
+    safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), rst);
+    g_state.cursor_pos[FIELD_RST_SENT] = (int)strlen(rst);
+    g_state.cursor_pos[FIELD_RST_RCVD] = (int)strlen(rst);
+}
+
 
 static void SetStatus(const char *msg, int is_error)
 {
@@ -981,6 +1013,16 @@ static void RefreshQsoList(void)
 
 /* ── CLI integration: Lookup callsign ──────────────────────────────────── */
 
+static void ClearLookupDisplay(void)
+{
+    g_state.has_lookup = 0;
+    g_state.lookup_name[0] = 0;
+    g_state.lookup_qth[0] = 0;
+    g_state.lookup_grid[0] = 0;
+    g_state.lookup_country[0] = 0;
+    g_state.lookup_cq_zone = 0;
+}
+
 static void LookupCallsign(const char *call)
 {
     if (!call || call[0] == 0) {
@@ -993,13 +1035,6 @@ static void LookupCallsign(const char *call)
     char *result = RunQrCommand(cmd);
     if (!result) return;
 
-    g_state.has_lookup = 0;
-    g_state.lookup_name[0] = 0;
-    g_state.lookup_qth[0] = 0;
-    g_state.lookup_grid[0] = 0;
-    g_state.lookup_country[0] = 0;
-    g_state.lookup_cq_zone = 0;
-
     /* The lookup JSON is nested: { "result": { "record": { ... } } }
        Navigate to the record object. */
     const char *record_pos = strstr(result, "\"record\"");
@@ -1010,13 +1045,20 @@ static void LookupCallsign(const char *call)
     if (!v) v = json_get_string(record_pos, "firstName");
     if (v) {
         safe_strcpy(g_state.lookup_name, sizeof(g_state.lookup_name), v);
+        if (g_state.worked_name[0] == 0)
+            safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), v);
         g_state.has_lookup = 1;
         free(v);
     }
 
     v = json_get_string(record_pos, "addr2");
     if (!v) v = json_get_string(record_pos, "qth");
-    if (v) { safe_strcpy(g_state.lookup_qth, sizeof(g_state.lookup_qth), v); free(v); }
+    if (v) {
+        safe_strcpy(g_state.lookup_qth, sizeof(g_state.lookup_qth), v);
+        if (g_state.qth[0] == 0)
+            safe_strcpy(g_state.qth, sizeof(g_state.qth), v);
+        free(v);
+    }
 
     v = json_get_string(record_pos, "gridSquare");
     if (!v) v = json_get_string(record_pos, "grid");
@@ -1224,7 +1266,7 @@ static void LoadSelectedQso(void)
     g_state.cursor_pos[FIELD_TIME]     = (int)strlen(g_state.time_str);
 
     g_state.qso_list_focused = 0;
-    g_state.focused_field = FIELD_CALLSIGN;
+    SetFocusField(FIELD_CALLSIGN);
     free(result);
 
     SetStatus("QSO loaded for editing", 0);
@@ -1298,7 +1340,7 @@ static void PaintHeader(HDC hdc, RECT *rc)
         DrawText_A_BG(hdc, cx + kw, ch, CLR_HEADER_FG, CLR_HEADER_BG, rest);
     } else {
         int cx = (w - 22 * cw) / 2;
-        DrawText_A_BG(hdc, cx, ch, CLR_GRAY, CLR_HEADER_BG, "Loading space weather...");
+        DrawText_A_BG(hdc, cx, ch, CLR_HEADER_FG, CLR_HEADER_BG, "Loading space weather...");
     }
 
     /* Right: UTC clock */
@@ -1354,7 +1396,8 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
     /* Title */
     {
         const char *title = g_state.editing_local_id[0] ? " Edit QSO " : " Log QSO ";
-        DrawText_A_BG(hdc, pad, y_start, CLR_YELLOW, CLR_BG, title);
+        COLORREF title_clr = g_state.editing_local_id[0] ? CLR_ORANGE : CLR_CYAN;
+        DrawText_A_BG(hdc, pad, y_start, title_clr, CLR_BG, title);
     }
 
     int y = y_start + ch + 4;
@@ -1597,7 +1640,7 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
         for (t = 0; t < ADV_TAB_COUNT; t++) {
             char tab_label[32];
             COLORREF bg = (t == tab) ? CLR_CYAN : CLR_DARKGRAY;
-            COLORREF fg = (t == tab) ? CLR_BG : CLR_GRAY;
+            COLORREF fg = (t == tab) ? CLR_BG : CLR_WHITE;
             _snprintf(tab_label, sizeof(tab_label), " %s ", ADV_TAB_NAMES[t]);
             DrawChip(hdc, tx, y, bg, fg, tab_label, cw, ch);
             tx += (int)strlen(tab_label) * cw + 12;
@@ -1721,7 +1764,7 @@ static int PaintLookup(HDC hdc, int y_start, int w)
         char line[128];
 
         SelectObject(hdc, g_state.hFontBold);
-        DrawText_A(hdc, pad + cw, y, CLR_WHITE, g_state.lookup_name);
+        DrawText_A(hdc, pad + cw, y, CLR_TEXT, g_state.lookup_name);
         SelectObject(hdc, g_state.hFont);
         y += ch + 2;
 
@@ -1762,7 +1805,7 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
     if (g_state.search_focused)
         border_clr = CLR_MAGENTA;
     else if (g_state.qso_list_focused)
-        border_clr = CLR_YELLOW;
+        border_clr = CLR_GREEN;
 
     DrawBox(hdc, 4, y_start, w - 8, panel_h, border_clr);
 
@@ -1794,7 +1837,7 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
         _snprintf(hdr, sizeof(hdr),
                   "%-19s %-10s %-5s %-5s %-4s %-4s %-16s %-6s",
                   "UTC", "Callsign", "Band", "Mode",
-                  "RST\x18", "RST\x19", "Country", "Grid");
+                  "Sent", "Rcvd", "Country", "Grid");
         SelectObject(hdc, g_state.hFontBold);
         DrawText_A(hdc, pad + cw, y + 1, CLR_HIGHLIGHT, hdr);
         SelectObject(hdc, g_state.hFont);
@@ -1911,20 +1954,31 @@ static void PaintHelp(HDC hdc, int w, int h)
     int cw = g_state.char_w;
     int ch = g_state.char_h;
 
-    /* Semi-transparent overlay (approximate with dark fill) */
     int ow = cw * 52;
     int oh = ch * 24;
     int ox = (w - ow) / 2;
     int oy = (h - oh) / 2;
 
-    FillRect_Color(hdc, ox, oy, ow, oh, CLR_BG);
-    DrawBox(hdc, ox, oy, ow, oh, CLR_YELLOW);
+    int header_h = ch * 3;
+
+    /* Body */
+    FillRect_Color(hdc, ox, oy + header_h, ow, oh - header_h, CLR_BG);
+
+    /* Navy header band */
+    FillRect_Color(hdc, ox, oy, ow, header_h, CLR_HEADER_BG);
+    DrawBox(hdc, ox, oy, ow, oh, CLR_HEADER_BG);
 
     SelectObject(hdc, g_state.hFontBold);
-    DrawText_A(hdc, ox + cw * 2, oy + ch, CLR_YELLOW, "QsoRipper Help");
+    DrawText_A(hdc, ox + cw * 2, oy + ch, CLR_HEADER_FG, "QsoRipper Help");
     SelectObject(hdc, g_state.hFont);
 
-    int y = oy + ch * 3;
+    /* Divider between header and body */
+    DrawHLine(hdc, ox, ox + ow, oy + header_h, CLR_CYAN);
+
+    /* Outer border */
+    DrawBox(hdc, ox, oy, ow, oh, CLR_CYAN);
+
+    int y = oy + header_h + ch;
     const char *lines[] = {
         "Ctrl+Q          Quit application",
         "F1              Toggle this help",
@@ -1939,7 +1993,7 @@ static void PaintHelp(HDC hdc, int w, int h)
         "Esc             Clear form / exit focus",
         "Backspace       Delete character",
         "Alt+C/B/M/S/R   Jump to field",
-        "Alt+O/N/F/D/T   Jump to field",
+        "Alt+O/N/Z/D/T   Jump to field",
         "Up / Down       Navigate QSO list",
         "Enter           Load selected QSO",
         "D / Delete      Delete selected QSO",
@@ -1948,7 +2002,7 @@ static void PaintHelp(HDC hdc, int w, int h)
         NULL
     };
     for (int i = 0; lines[i]; i++) {
-        DrawText_A(hdc, ox + cw * 2, y, CLR_GRAY, lines[i]);
+        DrawText_A(hdc, ox + cw * 2, y, CLR_TEXT, lines[i]);
         y += ch + 2;
     }
 }
@@ -2052,6 +2106,13 @@ static void PaintAll(HWND hwnd, HDC hdc_screen, RECT *rc)
 
 static void InsertChar(enum Field f, char c)
 {
+    if (g_state.field_all_selected) {
+        char *clrbuf = FieldBuffer(f);
+        if (clrbuf) clrbuf[0] = '\0';
+        g_state.cursor_pos[f] = 0;
+        g_state.field_all_selected = 0;
+    }
+
     char *buf = FieldBuffer(f);
     if (!buf) return;
     int maxlen = FieldMaxLen(f);
@@ -2075,6 +2136,14 @@ static void InsertChar(enum Field f, char c)
 
 static void DeleteChar(enum Field f)
 {
+    if (g_state.field_all_selected) {
+        char *clrbuf = FieldBuffer(f);
+        if (clrbuf) clrbuf[0] = '\0';
+        g_state.cursor_pos[f] = 0;
+        g_state.field_all_selected = 0;
+        return;
+    }
+
     char *buf = FieldBuffer(f);
     if (!buf) return;
     int pos = g_state.cursor_pos[f];
@@ -2110,6 +2179,7 @@ static void TypeSelectMode(char c)
         int idx = (g_state.mode_idx + 1 + attempt) % NUM_MODES;
         if (toupper((unsigned char)MODES[idx][0]) == c) {
             g_state.mode_idx = idx;
+            ApplyModeDefaults();
             return;
         }
     }
@@ -2170,12 +2240,12 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
                 int cnt;
                 const enum Field *flds =
                     AdvTabFields(g_state.advanced_tab, &cnt);
-                g_state.focused_field = flds[0];
+                SetFocusField(flds[0]);
             }
         } else {
             /* Return to basic: ensure field is in basic range */
             if (g_state.focused_field > FIELD_TIME)
-                g_state.focused_field = FIELD_CALLSIGN;
+                SetFocusField(FIELD_CALLSIGN);
         }
         g_state.qso_list_focused = 0;
         g_state.search_focused = 0;
@@ -2189,7 +2259,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         const enum Field *flds;
         g_state.advanced_tab = (g_state.advanced_tab + 1) % ADV_TAB_COUNT;
         flds = AdvTabFields(g_state.advanced_tab, &cnt);
-        g_state.focused_field = flds[0];
+        SetFocusField(flds[0]);
         InvalidateRect(hwnd, NULL, FALSE);
         return;
     }
@@ -2201,7 +2271,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         g_state.advanced_tab =
             (g_state.advanced_tab + ADV_TAB_COUNT - 1) % ADV_TAB_COUNT;
         flds = AdvTabFields(g_state.advanced_tab, &cnt);
-        g_state.focused_field = flds[0];
+        SetFocusField(flds[0]);
         InvalidateRect(hwnd, NULL, FALSE);
         return;
     }
@@ -2254,7 +2324,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         case 'R': target = FIELD_RST_RCVD; break;
         case 'O': target = FIELD_COMMENT; break;
         case 'N': target = FIELD_NOTES; break;
-        case 'F': target = FIELD_FREQ; break;
+        case 'Z': target = FIELD_FREQ; break;
         case 'D': target = FIELD_DATE; break;
         case 'T': target = FIELD_TIME; break;
         case 'A': target = FIELD_WORKED_NAME; break;
@@ -2267,7 +2337,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         case 'K': target = FIELD_SKCC; break;
         }
         if (target != FIELD_COUNT) {
-            g_state.focused_field = target;
+            SetFocusField(target);
             g_state.qso_list_focused = 0;
             g_state.search_focused = 0;
             InvalidateRect(hwnd, NULL, FALSE);
@@ -2353,7 +2423,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         }
         if (vk == VK_TAB) {
             g_state.qso_list_focused = 0;
-            g_state.focused_field = FIELD_CALLSIGN;
+            SetFocusField(FIELD_CALLSIGN);
             InvalidateRect(hwnd, NULL, FALSE);
             return;
         }
@@ -2367,7 +2437,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         if (g_state.advanced_view) {
             g_state.advanced_view = 0;
             if (g_state.focused_field > FIELD_TIME)
-                g_state.focused_field = FIELD_CALLSIGN;
+                SetFocusField(FIELD_CALLSIGN);
         } else {
             ClearForm();
         }
@@ -2389,22 +2459,20 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
                 idx = (idx + cnt - 1) % cnt;
             else
                 idx = (idx + 1) % cnt;
-            g_state.focused_field = flds[idx];
+            SetFocusField(flds[idx]);
         } else {
             /* Basic view: cycle through basic fields only */
+            enum Field nf;
             if (shift_down) {
-                if (g_state.focused_field > FIELD_CALLSIGN)
-                    g_state.focused_field =
-                        (enum Field)(g_state.focused_field - 1);
-                else
-                    g_state.focused_field = FIELD_TIME;
+                nf = (g_state.focused_field > FIELD_CALLSIGN)
+                    ? (enum Field)(g_state.focused_field - 1)
+                    : FIELD_TIME;
             } else {
-                if (g_state.focused_field < FIELD_TIME)
-                    g_state.focused_field =
-                        (enum Field)(g_state.focused_field + 1);
-                else
-                    g_state.focused_field = FIELD_CALLSIGN;
+                nf = (g_state.focused_field < FIELD_TIME)
+                    ? (enum Field)(g_state.focused_field + 1)
+                    : FIELD_CALLSIGN;
             }
+            SetFocusField(nf);
         }
         InvalidateRect(hwnd, NULL, FALSE);
         return;
@@ -2419,10 +2487,15 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
             g_state.mode_idx = (g_state.mode_idx + NUM_MODES - 1) % NUM_MODES;
+            ApplyModeDefaults();
         } else {
             enum Field f = g_state.focused_field;
-            if (g_state.cursor_pos[f] > 0)
+            if (g_state.field_all_selected) {
+                g_state.field_all_selected = 0;
+                g_state.cursor_pos[f] = 0;
+            } else if (g_state.cursor_pos[f] > 0) {
                 g_state.cursor_pos[f]--;
+            }
         }
         InvalidateRect(hwnd, NULL, FALSE);
         return;
@@ -2435,11 +2508,16 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
             g_state.mode_idx = (g_state.mode_idx + 1) % NUM_MODES;
+            ApplyModeDefaults();
         } else {
             enum Field f = g_state.focused_field;
             char *buf = FieldBuffer(f);
-            if (buf && g_state.cursor_pos[f] < (int)strlen(buf))
+            if (g_state.field_all_selected) {
+                g_state.field_all_selected = 0;
+                if (buf) g_state.cursor_pos[f] = (int)strlen(buf);
+            } else if (buf && g_state.cursor_pos[f] < (int)strlen(buf)) {
                 g_state.cursor_pos[f]++;
+            }
         }
         InvalidateRect(hwnd, NULL, FALSE);
         return;
@@ -2453,6 +2531,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
 
             /* Trigger lookup debounce if callsign changed */
             if (f == FIELD_CALLSIGN) {
+                ClearLookupDisplay();
                 g_state.last_callsign_change = GetTickCount64();
             }
         }
@@ -2462,11 +2541,13 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
 
     /* Home / End */
     if (vk == VK_HOME) {
+        g_state.field_all_selected = 0;
         g_state.cursor_pos[g_state.focused_field] = 0;
         InvalidateRect(hwnd, NULL, FALSE);
         return;
     }
     if (vk == VK_END) {
+        g_state.field_all_selected = 0;
         char *buf = FieldBuffer(g_state.focused_field);
         if (buf)
             g_state.cursor_pos[g_state.focused_field] = (int)strlen(buf);
@@ -2523,6 +2604,7 @@ static void OnChar(HWND hwnd, WPARAM ch)
 
     /* Callsign lookup debounce */
     if (g_state.focused_field == FIELD_CALLSIGN) {
+        ClearLookupDisplay();
         g_state.last_callsign_change = GetTickCount64();
     }
 
@@ -2540,6 +2622,8 @@ static void OnTimer(HWND hwnd)
         ULONGLONG elapsed = GetTickCount64() - g_state.last_callsign_change;
         if (elapsed >= LOOKUP_DEBOUNCE_MS) {
             if (_stricmp(g_state.callsign, g_state.last_looked_up) != 0) {
+                g_state.worked_name[0] = 0;
+                g_state.qth[0] = 0;
                 LookupCallsign(g_state.callsign);
             }
             g_state.last_callsign_change = 0;
@@ -2585,11 +2669,47 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         /* Start timer */
         SetTimer(hwnd, TIMER_ID, TIMER_MS, NULL);
 
+        /* Build menu bar */
+        {
+            HMENU hMenuBar = CreateMenu();
+
+            HMENU hFile = CreatePopupMenu();
+            AppendMenuW(hFile, MF_STRING, IDM_FILE_EXIT, L"E&xit\tAlt+F4");
+
+            HMENU hHelp = CreatePopupMenu();
+            AppendMenuW(hHelp, MF_STRING, IDM_HELP_KEYBOARD, L"&Keyboard Shortcuts\tF1");
+            AppendMenuW(hHelp, MF_STRING, IDM_HELP_ABOUT,    L"&About QsoRipper");
+
+            AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hFile, L"&File");
+            AppendMenuW(hMenuBar, MF_POPUP, (UINT_PTR)hHelp, L"&Help");
+
+            SetMenu(hwnd, hMenuBar);
+        }
+
         /* Initial data load (async-ish — runs synchronously but fast) */
         RefreshQsoList();
         FetchSpaceWeather();
         break;
     }
+
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case IDM_FILE_EXIT:
+            DestroyWindow(hwnd);
+            break;
+        case IDM_HELP_KEYBOARD:
+            g_state.help_visible = !g_state.help_visible;
+            InvalidateRect(hwnd, NULL, FALSE);
+            break;
+        case IDM_HELP_ABOUT:
+            MessageBoxW(hwnd,
+                L"QsoRipper\r\n\r\n"
+                L"Keyboard-first ham radio logging.\r\n\r\n"
+                L"Press F1 for keyboard shortcuts.",
+                L"About QsoRipper", MB_OK | MB_ICONINFORMATION);
+            break;
+        }
+        break;
 
     case WM_DESTROY:
         KillTimer(hwnd, TIMER_ID);
@@ -2630,14 +2750,36 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         break;
 
     case WM_SYSKEYDOWN:
-        /* Handle Alt+key combinations */
+        /* VK_MENU (Alt key itself), Space, F4, F, H must reach DefWindowProc
+           so the menu bar, Alt+F4 close, and system menu work correctly.
+           Kill the timer first so the 100ms tick and any pending lookup
+           subprocess cannot block DefWindowProc's modal menu loop.
+           NOTE: break exits to return 0 — must use explicit DefWindowProcW. */
+        if (wParam == VK_MENU || wParam == VK_SPACE || wParam == VK_F4 ||
+            wParam == 'F'     || wParam == 'H') {
+            KillTimer(hwnd, TIMER_ID);
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
+        }
+        /* Handle our custom Alt+key field-navigation shortcuts */
         OnKeyDown(hwnd, wParam, lParam);
-        /* Return 0 to prevent the default system menu behavior */
         return 0;
 
     case WM_SYSCHAR:
-        /* Eat Alt+char to prevent system menu beep */
+        /* Let menu accelerator chars and system chars reach DefWindowProc */
+        if (wParam == 'f' || wParam == 'F' || wParam == 'h' || wParam == 'H' ||
+            wParam == ' ') {
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
+        }
         return 0;
+
+    case WM_MENUCHAR:
+        /* Suppress the error beep when an Alt+key has no matching menu item */
+        return MAKELRESULT(0, MNC_CLOSE);
+
+    case WM_EXITMENULOOP:
+        /* Restart the timer that was suspended in WM_SYSKEYDOWN */
+        SetTimer(hwnd, TIMER_ID, TIMER_MS, NULL);
+        break;
 
     case WM_MOUSEWHEEL:
         if (g_state.qso_list_focused) {
