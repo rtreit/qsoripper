@@ -178,6 +178,12 @@ typedef struct {
     /* Cursor positions per field */
     int cursor_pos[FIELD_COUNT];
 
+    /* Hit-test rectangles for click-to-focus (populated during paint) */
+    RECT field_rects[FIELD_COUNT];
+    int  field_rects_valid;
+    int  qso_list_y;  /* top of QSO list panel for click detection */
+    int  qso_list_row_h; /* row height in QSO list */
+
     /* Search */
     char search_text[64];
     int search_cursor;
@@ -249,6 +255,8 @@ static int  PaintAdvancedForm(HDC hdc, int y_start, int w);
 static char *RunQrCommand(const char *args);
 static char *FieldBuffer(enum Field f);
 static int   FieldMaxLen(enum Field f);
+static void  DrawField(HDC, int, int, int, const char *, int, int, int, int);
+static void  DrawCycleField(HDC, int, int, int, const char *, int, int, int);
 
 /* ── Utility: safe string helpers ──────────────────────────────────────── */
 
@@ -1145,21 +1153,26 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
     /* Row 1: Callsign, Band, Mode */
     {
         DrawText_A(hdc, pad, y + 3, CLR_LABEL, "Callsign");
+        int fw = 14 * cw + 6, fh = ch + 4;
         DrawField(hdc, pad + label_w, y, 14,
                   g_state.callsign, g_state.cursor_pos[FIELD_CALLSIGN],
                   focused_form && g_state.focused_field == FIELD_CALLSIGN, cw, ch);
+        SetRect(&g_state.field_rects[FIELD_CALLSIGN], pad + label_w, y, pad + label_w + fw, y + fh);
 
         int bx = pad + label_w + 14 * cw + 16;
         DrawText_A(hdc, bx, y + 3, CLR_LABEL, "Band");
+        int bfw = 8 * cw + 6;
         DrawCycleField(hdc, bx + 5 * cw, y, 8,
                        BANDS[g_state.band_idx],
                        focused_form && g_state.focused_field == FIELD_BAND, cw, ch);
+        SetRect(&g_state.field_rects[FIELD_BAND], bx + 5 * cw, y, bx + 5 * cw + bfw, y + fh);
 
         int mx = bx + 5 * cw + 8 * cw + 16;
         DrawText_A(hdc, mx, y + 3, CLR_LABEL, "Mode");
         DrawCycleField(hdc, mx + 5 * cw, y, 8,
                        MODES[g_state.mode_idx],
                        focused_form && g_state.focused_field == FIELD_MODE, cw, ch);
+        SetRect(&g_state.field_rects[FIELD_MODE], mx + 5 * cw, y, mx + 5 * cw + bfw, y + fh);
     }
     y += row_h;
 
@@ -2417,6 +2430,112 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             InvalidateRect(hwnd, NULL, FALSE);
         }
         break;
+
+    case WM_LBUTTONDOWN:
+    {
+        int mx = LOWORD(lParam);
+        int my = HIWORD(lParam);
+        int cw = g_state.char_w;
+        int ch = g_state.char_h;
+        if (cw == 0 || ch == 0) break;
+
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        (void)rc; /* layout uses cw/ch relative math */
+
+        /* Compute layout positions matching PaintAll */
+        int header_h = ch * 3 + 4;
+        int status_h = ch + 4;
+        int row_h = ch + 8;
+        int form_start = header_h + status_h;
+        int form_h = g_state.advanced_view
+            ? (row_h * 12 + ch + 10)
+            : (row_h * 9 + ch + 10);
+        int form_end = form_start + form_h;
+        int lookup_h = ch * 5 + 8;
+        int qso_list_start = form_end + lookup_h;
+
+        /* Click in form area? */
+        if (my >= form_start && my < form_end && !g_state.advanced_view) {
+            int pad = cw * 2;
+            int label_w = cw * 10;
+            int fy = form_start + ch + 4; /* first row y */
+            int row = (my - fy) / row_h;
+            int clicked = -1;
+
+            if (row == 0) {
+                /* Callsign / Band / Mode */
+                int cx = pad + label_w;
+                int bx = cx + 14 * cw + 16 + 5 * cw;
+                int modex = bx + 8 * cw + 16 + 5 * cw;
+                if (mx >= cx && mx < cx + 14 * cw + 6) clicked = FIELD_CALLSIGN;
+                else if (mx >= bx && mx < bx + 8 * cw + 6) clicked = FIELD_BAND;
+                else if (mx >= modex && mx < modex + 8 * cw + 6) clicked = FIELD_MODE;
+            } else if (row == 1) {
+                /* RST Sent / RST Rcvd */
+                int cx = pad + label_w;
+                int rx = cx + 6 * cw + 16 + 9 * cw;
+                if (mx >= cx && mx < cx + 6 * cw + 6) clicked = FIELD_RST_SENT;
+                else if (mx >= rx && mx < rx + 6 * cw + 6) clicked = FIELD_RST_RCVD;
+            } else if (row == 2) {
+                clicked = FIELD_COMMENT;
+            } else if (row == 3) {
+                clicked = FIELD_NOTES;
+            } else if (row == 4) {
+                /* Freq / Date / Time */
+                int cx = pad + label_w;
+                int dx = cx + 10 * cw + 16 + 5 * cw;
+                int tx = dx + 12 * cw + 16 + 5 * cw;
+                if (mx >= cx && mx < cx + 10 * cw + 6) clicked = FIELD_FREQ;
+                else if (mx >= dx && mx < dx + 12 * cw + 6) clicked = FIELD_DATE;
+                else if (mx >= tx && mx < tx + 6 * cw + 6) clicked = FIELD_TIME;
+            }
+
+            if (clicked >= 0) {
+                g_state.focused_field = (enum Field)clicked;
+                g_state.qso_list_focused = 0;
+                g_state.search_focused = 0;
+                /* Place cursor at click position within the field */
+                char *buf = FieldBuffer((enum Field)clicked);
+                if (buf) {
+                    int field_x;
+                    if (clicked == FIELD_CALLSIGN) field_x = pad + label_w;
+                    else if (clicked == FIELD_COMMENT || clicked == FIELD_NOTES) field_x = pad + label_w;
+                    else if (clicked == FIELD_RST_SENT) field_x = pad + label_w;
+                    else if (clicked == FIELD_FREQ) field_x = pad + label_w;
+                    else field_x = 0;
+                    int pos = (mx - field_x - 3) / cw;
+                    int len = (int)strlen(buf);
+                    if (pos < 0) pos = 0;
+                    if (pos > len) pos = len;
+                    g_state.cursor_pos[clicked] = pos;
+                }
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+        }
+        /* Click in QSO list area? */
+        else if (my >= qso_list_start && g_state.recent_count > 0) {
+            int header_row_h = row_h + 2; /* header + separator */
+            int list_content_start = qso_list_start + ch + 4 + header_row_h;
+            if (my >= list_content_start) {
+                int row_idx = (my - list_content_start) / row_h + g_state.qso_scroll;
+                if (row_idx >= 0 && row_idx < g_state.recent_count) {
+                    g_state.qso_list_focused = 1;
+                    g_state.search_focused = 0;
+                    g_state.qso_selected = row_idx;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+            } else {
+                /* Clicked in QSO list header area — just focus the list */
+                g_state.qso_list_focused = 1;
+                g_state.search_focused = 0;
+                if (g_state.qso_selected < 0 && g_state.recent_count > 0)
+                    g_state.qso_selected = 0;
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+        }
+        break;
+    }
 
     case WM_GETMINMAXINFO:
     {
