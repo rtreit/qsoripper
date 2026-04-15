@@ -53,6 +53,7 @@ Proto files under `proto/` are the **single source of truth** for all shared typ
 | **StationProfileService** | Persisted station profile CRUD, active profile selection, bounded session overrides |
 | **LookupService** | Callsign lookups -- single, streaming, batch, cached, DXCC |
 | **LogbookService** | QSO CRUD, QRZ logbook sync, ADIF import/export |
+| **SpaceWeatherService** | Current NOAA SWPC snapshot reads and explicit refresh for engine clients |
 
 **Building a client?** See the [Engine API Documentation](docs/api/README.md) for a client-facing reference covering service contracts, implementation status, stub generation, transport options, and workflow examples.
 
@@ -85,6 +86,25 @@ sudo apt install dotnet-sdk-10.0
 ```
 
 The repository pins SDK `10.0.201` in `global.json`.
+
+**Node.js + npm** -- required for the repo-local Playwright tooling and for bootstrapping the local Terminalizer runtime used by terminal capture:
+
+```
+# Windows
+winget install OpenJS.NodeJS.LTS
+
+# Linux (Debian/Ubuntu)
+sudo apt install nodejs npm
+```
+
+Node 22 LTS is the safest default for local UI automation work. A newer globally installed Node is fine as long as `npm` is available; `capture-tui.ps1` bootstraps its own repo-local Node 22 runtime for Terminalizer.
+
+**PowerShell 7** -- required for the repo automation scripts under `scripts/`, including Avalonia and terminal capture:
+
+```powershell
+# Windows
+winget install Microsoft.PowerShell
+```
 
 **Protocol Buffers compiler** -- needed to generate gRPC code from proto files:
 
@@ -133,40 +153,51 @@ cargo test
 
 This compiles the C libraries via FFI, generates Rust types from the proto files, and builds the engine. All tests (unit + integration) run with `cargo test`.
 
-**Stress host and dashboard:**
+### UI inspection and automation setup
+
+The repo now includes three developer-facing UX inspection lanes:
+
+- **Web** screenshots and diffs with Playwright
+- **Avalonia desktop** deterministic capture plus Windows UI automation
+- **Terminal** workflow capture to GIF/transcript via a repo-local Terminalizer runtime (**Windows-only** today)
+- **Terminal/TUI live automation** through a repo-local PTY harness with JSON action scripts and screen snapshots
+
+One-time setup after cloning:
 
 ```powershell
-cd src\rust
-cargo run -p qsoripper-stress
+npm install
+npx playwright install chromium
 ```
 
-In a second terminal:
+- `npm install` restores the root TypeScript and Playwright tooling used by `scripts\capture-web.ts` and `scripts\capture-web-diff.ts`.
+- The same repo-local Node toolchain now also drives `scripts\drive-tui.ts`, browser-rendered terminal snapshots, and the sample terminal fixture used for TUI automation smoke coverage.
+- `npx playwright install chromium` installs the browser binary used for web captures.
+- `scripts\capture-tui.ps1` is currently **Windows-only**. It does **not** require a global Terminalizer install; on first run it bootstraps a repo-local Node 22 + Terminalizer runtime under `tools\terminalizer-bootstrap\` and `tools\terminalizer-runtime\`.
+- `scripts\drive-avalonia.ps1` is **Windows-only** and needs an interactive desktop session because it uses Windows UI Automation APIs. It does not require WinAppDriver.
+
+Common entry points:
 
 ```powershell
-cd src\rust
-cargo run -p qsoripper-stress-tui
+# Web capture / diff
+npm run ux:capture:web -- --scenario debughost-home --launch-debughost
+npm run ux:diff:web -- --scenario debughost-home --launch-debughost
+
+# Deterministic Avalonia capture
+.\scripts\capture-avalonia.ps1 -Scenario main-window
+
+# Windows UI automation against the live Avalonia window
+.\scripts\drive-avalonia.ps1 -ActionScript .\scripts\automation\avalonia-main-window-smoke.json
+
+# Cross-platform terminal/TUI automation against the sample fixture
+npm run ux:drive:tui -- --action-script .\scripts\automation\tui-sample-smoke.json
+
+# Terminal workflow capture (Windows-only today)
+.\scripts\capture-tui.ps1 -Scenario cli-help
 ```
 
-The stress host listens on `127.0.0.1:50061` by default and exposes a developer-only gRPC control surface for starting, stopping, and monitoring long-haul stress runs. The TUI connects to that endpoint, renders per-vector activity, shows rolling calls-per-second plus process CPU and memory, and keeps a bounded recent-event log with representative sample inputs from the active vectors.
+Artifacts are written under `artifacts\ux\current\`, `artifacts\ux\baseline\`, and `artifacts\ux\diff\`.
 
-Built-in stress profiles now use a dedicated engine endpoint at `127.0.0.1:55051`, and when the harness auto-starts that engine it points it at a separate stress-owned SQLite file under `artifacts\stress\storage\`. Stress runs should not reuse or mutate your normal logbook.
-
-Each stress run also writes a persistent event log under `artifacts\stress\logs\stress-run-<run-id>.log`. The dashboard still shows a bounded in-memory event pane, but the file is the durable place to check overnight panic, crash, and notable internal-failure details.
-
-When the dashboard targets a local loopback endpoint and no stress host is running yet, it now auto-starts a local `qsoripper-stress` instance before entering the UI. Remote endpoints still need an already-running host.
-
-Use `cargo run -p qsoripper-stress -- --help` and `cargo run -p qsoripper-stress-tui -- --help` for alternate endpoints. The dashboard keymap is:
-
-| Key | Action |
-|---|---|
-| `s` | Start the selected profile |
-| `x` | Stop the active run |
-| `r` | Restart the selected profile |
-| `p` | Cycle between built-in profiles |
-| `tab` | Switch focus between vectors and events |
-| `up` / `down` | Move the current selection |
-| `esc` | Clear the current error banner |
-| `q` | Quit the dashboard |
+For the full dependency matrix and per-lane setup notes, see `docs\development\ui-inspection.md`.
 
 **Runnable gRPC server host:**
 
@@ -210,6 +241,76 @@ If you want the engine to stay running in the background while you log QSOs from
 
 `start-qsoripper.ps1` builds `qsoripper-server`, imports `.env`, starts the engine in the background from the repository root, respects `QSORIPPER_CONFIG_PATH` and `QSORIPPER_SQLITE_PATH` unless you override them with parameters, and writes process state plus stdout/stderr logs under `artifacts\run\`.
 
+**Stress host and dashboard:**
+
+```powershell
+cd src\rust
+cargo run -p qsoripper-stress
+```
+
+In a second terminal:
+
+```powershell
+cd src\rust
+cargo run -p qsoripper-stress-tui
+```
+
+The stress host listens on `127.0.0.1:50061` by default and exposes a developer-only gRPC control surface for starting, stopping, and monitoring long-haul stress runs. The TUI connects to that endpoint, renders per-vector activity, shows rolling calls-per-second plus process CPU and memory, and keeps a bounded recent-event log with representative sample inputs from the active vectors.
+
+Built-in stress profiles use a dedicated engine endpoint at `127.0.0.1:55051`. When the harness auto-starts that engine it points it at a separate stress-owned SQLite file under `artifacts\stress\storage\`. Stress runs do not reuse or mutate your normal logbook.
+
+Each stress run writes a persistent event log under `artifacts\stress\logs\stress-run-<run-id>.log`. The dashboard shows a bounded in-memory event pane, but the file is the durable place to check overnight panic, crash, and notable internal-failure details.
+
+When the dashboard targets a local loopback endpoint and no stress host is running yet, it auto-starts a local `qsoripper-stress` instance before entering the UI. Remote endpoints still need an already-running host.
+
+Use `cargo run -p qsoripper-stress -- --help` and `cargo run -p qsoripper-stress-tui -- --help` for alternate endpoints. The dashboard keymap is:
+
+| Key | Action |
+|---|---|
+| `s` | Start the selected profile |
+| `x` | Stop the active run |
+| `r` | Restart the selected profile |
+| `p` | Cycle between built-in profiles |
+| `tab` | Switch focus between vectors and events |
+| `up` / `down` | Move the current selection |
+| `esc` | Clear the current error banner |
+| `q` | Quit the dashboard |
+
+### Avalonia GUI automation
+
+For repeatable desktop UX inspection, the Avalonia GUI now supports a fixture-backed live inspection mode plus a Windows automation driver. The driver builds the GUI into a per-run output folder under `artifacts\ux\automation-bin\`, launches it with deterministic fixture data, performs scripted UI actions, and saves screenshots plus UI tree dumps under `artifacts\ux\current\`.
+
+The inspection harness supports `MainWindow`, `Settings`, and `Wizard` surfaces. Scenarios can select a surface with `inspectSurface` in the action JSON, or you can override it with `-Surface` on `drive-avalonia.ps1`.
+
+```powershell
+.\scripts\drive-avalonia.ps1 -ActionScript .\scripts\automation\avalonia-main-window-smoke.json
+.\scripts\drive-avalonia.ps1 -ActionScript .\scripts\automation\avalonia-settings-smoke.json
+.\scripts\drive-avalonia.ps1 -Fixture .\scripts\fixtures\ux-setup-wizard.fixture.json -ActionScript .\scripts\automation\avalonia-setup-wizard-smoke.json
+```
+
+Use `-KeepOpen` when you want the fixture-backed window to stay open after the scripted steps finish.
+
+### Terminal / TUI automation
+
+The repo also includes a first-class PTY-backed terminal automation lane for interactive text UIs. It complements `capture-tui.ps1`:
+
+- `scripts\drive-tui.ts` drives a live terminal session from a JSON action script.
+- It writes artifacts under `artifacts\ux\current\<scenario>\`.
+- Snapshot actions save:
+  - `*.screen.png` — rendered terminal image for the visible viewport
+  - `*.screen.txt` — visible viewport text
+  - `*.screen.json` — viewport metadata and lines
+  - `*.ansi.txt` — serialized ANSI screen content
+- Every run also writes `transcript.txt` plus `report.json`.
+
+Today's built-in fixture is `sample-tui`, a deterministic menu/filter/list/details demo used to validate the harness before a production TUI exists.
+
+```powershell
+npm run ux:drive:tui -- --action-script .\scripts\automation\tui-sample-smoke.json
+```
+
+Use `scripts\capture-tui.ps1` when you specifically want a rendered GIF. Use `scripts\drive-tui.ts` when you need repeatable interactive input, screen-state assertions, and step-by-step screen artifacts with rendered PNG snapshots.
+
 ### Local engine configuration
 
 Use `.env.example` as the local template for QRZ settings and optional local-station defaults:
@@ -234,6 +335,17 @@ The QRZ credentials are easy to mix up, so keep this split in mind:
 | `QSORIPPER_QRZ_LOGBOOK_API_KEY` | Your separate **QRZ Logbook API access key** from the QRZ website |
 
 **Important:** `QSORIPPER_QRZ_XML_PASSWORD` and `QSORIPPER_QRZ_LOGBOOK_API_KEY` are **not** the same value and are **not** interchangeable. Using the logbook API key as the XML password will cause QRZ XML login failures and may trigger a temporary lockout.
+
+Current space weather can also be enabled for engine clients through the NOAA SWPC-backed service:
+
+```powershell
+QSORIPPER_NOAA_SPACE_WEATHER_ENABLED=true
+QSORIPPER_NOAA_HTTP_TIMEOUT_SECONDS=8
+QSORIPPER_NOAA_REFRESH_INTERVAL_SECONDS=900
+QSORIPPER_NOAA_STALE_AFTER_SECONDS=3600
+```
+
+Optional endpoint overrides are available with `QSORIPPER_NOAA_KP_INDEX_URL` and `QSORIPPER_NOAA_SOLAR_INDICES_URL` if you need to point the engine at alternate NOAA-compatible feeds during local testing.
 
 For lockout-safe debugging, you can temporarily set:
 

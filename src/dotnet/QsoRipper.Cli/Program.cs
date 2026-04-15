@@ -34,6 +34,7 @@ try
     return arguments.Command switch
     {
         "status" => await StatusCommand.RunAsync(channel, arguments.JsonOutput),
+        "space-weather" => await SpaceWeatherCommand.RunAsync(channel, arguments.Refresh, arguments.JsonOutput),
         "lookup" => await LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache, arguments.JsonOutput),
         "stream-lookup" => await StreamLookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache),
         "cache-check" => await CacheCheckCommand.RunAsync(channel, arguments.Callsign!, arguments.JsonOutput),
@@ -46,6 +47,9 @@ try
         "export" => await ExportAdifCommand.RunAsync(channel, arguments.RemainingArgs),
         "config" => await ConfigCommand.RunAsync(channel, arguments.RemainingArgs, arguments.JsonOutput),
         "setup" => await SetupCommand.RunAsync(channel, arguments),
+        "sync" => await SyncCommand.RunAsync(channel, arguments.Force),
+        "sync-status" => await SyncStatusCommand.RunAsync(channel, arguments.JsonOutput),
+        "test-logbook" => await TestLogbookCommand.RunAsync(channel, arguments.RemainingArgs),
         _ => ShowHelp($"Unknown command: {arguments.Command}")
     };
 }

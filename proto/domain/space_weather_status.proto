@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+enum SpaceWeatherStatus {
+  SPACE_WEATHER_STATUS_UNSPECIFIED = 0;
+  SPACE_WEATHER_STATUS_CURRENT = 1;
+  SPACE_WEATHER_STATUS_STALE = 2;
+  SPACE_WEATHER_STATUS_ERROR = 3;
+}

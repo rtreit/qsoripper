@@ -63,5 +63,15 @@ public class CliRegressionTests
         Assert.False(arguments.ShowHelp);
         Assert.Equal(["--help"], arguments.RemainingArgs);
     }
+
+    [Fact]
+    public async Task Entry_point_shows_command_help_for_space_weather_help()
+    {
+        var result = await CliProcessRunner.RunAsync("space-weather", "--help");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("Usage: space-weather [--refresh]", result.StandardOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("Could not connect to QsoRipper engine", result.StandardError, StringComparison.Ordinal);
+    }
 }
 #pragma warning restore CA1707

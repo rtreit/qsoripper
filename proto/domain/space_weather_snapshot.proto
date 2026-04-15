@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+import "domain/space_weather_status.proto";
+import "google/protobuf/timestamp.proto";
+
+message SpaceWeatherSnapshot {
+  optional google.protobuf.Timestamp observed_at = 1;
+  optional google.protobuf.Timestamp fetched_at = 2;
+  SpaceWeatherStatus status = 3;
+  optional string error_message = 4;
+  optional double planetary_k_index = 5;
+  optional uint32 planetary_a_index = 6;
+  optional double solar_flux_index = 7;
+  optional uint32 sunspot_number = 8;
+  optional uint32 geomagnetic_storm_scale = 9;
+  optional string source_name = 10;
+}

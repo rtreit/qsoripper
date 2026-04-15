@@ -31,9 +31,12 @@ internal sealed class StorageWorkbenchService
         ApplyStationProfile(sampleQso, activeStationProfile);
         LogQsoResponse? logResponse = null;
         GetQsoResponse? loadedResponse = null;
+        UpdateQsoResponse? updateResponse = null;
+        GetQsoResponse? updatedResponse = null;
         DeleteQsoResponse? deleteResponse = null;
         GetSyncStatusResponse? syncStatus = null;
         var listedQsos = new List<QsoRecord>();
+        var updateVerified = false;
         var deleteVerified = false;
 
         try
@@ -51,6 +54,21 @@ internal sealed class StorageWorkbenchService
             loadedResponse = await client.GetQsoAsync(
                 new GetQsoRequest { LocalId = logResponse.LocalId },
                 cancellationToken: cancellationToken);
+
+            var updatedQso = BuildUpdatedQso(
+                loadedResponse.Qso ?? throw new InvalidOperationException("GetQso returned a response without a qso payload."));
+            updateResponse = await client.UpdateQsoAsync(
+                new UpdateQsoRequest
+                {
+                    Qso = updatedQso,
+                    SyncToQrz = false
+                },
+                cancellationToken: cancellationToken);
+
+            updatedResponse = await client.GetQsoAsync(
+                new GetQsoRequest { LocalId = logResponse.LocalId },
+                cancellationToken: cancellationToken);
+            updateVerified = updateResponse.Success && VerifyUpdatedQso(updatedResponse.Qso, updatedQso);
 
             using var listCall = client.ListQsos(
                 new ListQsosRequest
@@ -83,18 +101,45 @@ internal sealed class StorageWorkbenchService
                 deleteVerified = await ConfirmDeleteAsync(client, logResponse.LocalId, cancellationToken);
             }
 
-            var errorMessage = !retainRecord && !deleteVerified
-                ? "Delete verification failed. GetQso still returned the sample record after delete."
-                : null;
+            var errorMessages = new List<string>();
+            if (updateResponse is { Success: false })
+            {
+                errorMessages.Add(
+                    $"UpdateQso returned failure: {updateResponse.Error ?? "(no detail was returned by the engine)"}");
+            }
+            else if (!updateVerified)
+            {
+                errorMessages.Add("Update verification failed. GetQso did not return the updated sample record.");
+            }
+
+            if (!retainRecord)
+            {
+                if (deleteResponse is { Success: false })
+                {
+                    errorMessages.Add(
+                        $"DeleteQso returned failure: {deleteResponse.Error ?? "(no detail was returned by the engine)"}");
+                }
+                else if (!deleteVerified)
+                {
+                    errorMessages.Add("Delete verification failed. GetQso still returned the sample record after delete.");
+                }
+            }
+
+            var errorMessage = errorMessages.Count == 0
+                ? null
+                : string.Join(" ", errorMessages);
 
             return new StorageSmokeTestResult(
                 sampleQso,
                 logResponse,
                 loadedResponse,
+                updateResponse,
+                updatedResponse,
                 listedQsos,
                 syncStatus,
                 deleteResponse,
                 retainRecord,
+                updateVerified,
                 deleteVerified,
                 errorMessage,
                 DateTimeOffset.UtcNow);
@@ -105,10 +150,13 @@ internal sealed class StorageWorkbenchService
                 sampleQso,
                 logResponse,
                 loadedResponse,
+                updateResponse,
+                updatedResponse,
                 listedQsos,
                 syncStatus,
                 deleteResponse,
                 retainRecord,
+                updateVerified,
                 deleteVerified,
                 ex.Status.Detail,
                 DateTimeOffset.UtcNow);
@@ -119,14 +167,26 @@ internal sealed class StorageWorkbenchService
                 sampleQso,
                 logResponse,
                 loadedResponse,
+                updateResponse,
+                updatedResponse,
                 listedQsos,
                 syncStatus,
                 deleteResponse,
                 retainRecord,
+                updateVerified,
                 deleteVerified,
                 ex.Message,
                 DateTimeOffset.UtcNow);
         }
+    }
+
+    internal static QsoRecord BuildUpdatedQso(QsoRecord source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        var updated = source.Clone();
+        updated.Comment = $"DebugHost storage smoke update {DateTime.UtcNow:O}";
+        return updated;
     }
 
     private static void ApplyStationProfile(QsoRecord qso, StationProfile? profile)
@@ -154,6 +214,15 @@ internal sealed class StorageWorkbenchService
             Longitude = profile.Longitude,
             ArrlSection = profile.ArrlSection
         };
+    }
+
+    private static bool VerifyUpdatedQso(QsoRecord? persisted, QsoRecord expected)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+
+        return persisted is not null
+            && string.Equals(persisted.LocalId, expected.LocalId, StringComparison.Ordinal)
+            && string.Equals(persisted.Comment, expected.Comment, StringComparison.Ordinal);
     }
 
     private static async Task<bool> ConfirmDeleteAsync(

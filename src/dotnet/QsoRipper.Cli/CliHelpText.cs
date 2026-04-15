@@ -27,6 +27,10 @@ internal static class CliHelpText
 
             Engine:
               status                           Show sync status and QSO counts
+              sync [--force]                   Sync with QRZ logbook (--force = full sync)
+              sync-status                      Detailed sync status and scheduling info
+              test-logbook [--api-key <key>]   Test QRZ logbook API key
+              space-weather [--refresh]        Show current NOAA space weather snapshot
               config [--set KEY=VALUE]         View or modify runtime config
               setup [--status | --from-env]    Interactive setup wizard or headless config
 
@@ -52,11 +56,13 @@ internal static class CliHelpText
                   --rst-sent <rst>     RST sent (e.g., 59, 599)
                   --rst-rcvd <rst>     RST received
                   --freq <khz>         Frequency in kHz (e.g., 14074)
+                  --comment <text>     Comment text
+                  --notes <text>       Notes text
                   --no-enrich          Skip automatic QRZ lookup enrichment
 
                 Examples:
                   log W1AW 20m FT8
-                  log W1AW 40m CW --station AE7XI --rst-sent 599 --freq 7030
+                  log W1AW 40m CW --station AE7XI --rst-sent 599 --freq 7030 --comment "Nice signal"
                   log K7ABV 20m SSB --at 30.minutes
                 """,
             "get" => """
@@ -77,7 +83,7 @@ internal static class CliHelpText
                   --limit <n>          Max results (default: 20)
                   --show-id            Include the QSO local ID column
                   --show-rst           Include RST sent/received columns
-                  --show-comment       Include comment/notes column
+                  --show-comment       Include comment/notes column (default)
                 """,
             "update" => """
                 Usage: update <local-id> [options]
@@ -173,6 +179,35 @@ internal static class CliHelpText
                 Usage: status
 
                 Show engine sync status and QSO counts.
+                """,
+            "sync" => """
+                Usage: sync [--force]
+
+                Trigger a sync with the QRZ logbook. Shows streaming progress updates.
+
+                  --force              Run a full sync instead of incremental
+                """,
+            "sync-status" => """
+                Usage: sync-status
+
+                Show detailed sync status: local/QRZ counts, pending uploads,
+                auto-sync scheduling, and last error.
+                """,
+            "test-logbook" => """
+                Usage: test-logbook [--api-key <key>]
+
+                Test QRZ logbook API key by querying the logbook STATUS endpoint.
+                Uses the configured key if --api-key is not provided.
+
+                  --api-key <key>      API key to test (optional)
+                """,
+            "space-weather" => """
+                Usage: space-weather [--refresh]
+
+                Show the current engine-backed NOAA space weather snapshot.
+
+                  --refresh          Force an immediate refresh before printing
+                  --json             Output the snapshot as JSON
                 """,
             _ => $"No help available for '{command}'."
         };
