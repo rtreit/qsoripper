@@ -676,6 +676,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         RecentQsoSortColumn.Qth => nameof(RecentQsoItemViewModel.Qth),
         RecentQsoSortColumn.State => nameof(RecentQsoItemViewModel.State),
         RecentQsoSortColumn.County => nameof(RecentQsoItemViewModel.County),
+        RecentQsoSortColumn.Comment => nameof(RecentQsoItemViewModel.Comment),
         RecentQsoSortColumn.Sync => nameof(RecentQsoItemViewModel.SyncStatus),
         _ => nameof(RecentQsoItemViewModel.UtcSortKey)
     };
@@ -704,6 +705,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         nameof(RecentQsoItemViewModel.Qth) => RecentQsoSortColumn.Qth,
         nameof(RecentQsoItemViewModel.State) => RecentQsoSortColumn.State,
         nameof(RecentQsoItemViewModel.County) => RecentQsoSortColumn.County,
+        nameof(RecentQsoItemViewModel.Comment) => RecentQsoSortColumn.Comment,
         nameof(RecentQsoItemViewModel.SyncStatus) => RecentQsoSortColumn.Sync,
         _ => RecentQsoSortColumn.Utc
     };
@@ -732,7 +734,6 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
             else
             {
                 freeTextTokens.Add(rawToken.ToUpperInvariant());
-                displayTokens.Add(rawToken.Trim());
             }
         }
 
@@ -759,6 +760,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Contest, "Contest", true);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Station, "Station", true);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Note, "Note", true);
+        yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.Comment, "Comment", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.UtcEnd, "End", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.CqZone, "CQ", false);
         yield return new RecentQsoColumnOptionViewModel(RecentQsoGridColumn.ItuZone, "ITU", false);

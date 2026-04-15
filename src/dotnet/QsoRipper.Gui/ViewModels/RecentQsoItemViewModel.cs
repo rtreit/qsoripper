@@ -38,6 +38,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     private string _contest = "-";
     private string _station = "-";
     private string _note = "-";
+    private string _comment = "-";
     private string _utcEndDisplay = "-";
     private string _cqZone = "-";
     private string _ituZone = "-";
@@ -138,6 +139,12 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         set => SetProperty(ref _note, value);
     }
 
+    public string Comment
+    {
+        get => _comment;
+        set => SetProperty(ref _comment, value);
+    }
+
     public string UtcEndDisplay
     {
         get => _utcEndDisplay;
@@ -210,6 +217,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         Exchange,
         Station,
         Note,
+        Comment,
         CqZone,
         ItuZone,
         SyncStatus,
@@ -290,7 +298,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         Qth = BuildQth(_sourceQso);
         SyncStatus = BuildSyncStatus(_sourceQso.SyncStatus);
         State = NoteOrNull(_sourceQso.WorkedState) ?? string.Empty;
-        County = NoteOrNull(_sourceQso.WorkedCounty) ?? string.Empty;
+        County = ParseCountyName(_sourceQso.WorkedCounty);
+        Comment = NoteOrNull(_sourceQso.Comment) ?? "-";
         RecomputeDirty();
     }
 
@@ -316,7 +325,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
             "EXCH" or "EXCHANGE" => ContainsNormalized(Exchange, normalizedValue),
             "CONTEST" => ContainsNormalized(Contest, normalizedValue),
             "STATION" => ContainsNormalized(Station, normalizedValue),
-            "NOTE" or "COMMENT" => ContainsNormalized(Note, normalizedValue),
+            "NOTE" => ContainsNormalized(Note, normalizedValue),
+            "COMMENT" => ContainsNormalized(Comment, normalizedValue),
             "CQ" => ContainsNormalized(CqZone, normalizedValue),
             "ITU" => ContainsNormalized(ItuZone, normalizedValue),
             "QTH" => ContainsNormalized(Qth, normalizedValue),
@@ -408,6 +418,11 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
             ApplyNote(updated);
         }
 
+        if (!StringComparer.Ordinal.Equals(Comment, sourceState.Comment))
+        {
+            ApplyComment(updated);
+        }
+
         qso = updated;
         return true;
     }
@@ -421,7 +436,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         SyncStatus = BuildSyncStatus(_sourceQso.SyncStatus);
         Continent = NoteOrNull(_sourceQso.WorkedContinent) ?? "-";
         State = NoteOrNull(_sourceQso.WorkedState) ?? string.Empty;
-        County = NoteOrNull(_sourceQso.WorkedCounty) ?? string.Empty;
+        County = ParseCountyName(_sourceQso.WorkedCounty);
+        Comment = NoteOrNull(_sourceQso.Comment) ?? "-";
         RecomputeDirty();
     }
 
@@ -440,6 +456,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         Contest,
         Station,
         Note,
+        Comment,
         UtcEndDisplay,
         CqZone,
         ItuZone);
@@ -460,6 +477,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         Contest = state.Contest;
         Station = state.Station;
         Note = state.Note;
+        Comment = state.Comment;
         UtcEndDisplay = state.UtcEndDisplay;
         CqZone = state.CqZone;
         ItuZone = state.ItuZone;
@@ -605,13 +623,23 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         var note = NoteOrNull(Note);
         if (note is null)
         {
-            updated.ClearComment();
             updated.ClearNotes();
             return;
         }
 
-        updated.Comment = note;
-        updated.ClearNotes();
+        updated.Notes = note;
+    }
+
+    private void ApplyComment(QsoRecord updated)
+    {
+        var comment = NoteOrNull(Comment);
+        if (comment is null)
+        {
+            updated.ClearComment();
+            return;
+        }
+
+        updated.Comment = comment;
     }
 
     private static EditableQsoState EditableQsoStateFromQso(QsoRecord qso) => new(
@@ -629,23 +657,13 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         DisplayOrDash(qso.ContestId),
         DisplayOrDash(qso.StationCallsign),
         BuildNote(qso),
+        NoteOrNull(qso.Comment) ?? "-",
         FormatTimestamp(qso.UtcEndTimestamp),
         BuildOptionalNumber(qso.WorkedCqZone),
         BuildOptionalNumber(qso.WorkedItuZone));
 
-    private static string BuildNote(QsoRecord qso)
-    {
-        var parts = new[]
-            {
-                NoteOrNull(qso.Comment),
-                NoteOrNull(qso.Notes)
-            }
-            .Where(static value => value is not null)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-
-        return parts.Length == 0 ? "-" : string.Join(" / ", parts!);
-    }
+    private static string BuildNote(QsoRecord qso) =>
+        NoteOrNull(qso.Notes) ?? "-";
 
     private static string BuildCountry(QsoRecord qso)
     {
@@ -655,6 +673,18 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
                    qso.WorkedCounty,
                    qso.WorkedContinent)
                ?? "-";
+    }
+
+    private static string ParseCountyName(string? rawCounty)
+    {
+        var value = NoteOrNull(rawCounty);
+        if (value is null)
+        {
+            return string.Empty;
+        }
+
+        var lastComma = value.LastIndexOf(',');
+        return lastComma >= 0 ? value[(lastComma + 1)..].Trim() : value;
     }
 
     private static string BuildOperatorName(QsoRecord qso) =>
@@ -901,6 +931,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         string Contest,
         string Station,
         string Note,
+        string Comment,
         string UtcEndDisplay,
         string CqZone,
         string ItuZone)

@@ -394,7 +394,7 @@ internal sealed partial class MainWindow : Window
 
     private void BuildColumnMap()
     {
-        if (_recentQsoGrid is null || _recentQsoGrid.Columns.Count < 22)
+        if (_recentQsoGrid is null || _recentQsoGrid.Columns.Count < 23)
         {
             return;
         }
@@ -416,13 +416,14 @@ internal sealed partial class MainWindow : Window
             [RecentQsoGridColumn.Contest] = _recentQsoGrid.Columns[12],
             [RecentQsoGridColumn.Station] = _recentQsoGrid.Columns[13],
             [RecentQsoGridColumn.Note] = _recentQsoGrid.Columns[14],
-            [RecentQsoGridColumn.UtcEnd] = _recentQsoGrid.Columns[15],
-            [RecentQsoGridColumn.CqZone] = _recentQsoGrid.Columns[16],
-            [RecentQsoGridColumn.ItuZone] = _recentQsoGrid.Columns[17],
-            [RecentQsoGridColumn.State] = _recentQsoGrid.Columns[18],
-            [RecentQsoGridColumn.County] = _recentQsoGrid.Columns[19],
-            [RecentQsoGridColumn.Sync] = _recentQsoGrid.Columns[20],
-            [RecentQsoGridColumn.Continent] = _recentQsoGrid.Columns[21]
+            [RecentQsoGridColumn.Comment] = _recentQsoGrid.Columns[15],
+            [RecentQsoGridColumn.UtcEnd] = _recentQsoGrid.Columns[16],
+            [RecentQsoGridColumn.CqZone] = _recentQsoGrid.Columns[17],
+            [RecentQsoGridColumn.ItuZone] = _recentQsoGrid.Columns[18],
+            [RecentQsoGridColumn.State] = _recentQsoGrid.Columns[19],
+            [RecentQsoGridColumn.County] = _recentQsoGrid.Columns[20],
+            [RecentQsoGridColumn.Sync] = _recentQsoGrid.Columns[21],
+            [RecentQsoGridColumn.Continent] = _recentQsoGrid.Columns[22]
         };
     }
 
