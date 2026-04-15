@@ -577,7 +577,7 @@ static char FieldHotkey(enum Field f)
     case FIELD_RST_RCVD:      return 'R';
     case FIELD_COMMENT:       return 'O';
     case FIELD_NOTES:         return 'N';
-    case FIELD_FREQ:          return 'F';
+    case FIELD_FREQ:          return 'Z';
     case FIELD_DATE:          return 'D';
     case FIELD_TIME:          return 'T';
     case FIELD_WORKED_NAME:   return 'A';
@@ -1942,10 +1942,10 @@ static void PaintHelp(HDC hdc, int w, int h)
     int oy = (h - oh) / 2;
 
     FillRect_Color(hdc, ox, oy, ow, oh, CLR_BG);
-    DrawBox(hdc, ox, oy, ow, oh, CLR_YELLOW);
+    DrawBox(hdc, ox, oy, ow, oh, CLR_WHITE);
 
     SelectObject(hdc, g_state.hFontBold);
-    DrawText_A(hdc, ox + cw * 2, oy + ch, CLR_YELLOW, "QsoRipper Help");
+    DrawText_A(hdc, ox + cw * 2, oy + ch, CLR_WHITE, "QsoRipper Help");
     SelectObject(hdc, g_state.hFont);
 
     int y = oy + ch * 3;
@@ -1963,7 +1963,7 @@ static void PaintHelp(HDC hdc, int w, int h)
         "Esc             Clear form / exit focus",
         "Backspace       Delete character",
         "Alt+C/B/M/S/R   Jump to field",
-        "Alt+O/N/F/D/T   Jump to field",
+        "Alt+O/N/Z/D/T   Jump to field",
         "Up / Down       Navigate QSO list",
         "Enter           Load selected QSO",
         "D / Delete      Delete selected QSO",
@@ -2278,7 +2278,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         case 'R': target = FIELD_RST_RCVD; break;
         case 'O': target = FIELD_COMMENT; break;
         case 'N': target = FIELD_NOTES; break;
-        case 'F': target = FIELD_FREQ; break;
+        case 'Z': target = FIELD_FREQ; break;
         case 'D': target = FIELD_DATE; break;
         case 'T': target = FIELD_TIME; break;
         case 'A': target = FIELD_WORKED_NAME; break;
@@ -2692,13 +2692,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         break;
 
     case WM_SYSKEYDOWN:
-        /* Handle Alt+key combinations */
+        /* Let menu accelerators and system keys reach DefWindowProc */
+        if (wParam == VK_SPACE || wParam == 'F' || wParam == 'H') {
+            break;
+        }
+        /* Handle Alt+key combinations for field navigation */
         OnKeyDown(hwnd, wParam, lParam);
-        /* Return 0 to prevent the default system menu behavior */
         return 0;
 
     case WM_SYSCHAR:
-        /* Eat Alt+char to prevent system menu beep */
+        /* Pass menu chars through; eat others to prevent beep */
+        if (wParam == 'f' || wParam == 'F' || wParam == 'h' || wParam == 'H') {
+            break;
+        }
         return 0;
 
     case WM_MOUSEWHEEL:
