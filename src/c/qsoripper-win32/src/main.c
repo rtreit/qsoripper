@@ -684,7 +684,7 @@ static void DrawCycleField(HDC hdc, int x, int y, int width_chars,
     /* Arrow indicators */
     if (focused) {
         char buf[64];
-        _snprintf(buf, sizeof(buf), "\x11 %s \x10", value);
+        _snprintf(buf, sizeof(buf), "< %s >", value);
         DrawText_A_BG(hdc, x + 3, y + 2, fg, bg, buf);
     } else {
         DrawText_A_BG(hdc, x + 3, y + 2, fg, bg, value);
