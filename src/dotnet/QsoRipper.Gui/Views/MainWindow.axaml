@@ -324,11 +324,18 @@
                       </DataTemplate>
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
-                  <DataGridTextColumn Header="RST"
-                                      Width="88"
-                                      MinWidth="64"
-                                      Binding="{ReflectionBinding Rst, Mode=TwoWay}"
-                                      SortMemberPath="Rst" />
+                  <DataGridTextColumn Header="S"
+                                      Width="48"
+                                      MinWidth="40"
+                                      Binding="{ReflectionBinding RstSent}"
+                                      SortMemberPath="RstSent"
+                                      IsReadOnly="True" />
+                  <DataGridTextColumn Header="R"
+                                      Width="48"
+                                      MinWidth="40"
+                                      Binding="{ReflectionBinding RstReceived}"
+                                      SortMemberPath="RstReceived"
+                                      IsReadOnly="True" />
                   <DataGridTextColumn Header="DXCC"
                                       Width="76"
                                       MinWidth="64"
@@ -455,22 +462,20 @@
                                       Binding="{ReflectionBinding ItuZone, Mode=TwoWay}"
                                       SortMemberPath="ItuZone"
                                       IsVisible="False" />
-                  <DataGridTemplateColumn Header="QTH"
-                                          Width="120"
-                                          MinWidth="96"
-                                          SortMemberPath="Qth"
-                                          IsVisible="False"
-                                          IsReadOnly="True">
-                    <DataGridTemplateColumn.CellTemplate>
-                      <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
-                        <TextBlock Text="{Binding Qth}"
-                                   TextWrapping="NoWrap"
-                                   TextTrimming="CharacterEllipsis"
-                                   VerticalAlignment="Center"
-                                   ToolTip.Tip="{Binding Qth}" />
-                      </DataTemplate>
-                    </DataGridTemplateColumn.CellTemplate>
-                  </DataGridTemplateColumn>
+                  <DataGridTextColumn Header="State"
+                                      Width="56"
+                                      MinWidth="48"
+                                      Binding="{ReflectionBinding State}"
+                                      SortMemberPath="State"
+                                      IsReadOnly="True"
+                                      IsVisible="False" />
+                  <DataGridTextColumn Header="County"
+                                      Width="80"
+                                      MinWidth="64"
+                                      Binding="{ReflectionBinding County}"
+                                      SortMemberPath="County"
+                                      IsReadOnly="True"
+                                      IsVisible="False" />
                   <DataGridTextColumn Header="Sync"
                                       Width="78"
                                       MinWidth="72"

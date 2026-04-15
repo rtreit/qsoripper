@@ -44,6 +44,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     private string _qth = "-";
     private string _syncStatus = "-";
     private string _continent = "-";
+    private string _state = string.Empty;
+    private string _county = string.Empty;
     private bool _isDirty;
 
     public string LocalId => _sourceQso.LocalId;
@@ -172,6 +174,18 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         private set => SetProperty(ref _continent, value);
     }
 
+    public string State
+    {
+        get => _state;
+        private set => SetProperty(ref _state, value);
+    }
+
+    public string County
+    {
+        get => _county;
+        private set => SetProperty(ref _county, value);
+    }
+
     public bool IsDirty
     {
         get => _isDirty;
@@ -275,6 +289,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         _editSnapshot = null;
         Qth = BuildQth(_sourceQso);
         SyncStatus = BuildSyncStatus(_sourceQso.SyncStatus);
+        State = NoteOrNull(_sourceQso.WorkedState) ?? string.Empty;
+        County = NoteOrNull(_sourceQso.WorkedCounty) ?? string.Empty;
         RecomputeDirty();
     }
 
@@ -304,6 +320,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
             "CQ" => ContainsNormalized(CqZone, normalizedValue),
             "ITU" => ContainsNormalized(ItuZone, normalizedValue),
             "QTH" => ContainsNormalized(Qth, normalizedValue),
+            "STATE" => ContainsNormalized(State, normalizedValue),
+            "COUNTY" => ContainsNormalized(County, normalizedValue),
             "SYNC" => ContainsNormalized(SyncStatus, normalizedValue),
             _ => false
         };
@@ -402,6 +420,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         Qth = BuildQth(_sourceQso);
         SyncStatus = BuildSyncStatus(_sourceQso.SyncStatus);
         Continent = NoteOrNull(_sourceQso.WorkedContinent) ?? "-";
+        State = NoteOrNull(_sourceQso.WorkedState) ?? string.Empty;
+        County = NoteOrNull(_sourceQso.WorkedCounty) ?? string.Empty;
         RecomputeDirty();
     }
 
