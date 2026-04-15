@@ -1567,7 +1567,7 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
         DrawText_A_BG(hdc, pad, y_start, border_clr, CLR_BG, title);
     }
 
-    int y = y_start + 4;
+    int y = y_start + ch + 4;
 
     /* Search bar (if search focused) */
     if (g_state.search_focused) {
