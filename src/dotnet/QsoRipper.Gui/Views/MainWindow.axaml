@@ -57,11 +57,13 @@
       <Setter Property="BorderThickness" Value="0" />
     </Style>
 
-    <!-- Current cell: subtle background highlight instead of white vertical border lines -->
+    <!-- Hide white border lines on current/focused cell; use subtle background instead -->
     <Style Selector="DataGrid#RecentQsoGrid DataGridCell:current /template/ Rectangle#CurrencyVisual">
       <Setter Property="IsVisible" Value="False" />
     </Style>
-
+    <Style Selector="DataGrid#RecentQsoGrid DataGridCell:focus /template/ Grid#FocusVisual">
+      <Setter Property="IsVisible" Value="False" />
+    </Style>
     <Style Selector="DataGrid#RecentQsoGrid DataGridCell:current">
       <Setter Property="Background" Value="#400078D7" />
       <Setter Property="BorderBrush" Value="Transparent" />
