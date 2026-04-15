@@ -2692,20 +2692,26 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         break;
 
     case WM_SYSKEYDOWN:
-        /* Let menu accelerators and system keys reach DefWindowProc */
-        if (wParam == VK_SPACE || wParam == 'F' || wParam == 'H') {
+        /* VK_MENU (Alt key itself), Space, F, H must reach DefWindowProc
+           so the menu bar and system menu activate correctly. */
+        if (wParam == VK_MENU || wParam == VK_SPACE ||
+            wParam == 'F'     || wParam == 'H') {
             break;
         }
-        /* Handle Alt+key combinations for field navigation */
+        /* Handle our custom Alt+key field-navigation shortcuts */
         OnKeyDown(hwnd, wParam, lParam);
         return 0;
 
     case WM_SYSCHAR:
-        /* Pass menu chars through; eat others to prevent beep */
+        /* Let menu accelerator chars reach DefWindowProc */
         if (wParam == 'f' || wParam == 'F' || wParam == 'h' || wParam == 'H') {
             break;
         }
         return 0;
+
+    case WM_MENUCHAR:
+        /* Suppress the error beep when an Alt+key has no matching menu item */
+        return MAKELRESULT(0, MNC_CLOSE);
 
     case WM_MOUSEWHEEL:
         if (g_state.qso_list_focused) {
