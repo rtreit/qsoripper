@@ -1935,20 +1935,31 @@ static void PaintHelp(HDC hdc, int w, int h)
     int cw = g_state.char_w;
     int ch = g_state.char_h;
 
-    /* Semi-transparent overlay (approximate with dark fill) */
     int ow = cw * 52;
     int oh = ch * 24;
     int ox = (w - ow) / 2;
     int oy = (h - oh) / 2;
 
-    FillRect_Color(hdc, ox, oy, ow, oh, CLR_BG);
-    DrawBox(hdc, ox, oy, ow, oh, CLR_WHITE);
+    int header_h = ch * 3;
+
+    /* Body */
+    FillRect_Color(hdc, ox, oy + header_h, ow, oh - header_h, CLR_BG);
+
+    /* Navy header band */
+    FillRect_Color(hdc, ox, oy, ow, header_h, CLR_HEADER_BG);
+    DrawBox(hdc, ox, oy, ow, oh, CLR_HEADER_BG);
 
     SelectObject(hdc, g_state.hFontBold);
-    DrawText_A(hdc, ox + cw * 2, oy + ch, CLR_WHITE, "QsoRipper Help");
+    DrawText_A(hdc, ox + cw * 2, oy + ch, CLR_HEADER_FG, "QsoRipper Help");
     SelectObject(hdc, g_state.hFont);
 
-    int y = oy + ch * 3;
+    /* Divider between header and body */
+    DrawHLine(hdc, ox, ox + ow, oy + header_h, CLR_CYAN);
+
+    /* Outer border */
+    DrawBox(hdc, ox, oy, ow, oh, CLR_CYAN);
+
+    int y = oy + header_h + ch;
     const char *lines[] = {
         "Ctrl+Q          Quit application",
         "F1              Toggle this help",
@@ -1972,7 +1983,7 @@ static void PaintHelp(HDC hdc, int w, int h)
         NULL
     };
     for (int i = 0; lines[i]; i++) {
-        DrawText_A(hdc, ox + cw * 2, y, CLR_GRAY, lines[i]);
+        DrawText_A(hdc, ox + cw * 2, y, CLR_TEXT, lines[i]);
         y += ch + 2;
     }
 }
