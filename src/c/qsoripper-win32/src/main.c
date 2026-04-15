@@ -10,6 +10,7 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
+#include <process.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +34,9 @@
 #define IDM_FILE_EXIT        1001
 #define IDM_HELP_KEYBOARD    1101
 #define IDM_HELP_ABOUT       1102
+
+/* Custom window messages */
+#define WM_APP_LOOKUP_DONE   (WM_APP + 1)
 
 /* ── Color palette (Win2K classic theme) ────────────────────────────────── */
 
@@ -119,6 +123,23 @@ static const int FIELD_MAX_LEN[] = {
     14, 30, 14,         /* prop_mode, sat_name, sat_mode */
     14, 14, 14, 30, 16  /* iota, arrl_section, worked_state, worked_county, skcc */
 };
+
+/* ── Async lookup message structs ──────────────────────────────────────── */
+
+typedef struct {
+    HWND hwnd;
+    char callsign[64];
+} LookupThreadArg;
+
+typedef struct {
+    char callsign[64];
+    char name[64];
+    char qth[64];
+    char grid[16];
+    char country[64];
+    int  cq_zone;
+    int  has_data;
+} LookupResultMsg;
 
 /* ── Recent QSO record ─────────────────────────────────────────────────── */
 
@@ -210,6 +231,7 @@ typedef struct {
     char lookup_country[64];
     int  lookup_cq_zone;
     int  has_lookup;
+    int  lookup_in_progress;
 
     /* Recent QSOs */
     RecentQso recent_qsos[MAX_RECENT];
@@ -256,7 +278,6 @@ static void ClearForm(void);
 static void SetStatus(const char *msg, int is_error);
 static void LogQso(void);
 static void RefreshQsoList(void);
-static void LookupCallsign(const char *call);
 static void FetchSpaceWeather(void);
 static void LoadSelectedQso(void);
 static void DeleteSelectedQso(void);
@@ -1017,6 +1038,7 @@ static void RefreshQsoList(void)
 static void ClearLookupDisplay(void)
 {
     g_state.has_lookup = 0;
+    g_state.lookup_in_progress = 0;
     g_state.lookup_name[0] = 0;
     g_state.lookup_qth[0] = 0;
     g_state.lookup_grid[0] = 0;
@@ -1025,54 +1047,50 @@ static void ClearLookupDisplay(void)
     g_state.last_looked_up[0] = 0;
 }
 
-static void LookupCallsign(const char *call)
+static unsigned __stdcall LookupThread(void *param)
 {
-    if (!call || call[0] == 0) {
-        g_state.has_lookup = 0;
-        return;
-    }
+    LookupThreadArg *arg = (LookupThreadArg *)param;
+    LookupResultMsg *res = (LookupResultMsg *)calloc(1, sizeof(LookupResultMsg));
+    if (!res) { free(arg); return 0; }
+
+    safe_strcpy(res->callsign, sizeof(res->callsign), arg->callsign);
 
     char cmd[128];
-    _snprintf(cmd, sizeof(cmd), "lookup %s --json", call);
+    _snprintf(cmd, sizeof(cmd), "lookup %s --json", arg->callsign);
     char *result = RunQrCommand(cmd);
-    if (!result) return;
 
-    /* The lookup JSON is nested: { "result": { "record": { ... } } }
-       Navigate to the record object. */
-    const char *record_pos = strstr(result, "\"record\"");
-    if (!record_pos) { free(result); return; }
+    if (result) {
+        const char *record_pos = strstr(result, "\"record\"");
+        if (record_pos) {
+            char *v;
+            v = json_get_string(record_pos, "formattedName");
+            if (!v) v = json_get_string(record_pos, "firstName");
+            if (v) {
+                safe_strcpy(res->name, sizeof(res->name), v);
+                res->has_data = 1;
+                free(v);
+            }
+            v = json_get_string(record_pos, "addr2");
+            if (!v) v = json_get_string(record_pos, "qth");
+            if (v) { safe_strcpy(res->qth, sizeof(res->qth), v); free(v); }
 
-    char *v;
-    v = json_get_string(record_pos, "formattedName");
-    if (!v) v = json_get_string(record_pos, "firstName");
-    if (v) {
-        safe_strcpy(g_state.lookup_name, sizeof(g_state.lookup_name), v);
-        if (g_state.worked_name[0] == 0)
-            safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), v);
-        g_state.has_lookup = 1;
-        free(v);
+            v = json_get_string(record_pos, "gridSquare");
+            if (!v) v = json_get_string(record_pos, "grid");
+            if (v) { safe_strcpy(res->grid, sizeof(res->grid), v); free(v); }
+
+            v = json_get_string(record_pos, "country");
+            if (v) { safe_strcpy(res->country, sizeof(res->country), v); free(v); }
+
+            res->cq_zone = json_get_int(record_pos, "cqZone", 0);
+        }
+        free(result);
     }
 
-    v = json_get_string(record_pos, "addr2");
-    if (!v) v = json_get_string(record_pos, "qth");
-    if (v) {
-        safe_strcpy(g_state.lookup_qth, sizeof(g_state.lookup_qth), v);
-        if (g_state.qth[0] == 0)
-            safe_strcpy(g_state.qth, sizeof(g_state.qth), v);
-        free(v);
-    }
+    if (!PostMessage(arg->hwnd, WM_APP_LOOKUP_DONE, 0, (LPARAM)res))
+        free(res);
 
-    v = json_get_string(record_pos, "gridSquare");
-    if (!v) v = json_get_string(record_pos, "grid");
-    if (v) { safe_strcpy(g_state.lookup_grid, sizeof(g_state.lookup_grid), v); free(v); }
-
-    v = json_get_string(record_pos, "country");
-    if (v) { safe_strcpy(g_state.lookup_country, sizeof(g_state.lookup_country), v); free(v); }
-
-    g_state.lookup_cq_zone = json_get_int(record_pos, "cqZone", 0);
-
-    free(result);
-    safe_strcpy(g_state.last_looked_up, sizeof(g_state.last_looked_up), call);
+    free(arg);
+    return 0;
 }
 
 /* ── CLI integration: Fetch space weather ──────────────────────────────── */
@@ -1783,6 +1801,12 @@ static int PaintLookup(HDC hdc, int y_start, int w)
         _snprintf(line, sizeof(line), "Country: %s   CQ Zone: %d",
                   g_state.lookup_country, g_state.lookup_cq_zone);
         DrawText_A(hdc, pad + cw, y, CLR_GRAY, line);
+    } else if (g_state.lookup_in_progress) {
+        static const char *dots[] = { ".", "..", "..." };
+        int frame = (int)(GetTickCount64() / 400) % 3;
+        char line[64];
+        _snprintf(line, sizeof(line), "Looking up%s", dots[frame]);
+        DrawText_A(hdc, pad + cw, y + ch, CLR_CYAN, line);
     } else {
         DrawText_A(hdc, pad + cw, y + ch, CLR_DARKGRAY,
                    "Type a callsign to look up");
@@ -2618,18 +2642,24 @@ static void OnChar(HWND hwnd, WPARAM ch)
 
 static void OnTimer(HWND hwnd)
 {
-    /* Check callsign lookup debounce */
     if (g_state.last_callsign_change > 0 &&
         g_state.callsign[0] != 0 &&
         strlen(g_state.callsign) >= 3) {
         ULONGLONG elapsed = GetTickCount64() - g_state.last_callsign_change;
         if (elapsed >= LOOKUP_DEBOUNCE_MS) {
-            if (_stricmp(g_state.callsign, g_state.last_looked_up) != 0) {
-                g_state.worked_name[0] = 0;
-                g_state.qth[0] = 0;
-                LookupCallsign(g_state.callsign);
-            }
             g_state.last_callsign_change = 0;
+            if (!g_state.lookup_in_progress &&
+                _stricmp(g_state.callsign, g_state.last_looked_up) != 0) {
+                LookupThreadArg *arg = (LookupThreadArg *)malloc(sizeof(LookupThreadArg));
+                if (arg) {
+                    arg->hwnd = hwnd;
+                    safe_strcpy(arg->callsign, sizeof(arg->callsign), g_state.callsign);
+                    g_state.lookup_in_progress = 1;
+                    uintptr_t h = _beginthreadex(NULL, 0, LookupThread, arg, 0, NULL);
+                    if (h) CloseHandle((HANDLE)h);
+                    else { free(arg); g_state.lookup_in_progress = 0; }
+                }
+            }
         }
     }
 
@@ -2783,6 +2813,30 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         /* Restart the timer that was suspended in WM_SYSKEYDOWN */
         SetTimer(hwnd, TIMER_ID, TIMER_MS, NULL);
         break;
+
+    case WM_APP_LOOKUP_DONE:
+    {
+        LookupResultMsg *res = (LookupResultMsg *)lParam;
+        if (res) {
+            if (_stricmp(res->callsign, g_state.callsign) == 0 && res->has_data) {
+                safe_strcpy(g_state.lookup_name, sizeof(g_state.lookup_name), res->name);
+                safe_strcpy(g_state.lookup_qth,  sizeof(g_state.lookup_qth),  res->qth);
+                safe_strcpy(g_state.lookup_grid, sizeof(g_state.lookup_grid), res->grid);
+                safe_strcpy(g_state.lookup_country, sizeof(g_state.lookup_country), res->country);
+                g_state.lookup_cq_zone = res->cq_zone;
+                g_state.has_lookup = 1;
+                if (g_state.worked_name[0] == 0)
+                    safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), res->name);
+                if (g_state.qth[0] == 0)
+                    safe_strcpy(g_state.qth, sizeof(g_state.qth), res->qth);
+                safe_strcpy(g_state.last_looked_up, sizeof(g_state.last_looked_up), res->callsign);
+            }
+            g_state.lookup_in_progress = 0;
+            free(res);
+        }
+        InvalidateRect(hwnd, NULL, FALSE);
+        break;
+    }
 
     case WM_MOUSEWHEEL:
         if (g_state.qso_list_focused) {
