@@ -9,11 +9,13 @@ use qsoripper_core::domain::mode::{mode_from_adif, mode_to_adif};
 use qsoripper_core::proto::qsoripper::domain::{Band, LookupState, Mode, RstReport};
 use qsoripper_core::proto::qsoripper::services::{
     logbook_service_client::LogbookServiceClient, lookup_service_client::LookupServiceClient,
+    rig_control_service_client::RigControlServiceClient,
     space_weather_service_client::SpaceWeatherServiceClient, DeleteQsoRequest,
-    GetCurrentSpaceWeatherRequest, ListQsosRequest, LogQsoRequest, LookupRequest, UpdateQsoRequest,
+    GetCurrentSpaceWeatherRequest, GetRigSnapshotRequest, ListQsosRequest, LogQsoRequest,
+    LookupRequest, UpdateQsoRequest,
 };
 
-use crate::app::{CallsignInfo, RecentQso, SpaceWeatherInfo};
+use crate::app::{CallsignInfo, RecentQso, RigInfo, RigStatus, SpaceWeatherInfo};
 use crate::form::{LogForm, BANDS, MODES};
 
 /// Enrichment snapshot from a callsign lookup: `(grid, country, cq_zone, dxcc)`.
@@ -229,6 +231,60 @@ pub(crate) async fn get_space_weather(
         k_index: snapshot.planetary_k_index,
         solar_flux: snapshot.solar_flux_index,
         sunspot_number: snapshot.sunspot_number,
+    }))
+}
+
+/// Fetch the current rig snapshot from the rig control service.
+pub(crate) async fn get_rig_snapshot(channel: Channel) -> anyhow::Result<Option<RigInfo>> {
+    use qsoripper_core::proto::qsoripper::domain::RigConnectionStatus;
+
+    let mut client = RigControlServiceClient::new(channel);
+
+    let response = client
+        .get_rig_snapshot(GetRigSnapshotRequest {})
+        .await?
+        .into_inner();
+
+    let Some(snapshot) = response.snapshot else {
+        return Ok(None);
+    };
+
+    let status = match RigConnectionStatus::try_from(snapshot.status) {
+        Ok(RigConnectionStatus::Connected) => RigStatus::Connected,
+        Ok(RigConnectionStatus::Error) => RigStatus::Error,
+        Ok(RigConnectionStatus::Disabled) => RigStatus::Disabled,
+        _ => RigStatus::Disconnected,
+    };
+
+    let band = Band::try_from(snapshot.band)
+        .ok()
+        .and_then(band_to_adif)
+        .map(str::to_string);
+
+    let mode = Mode::try_from(snapshot.mode)
+        .ok()
+        .and_then(mode_to_adif)
+        .map(str::to_string);
+
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "ham radio frequencies are well within f64 mantissa range"
+    )]
+    let freq_mhz = snapshot.frequency_hz as f64 / 1_000_000.0;
+    let frequency_display = if snapshot.frequency_hz > 0 {
+        format!("{freq_mhz:.3} MHz")
+    } else {
+        String::new()
+    };
+
+    Ok(Some(RigInfo {
+        frequency_display,
+        frequency_hz: snapshot.frequency_hz,
+        band,
+        mode,
+        submode: snapshot.submode,
+        status,
+        error_message: snapshot.error_message,
     }))
 }
 
