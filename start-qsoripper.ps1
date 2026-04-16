@@ -341,7 +341,10 @@ function Get-EngineProfiles {
             DefaultStorage = 'memory'
             DefaultPersistenceLocation = $defaultPersistenceLocation
             DefaultConfigPath = Join-Path $runtimeDirectory 'dotnet-engine.json'
-            EnvironmentTemplates = @{}
+            EnvironmentTemplates = @{
+                QSORIPPER_STORAGE_BACKEND = '{storageBackend}'
+                QSORIPPER_STORAGE_PATH = '{persistenceLocation}'
+            }
             BuildFilePath = 'dotnet'
             BuildArguments = @('build', $dotnetProjectPath, '-c', 'Debug')
             LaunchFilePath = 'dotnet'
@@ -352,7 +355,7 @@ function Get-EngineProfiles {
                 '--config',
                 '{configPath}'
             )
-            SupportsStorageSession = $false
+            SupportsStorageSession = $true
         }
     )
 }

@@ -14,6 +14,7 @@ namespace QsoRipper.Engine.DotNet;
 internal sealed class ManagedEngineState
 {
     private const string PersistenceStepDescription = "The managed .NET engine keeps its logbook in memory. No persistence input is required during setup.";
+    private const string PersistenceStepDescriptionSqlite = "The managed .NET engine stores its logbook in a local SQLite database.";
     private const string PersistenceStepLabel = "Storage";
     private const string PersistenceSummary = "In-memory logbook";
 
@@ -1004,6 +1005,7 @@ internal sealed class ManagedEngineState
 
     private SetupStatus BuildSetupStatusNoLock()
     {
+        var isSqlite = string.Equals(_storage.BackendName, "sqlite", StringComparison.OrdinalIgnoreCase);
         var status = new SetupStatus
         {
             ConfigFileExists = File.Exists(_configPath),
@@ -1015,15 +1017,15 @@ internal sealed class ManagedEngineState
             IsFirstRun = !File.Exists(_configPath),
             HasQrzXmlPassword = _hasQrzXmlPassword,
             HasQrzLogbookApiKey = _hasQrzLogbookApiKey,
-            PersistenceDescription = PersistenceStepDescription,
+            PersistenceDescription = isSqlite ? PersistenceStepDescriptionSqlite : PersistenceStepDescription,
             PersistenceLabel = PersistenceStepLabel,
             PersistenceContractExplicit = true,
             SyncConfig = _syncConfig.Clone(),
         };
 #pragma warning disable CS0612
-        status.StorageBackend = StorageBackend.Memory;
+        status.StorageBackend = isSqlite ? StorageBackend.Sqlite : StorageBackend.Memory;
 #pragma warning restore CS0612
-        status.PersistenceStepEnabled = false;
+        status.PersistenceStepEnabled = isSqlite;
 
         if (!string.IsNullOrWhiteSpace(_qrzXmlUsername))
         {
@@ -1040,7 +1042,11 @@ internal sealed class ManagedEngineState
             status.RigControl = _rigControl.Clone();
         }
 
-        status.Warnings.Add("Managed .NET engine currently uses an in-memory logbook.");
+        if (!isSqlite)
+        {
+            status.Warnings.Add("Managed .NET engine currently uses an in-memory logbook.");
+        }
+
         return status;
     }
 

@@ -24,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\QsoRipper.Engine.Storage.Abstractions\QsoRipper.Engine.Storage.Abstractions.csproj" />
     <ProjectReference Include="..\QsoRipper.Engine.Storage.Memory\QsoRipper.Engine.Storage.Memory.csproj" />
+    <ProjectReference Include="..\QsoRipper.Engine.Storage.Sqlite\QsoRipper.Engine.Storage.Sqlite.csproj" />
     <ProjectReference Include="..\QsoRipper.EngineSelection\QsoRipper.EngineSelection.csproj" />
   </ItemGroup>
 

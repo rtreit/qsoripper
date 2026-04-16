@@ -3,13 +3,16 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using QsoRipper.Engine.DotNet;
 using QsoRipper.Engine.Storage;
 using QsoRipper.Engine.Storage.Memory;
+using QsoRipper.Engine.Storage.Sqlite;
 
 var options = ManagedEngineHostOptions.Parse(args);
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(kestrel => ConfigureListenEndpoint(kestrel, options.ListenAddress));
 builder.Services.AddGrpc();
-builder.Services.AddSingleton<IEngineStorage>(new MemoryStorage());
+
+var storage = CreateStorage();
+builder.Services.AddSingleton(storage);
 builder.Services.AddSingleton(provider => new ManagedEngineState(options.ConfigPath, provider.GetRequiredService<IEngineStorage>()));
 
 var app = builder.Build();
@@ -23,8 +26,26 @@ app.MapGrpcService<ManagedRigControlGrpcService>();
 app.MapGrpcService<ManagedSpaceWeatherGrpcService>();
 app.MapGet("/", () => "QsoRipper .NET engine host. Use a gRPC client.");
 
-Console.WriteLine($"Starting QsoRipper .NET engine on {options.ListenAddress} using config {options.ConfigPath}");
+Console.WriteLine($"Starting QsoRipper .NET engine on {options.ListenAddress} using config {options.ConfigPath} (storage: {storage.BackendName})");
 await app.RunAsync();
+
+static IEngineStorage CreateStorage()
+{
+    var backend = Environment.GetEnvironmentVariable("QSORIPPER_STORAGE_BACKEND")?.Trim();
+    if (string.Equals(backend, "sqlite", StringComparison.OrdinalIgnoreCase))
+    {
+        var path = Environment.GetEnvironmentVariable("QSORIPPER_STORAGE_PATH")?.Trim();
+        var storageBuilder = new SqliteStorageBuilder();
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            storageBuilder.Path(path);
+        }
+
+        return storageBuilder.Build();
+    }
+
+    return new MemoryStorage();
+}
 
 static void ConfigureListenEndpoint(KestrelServerOptions options, string listenAddress)
 {
