@@ -120,12 +120,12 @@ function Get-ProbeTargets([string]$Address) {
     )
 }
 
-function Format-HttpEndpoint([string]$Host, [int]$Port) {
-    if ($Host.Contains(':') -and -not $Host.StartsWith('[')) {
-        return "http://[$Host]:$Port"
+function Format-HttpEndpoint([string]$TargetHost, [int]$Port) {
+    if ($TargetHost.Contains(':') -and -not $TargetHost.StartsWith('[')) {
+        return "http://[${TargetHost}]:${Port}"
     }
 
-    return "http://$Host:$Port"
+    return "http://${TargetHost}:${Port}"
 }
 
 function Test-TcpEndpoint([string]$TargetHost, [int]$Port) {
@@ -535,7 +535,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
     foreach ($probeTarget in $probeTargets) {
         if (Test-TcpEndpoint -TargetHost $probeTarget.Host -Port $probeTarget.Port) {
             Write-Host "$($profile.DisplayName) started in the background (PID $($process.Id))." -ForegroundColor Green
-            Write-Host "Endpoint: $(Format-HttpEndpoint -Host $probeTarget.Host -Port $probeTarget.Port)" -ForegroundColor Green
+            Write-Host "Endpoint: $(Format-HttpEndpoint -TargetHost $probeTarget.Host -Port $probeTarget.Port)" -ForegroundColor Green
             if ($Storage -ne 'memory' -and -not [string]::IsNullOrWhiteSpace($PersistenceLocation)) {
                 Write-Host "Persistence location: $PersistenceLocation" -ForegroundColor Green
             }
@@ -552,4 +552,4 @@ while ([DateTime]::UtcNow -lt $deadline) {
 
 Stop-TrackedProcess -ProcessId $process.Id
 Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
-throw "QsoRipper did not open any expected endpoint ($((@($probeTargets | ForEach-Object { Format-HttpEndpoint -Host $_.Host -Port $_.Port })) -join ', ')) within $StartupTimeoutSeconds seconds."
+throw "QsoRipper did not open any expected endpoint ($((@($probeTargets | ForEach-Object { Format-HttpEndpoint -TargetHost $_.Host -Port $_.Port })) -join ', ')) within $StartupTimeoutSeconds seconds."
