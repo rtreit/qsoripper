@@ -1,8 +1,11 @@
+using QsoRipper.EngineSelection;
+
 namespace QsoRipper.Cli;
 
 internal sealed record CliArguments(
     string Command,
     string Endpoint,
+    EngineImplementation EngineImplementation = EngineImplementation.Rust,
     bool ShowHelp = false,
     string? Error = null,
     string? Callsign = null,

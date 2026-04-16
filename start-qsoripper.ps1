@@ -1,17 +1,19 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Starts the QsoRipper Rust engine in the background.
+    Starts the selected QsoRipper engine in the background.
 
 .DESCRIPTION
-    Builds qsoripper-server if needed, launches it as a background process,
+    Builds the selected engine if needed, launches it as a background process,
     and records its PID and log paths under artifacts/run.
 #>
 
 param(
-    [string]$ListenAddress = '127.0.0.1:50051',
+    [ValidateSet('rust', 'dotnet')]
+    [string]$Engine = 'rust',
+    [string]$ListenAddress,
     [ValidateSet('sqlite', 'memory')]
-    [string]$Storage = 'sqlite',
+    [string]$Storage,
     [string]$SqlitePath,
     [string]$ConfigPath,
     [int]$StartupTimeoutSeconds = 30,
@@ -22,16 +24,39 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $runtimeDirectory = Join-Path $PSScriptRoot 'artifacts' | Join-Path -ChildPath 'run'
-$statePath = Join-Path $runtimeDirectory 'qsoripper-server.json'
-$stdoutPath = Join-Path $runtimeDirectory 'qsoripper-server.stdout.log'
-$stderrPath = Join-Path $runtimeDirectory 'qsoripper-server.stderr.log'
+$statePath = Join-Path $runtimeDirectory 'qsoripper-engine.json'
+$stdoutPath = Join-Path $runtimeDirectory "qsoripper-$Engine.stdout.log"
+$stderrPath = Join-Path $runtimeDirectory "qsoripper-$Engine.stderr.log"
 $dotenvPath = Join-Path $PSScriptRoot '.env'
 $rustManifestPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'rust' | Join-Path -ChildPath 'Cargo.toml'
+$dotnetProjectPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'dotnet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet.csproj'
+$dotnetDebugDllPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'dotnet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet' | Join-Path -ChildPath 'bin' | Join-Path -ChildPath 'Debug' | Join-Path -ChildPath 'net10.0' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet.dll'
+$dotnetReleaseDllPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'dotnet' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet' | Join-Path -ChildPath 'bin' | Join-Path -ChildPath 'Release' | Join-Path -ChildPath 'net10.0' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet.dll'
 $binaryName = if ($IsWindows) { 'qsoripper-server.exe' } else { 'qsoripper-server' }
 $serverBinaryPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'rust' | Join-Path -ChildPath 'target' | Join-Path -ChildPath 'debug' | Join-Path -ChildPath $binaryName
 
 function Write-Info([string]$Message) {
     Write-Host $Message -ForegroundColor Cyan
+}
+
+function Get-DefaultListenAddress([string]$SelectedEngine) {
+    if ($SelectedEngine -eq 'dotnet') {
+        return '127.0.0.1:50052'
+    }
+
+    return '127.0.0.1:50051'
+}
+
+function Resolve-DotNetEngineDllPath {
+    if (Test-Path -LiteralPath $dotnetDebugDllPath) {
+        return $dotnetDebugDllPath
+    }
+
+    if (Test-Path -LiteralPath $dotnetReleaseDllPath) {
+        return $dotnetReleaseDllPath
+    }
+
+    return $dotnetDebugDllPath
 }
 
 function Import-DotEnv([string]$Path) {
@@ -159,6 +184,22 @@ function Stop-TrackedProcess([int]$ProcessId) {
 New-Item -ItemType Directory -Path $runtimeDirectory -Force | Out-Null
 Import-DotEnv -Path $dotenvPath
 
+if ([string]::IsNullOrWhiteSpace($ListenAddress)) {
+    $ListenAddress = Get-DefaultListenAddress -SelectedEngine $Engine
+}
+
+if ([string]::IsNullOrWhiteSpace($Storage)) {
+    $Storage = if ($Engine -eq 'dotnet') { 'memory' } else { 'sqlite' }
+}
+
+if ($Engine -eq 'dotnet' -and $Storage -ne 'memory') {
+    throw 'The managed .NET engine helper currently supports only memory storage.'
+}
+
+if ($Engine -eq 'dotnet' -and [string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $ConfigPath = Join-Path $runtimeDirectory 'dotnet-engine.json'
+}
+
 $existing = Get-TrackedProcess
 if ($null -ne $existing) {
     if (-not $ForceRestart) {
@@ -196,33 +237,56 @@ if ($ForceRestart) {
 }
 
 if (-not $SkipBuild) {
-    Write-Info 'Building qsoripper-server.'
-    cargo build --manifest-path $rustManifestPath -p qsoripper-server
+    if ($Engine -eq 'dotnet') {
+        Write-Info 'Building QsoRipper .NET engine.'
+        dotnet build $dotnetProjectPath -c Debug
+    }
+    else {
+        Write-Info 'Building qsoripper-server.'
+        cargo build --manifest-path $rustManifestPath -p qsoripper-server
+    }
+
     if ($LASTEXITCODE -ne 0) {
-        throw "cargo build failed with exit code $LASTEXITCODE."
+        throw "Build failed with exit code $LASTEXITCODE."
     }
 }
 
-if (-not (Test-Path -LiteralPath $serverBinaryPath)) {
+if ($Engine -eq 'dotnet') {
+    $dotnetDllPath = Resolve-DotNetEngineDllPath
+    if (-not (Test-Path -LiteralPath $dotnetDllPath)) {
+        throw "Managed engine assembly not found at $dotnetDllPath."
+    }
+}
+elseif (-not (Test-Path -LiteralPath $serverBinaryPath)) {
     throw "Server binary not found at $serverBinaryPath."
 }
 
-$argumentList = @(
-    '--listen', $ListenAddress,
-    '--storage', $Storage
-)
+if ($Engine -eq 'dotnet') {
+    $filePath = 'dotnet'
+    $argumentList = @(
+        $dotnetDllPath,
+        '--listen', $ListenAddress
+    )
+}
+else {
+    $filePath = $serverBinaryPath
+    $argumentList = @(
+        '--listen', $ListenAddress,
+        '--storage', $Storage
+    )
 
-if ($Storage -eq 'sqlite' -and -not [string]::IsNullOrWhiteSpace($SqlitePath)) {
-    $argumentList += @('--sqlite-path', $SqlitePath)
+    if ($Storage -eq 'sqlite' -and -not [string]::IsNullOrWhiteSpace($SqlitePath)) {
+        $argumentList += @('--sqlite-path', $SqlitePath)
+    }
 }
 
 if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
     $argumentList += @('--config', $ConfigPath)
 }
 
-Write-Info "Starting QsoRipper on $ListenAddress using $Storage storage."
+Write-Info "Starting $Engine QsoRipper engine on $ListenAddress."
 $startProcessParameters = @{
-    FilePath = $serverBinaryPath
+    FilePath = $filePath
     ArgumentList = $argumentList
     WorkingDirectory = $PSScriptRoot
     RedirectStandardOutput = $stdoutPath
@@ -237,6 +301,7 @@ if ($IsWindows) {
 $process = Start-Process @startProcessParameters
 
 $state = [pscustomobject]@{
+    engine = $Engine
     pid = $process.Id
     listenAddress = $ListenAddress
     storage = $Storage
@@ -261,10 +326,13 @@ while ([DateTime]::UtcNow -lt $deadline) {
     }
 
     if (Test-TcpEndpoint -TargetHost $probeTarget.Host -Port $probeTarget.Port) {
-        Write-Host "QsoRipper started in the background (PID $($process.Id))." -ForegroundColor Green
+        Write-Host "QsoRipper $Engine engine started in the background (PID $($process.Id))." -ForegroundColor Green
         Write-Host "Endpoint: http://$($probeTarget.Host):$($probeTarget.Port)" -ForegroundColor Green
         if ($Storage -eq 'sqlite' -and -not [string]::IsNullOrWhiteSpace($SqlitePath)) {
             Write-Host "SQLite file: $SqlitePath" -ForegroundColor Green
+        }
+        if ($Engine -eq 'dotnet' -and -not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+            Write-Host "Managed config: $ConfigPath" -ForegroundColor Green
         }
         Write-Host "Logs: $stdoutPath" -ForegroundColor Green
         exit 0

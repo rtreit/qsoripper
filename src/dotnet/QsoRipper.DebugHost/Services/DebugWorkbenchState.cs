@@ -4,12 +4,14 @@ using Grpc.Core;
 using Grpc.Net.Client;
 using Microsoft.Extensions.Options;
 using QsoRipper.DebugHost.Models;
+using QsoRipper.EngineSelection;
 using QsoRipper.Services;
 
 namespace QsoRipper.DebugHost.Services;
 
 internal sealed class DebugWorkbenchState
 {
+    private const string SuggestedManagedConfigPath = @".\artifacts\run\dotnet-engine.json";
     private readonly DebugWorkbenchOptions _options;
 
     public DebugWorkbenchState(IOptions<DebugWorkbenchOptions> options)
@@ -17,16 +19,21 @@ internal sealed class DebugWorkbenchState
         ArgumentNullException.ThrowIfNull(options);
 
         _options = options.Value;
-        EngineEndpoint = _options.DefaultEngineEndpoint.Trim();
+        EngineImplementation = EngineCatalog.ResolveImplementation(_options.DefaultEngineImplementation);
+        EngineEndpoint = EngineCatalog.ResolveEndpoint(EngineImplementation, _options.DefaultEngineEndpoint);
         EngineStorageBackend = ParseStorageBackend(_options.DefaultEngineStorageBackend);
         EngineSqlitePath = NormalizeSqlitePath(_options.DefaultEngineSqlitePath);
     }
+
+    public EngineImplementation EngineImplementation { get; private set; }
 
     public string EngineEndpoint { get; private set; }
 
     public EngineStorageBackend EngineStorageBackend { get; private set; }
 
     public string EngineSqlitePath { get; private set; }
+
+    public EngineInfo? ReportedEngineInfo { get; private set; }
 
     public TransportProbeResult? LastProbe { get; private set; }
 
@@ -49,6 +56,22 @@ internal sealed class DebugWorkbenchState
         ArgumentNullException.ThrowIfNull(endpoint);
 
         EngineEndpoint = endpoint.Trim();
+        LastProbe = null;
+        ReportedEngineInfo = null;
+    }
+
+    public void UpdateEngineImplementation(EngineImplementation implementation)
+    {
+        var previousImplementation = EngineImplementation;
+        EngineImplementation = implementation;
+        if (string.IsNullOrWhiteSpace(EngineEndpoint)
+            || EngineCatalog.IsDefaultEndpoint(EngineEndpoint, previousImplementation))
+        {
+            EngineEndpoint = EngineCatalog.GetDefaultEndpoint(implementation);
+        }
+
+        LastProbe = null;
+        ReportedEngineInfo = null;
     }
 
     public void UpdateStorageOptions(EngineStorageBackend backend, string sqlitePath)
@@ -146,12 +169,26 @@ internal sealed class DebugWorkbenchState
         };
     }
 
-    public string BuildRustServerCommand()
+    public string GetSelectedEngineDisplayName()
     {
-        return EngineStorageBackend switch
+        return EngineCatalog.GetDisplayName(EngineImplementation);
+    }
+
+    public string GetSelectedEngineId()
+    {
+        return EngineCatalog.GetEngineId(EngineImplementation);
+    }
+
+    public string BuildEngineLaunchCommand()
+    {
+        return EngineImplementation switch
         {
-            EngineStorageBackend.Sqlite => $"cargo run -p qsoripper-server -- --storage sqlite --sqlite-path {EngineSqlitePath}",
-            _ => "cargo run -p qsoripper-server -- --storage memory"
+            EngineImplementation.DotNet => $"dotnet run --project src\\dotnet\\QsoRipper.Engine.DotNet -- --listen {GetListenAddress()} --config {SuggestedManagedConfigPath}",
+            _ => EngineStorageBackend switch
+            {
+                EngineStorageBackend.Sqlite => $"cargo run -p qsoripper-server -- --storage sqlite --sqlite-path {EngineSqlitePath}",
+                _ => "cargo run -p qsoripper-server -- --storage memory"
+            }
         };
     }
 
@@ -185,6 +222,7 @@ internal sealed class DebugWorkbenchState
         var attemptedAt = DateTimeOffset.UtcNow;
         if (!Uri.TryCreate(EngineEndpoint, UriKind.Absolute, out var endpointUri))
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.InvalidEndpoint,
@@ -209,6 +247,7 @@ internal sealed class DebugWorkbenchState
         }
         catch (OperationCanceledException ex)
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.TcpUnreachable,
@@ -220,6 +259,7 @@ internal sealed class DebugWorkbenchState
         }
         catch (SocketException ex)
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.TcpUnreachable,
@@ -231,6 +271,7 @@ internal sealed class DebugWorkbenchState
         }
         catch (IOException ex)
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.TcpUnreachable,
@@ -241,21 +282,35 @@ internal sealed class DebugWorkbenchState
             return LastProbe;
         }
 
-        // TCP succeeded; now probe gRPC capability via GetSyncStatus.
+        // TCP succeeded; now probe gRPC capability via EngineService and GetSyncStatus.
         var grpcChannel = GrpcChannel.ForAddress(endpointUri);
         try
         {
             using var grpcTimeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             grpcTimeoutSource.CancelAfter(TimeSpan.FromSeconds(_options.ProbeTimeoutSeconds));
 
-            var client = new LogbookService.LogbookServiceClient(grpcChannel);
             var callOptions = new CallOptions(cancellationToken: grpcTimeoutSource.Token);
+            EngineInfo? engineInfo = null;
+            var engineClient = new EngineService.EngineServiceClient(grpcChannel);
+            try
+            {
+                engineInfo = (await engineClient.GetEngineInfoAsync(new GetEngineInfoRequest(), callOptions)).Engine;
+            }
+            catch (RpcException ex) when (ex.StatusCode == StatusCode.Unimplemented)
+            {
+            }
+
+            ReportedEngineInfo = engineInfo?.Clone();
+            var client = new LogbookService.LogbookServiceClient(grpcChannel);
             await client.GetSyncStatusAsync(new GetSyncStatusRequest(), callOptions);
+            var engineLabel = engineInfo is null
+                ? "Engine"
+                : $"{engineInfo.DisplayName} ({engineInfo.EngineId})";
 
             LastProbe = new TransportProbeResult(
                 true,
                 EngineProbeStage.MethodSucceeded,
-                "Engine is reachable and GetSyncStatus succeeded. Baseline service is live.",
+                $"{engineLabel} is reachable and GetSyncStatus succeeded. Baseline service is live.",
                 "The engine is operational. Proceed with logbook and lookup workflows.",
                 attemptedAt,
                 EngineEndpoint);
@@ -263,28 +318,33 @@ internal sealed class DebugWorkbenchState
         }
         catch (RpcException ex) when (ex.StatusCode == StatusCode.Unimplemented)
         {
+            var engineLabel = ReportedEngineInfo is null
+                ? "The selected engine"
+                : $"{ReportedEngineInfo.DisplayName} ({ReportedEngineInfo.EngineId})";
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.MethodUnimplemented,
-                "TCP and gRPC transport are reachable, but GetSyncStatus is not implemented.",
-                "Implement GetSyncStatus in the Rust engine host to enable baseline service health checks.",
+                $"{engineLabel} is reachable, but GetSyncStatus is not implemented.",
+                "Implement GetSyncStatus in the selected engine host to enable baseline service health checks.",
                 attemptedAt,
                 EngineEndpoint);
             return LastProbe;
         }
         catch (RpcException ex) when (ex.StatusCode == StatusCode.Unavailable)
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.GrpcUnavailable,
                 $"TCP is reachable but gRPC is unavailable: {ex.Status.Detail}",
-                "Start the Rust gRPC engine host. The port is open but no gRPC service is responding.",
+                "Start the selected gRPC engine host. The port is open but no gRPC service is responding.",
                 attemptedAt,
                 EngineEndpoint);
             return LastProbe;
         }
         catch (RpcException ex)
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.GrpcUnavailable,
@@ -296,11 +356,12 @@ internal sealed class DebugWorkbenchState
         }
         catch (OperationCanceledException)
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.GrpcUnavailable,
                 "gRPC call timed out. TCP is reachable but the gRPC service did not respond in time.",
-                "Start the Rust gRPC engine host. The port is open but no gRPC service is responding.",
+                "Start the selected gRPC engine host. The port is open but no gRPC service is responding.",
                 attemptedAt,
                 EngineEndpoint);
             return LastProbe;
@@ -326,5 +387,16 @@ internal sealed class DebugWorkbenchState
         return string.IsNullOrWhiteSpace(sqlitePath)
             ? @".\data\qsoripper.db"
             : sqlitePath.Trim();
+    }
+
+    private string GetListenAddress()
+    {
+        if (Uri.TryCreate(EngineEndpoint, UriKind.Absolute, out var endpointUri))
+        {
+            return $"{endpointUri.Host}:{endpointUri.Port}";
+        }
+
+        var fallbackUri = new Uri(EngineCatalog.GetDefaultEndpoint(EngineImplementation), UriKind.Absolute);
+        return $"{fallbackUri.Host}:{fallbackUri.Port}";
     }
 }

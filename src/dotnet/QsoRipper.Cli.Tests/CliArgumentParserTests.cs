@@ -1,4 +1,5 @@
 using QsoRipper.Cli;
+using QsoRipper.EngineSelection;
 
 namespace QsoRipper.Cli.Tests;
 
@@ -90,6 +91,25 @@ public class CliArgumentParserTests
         Assert.Equal("http://host:9090", arguments.Endpoint);
         Assert.Equal("AA1AA", arguments.Callsign);
         Assert.True(arguments.SkipCache);
+    }
+
+    [Fact]
+    public void Parse_engine_switch_updates_default_endpoint()
+    {
+        var arguments = CliArgumentParser.Parse(["--engine", "dotnet", "status"]);
+
+        Assert.Equal("status", arguments.Command);
+        Assert.Equal(EngineImplementation.DotNet, arguments.EngineImplementation);
+        Assert.Equal(EngineCatalog.DefaultDotNetEndpoint, arguments.Endpoint);
+    }
+
+    [Fact]
+    public void Parse_returns_error_for_unknown_engine()
+    {
+        var arguments = CliArgumentParser.Parse(["--engine", "fortran", "status"]);
+
+        Assert.True(arguments.ShowHelp);
+        Assert.Equal("Unknown engine implementation 'fortran'. Use 'rust' or 'dotnet'.", arguments.Error);
     }
 
     [Fact]

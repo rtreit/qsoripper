@@ -6,7 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="Google.Protobuf" />
-    <PackageReference Include="Grpc.Net.Client" />
+    <PackageReference Include="Grpc.AspNetCore" />
     <PackageReference Include="Grpc.Tools">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
@@ -21,15 +21,15 @@
               ProtoRoot="..\..\..\proto"
               GrpcServices="None" />
     <Protobuf Update="..\..\..\proto\services\*service.proto"
-              GrpcServices="Client" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <InternalsVisibleTo Include="QsoRipper.DebugHost.Tests" />
+              GrpcServices="Server" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\QsoRipper.EngineSelection\QsoRipper.EngineSelection.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="QsoRipper.Engine.DotNet.Tests" />
   </ItemGroup>
 
 </Project>

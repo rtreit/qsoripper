@@ -2,6 +2,7 @@ using System;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using QsoRipper.EngineSelection;
 using QsoRipper.Gui.Inspection;
 using QsoRipper.Gui.ViewModels;
 using QsoRipper.Gui.Views;
@@ -33,8 +34,8 @@ internal sealed partial class App : Application
             }
             else
             {
-                var endpoint = Environment.GetEnvironmentVariable("QSORIPPER_ENDPOINT")
-                    ?? "http://127.0.0.1:50051";
+                var engineImplementation = EngineCatalog.ResolveImplementation();
+                var endpoint = EngineCatalog.ResolveEndpoint(engineImplementation);
 
                 var mainVm = new MainWindowViewModel(endpoint);
 

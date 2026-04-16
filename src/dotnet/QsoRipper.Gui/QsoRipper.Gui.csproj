@@ -34,4 +34,8 @@
               GrpcServices="Client" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\QsoRipper.EngineSelection\QsoRipper.EngineSelection.csproj" />
+  </ItemGroup>
+
 </Project>

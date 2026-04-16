@@ -1,12 +1,17 @@
 using Grpc.Net.Client;
 using QsoRipper.Cli;
+using QsoRipper.EngineSelection;
 using QsoRipper.Services;
 
 namespace QsoRipper.Cli.Commands;
 
 internal static class StatusCommand
 {
-    public static async Task<int> RunAsync(GrpcChannel channel, bool jsonOutput = false)
+    public static async Task<int> RunAsync(
+        GrpcChannel channel,
+        string endpoint,
+        EngineImplementation engineImplementation,
+        bool jsonOutput = false)
     {
         var client = new LogbookService.LogbookServiceClient(channel);
         var response = await client.GetSyncStatusAsync(new GetSyncStatusRequest());
@@ -15,6 +20,24 @@ internal static class StatusCommand
         {
             JsonOutput.Print(response);
             return 0;
+        }
+
+        var engineClient = new EngineService.EngineServiceClient(channel);
+        EngineInfo? engineInfo = null;
+        try
+        {
+            engineInfo = (await engineClient.GetEngineInfoAsync(new GetEngineInfoRequest())).Engine;
+        }
+        catch (Grpc.Core.RpcException ex) when (ex.StatusCode == Grpc.Core.StatusCode.Unimplemented)
+        {
+        }
+
+        Console.WriteLine(
+            $"Engine:           {(engineInfo is null ? EngineCatalog.GetDisplayName(engineImplementation) : engineInfo.DisplayName)}{(string.IsNullOrWhiteSpace(engineInfo?.EngineId) ? string.Empty : $" ({engineInfo.EngineId})")}");
+        Console.WriteLine($"Endpoint:         {endpoint}");
+        if (!string.IsNullOrWhiteSpace(engineInfo?.Version))
+        {
+            Console.WriteLine($"Engine version:   {engineInfo.Version}");
         }
 
         Console.WriteLine($"Local QSOs:       {response.LocalQsoCount}");

@@ -2,6 +2,7 @@ using Grpc.Core;
 using Grpc.Net.Client;
 using QsoRipper.Cli;
 using QsoRipper.Cli.Commands;
+using QsoRipper.EngineSelection;
 
 var arguments = CliArgumentParser.Parse(args);
 
@@ -33,7 +34,11 @@ try
 
     return arguments.Command switch
     {
-        "status" => await StatusCommand.RunAsync(channel, arguments.JsonOutput),
+        "status" => await StatusCommand.RunAsync(
+            channel,
+            arguments.Endpoint,
+            arguments.EngineImplementation,
+            arguments.JsonOutput),
         "space-weather" => await SpaceWeatherCommand.RunAsync(channel, arguments.Refresh, arguments.JsonOutput),
         "lookup" => await LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache, arguments.JsonOutput),
         "stream-lookup" => await StreamLookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache),
@@ -56,7 +61,8 @@ try
 }
 catch (RpcException ex) when (ex.StatusCode == StatusCode.Unavailable)
 {
-    Console.Error.WriteLine($"Could not connect to QsoRipper engine at {arguments.Endpoint}");
+    Console.Error.WriteLine(
+        $"Could not connect to {EngineCatalog.GetDisplayName(arguments.EngineImplementation)} at {arguments.Endpoint}");
     Console.Error.WriteLine("Make sure the engine is running.");
     return 1;
 }

@@ -9,7 +9,7 @@
 
 <h1 class="mb-3">Storage Workbench</h1>
 <p class="text-muted">
-    Exercise the logbook CRUD path against the active Rust engine endpoint. Use the engine session page to
+    Exercise the logbook CRUD path against the active engine endpoint. Use the engine session page to
     hot-apply memory or SQLite runtime overrides, then rerun the same smoke test here to compare create,
     update, read, list, sync-status, and cleanup behavior without restarting the process.
 </p>
@@ -74,8 +74,8 @@
         </div>
     }
     <div class="col-xl-6">
-        <PayloadCard Title="Rust host launch command"
-                     Payload="@WorkbenchState.BuildRustServerCommand()"
+        <PayloadCard Title="Local engine launch command"
+                     Payload="@WorkbenchState.BuildEngineLaunchCommand()"
                      BadgeText="@WorkbenchState.GetStorageBackendDisplayName()" />
     </div>
 </div>

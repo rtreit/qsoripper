@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using QsoRipper.DebugHost.Models;
 using QsoRipper.DebugHost.Services;
 using QsoRipper.Domain;
+using QsoRipper.EngineSelection;
 using QsoRipper.Services;
 
 namespace QsoRipper.DebugHost.Tests;
@@ -22,8 +23,8 @@ public class DebugWorkbenchStateTests
         Assert.Equal("http://localhost:60051", state.EngineEndpoint);
         Assert.Equal(EngineStorageBackend.Sqlite, state.EngineStorageBackend);
         Assert.Equal(@".\data\test-qsoripper.db", state.EngineSqlitePath);
-        Assert.Contains("--storage sqlite", state.BuildRustServerCommand(), StringComparison.Ordinal);
-        Assert.Contains("--sqlite-path .\\data\\test-qsoripper.db", state.BuildRustServerCommand(), StringComparison.Ordinal);
+        Assert.Contains("--storage sqlite", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Contains("--sqlite-path .\\data\\test-qsoripper.db", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -38,7 +39,36 @@ public class DebugWorkbenchStateTests
         Assert.Equal(EngineStorageBackend.Memory, state.EngineStorageBackend);
         Assert.Equal("memory", state.GetEngineEnvironmentOverrides()["QSORIPPER_STORAGE_BACKEND"]);
         Assert.DoesNotContain("QSORIPPER_SQLITE_PATH", state.GetEngineEnvironmentOverrides().Keys, StringComparer.Ordinal);
-        Assert.Equal("cargo run -p qsoripper-server -- --storage memory", state.BuildRustServerCommand());
+        Assert.Equal("cargo run -p qsoripper-server -- --storage memory", state.BuildEngineLaunchCommand());
+    }
+
+    [Fact]
+    public void Initializes_dotnet_engine_defaults_from_options()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions
+        {
+            DefaultEngineImplementation = "dotnet",
+            DefaultEngineEndpoint = ""
+        }));
+
+        Assert.Equal(EngineImplementation.DotNet, state.EngineImplementation);
+        Assert.Equal(EngineCatalog.DefaultDotNetEndpoint, state.EngineEndpoint);
+        Assert.Contains(@"QsoRipper.Engine.DotNet", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Contains("--listen 127.0.0.1:50052", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Update_engine_implementation_swaps_default_endpoint_but_preserves_custom_endpoint()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
+
+        state.UpdateEngineImplementation(EngineImplementation.DotNet);
+        Assert.Equal(EngineCatalog.DefaultDotNetEndpoint, state.EngineEndpoint);
+
+        state.UpdateEngineEndpoint("http://localhost:61234");
+        state.UpdateEngineImplementation(EngineImplementation.Rust);
+
+        Assert.Equal("http://localhost:61234", state.EngineEndpoint);
     }
 
     [Fact]
@@ -79,7 +109,7 @@ public class DebugWorkbenchStateTests
         Assert.Equal(EngineStorageBackend.Sqlite, state.EngineStorageBackend);
         Assert.Equal(@".\data\live-qsoripper.db", state.EngineSqlitePath);
         Assert.Equal("<redacted>", state.GetEngineEnvironmentOverrides()["QSORIPPER_QRZ_XML_PASSWORD"]);
-        Assert.Contains("--storage sqlite", state.BuildRustServerCommand(), StringComparison.Ordinal);
+        Assert.Contains("--storage sqlite", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
     }
 
     [Fact]

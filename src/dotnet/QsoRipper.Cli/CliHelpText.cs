@@ -38,7 +38,8 @@ internal static class CliHelpText
               rig-status                       Show rig connection and current state
 
             Options:
-              --endpoint, -e <url>             Engine endpoint (default: http://127.0.0.1:50051)
+              --engine <rust|dotnet>           Engine implementation (changes the default endpoint)
+              --endpoint, -e <url>             Engine endpoint (default: rust=50051, dotnet=50052)
               --skip-cache                     Bypass cache for lookup commands
               --json                           Output as JSON (for piping to PowerShell)
               --help, -h                       Show this help
@@ -191,7 +192,7 @@ internal static class CliHelpText
             "status" => """
                 Usage: status
 
-                Show engine sync status and QSO counts.
+                Show engine identity, sync status, and QSO counts.
                 """,
             "rig-status" => """
                 Usage: rig-status

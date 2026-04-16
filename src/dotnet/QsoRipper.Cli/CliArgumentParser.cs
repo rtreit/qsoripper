@@ -1,14 +1,18 @@
+using QsoRipper.EngineSelection;
+
 namespace QsoRipper.Cli;
 
 internal static class CliArgumentParser
 {
-    public const string DefaultEndpoint = "http://127.0.0.1:50051";
+    public const string DefaultEndpoint = EngineCatalog.DefaultRustEndpoint;
 
     public static CliArguments Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
 
-        var endpoint = Environment.GetEnvironmentVariable("QSORIPPER_ENDPOINT") ?? DefaultEndpoint;
+        var engineImplementation = EngineCatalog.ResolveImplementation();
+        var endpoint = EngineCatalog.ResolveEndpoint(engineImplementation);
+        var hasExplicitEndpoint = false;
         string? command = null;
         string? callsign = null;
         var skipCache = false;
@@ -35,14 +39,51 @@ internal static class CliArgumentParser
                 continue;
             }
 
+            if (arg == "--engine")
+            {
+                if (i == args.Length - 1)
+                {
+                    return new CliArguments(
+                        "help",
+                        endpoint,
+                        engineImplementation,
+                        ShowHelp: true,
+                        Error: "Missing value for --engine.");
+                }
+
+                if (!EngineCatalog.TryParseImplementation(args[++i], out var parsedImplementation))
+                {
+                    return new CliArguments(
+                        "help",
+                        endpoint,
+                        engineImplementation,
+                        ShowHelp: true,
+                        Error: $"Unknown engine implementation '{args[i]}'. Use 'rust' or 'dotnet'.");
+                }
+
+                engineImplementation = parsedImplementation.Value;
+                if (!hasExplicitEndpoint)
+                {
+                    endpoint = EngineCatalog.ResolveEndpoint(engineImplementation);
+                }
+
+                continue;
+            }
+
             if (arg is "--endpoint" or "-e")
             {
                 if (i == args.Length - 1)
                 {
-                    return new CliArguments("help", endpoint, ShowHelp: true, Error: "Missing value for --endpoint.");
+                    return new CliArguments(
+                        "help",
+                        endpoint,
+                        engineImplementation,
+                        ShowHelp: true,
+                        Error: "Missing value for --endpoint.");
                 }
 
                 endpoint = args[++i];
+                hasExplicitEndpoint = true;
                 continue;
             }
 
@@ -102,6 +143,7 @@ internal static class CliArgumentParser
         return new CliArguments(
             command ?? "help",
             endpoint,
+            engineImplementation,
             ShowHelp: command is null,
             Callsign: callsign,
             SkipCache: skipCache,

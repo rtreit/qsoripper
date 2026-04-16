@@ -11,7 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $runtimeDirectory = Join-Path $PSScriptRoot 'artifacts' | Join-Path -ChildPath 'run'
-$statePath = Join-Path $runtimeDirectory 'qsoripper-server.json'
+$statePath = Join-Path $runtimeDirectory 'qsoripper-engine.json'
 
 function Get-State {
     if (-not (Test-Path -LiteralPath $statePath)) {
@@ -41,7 +41,8 @@ while ([DateTime]::UtcNow -lt $deadline) {
     Start-Sleep -Milliseconds 200
     if ($null -eq (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) {
         Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
-        Write-Host "Stopped QsoRipper (PID $($process.Id))." -ForegroundColor Green
+        $engineLabel = if ([string]::IsNullOrWhiteSpace($state.engine)) { 'engine' } else { "$($state.engine) engine" }
+        Write-Host "Stopped QsoRipper $engineLabel (PID $($process.Id))." -ForegroundColor Green
         Write-Host "Logs retained under $runtimeDirectory." -ForegroundColor Green
         exit 0
     }
