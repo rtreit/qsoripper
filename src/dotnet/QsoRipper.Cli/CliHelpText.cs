@@ -38,7 +38,8 @@ internal static class CliHelpText
               rig-status                       Show rig connection and current state
 
             Options:
-              --endpoint, -e <url>             Engine endpoint (default: http://127.0.0.1:50051)
+              --engine <profile>               Engine profile (for example: rust, dotnet, local-rust)
+              --endpoint, -e <url>             Engine endpoint (default: rust=50051, dotnet=50052)
               --skip-cache                     Bypass cache for lookup commands
               --json                           Output as JSON (for piping to PowerShell)
               --help, -h                       Show this help
@@ -167,7 +168,7 @@ internal static class CliHelpText
                 Usage: setup [--status] [--from-env]
 
                 Interactive setup wizard for first-run configuration. Walks through
-                log file path, station profile, and optional QRZ integration step by step.
+                persistence settings, station profile, and optional QRZ integration step by step.
 
                 Modes:
                   (default)          Interactive wizard — prompts for each setting
@@ -175,7 +176,8 @@ internal static class CliHelpText
                   --from-env         Headless setup from environment variables (no prompts)
 
                 Environment variables for --from-env:
-                  QSORIPPER_LOG_FILE              Log file path
+                  QSORIPPER_LOG_FILE              Legacy alias for persistence.path
+                  QSORIPPER_PERSISTENCE_<FIELD>   Persistence field values (for example PATH)
                   QSORIPPER_STATION_CALLSIGN      Station callsign (required)
                   QSORIPPER_OPERATOR_CALLSIGN     Operator callsign (defaults to station)
                   QSORIPPER_PROFILE_NAME          Profile name (defaults to "Default")
@@ -191,7 +193,7 @@ internal static class CliHelpText
             "status" => """
                 Usage: status
 
-                Show engine sync status and QSO counts.
+                Show engine identity, sync status, and QSO counts.
                 """,
             "rig-status" => """
                 Usage: rig-status

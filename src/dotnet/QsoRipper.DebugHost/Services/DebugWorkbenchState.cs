@@ -4,6 +4,7 @@ using Grpc.Core;
 using Grpc.Net.Client;
 using Microsoft.Extensions.Options;
 using QsoRipper.DebugHost.Models;
+using QsoRipper.EngineSelection;
 using QsoRipper.Services;
 
 namespace QsoRipper.DebugHost.Services;
@@ -17,16 +18,24 @@ internal sealed class DebugWorkbenchState
         ArgumentNullException.ThrowIfNull(options);
 
         _options = options.Value;
-        EngineEndpoint = _options.DefaultEngineEndpoint.Trim();
-        EngineStorageBackend = ParseStorageBackend(_options.DefaultEngineStorageBackend);
-        EngineSqlitePath = NormalizeSqlitePath(_options.DefaultEngineSqlitePath);
+        var configuredProfile = string.IsNullOrWhiteSpace(_options.DefaultEngineProfile)
+            ? _options.DefaultEngineImplementation
+            : _options.DefaultEngineProfile;
+        EngineProfile = EngineCatalog.ResolveProfile(configuredProfile);
+        EngineEndpoint = EngineCatalog.ResolveEndpoint(EngineProfile, _options.DefaultEngineEndpoint);
+        EngineStorageBackend = NormalizeStorageBackend(_options.DefaultEngineStorageBackend);
+        EnginePersistenceLocation = NormalizePersistenceLocation(_options.DefaultEnginePersistenceLocation);
     }
+
+    public EngineTargetProfile EngineProfile { get; private set; }
 
     public string EngineEndpoint { get; private set; }
 
-    public EngineStorageBackend EngineStorageBackend { get; private set; }
+    public string EngineStorageBackend { get; private set; }
 
-    public string EngineSqlitePath { get; private set; }
+    public string EnginePersistenceLocation { get; private set; }
+
+    public EngineInfo? ReportedEngineInfo { get; private set; }
 
     public TransportProbeResult? LastProbe { get; private set; }
 
@@ -49,14 +58,38 @@ internal sealed class DebugWorkbenchState
         ArgumentNullException.ThrowIfNull(endpoint);
 
         EngineEndpoint = endpoint.Trim();
+        LastProbe = null;
+        ReportedEngineInfo = null;
     }
 
-    public void UpdateStorageOptions(EngineStorageBackend backend, string sqlitePath)
+    public void UpdateEngineProfile(string profileId)
     {
-        ArgumentNullException.ThrowIfNull(sqlitePath);
+        UpdateEngineProfile(EngineCatalog.GetProfile(profileId));
+    }
 
-        EngineStorageBackend = backend;
-        EngineSqlitePath = NormalizeSqlitePath(sqlitePath);
+    public void UpdateEngineProfile(EngineTargetProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        var previousProfile = EngineProfile;
+        EngineProfile = profile;
+        if (string.IsNullOrWhiteSpace(EngineEndpoint)
+            || EngineCatalog.IsDefaultEndpoint(EngineEndpoint, previousProfile))
+        {
+            EngineEndpoint = profile.DefaultEndpoint;
+        }
+
+        LastProbe = null;
+        ReportedEngineInfo = null;
+    }
+
+    public void UpdateStorageOptions(string backend, string persistenceLocation)
+    {
+        ArgumentNullException.ThrowIfNull(backend);
+        ArgumentNullException.ThrowIfNull(persistenceLocation);
+
+        EngineStorageBackend = NormalizeStorageBackend(backend);
+        EnginePersistenceLocation = NormalizePersistenceLocation(persistenceLocation);
     }
 
     public void UpdateRuntimeConfig(RuntimeConfigSnapshot snapshot)
@@ -65,13 +98,11 @@ internal sealed class DebugWorkbenchState
 
         RuntimeConfigSnapshot = snapshot;
         RuntimeConfigErrorMessage = null;
-        EngineStorageBackend = ParseStorageBackend(snapshot.ActiveStorageBackend);
+        EngineStorageBackend = NormalizeStorageBackend(snapshot.ActiveStorageBackend);
 
-        var sqlitePath = snapshot.Values.FirstOrDefault(value =>
-            string.Equals(value.Key, "QSORIPPER_SQLITE_PATH", StringComparison.OrdinalIgnoreCase));
-        if (sqlitePath is { HasValue: true })
+        if (!string.IsNullOrWhiteSpace(snapshot.PersistenceLocation))
         {
-            EngineSqlitePath = NormalizeSqlitePath(sqlitePath.DisplayValue);
+            EnginePersistenceLocation = NormalizePersistenceLocation(snapshot.PersistenceLocation);
         }
     }
 
@@ -96,8 +127,7 @@ internal sealed class DebugWorkbenchState
 #pragma warning restore CS0612
         if (!string.IsNullOrWhiteSpace(persistedLogFilePath))
         {
-            EngineStorageBackend = EngineStorageBackend.Sqlite;
-            EngineSqlitePath = NormalizeSqlitePath(persistedLogFilePath);
+            EnginePersistenceLocation = NormalizePersistenceLocation(persistedLogFilePath);
         }
     }
 
@@ -139,20 +169,45 @@ internal sealed class DebugWorkbenchState
 
     public string GetStorageBackendDisplayName()
     {
-        return EngineStorageBackend switch
+        if (!string.IsNullOrWhiteSpace(RuntimeConfigSnapshot?.PersistenceSummary))
         {
-            EngineStorageBackend.Sqlite => "SQLite",
-            _ => "Memory"
-        };
+            return RuntimeConfigSnapshot.PersistenceSummary;
+        }
+
+        return FormatStorageBackendDisplayName(EngineStorageBackend);
     }
 
-    public string BuildRustServerCommand()
+    public string? GetPersistenceLocation()
     {
-        return EngineStorageBackend switch
+        if (!string.IsNullOrWhiteSpace(RuntimeConfigSnapshot?.PersistenceLocation))
         {
-            EngineStorageBackend.Sqlite => $"cargo run -p qsoripper-server -- --storage sqlite --sqlite-path {EngineSqlitePath}",
-            _ => "cargo run -p qsoripper-server -- --storage memory"
-        };
+            return RuntimeConfigSnapshot.PersistenceLocation;
+        }
+
+        return string.IsNullOrWhiteSpace(EnginePersistenceLocation)
+            ? null
+            : EnginePersistenceLocation;
+    }
+
+    public string GetSelectedEngineDisplayName()
+    {
+        return EngineProfile.DisplayName;
+    }
+
+    public string GetSelectedEngineId()
+    {
+        return EngineProfile.EngineId;
+    }
+
+    public string BuildEngineLaunchCommand()
+    {
+        var recipe = EngineProfile.LocalLaunchRecipe;
+        if (recipe is null)
+        {
+            return "No local launch recipe is registered for the selected engine profile.";
+        }
+
+        return BuildCommandPreview(recipe.Command, BuildRecipeTokens(recipe));
     }
 
     public IReadOnlyDictionary<string, string> GetEngineEnvironmentOverrides()
@@ -167,14 +222,21 @@ internal sealed class DebugWorkbenchState
                     StringComparer.OrdinalIgnoreCase);
         }
 
-        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        var recipe = EngineProfile.LocalLaunchRecipe;
+        if (recipe is null)
         {
-            ["QSORIPPER_STORAGE_BACKEND"] = EngineStorageBackend == EngineStorageBackend.Sqlite ? "sqlite" : "memory"
-        };
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
 
-        if (EngineStorageBackend == EngineStorageBackend.Sqlite)
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var tokens = BuildRecipeTokens(recipe);
+        foreach (var template in recipe.EnvironmentTemplates)
         {
-            environment["QSORIPPER_SQLITE_PATH"] = EngineSqlitePath;
+            var value = ExpandTemplate(template.Value, tokens);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                environment[template.Key] = value;
+            }
         }
 
         return environment;
@@ -185,6 +247,7 @@ internal sealed class DebugWorkbenchState
         var attemptedAt = DateTimeOffset.UtcNow;
         if (!Uri.TryCreate(EngineEndpoint, UriKind.Absolute, out var endpointUri))
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.InvalidEndpoint,
@@ -209,6 +272,7 @@ internal sealed class DebugWorkbenchState
         }
         catch (OperationCanceledException ex)
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.TcpUnreachable,
@@ -220,6 +284,7 @@ internal sealed class DebugWorkbenchState
         }
         catch (SocketException ex)
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.TcpUnreachable,
@@ -231,6 +296,7 @@ internal sealed class DebugWorkbenchState
         }
         catch (IOException ex)
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.TcpUnreachable,
@@ -241,21 +307,35 @@ internal sealed class DebugWorkbenchState
             return LastProbe;
         }
 
-        // TCP succeeded; now probe gRPC capability via GetSyncStatus.
+        // TCP succeeded; now probe gRPC capability via EngineService and GetSyncStatus.
         var grpcChannel = GrpcChannel.ForAddress(endpointUri);
         try
         {
             using var grpcTimeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             grpcTimeoutSource.CancelAfter(TimeSpan.FromSeconds(_options.ProbeTimeoutSeconds));
 
-            var client = new LogbookService.LogbookServiceClient(grpcChannel);
             var callOptions = new CallOptions(cancellationToken: grpcTimeoutSource.Token);
+            EngineInfo? engineInfo = null;
+            var engineClient = new EngineService.EngineServiceClient(grpcChannel);
+            try
+            {
+                engineInfo = (await engineClient.GetEngineInfoAsync(new GetEngineInfoRequest(), callOptions)).Engine;
+            }
+            catch (RpcException ex) when (ex.StatusCode == StatusCode.Unimplemented)
+            {
+            }
+
+            ReportedEngineInfo = engineInfo?.Clone();
+            var client = new LogbookService.LogbookServiceClient(grpcChannel);
             await client.GetSyncStatusAsync(new GetSyncStatusRequest(), callOptions);
+            var engineLabel = engineInfo is null
+                ? "Engine"
+                : $"{engineInfo.DisplayName} ({engineInfo.EngineId})";
 
             LastProbe = new TransportProbeResult(
                 true,
                 EngineProbeStage.MethodSucceeded,
-                "Engine is reachable and GetSyncStatus succeeded. Baseline service is live.",
+                $"{engineLabel} is reachable and GetSyncStatus succeeded. Baseline service is live.",
                 "The engine is operational. Proceed with logbook and lookup workflows.",
                 attemptedAt,
                 EngineEndpoint);
@@ -263,28 +343,33 @@ internal sealed class DebugWorkbenchState
         }
         catch (RpcException ex) when (ex.StatusCode == StatusCode.Unimplemented)
         {
+            var engineLabel = ReportedEngineInfo is null
+                ? "The selected engine"
+                : $"{ReportedEngineInfo.DisplayName} ({ReportedEngineInfo.EngineId})";
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.MethodUnimplemented,
-                "TCP and gRPC transport are reachable, but GetSyncStatus is not implemented.",
-                "Implement GetSyncStatus in the Rust engine host to enable baseline service health checks.",
+                $"{engineLabel} is reachable, but GetSyncStatus is not implemented.",
+                "Implement GetSyncStatus in the selected engine host to enable baseline service health checks.",
                 attemptedAt,
                 EngineEndpoint);
             return LastProbe;
         }
         catch (RpcException ex) when (ex.StatusCode == StatusCode.Unavailable)
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.GrpcUnavailable,
                 $"TCP is reachable but gRPC is unavailable: {ex.Status.Detail}",
-                "Start the Rust gRPC engine host. The port is open but no gRPC service is responding.",
+                "Start the selected gRPC engine host. The port is open but no gRPC service is responding.",
                 attemptedAt,
                 EngineEndpoint);
             return LastProbe;
         }
         catch (RpcException ex)
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.GrpcUnavailable,
@@ -296,11 +381,12 @@ internal sealed class DebugWorkbenchState
         }
         catch (OperationCanceledException)
         {
+            ReportedEngineInfo = null;
             LastProbe = new TransportProbeResult(
                 false,
                 EngineProbeStage.GrpcUnavailable,
                 "gRPC call timed out. TCP is reachable but the gRPC service did not respond in time.",
-                "Start the Rust gRPC engine host. The port is open but no gRPC service is responding.",
+                "Start the selected gRPC engine host. The port is open but no gRPC service is responding.",
                 attemptedAt,
                 EngineEndpoint);
             return LastProbe;
@@ -312,19 +398,106 @@ internal sealed class DebugWorkbenchState
         }
     }
 
-    private static EngineStorageBackend ParseStorageBackend(string? configuredBackend)
+    private static string NormalizeStorageBackend(string? configuredBackend)
     {
-        return configuredBackend?.Trim().ToUpperInvariant() switch
+        return string.IsNullOrWhiteSpace(configuredBackend)
+            ? "memory"
+            : configuredBackend.Trim();
+    }
+
+    private static string NormalizePersistenceLocation(string persistenceLocation)
+    {
+        return string.IsNullOrWhiteSpace(persistenceLocation)
+            ? PersistenceSetup.DefaultRelativePersistencePath
+            : persistenceLocation.Trim();
+    }
+
+    private static string FormatStorageBackendDisplayName(string storageBackend)
+    {
+        if (string.IsNullOrWhiteSpace(storageBackend))
         {
-            "SQLITE" => EngineStorageBackend.Sqlite,
-            _ => EngineStorageBackend.Memory
+            return "Engine-managed";
+        }
+
+        return string.Join(
+            " ",
+            storageBackend
+                .Split(['-', '_', ' '], StringSplitOptions.RemoveEmptyEntries)
+                .Select(static segment => char.ToUpperInvariant(segment[0]) + segment[1..]));
+    }
+
+    private string GetListenAddress()
+    {
+        if (Uri.TryCreate(EngineEndpoint, UriKind.Absolute, out var endpointUri))
+        {
+            return $"{endpointUri.Host}:{endpointUri.Port}";
+        }
+
+        var fallbackUri = new Uri(EngineProfile.DefaultEndpoint, UriKind.Absolute);
+        return $"{fallbackUri.Host}:{fallbackUri.Port}";
+    }
+
+    private Dictionary<string, string> BuildRecipeTokens(EngineLaunchRecipe recipe)
+    {
+        var configPath = string.IsNullOrWhiteSpace(recipe.DefaultConfigPath)
+            ? string.Empty
+            : recipe.DefaultConfigPath;
+        var persistenceLocation = EnginePersistenceLocation;
+        var enginePersistenceLocation = string.Equals(EngineStorageBackend, "memory", StringComparison.OrdinalIgnoreCase)
+            ? string.Empty
+            : EnginePersistenceLocation;
+
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["configPath"] = configPath,
+            ["enginePersistenceLocation"] = enginePersistenceLocation,
+            ["listenAddress"] = GetListenAddress(),
+            ["persistenceLocation"] = persistenceLocation,
+            ["storageBackend"] = EngineStorageBackend,
         };
     }
 
-    private static string NormalizeSqlitePath(string sqlitePath)
+    private static string BuildCommandPreview(
+        EngineCommand command,
+        IReadOnlyDictionary<string, string> tokens)
     {
-        return string.IsNullOrWhiteSpace(sqlitePath)
-            ? @".\data\qsoripper.db"
-            : sqlitePath.Trim();
+        var parts = new List<string>
+        {
+            QuoteIfNeeded(ExpandTemplate(command.FilePath, tokens))
+        };
+
+        foreach (var argument in command.Arguments)
+        {
+            var expanded = ExpandTemplate(argument, tokens);
+            if (!string.IsNullOrWhiteSpace(expanded))
+            {
+                parts.Add(QuoteIfNeeded(expanded));
+            }
+        }
+
+        return string.Join(" ", parts);
+    }
+
+    private static string ExpandTemplate(
+        string template,
+        IReadOnlyDictionary<string, string> tokens)
+    {
+        var expanded = template;
+        foreach (var token in tokens)
+        {
+            expanded = expanded.Replace($"{{{token.Key}}}", token.Value, StringComparison.Ordinal);
+        }
+
+        return expanded;
+    }
+
+    private static string QuoteIfNeeded(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !value.Contains(' ', StringComparison.Ordinal))
+        {
+            return value;
+        }
+
+        return $"\"{value}\"";
     }
 }

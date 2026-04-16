@@ -1,40 +1,48 @@
 # QsoRipper
 
-High-performance ham radio logging engine built for speed, clean workflows, and keyboard-first operation.
+High-performance ham radio logging platform built around shared gRPC/protobuf contracts, interchangeable engine hosts, and keyboard-first clients.
 
 ## Architecture
 
-QsoRipper is an **engine-first** project. The core engine handles logging, lookups, caching, and sync. It exposes all functionality through a gRPC API and has zero knowledge of any particular UI. Any number of UX implementations can be built on top of the engine: a terminal UI in Rust, a desktop GUI in .NET or Electron, a web frontend, a mobile app, or a voice-driven interface for accessibility. The engine doesn't know or care what's calling it.
+QsoRipper is a **gRPC/protobuf-first** project. The stable core is the contract in `proto/`, not any single process implementation. An engine host implements those services. A client consumes them. Because both sides meet at the same protobuf/gRPC seam, engines and clients can be mixed and matched across languages without changing the contract.
 
 ```
 ┌─────────────────────────────────────────────┐
-│  Engine (Rust)                              │
-│                                             │
-│  qsoripper-core:                            │
-│    Log storage, QSO CRUD, QRZ lookups,      │
-│    cache, ADIF parser, gRPC server (tonic)  │
+│ Clients                                     │
+│ Rust TUI | .NET CLI/GUI/DebugHost | Web | ... │
 └──────────────────┬──────────────────────────┘
-                   │ gRPC (protobuf)
-       ┌───────────┼───────────┐
-       ▼           ▼           ▼
-   ┌────────┐ ┌────────┐ ┌────────┐
-   │ TUI    │ │Desktop │ │ Web /  │
-   │        │ │  GUI   │ │ other  │
-   └────────┘ └────────┘ └────────┘
+                   │ gRPC + protobuf
+┌──────────────────▼──────────────────────────┐
+│ Shared contracts in proto/                  │
+│ EngineService, SetupService, LookupService, │
+│ LogbookService, StationProfileService, ...  │
+└──────────────────┬──────────────────────────┘
+         ┌─────────┴─────────┐
+         ▼                   ▼
+┌─────────────────┐  ┌────────────────────┐
+│ Rust engine     │  │ .NET engine        │
+│ rust-tonic      │  │ dotnet-aspnet      │
+└─────────────────┘  └────────────────────┘
 ```
 
-**Rust** owns the core engine, QRZ providers, and gRPC server. UX implementations are independent consumers of the gRPC API and can be written in any language or framework. Nothing about the project requires any particular UI technology.
+The repository currently ships two engine hosts behind the same contracts:
 
-### UX Decoupling
+- **Rust engine (`rust-tonic`)** for the main engine/runtime implementation
+- **.NET engine (`dotnet-aspnet`)** as a second real host proving the contract is not Rust-only
 
-The engine exposes a complete gRPC contract. Any UX implementation only needs a gRPC client to interact with the engine. Examples of possible frontends:
+It also ships multiple clients on top of that seam: the Rust TUI plus the .NET CLI, GUI, and DebugHost. Nothing in the contract privileges a specific engine language or client stack.
 
+### Engine and client decoupling
+
+Any engine implementation only needs to satisfy the shared service contracts. Any client implementation only needs a gRPC client. Examples of swappable pieces:
+
+- A **Rust** or **.NET** engine host today, with room for future Go, Java, or other implementations.
 - A **terminal UI** built with ratatui, crossterm, or any TUI library in any language.
 - A **native desktop GUI** using Avalonia, WPF, Win32, GTK, Qt, or similar.
 - A **web UI**, **mobile app**, or **CLI tool**.
-- Multiple UIs can run simultaneously against the same engine instance.
+- Multiple clients can run simultaneously against the same engine instance.
 
-No UX implementation is privileged. The gRPC contract is the only interface.
+No engine host or client is privileged. The protobuf/gRPC contract is the only shared interface.
 
 ### Protocol Buffers
 
@@ -49,17 +57,21 @@ Proto files under `proto/` are the **single source of truth** for all shared typ
 
 | Service | Purpose |
 |---|---|
+| **EngineService** | Engine identity, version, and capability discovery |
 | **SetupService** | First-run and shared engine settings, persisted config status, bootstrap storage/station defaults |
 | **StationProfileService** | Persisted station profile CRUD, active profile selection, bounded session overrides |
-| **LookupService** | Callsign lookups -- single, streaming, batch, cached, DXCC |
+| **LookupService** | Callsign lookups -- unary, streaming, cached, plus optional batch/DXCC surfaces |
 | **LogbookService** | QSO CRUD, QRZ logbook sync, ADIF import/export |
+| **DeveloperControlService** | Developer-only runtime config inspection and mutation |
 | **SpaceWeatherService** | Current NOAA SWPC snapshot reads and explicit refresh for engine clients |
 
-**Building a client?** See the [Engine API Documentation](docs/api/README.md) for a client-facing reference covering service contracts, implementation status, stub generation, transport options, and workflow examples.
+The built-in engine hosts intentionally advertise only the lookup capabilities they actually implement in this first slice (`lookup-callsign`, `lookup-stream`, `lookup-cache`). That keeps engine discovery truthful while `BatchLookup` and `GetDxccEntity` remain out of scope in both hosts.
+
+**Building a client or a new engine host?** See the [Engine API Documentation](docs/api/README.md) for the shared contract reference, stub generation guidance, transport notes, and implementation-status details.
 
 ### ADIF
 
-ADIF (Amateur Data Interchange Format) is used **only at the edges** -- QRZ API calls and file I/O. Internal communication always uses protobuf. The Rust ADIF parser converts to/from proto types at the boundary, with an `extra_fields` map for lossless round-tripping.
+ADIF (Amateur Data Interchange Format) is used **only at the edges** -- QRZ API calls and file I/O. Internal communication always uses protobuf. Engine-specific ADIF adapters convert to/from proto types at the boundary, with an `extra_fields` map for lossless round-tripping.
 
 ## Getting Started
 
@@ -143,6 +155,16 @@ winget install Bufbuild.Buf
 
 By default, `.\build.ps1` builds the Rust workspace in **Release**, publishes the Native AOT CLI to `artifacts\publish\QsoRipper.Cli\Release\`, and publishes the desktop GUI to `artifacts\publish\QsoRipper.Gui\Release\`. Use `-Configuration Debug` to switch the Rust build and both .NET publish outputs to `Debug`.
 
+For engine-neutral local validation, use the split checks plus the shared conformance harness:
+
+```powershell
+.\build.ps1 check-dotnet
+.\build.ps1 check-rust
+.\tests\Run-EngineConformance.ps1
+```
+
+The conformance harness runs the common CLI slice against both built-in engine hosts so cross-language engine behavior stays aligned at the gRPC/protobuf seam.
+
 **Rust engine:**
 
 ```
@@ -199,14 +221,38 @@ Artifacts are written under `artifacts\ux\current\`, `artifacts\ux\baseline\`, a
 
 For the full dependency matrix and per-lane setup notes, see `docs\development\ui-inspection.md`.
 
-**Runnable gRPC server host:**
+**Local engine launcher (recommended):**
+
+```powershell
+.\start-qsoripper.ps1 -Engine local-rust
+.\start-qsoripper.ps1 -Engine local-dotnet
+```
+
+Built-in local profiles:
+
+| Profile | Engine ID | Default endpoint | Default storage |
+|---|---|---|---|
+| `local-rust` | `rust-tonic` | `http://127.0.0.1:50051` | `sqlite` |
+| `local-dotnet` | `dotnet-aspnet` | `http://127.0.0.1:50052` | `memory` |
+
+`start-qsoripper.ps1` is the clean local abstraction for those profiles. It imports `.env`, builds the selected engine if needed, starts it in the background from the repository root, and records process state plus stdout/stderr logs under `artifacts\run\`.
+
+**Direct engine host launch:**
+
+Rust engine:
 
 ```
 cd src/rust
 cargo run -p qsoripper-server
 ```
 
-This starts the developer gRPC server on `127.0.0.1:50051` by default so the .NET CLI and debug workbench can validate transport and service wiring against a live Rust host.
+.NET engine:
+
+```
+dotnet run --project src/dotnet/QsoRipper.Engine.DotNet/QsoRipper.Engine.DotNet.csproj
+```
+
+Those start the built-in engine hosts directly. The Rust host defaults to `127.0.0.1:50051`; the .NET host defaults to `127.0.0.1:50052`.
 
 The server can now swap storage implementations at startup:
 
@@ -231,15 +277,15 @@ When no explicit config override is provided, the server uses a persisted setup 
 - **Windows:** `%APPDATA%\qsoripper\config.toml`
 - **Linux:** `~/.config/qsoripper/config.toml` (or `XDG_CONFIG_HOME`)
 
-If you want the engine to stay running in the background while you log QSOs from another terminal, use the repo-root helper scripts:
+If you want an engine to stay running in the background while you log QSOs from another terminal, use the repo-root helper scripts:
 
 ```powershell
-.\start-qsoripper.ps1
+.\start-qsoripper.ps1 -Engine local-rust
 .\artifacts\publish\QsoRipper.Cli\Release\QsoRipper.Cli.exe log W1AW 20m FT8
 .\stop-qsoripper.ps1
 ```
 
-`start-qsoripper.ps1` builds `qsoripper-server`, imports `.env`, starts the engine in the background from the repository root, respects `QSORIPPER_CONFIG_PATH` and `QSORIPPER_SQLITE_PATH` unless you override them with parameters, and writes process state plus stdout/stderr logs under `artifacts\run\`.
+The shared client-side engine selector uses `QSORIPPER_ENGINE` (legacy `QSORIPPER_ENGINE_IMPLEMENTATION`) and `QSORIPPER_ENDPOINT`. The built-in profiles are `local-rust` and `local-dotnet`.
 
 **Stress host and dashboard:**
 

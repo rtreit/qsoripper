@@ -21,6 +21,7 @@ use tonic::{Request, Response, Status};
 use qsoripper_core::proto::qsoripper::domain::{Band, ConflictPolicy, Mode};
 use qsoripper_core::proto::qsoripper::services::{
     developer_control_service_server::{DeveloperControlService, DeveloperControlServiceServer},
+    engine_service_server::{EngineService, EngineServiceServer},
     logbook_service_server::{LogbookService, LogbookServiceServer},
     lookup_service_server::{LookupService, LookupServiceServer},
     rig_control_service_server::{RigControlService, RigControlServiceServer},
@@ -28,17 +29,18 @@ use qsoripper_core::proto::qsoripper::services::{
     space_weather_service_server::{SpaceWeatherService, SpaceWeatherServiceServer},
     station_profile_service_server::StationProfileServiceServer,
     AdifChunk, ApplyRuntimeConfigRequest, ApplyRuntimeConfigResponse, BatchLookupRequest,
-    BatchLookupResponse, DeleteQsoRequest, DeleteQsoResponse, ExportAdifRequest,
+    BatchLookupResponse, DeleteQsoRequest, DeleteQsoResponse, EngineInfo, ExportAdifRequest,
     ExportAdifResponse, GetCachedCallsignRequest, GetCachedCallsignResponse,
     GetCurrentSpaceWeatherRequest, GetCurrentSpaceWeatherResponse, GetDxccEntityRequest,
-    GetDxccEntityResponse, GetQsoRequest, GetQsoResponse, GetRigSnapshotRequest,
-    GetRigSnapshotResponse, GetRigStatusRequest, GetRigStatusResponse, GetRuntimeConfigRequest,
-    GetRuntimeConfigResponse, GetSyncStatusRequest, GetSyncStatusResponse, ImportAdifRequest,
-    ImportAdifResponse, ListQsosRequest, ListQsosResponse, LogQsoRequest, LogQsoResponse,
-    LookupRequest, LookupResponse, QsoSortOrder as ProtoQsoSortOrder, RefreshSpaceWeatherRequest,
-    RefreshSpaceWeatherResponse, ResetRuntimeConfigRequest, ResetRuntimeConfigResponse,
-    StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse,
-    TestRigConnectionRequest, TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
+    GetDxccEntityResponse, GetEngineInfoRequest, GetEngineInfoResponse, GetQsoRequest,
+    GetQsoResponse, GetRigSnapshotRequest, GetRigSnapshotResponse, GetRigStatusRequest,
+    GetRigStatusResponse, GetRuntimeConfigRequest, GetRuntimeConfigResponse, GetSyncStatusRequest,
+    GetSyncStatusResponse, ImportAdifRequest, ImportAdifResponse, ListQsosRequest,
+    ListQsosResponse, LogQsoRequest, LogQsoResponse, LookupRequest, LookupResponse,
+    QsoSortOrder as ProtoQsoSortOrder, RefreshSpaceWeatherRequest, RefreshSpaceWeatherResponse,
+    ResetRuntimeConfigRequest, ResetRuntimeConfigResponse, StreamLookupRequest,
+    StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse, TestRigConnectionRequest,
+    TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
 };
 use qsoripper_core::rig_control::{
     RigControlProvider, RigctldConfig, RigctldProvider, DEFAULT_RIGCTLD_HOST, DEFAULT_RIGCTLD_PORT,
@@ -78,6 +80,7 @@ where
     let logbook_service =
         DeveloperLogbookService::new(runtime_config.clone(), sync_scheduler.clone());
     let lookup_service = DeveloperLookupService::new(runtime_config.clone());
+    let engine_service = EngineControlSurface;
     let developer_control_service = DeveloperControlSurface::new(runtime_config.clone());
     let setup_service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
     let station_profile_service =
@@ -114,6 +117,7 @@ where
 
     let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel::<()>();
     let server = Server::builder()
+        .add_service(EngineServiceServer::new(engine_service))
         .add_service(LogbookServiceServer::new(logbook_service))
         .add_service(LookupServiceServer::new(lookup_service))
         .add_service(SetupServiceServer::new(setup_service))
@@ -666,6 +670,44 @@ struct DeveloperControlSurface {
 impl DeveloperControlSurface {
     fn new(runtime_config: Arc<RuntimeConfigManager>) -> Self {
         Self { runtime_config }
+    }
+}
+
+const RUST_ENGINE_ID: &str = "rust-tonic";
+const RUST_ENGINE_DISPLAY_NAME: &str = "QsoRipper Rust Engine";
+const RUST_ENGINE_CAPABILITIES: &[&str] = &[
+    "engine-info",
+    "logbook",
+    "lookup-cache",
+    "lookup-callsign",
+    "lookup-stream",
+    "setup",
+    "station-profiles",
+    "runtime-config",
+    "rig-control",
+    "space-weather",
+];
+
+#[derive(Debug, Default)]
+struct EngineControlSurface;
+
+#[tonic::async_trait]
+impl EngineService for EngineControlSurface {
+    async fn get_engine_info(
+        &self,
+        _request: Request<GetEngineInfoRequest>,
+    ) -> Result<Response<GetEngineInfoResponse>, Status> {
+        Ok(Response::new(GetEngineInfoResponse {
+            engine: Some(EngineInfo {
+                engine_id: RUST_ENGINE_ID.to_string(),
+                display_name: RUST_ENGINE_DISPLAY_NAME.to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                capabilities: RUST_ENGINE_CAPABILITIES
+                    .iter()
+                    .map(|value| (*value).to_string())
+                    .collect(),
+            }),
+        }))
     }
 }
 

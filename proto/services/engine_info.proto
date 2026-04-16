@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+message EngineInfo {
+  string engine_id = 1;
+  string display_name = 2;
+  string version = 3;
+  repeated string capabilities = 4;
+}

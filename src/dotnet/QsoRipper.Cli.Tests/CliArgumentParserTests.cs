@@ -1,4 +1,5 @@
 using QsoRipper.Cli;
+using QsoRipper.EngineSelection;
 
 namespace QsoRipper.Cli.Tests;
 
@@ -12,6 +13,7 @@ public class CliArgumentParserTests
 
         Assert.Equal("status", arguments.Command);
         Assert.Equal(CliArgumentParser.DefaultEndpoint, arguments.Endpoint);
+        Assert.Equal(KnownEngineProfiles.LocalRust, arguments.EngineProfile.ProfileId);
         Assert.False(arguments.ShowHelp);
     }
 
@@ -90,6 +92,27 @@ public class CliArgumentParserTests
         Assert.Equal("http://host:9090", arguments.Endpoint);
         Assert.Equal("AA1AA", arguments.Callsign);
         Assert.True(arguments.SkipCache);
+    }
+
+    [Fact]
+    public void Parse_engine_switch_updates_default_endpoint()
+    {
+        var arguments = CliArgumentParser.Parse(["--engine", "dotnet", "status"]);
+
+        Assert.Equal("status", arguments.Command);
+        Assert.Equal(KnownEngineProfiles.LocalDotNet, arguments.EngineProfile.ProfileId);
+        Assert.Equal(EngineCatalog.DefaultDotNetEndpoint, arguments.Endpoint);
+    }
+
+    [Fact]
+    public void Parse_returns_error_for_unknown_engine()
+    {
+        var arguments = CliArgumentParser.Parse(["--engine", "fortran", "status"]);
+
+        Assert.True(arguments.ShowHelp);
+        Assert.Equal(
+            $"Unknown engine profile 'fortran'. Known values: {EngineCatalog.GetKnownProfileList()}.",
+            arguments.Error);
     }
 
     [Fact]

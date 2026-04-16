@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/get_engine_info_request.proto";
+import "services/get_engine_info_response.proto";
+
+// Stable handshake surface that lets clients confirm which engine implementation
+// is serving a given endpoint.
+service EngineService {
+  rpc GetEngineInfo(GetEngineInfoRequest) returns (GetEngineInfoResponse);
+}

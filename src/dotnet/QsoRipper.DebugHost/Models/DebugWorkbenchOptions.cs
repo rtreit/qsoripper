@@ -1,14 +1,32 @@
+using QsoRipper.EngineSelection;
+
 namespace QsoRipper.DebugHost.Models;
 
 internal sealed class DebugWorkbenchOptions
 {
     public const string SectionName = "DebugWorkbench";
 
-    public string DefaultEngineEndpoint { get; set; } = "http://127.0.0.1:50051";
+    public string DefaultEngineProfile { get; set; } = "rust";
+
+    public string DefaultEngineImplementation { get; set; } = string.Empty;
+
+    public string DefaultEngineEndpoint { get; set; } = string.Empty;
 
     public string DefaultEngineStorageBackend { get; set; } = "memory";
 
-    public string DefaultEngineSqlitePath { get; set; } = @".\data\qsoripper.db";
+    public string DefaultEnginePersistenceLocation { get; set; } = PersistenceSetup.DefaultRelativePersistencePath;
+
+    public string DefaultEngineSqlitePath
+    {
+        get => DefaultEnginePersistenceLocation;
+        set
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                DefaultEnginePersistenceLocation = value;
+            }
+        }
+    }
 
     public int ProbeTimeoutSeconds { get; set; } = 3;
 
