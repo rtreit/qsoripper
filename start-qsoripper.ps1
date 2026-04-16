@@ -202,7 +202,7 @@ function Get-ProcessCommandLine([int]$ProcessId) {
 function Get-UntrackedEngineProcesses {
     param(
         [pscustomobject]$Profile,
-        [int]$TrackedProcessId = 0
+        [int[]]$ExcludeProcessIds = @()
     )
 
     $fragments = [System.Collections.Generic.List[string]]::new()
@@ -227,6 +227,11 @@ function Get-UntrackedEngineProcesses {
         return @()
     }
 
+    $excludeSet = [System.Collections.Generic.HashSet[int]]::new()
+    foreach ($excludeId in $ExcludeProcessIds) {
+        if ($excludeId -gt 0) { [void]$excludeSet.Add($excludeId) }
+    }
+
     # Batch WMI query: get all processes with command lines in one call
     $allProcs = if ($IsWindows) {
         Get-CimInstance Win32_Process -Property ProcessId, CommandLine -ErrorAction SilentlyContinue
@@ -237,7 +242,7 @@ function Get-UntrackedEngineProcesses {
 
     $matches = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
     foreach ($proc in $allProcs) {
-        if ($TrackedProcessId -gt 0 -and $proc.ProcessId -eq $TrackedProcessId) {
+        if ($excludeSet.Contains([int]$proc.ProcessId)) {
             continue
         }
 
@@ -260,7 +265,7 @@ function Get-UntrackedEngineProcesses {
     # Linux/macOS fallback: use /proc or ps
     if (-not $IsWindows) {
         foreach ($candidate in Get-Process -ErrorAction SilentlyContinue) {
-            if ($TrackedProcessId -gt 0 -and $candidate.Id -eq $TrackedProcessId) {
+            if ($excludeSet.Contains($candidate.Id)) {
                 continue
             }
 
@@ -477,8 +482,17 @@ if ($null -ne $existing) {
 }
 
 if ($ForceRestart) {
-    $trackedProcessId = if ($null -ne $existing) { $existing.Process.Id } else { 0 }
-    $orphans = Get-UntrackedEngineProcesses -Profile $profile -TrackedProcessId $trackedProcessId
+    # Collect PIDs tracked by ALL profiles so we don't kill other engines
+    $excludePids = @()
+    if ($null -ne $existing) { $excludePids += $existing.Process.Id }
+    foreach ($otherProfile in $profiles) {
+        if ($otherProfile.ProfileId -eq $profile.ProfileId) { continue }
+        $otherStatePath = Get-ProfileStatePath -ProfileId $otherProfile.ProfileId
+        $otherTracked = Get-TrackedProcess -Path $otherStatePath
+        if ($null -ne $otherTracked) { $excludePids += $otherTracked.Process.Id }
+    }
+
+    $orphans = Get-UntrackedEngineProcesses -Profile $profile -ExcludeProcessIds $excludePids
     foreach ($orphan in $orphans) {
         Write-Info "Stopping untracked $($profile.DisplayName) process $($orphan.Id)."
         Stop-TrackedProcess -ProcessId $orphan.Id
