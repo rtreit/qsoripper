@@ -1229,6 +1229,11 @@ static void ClearLookupDisplay(void)
     g_state.lookup_country[0] = 0;
     g_state.lookup_cq_zone = 0;
     g_state.last_looked_up[0] = 0;
+    /* Clear form fields that were auto-populated from lookup */
+    g_state.worked_name[0] = 0;
+    g_state.cursor_pos[FIELD_WORKED_NAME] = 0;
+    g_state.qth[0] = 0;
+    g_state.cursor_pos[FIELD_QTH] = 0;
 }
 
 static unsigned __stdcall LookupThread(void *param)
@@ -1672,7 +1677,8 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
     int row_h = ch + 8;
     int pad = cw * 2;
     int label_w = cw * 10;
-    int form_h = row_h * 9 + ch + 10;
+    /* 8 rows at main font + 1 chip row at small font + border */
+    int form_h = row_h * 8 + g_state.list_ch + 18;
     int focused_form = !g_state.qso_list_focused && !g_state.search_focused;
 
     /* Form border */
@@ -2088,7 +2094,7 @@ static int PaintLookup(HDC hdc, int y_start, int w)
         snprintf(line, sizeof(line), "Looking up%s", dots[frame]);
         DrawText_A(hdc, pad + cw, y + ch, CLR_CYAN, line);
     } else if (g_state.lookup_not_found) {
-        DrawText_A(hdc, pad + cw, y + ch, CLR_YELLOW, "Callsign not found");
+        DrawText_A(hdc, pad + cw, y + ch, CLR_ORANGE, "Callsign not found");
     } else if (g_state.lookup_error[0]) {
         DrawText_A(hdc, pad + cw, y + ch, CLR_RED, g_state.lookup_error);
     } else {
@@ -3218,10 +3224,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     g_state.has_lookup = 1;
                     g_state.lookup_not_found = 0;
                     g_state.lookup_error[0] = 0;
-                    if (g_state.worked_name[0] == 0)
-                        safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), res->name);
-                    if (g_state.qth[0] == 0)
-                        safe_strcpy(g_state.qth, sizeof(g_state.qth), res->qth);
+                    /* Always populate from lookup (overwrite stale data from previous callsign) */
+                    safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), res->name);
+                    g_state.cursor_pos[FIELD_WORKED_NAME] = (int)strlen(g_state.worked_name);
+                    safe_strcpy(g_state.qth, sizeof(g_state.qth), res->qth);
+                    g_state.cursor_pos[FIELD_QTH] = (int)strlen(g_state.qth);
                 } else if (res->not_found) {
                     g_state.lookup_not_found = 1;
                     g_state.lookup_error[0] = 0;
@@ -3584,9 +3591,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         return 1;
     }
 
-    /* Calculate initial window size: 100 cols x 45 rows equivalent */
+    /* Calculate initial window size: 100 cols x 40 rows equivalent */
     int init_w = 1100;
-    int init_h = 780;
+    int init_h = 700;
 
     HWND hwnd = CreateWindowExW(
         0, WINDOW_CLASS, APP_TITLE,
