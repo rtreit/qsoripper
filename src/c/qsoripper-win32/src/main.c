@@ -1679,11 +1679,13 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
     COLORREF border_clr = focused_form ? CLR_FORM_BORDER : CLR_DARKGRAY;
     DrawBox(hdc, 4, y_start, w - 8, form_h, border_clr);
 
-    /* Title */
+    /* Title (small font) */
     {
         const char *title = g_state.editing_local_id[0] ? " Edit QSO " : " Log QSO ";
         COLORREF title_clr = g_state.editing_local_id[0] ? CLR_ORANGE : CLR_CYAN;
+        SelectObject(hdc, g_state.hFontSmallBold);
         DrawText_A_BG(hdc, pad, y_start, title_clr, CLR_BG, title);
+        SelectObject(hdc, g_state.hFont);
     }
 
     int y = y_start + ch + 4;
@@ -1910,12 +1912,14 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
     border_clr = focused_form ? CLR_MAGENTA : CLR_DARKGRAY;
     DrawBox(hdc, 4, y_start, w - 8, form_h, border_clr);
 
-    /* Title */
+    /* Title (small font) */
     {
         char title[64];
         const char *pfx = g_state.editing_local_id[0] ? "Edit" : "Advanced";
         snprintf(title, sizeof(title), " %s - %s ", pfx, ADV_TAB_NAMES[tab]);
+        SelectObject(hdc, g_state.hFontSmallBold);
         DrawText_A_BG(hdc, pad, y_start, CLR_MAGENTA, CLR_BG, title);
+        SelectObject(hdc, g_state.hFont);
     }
 
     y = y_start + ch + 4;
@@ -2113,7 +2117,7 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
 
     DrawBox(hdc, 4, y_start, w - 8, panel_h, border_clr);
 
-    /* Title with total count (drawn using main font) */
+    /* Title with total count (small font) */
     {
         char title[64];
         if (g_state.qso_loading)
@@ -2124,7 +2128,9 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
             snprintf(title, sizeof(title), " QSOs (%d) (focused) ", g_state.recent_count);
         else
             snprintf(title, sizeof(title), " QSOs (%d) ", g_state.recent_count);
+        SelectObject(hdc, g_state.hFontSmallBold);
         DrawText_A_BG(hdc, pad, y_start, border_clr, CLR_BG, title);
+        SelectObject(hdc, g_state.hFont);
     }
 
     int y = y_start + ch + 4;
