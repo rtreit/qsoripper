@@ -332,13 +332,22 @@ function Get-UntrackedEngineProcesses {
     }
 
     foreach ($argument in $Profile.LaunchArguments) {
-        if ([string]::IsNullOrWhiteSpace($argument) -or $argument -match '^\{.+\}$') {
+        if ([string]::IsNullOrWhiteSpace($argument) -or $argument -match '^\{.+\}$' -or $argument.StartsWith('-')) {
             continue
         }
 
-        $fragments.Add($argument)
         if (Test-Path -LiteralPath $argument) {
+            $fragments.Add($argument)
             $fragments.Add([System.IO.Path]::GetFileName($argument))
+            continue
+        }
+
+        if (
+            $argument.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $argument.EndsWith('.exe', [System.StringComparison]::OrdinalIgnoreCase) -or
+            $argument.Contains('qsoripper', [System.StringComparison]::OrdinalIgnoreCase)
+        ) {
+            $fragments.Add($argument)
         }
     }
 
