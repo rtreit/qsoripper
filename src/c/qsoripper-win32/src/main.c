@@ -296,9 +296,12 @@ typedef struct {
     /* GDI objects */
     HFONT hFont;
     HFONT hFontBold;
+    HFONT hFontMed;
+    HFONT hFontMedBold;
     HFONT hFontSmall;
     HFONT hFontSmallBold;
     int char_w, char_h;
+    int med_cw, med_ch;
     int list_cw, list_ch;
 
     HWND hwnd;
@@ -2054,24 +2057,24 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
 
 static int PaintLookup(HDC hdc, int y_start, int w)
 {
-    int cw = g_state.list_cw;
-    int ch = g_state.list_ch;
+    int cw = g_state.med_cw;
+    int ch = g_state.med_ch;
     int panel_h = ch * 5 + 8;
     int pad = g_state.char_w * 2;
 
     DrawBox(hdc, 4, y_start, w - 8, panel_h, CLR_CYAN);
     SelectObject(hdc, g_state.hFontSmallBold);
     DrawText_A_BG(hdc, pad, y_start, CLR_CYAN, CLR_BG, " Callsign Lookup ");
-    SelectObject(hdc, g_state.hFontSmall);
+    SelectObject(hdc, g_state.hFontMed);
 
     int y = y_start + ch + 4;
 
     if (g_state.has_lookup) {
         char line[128];
 
-        SelectObject(hdc, g_state.hFontSmallBold);
+        SelectObject(hdc, g_state.hFontMedBold);
         DrawText_A(hdc, pad + cw, y, CLR_TEXT, g_state.lookup_name);
-        SelectObject(hdc, g_state.hFontSmall);
+        SelectObject(hdc, g_state.hFontMed);
         y += ch + 2;
 
         snprintf(line, sizeof(line), "QTH: %s", g_state.lookup_qth);
@@ -2111,8 +2114,8 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
 {
     int cw = g_state.char_w;
     int ch = g_state.char_h;
-    int lcw = g_state.list_cw;
-    int lch = g_state.list_ch;
+    int lcw = g_state.med_cw;
+    int lch = g_state.med_ch;
     int pad = cw * 2;
     int list_row_h = lch + 3;
     int panel_h = bottom - y_start - list_row_h - 4;
@@ -2157,8 +2160,8 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
         y += (ch + 4) + 2;
     }
 
-    /* Switch to small font for table header and rows */
-    SelectObject(hdc, g_state.hFontSmallBold);
+    /* Switch to medium font for table header and rows */
+    SelectObject(hdc, g_state.hFontMedBold);
 
     /* Table header */
     {
@@ -2168,7 +2171,7 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
                   "UTC", "Callsign", "Band", "Mode",
                   "Sent", "Rcvd", "Country", "Grid");
         DrawText_A(hdc, pad + lcw, y + 1, CLR_HIGHLIGHT, hdr);
-        SelectObject(hdc, g_state.hFontSmall);
+        SelectObject(hdc, g_state.hFontMed);
         y += list_row_h;
         DrawHLine(hdc, pad, w - pad, y, CLR_DARKGRAY);
         y += 2;
@@ -2230,9 +2233,9 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
             int call_x = pad + lcw + 20 * lcw;
             char call_part[16];
             snprintf(call_part, sizeof(call_part), "%-10s ", q->callsign);
-            SelectObject(hdc, g_state.hFontSmallBold);
+            SelectObject(hdc, g_state.hFontMedBold);
             DrawText_A(hdc, call_x, y + 2, CLR_HIGHLIGHT, call_part);
-            SelectObject(hdc, g_state.hFontSmall);
+            SelectObject(hdc, g_state.hFontMed);
 
             int rest_x = call_x + 11 * lcw;
             char rest_part[128];
@@ -3047,6 +3050,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         HDC hdc = GetDC(hwnd);
         int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
         int fontHeight = -MulDiv(FONT_SIZE, dpi, 72);
+        int medFontHeight = -MulDiv(11, dpi, 72);
         int smallFontHeight = -MulDiv(9, dpi, 72);
 
         g_state.hFont = CreateFontW(
@@ -3056,6 +3060,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         g_state.hFontBold = CreateFontW(
             fontHeight, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, FONT_NAME);
+
+        g_state.hFontMed = CreateFontW(
+            medFontHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, FONT_NAME);
+
+        g_state.hFontMedBold = CreateFontW(
+            medFontHeight, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, FONT_NAME);
 
@@ -3075,6 +3089,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         GetTextMetricsW(hdc, &tm);
         g_state.char_w = tm.tmAveCharWidth;
         g_state.char_h = tm.tmHeight;
+
+        /* Measure medium font character size */
+        SelectObject(hdc, g_state.hFontMed);
+        GetTextMetricsW(hdc, &tm);
+        g_state.med_cw = tm.tmAveCharWidth;
+        g_state.med_ch = tm.tmHeight;
 
         /* Measure small font character size */
         SelectObject(hdc, g_state.hFontSmall);
@@ -3140,6 +3160,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         KillTimer(hwnd, TIMER_ID);
         if (g_state.hFont) DeleteObject(g_state.hFont);
         if (g_state.hFontBold) DeleteObject(g_state.hFontBold);
+        if (g_state.hFontMed) DeleteObject(g_state.hFontMed);
+        if (g_state.hFontMedBold) DeleteObject(g_state.hFontMedBold);
         if (g_state.hFontSmall) DeleteObject(g_state.hFontSmall);
         if (g_state.hFontSmallBold) DeleteObject(g_state.hFontSmallBold);
         free(g_state.recent_qsos);
