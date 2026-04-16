@@ -343,6 +343,14 @@ typedef struct QsrLookupResult {
    */
   int32_t has_data;
   /**
+   * 1 = callsign not found, 0 = found or error.
+   */
+  int32_t not_found;
+  /**
+   * Error message (null-terminated, empty = no error).
+   */
+  uint8_t error_msg[128];
+  /**
    * Formatted name (null-terminated).
    */
   uint8_t name[64];

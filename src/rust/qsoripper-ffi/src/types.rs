@@ -187,6 +187,10 @@ pub struct QsrQsoDetail {
 pub struct QsrLookupResult {
     /// 1 = data found, 0 = not found or error.
     pub has_data: i32,
+    /// 1 = callsign not found, 0 = found or error.
+    pub not_found: i32,
+    /// Error message (null-terminated, empty = no error).
+    pub error_msg: [u8; 128],
     /// Formatted name (null-terminated).
     pub name: [u8; 64],
     /// QTH / city (null-terminated).

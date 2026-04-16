@@ -680,12 +680,30 @@ fn populate_lookup_result(
 
     *out = QsrLookupResult {
         has_data: 0,
+        not_found: 0,
+        error_msg: [0; 128],
         name: [0; 64],
         qth: [0; 64],
         grid: [0; 16],
         country: [0; 64],
         cq_zone: 0,
     };
+
+    match result.state() {
+        LookupState::NotFound => {
+            out.not_found = 1;
+            return;
+        }
+        LookupState::Error => {
+            if let Some(msg) = &result.error_message {
+                str_to_buf(msg, &mut out.error_msg);
+            } else {
+                str_to_buf("Lookup error", &mut out.error_msg);
+            }
+            return;
+        }
+        _ => {}
+    }
 
     if result.state() != LookupState::Found {
         return;
