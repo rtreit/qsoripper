@@ -49,10 +49,7 @@ extern "C" {
         local_id: *const std::os::raw::c_char,
         out: *mut QsrQsoDetail,
     ) -> i32;
-    fn qsr_delete_qso(
-        client: *mut std::ffi::c_void,
-        local_id: *const std::os::raw::c_char,
-    ) -> i32;
+    fn qsr_delete_qso(client: *mut std::ffi::c_void, local_id: *const std::os::raw::c_char) -> i32;
     fn qsr_list_qsos(client: *mut std::ffi::c_void, out: *mut QsrQsoList) -> i32;
     fn qsr_free_qso_list(list: *mut QsrQsoList);
     fn qsr_lookup(
@@ -122,7 +119,10 @@ fn last_error() -> String {
 macro_rules! skip_if_no_server {
     () => {
         if !server_is_reachable() {
-            eprintln!("SKIP: QsoRipper server not reachable at {}", test_endpoint());
+            eprintln!(
+                "SKIP: QsoRipper server not reachable at {}",
+                test_endpoint()
+            );
             return;
         }
     };

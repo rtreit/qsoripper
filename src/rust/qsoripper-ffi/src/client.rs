@@ -23,12 +23,11 @@ use qsoripper_core::proto::qsoripper::domain::{
     Band, Mode, QsoRecord, RigConnectionStatus, RstReport,
 };
 use qsoripper_core::proto::qsoripper::services::{
-    logbook_service_client::LogbookServiceClient,
-    lookup_service_client::LookupServiceClient,
+    logbook_service_client::LogbookServiceClient, lookup_service_client::LookupServiceClient,
     rig_control_service_client::RigControlServiceClient,
-    space_weather_service_client::SpaceWeatherServiceClient,
-    DeleteQsoRequest, GetCurrentSpaceWeatherRequest, GetQsoRequest, GetRigSnapshotRequest,
-    ListQsosRequest, LogQsoRequest, LookupRequest, UpdateQsoRequest,
+    space_weather_service_client::SpaceWeatherServiceClient, DeleteQsoRequest,
+    GetCurrentSpaceWeatherRequest, GetQsoRequest, GetRigSnapshotRequest, ListQsosRequest,
+    LogQsoRequest, LookupRequest, UpdateQsoRequest,
 };
 
 use crate::types::{
@@ -55,7 +54,9 @@ pub(crate) fn last_error_cstr() -> *const c_char {
         static BUF: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
     }
 
-    let msg = LAST_ERROR.lock().map_or_else(|_| String::new(), |g| g.clone());
+    let msg = LAST_ERROR
+        .lock()
+        .map_or_else(|_| String::new(), |g| g.clone());
     BUF.with(|buf| {
         let mut b = buf.borrow_mut();
         b.clear();
@@ -106,7 +107,11 @@ impl QsrClient {
             .map_err(|e| format!("Failed to create tokio runtime: {e}"))?;
 
         let channel = runtime
-            .block_on(Channel::from_shared(endpoint.to_string()).map_err(|e| e.to_string())?.connect())
+            .block_on(
+                Channel::from_shared(endpoint.to_string())
+                    .map_err(|e| e.to_string())?
+                    .connect(),
+            )
             .map_err(|e| format!("Failed to connect to {endpoint}: {e}"))?;
 
         Ok(Box::new(Self {
@@ -119,11 +124,7 @@ impl QsrClient {
     }
 
     /// Log a new QSO. Returns 0 on success.
-    pub(crate) fn log_qso(
-        &mut self,
-        req: &QsrLogQsoRequest,
-        out: &mut QsrLogQsoResult,
-    ) -> i32 {
+    pub(crate) fn log_qso(&mut self, req: &QsrLogQsoRequest, out: &mut QsrLogQsoResult) -> i32 {
         let qso = match build_qso_record(req) {
             Ok(q) => q,
             Err(e) => {
@@ -132,12 +133,10 @@ impl QsrClient {
             }
         };
 
-        match self.runtime.block_on(
-            self.logbook.log_qso(LogQsoRequest {
-                qso: Some(qso),
-                sync_to_qrz: false,
-            }),
-        ) {
+        match self.runtime.block_on(self.logbook.log_qso(LogQsoRequest {
+            qso: Some(qso),
+            sync_to_qrz: false,
+        })) {
             Ok(resp) => {
                 str_to_buf(&resp.into_inner().local_id, &mut out.local_id);
                 0
@@ -160,12 +159,12 @@ impl QsrClient {
         };
         qso.local_id = buf_to_str(&req.local_id).to_string();
 
-        match self.runtime.block_on(
-            self.logbook.update_qso(UpdateQsoRequest {
+        match self
+            .runtime
+            .block_on(self.logbook.update_qso(UpdateQsoRequest {
                 qso: Some(qso),
                 sync_to_qrz: false,
-            }),
-        ) {
+            })) {
             Ok(_) => 0,
             Err(e) => {
                 set_error(format!("UpdateQso failed: {}", e.message()));
@@ -175,16 +174,10 @@ impl QsrClient {
     }
 
     /// Get a single QSO by local_id. Returns 0 on success.
-    pub(crate) fn get_qso(
-        &mut self,
-        local_id: &str,
-        out: &mut QsrQsoDetail,
-    ) -> i32 {
-        match self.runtime.block_on(
-            self.logbook.get_qso(GetQsoRequest {
-                local_id: local_id.to_string(),
-            }),
-        ) {
+    pub(crate) fn get_qso(&mut self, local_id: &str, out: &mut QsrQsoDetail) -> i32 {
+        match self.runtime.block_on(self.logbook.get_qso(GetQsoRequest {
+            local_id: local_id.to_string(),
+        })) {
             Ok(resp) => {
                 if let Some(qso) = resp.into_inner().qso {
                     populate_qso_detail(&qso, out);
@@ -200,12 +193,12 @@ impl QsrClient {
 
     /// Delete a QSO by local_id. Returns 0 on success.
     pub(crate) fn delete_qso(&mut self, local_id: &str) -> i32 {
-        match self.runtime.block_on(
-            self.logbook.delete_qso(DeleteQsoRequest {
+        match self
+            .runtime
+            .block_on(self.logbook.delete_qso(DeleteQsoRequest {
                 local_id: local_id.to_string(),
                 delete_from_qrz: false,
-            }),
-        ) {
+            })) {
             Ok(_) => 0,
             Err(e) => {
                 set_error(format!("DeleteQso failed: {}", e.message()));
@@ -216,12 +209,12 @@ impl QsrClient {
 
     /// List all QSOs. Returns a heap-allocated list.
     pub(crate) fn list_qsos(&mut self, out: &mut QsrQsoList) -> i32 {
-        let stream_result = self.runtime.block_on(
-            self.logbook.list_qsos(ListQsosRequest {
+        let stream_result = self
+            .runtime
+            .block_on(self.logbook.list_qsos(ListQsosRequest {
                 limit: 0,
                 ..Default::default()
-            }),
-        );
+            }));
 
         let mut stream = match stream_result {
             Ok(resp) => resp.into_inner(),
@@ -264,17 +257,11 @@ impl QsrClient {
     }
 
     /// Lookup a callsign. Returns 0 on success.
-    pub(crate) fn lookup(
-        &mut self,
-        callsign: &str,
-        out: &mut QsrLookupResult,
-    ) -> i32 {
-        match self.runtime.block_on(
-            self.lookup.lookup(LookupRequest {
-                callsign: callsign.to_string(),
-                skip_cache: false,
-            }),
-        ) {
+    pub(crate) fn lookup(&mut self, callsign: &str, out: &mut QsrLookupResult) -> i32 {
+        match self.runtime.block_on(self.lookup.lookup(LookupRequest {
+            callsign: callsign.to_string(),
+            skip_cache: false,
+        })) {
             Ok(resp) => {
                 let inner = resp.into_inner();
                 if let Some(result) = inner.result {
@@ -291,9 +278,10 @@ impl QsrClient {
 
     /// Get rig snapshot. Returns 0 on success.
     pub(crate) fn get_rig_snapshot(&mut self, out: &mut QsrRigStatus) -> i32 {
-        match self.runtime.block_on(
-            self.rig.get_rig_snapshot(GetRigSnapshotRequest {}),
-        ) {
+        match self
+            .runtime
+            .block_on(self.rig.get_rig_snapshot(GetRigSnapshotRequest {}))
+        {
             Ok(resp) => {
                 if let Some(snapshot) = resp.into_inner().snapshot {
                     populate_rig_status(&snapshot, out);
@@ -310,7 +298,8 @@ impl QsrClient {
     /// Get current space weather. Returns 0 on success.
     pub(crate) fn get_space_weather(&mut self, out: &mut QsrSpaceWeather) -> i32 {
         match self.runtime.block_on(
-            self.weather.get_current_space_weather(GetCurrentSpaceWeatherRequest {}),
+            self.weather
+                .get_current_space_weather(GetCurrentSpaceWeatherRequest {}),
         ) {
             Ok(resp) => {
                 if let Some(snapshot) = resp.into_inner().snapshot {
@@ -371,21 +360,35 @@ fn build_qso_record(req: &QsrLogQsoRequest) -> Result<QsoRecord, String> {
 
     set_optional_str(&req.comment, |s| qso.comment = Some(s.to_string()));
     set_optional_str(&req.notes, |s| qso.notes = Some(s.to_string()));
-    set_optional_str(&req.worked_name, |s| qso.worked_operator_name = Some(s.to_string()));
+    set_optional_str(&req.worked_name, |s| {
+        qso.worked_operator_name = Some(s.to_string())
+    });
     set_optional_str(&req.tx_power, |s| qso.tx_power = Some(s.to_string()));
     set_optional_str(&req.submode, |s| qso.submode = Some(s.to_string()));
     set_optional_str(&req.contest_id, |s| qso.contest_id = Some(s.to_string()));
     set_optional_str(&req.serial_sent, |s| qso.serial_sent = Some(s.to_string()));
-    set_optional_str(&req.serial_rcvd, |s| qso.serial_received = Some(s.to_string()));
-    set_optional_str(&req.exchange_sent, |s| qso.exchange_sent = Some(s.to_string()));
-    set_optional_str(&req.exchange_rcvd, |s| qso.exchange_received = Some(s.to_string()));
+    set_optional_str(&req.serial_rcvd, |s| {
+        qso.serial_received = Some(s.to_string())
+    });
+    set_optional_str(&req.exchange_sent, |s| {
+        qso.exchange_sent = Some(s.to_string())
+    });
+    set_optional_str(&req.exchange_rcvd, |s| {
+        qso.exchange_received = Some(s.to_string())
+    });
     set_optional_str(&req.prop_mode, |s| qso.prop_mode = Some(s.to_string()));
     set_optional_str(&req.sat_name, |s| qso.sat_name = Some(s.to_string()));
     set_optional_str(&req.sat_mode, |s| qso.sat_mode = Some(s.to_string()));
     set_optional_str(&req.iota, |s| qso.worked_iota = Some(s.to_string()));
-    set_optional_str(&req.arrl_section, |s| qso.worked_arrl_section = Some(s.to_string()));
-    set_optional_str(&req.worked_state, |s| qso.worked_state = Some(s.to_string()));
-    set_optional_str(&req.worked_county, |s| qso.worked_county = Some(s.to_string()));
+    set_optional_str(&req.arrl_section, |s| {
+        qso.worked_arrl_section = Some(s.to_string())
+    });
+    set_optional_str(&req.worked_state, |s| {
+        qso.worked_state = Some(s.to_string())
+    });
+    set_optional_str(&req.worked_county, |s| {
+        qso.worked_county = Some(s.to_string())
+    });
     set_optional_str(&req.skcc, |s| qso.skcc = Some(s.to_string()));
 
     let time_off = buf_to_str(&req.time_off);
@@ -443,17 +446,27 @@ fn parse_datetime(s: &str) -> Result<prost_types::Timestamp, String> {
         return Err(format!("Invalid date: {}", parts[0]));
     }
 
-    let year: i32 = date_parts[0].parse().map_err(|_| format!("Invalid year: {}", date_parts[0]))?;
-    let month: u32 = date_parts[1].parse().map_err(|_| format!("Invalid month: {}", date_parts[1]))?;
-    let day: u32 = date_parts[2].parse().map_err(|_| format!("Invalid day: {}", date_parts[2]))?;
+    let year: i32 = date_parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid year: {}", date_parts[0]))?;
+    let month: u32 = date_parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid month: {}", date_parts[1]))?;
+    let day: u32 = date_parts[2]
+        .parse()
+        .map_err(|_| format!("Invalid day: {}", date_parts[2]))?;
 
     let time_parts: Vec<&str> = parts[1].split(':').collect();
     if time_parts.len() < 2 {
         return Err(format!("Invalid time: {}", parts[1]));
     }
 
-    let hour: u32 = time_parts[0].parse().map_err(|_| format!("Invalid hour: {}", time_parts[0]))?;
-    let minute: u32 = time_parts[1].parse().map_err(|_| format!("Invalid minute: {}", time_parts[1]))?;
+    let hour: u32 = time_parts[0]
+        .parse()
+        .map_err(|_| format!("Invalid hour: {}", time_parts[0]))?;
+    let minute: u32 = time_parts[1]
+        .parse()
+        .map_err(|_| format!("Invalid minute: {}", time_parts[1]))?;
     let second: u32 = if time_parts.len() > 2 {
         time_parts[2].parse().unwrap_or(0)
     } else {
@@ -464,7 +477,10 @@ fn parse_datetime(s: &str) -> Result<prost_types::Timestamp, String> {
     #[allow(clippy::cast_possible_wrap)]
     let days = days_from_civil(year, month, day);
     #[allow(clippy::cast_possible_wrap)]
-    let secs = i64::from(days) * 86400 + i64::from(hour) * 3600 + i64::from(minute) * 60 + i64::from(second);
+    let secs = i64::from(days) * 86400
+        + i64::from(hour) * 3600
+        + i64::from(minute) * 60
+        + i64::from(second);
 
     Ok(prost_types::Timestamp {
         seconds: secs,
@@ -651,24 +667,60 @@ fn populate_qso_detail(qso: &QsoRecord, out: &mut QsrQsoDetail) {
     }
 
     // Optional string fields
-    if let Some(v) = &qso.comment { str_to_buf(v, &mut out.comment); }
-    if let Some(v) = &qso.notes { str_to_buf(v, &mut out.notes); }
-    if let Some(v) = &qso.worked_operator_name { str_to_buf(v, &mut out.worked_name); }
-    if let Some(v) = &qso.tx_power { str_to_buf(v, &mut out.tx_power); }
-    if let Some(v) = &qso.submode { str_to_buf(v, &mut out.submode); }
-    if let Some(v) = &qso.contest_id { str_to_buf(v, &mut out.contest_id); }
-    if let Some(v) = &qso.serial_sent { str_to_buf(v, &mut out.serial_sent); }
-    if let Some(v) = &qso.serial_received { str_to_buf(v, &mut out.serial_rcvd); }
-    if let Some(v) = &qso.exchange_sent { str_to_buf(v, &mut out.exchange_sent); }
-    if let Some(v) = &qso.exchange_received { str_to_buf(v, &mut out.exchange_rcvd); }
-    if let Some(v) = &qso.prop_mode { str_to_buf(v, &mut out.prop_mode); }
-    if let Some(v) = &qso.sat_name { str_to_buf(v, &mut out.sat_name); }
-    if let Some(v) = &qso.sat_mode { str_to_buf(v, &mut out.sat_mode); }
-    if let Some(v) = &qso.worked_iota { str_to_buf(v, &mut out.iota); }
-    if let Some(v) = &qso.worked_arrl_section { str_to_buf(v, &mut out.arrl_section); }
-    if let Some(v) = &qso.worked_state { str_to_buf(v, &mut out.worked_state); }
-    if let Some(v) = &qso.worked_county { str_to_buf(v, &mut out.worked_county); }
-    if let Some(v) = &qso.skcc { str_to_buf(v, &mut out.skcc); }
+    if let Some(v) = &qso.comment {
+        str_to_buf(v, &mut out.comment);
+    }
+    if let Some(v) = &qso.notes {
+        str_to_buf(v, &mut out.notes);
+    }
+    if let Some(v) = &qso.worked_operator_name {
+        str_to_buf(v, &mut out.worked_name);
+    }
+    if let Some(v) = &qso.tx_power {
+        str_to_buf(v, &mut out.tx_power);
+    }
+    if let Some(v) = &qso.submode {
+        str_to_buf(v, &mut out.submode);
+    }
+    if let Some(v) = &qso.contest_id {
+        str_to_buf(v, &mut out.contest_id);
+    }
+    if let Some(v) = &qso.serial_sent {
+        str_to_buf(v, &mut out.serial_sent);
+    }
+    if let Some(v) = &qso.serial_received {
+        str_to_buf(v, &mut out.serial_rcvd);
+    }
+    if let Some(v) = &qso.exchange_sent {
+        str_to_buf(v, &mut out.exchange_sent);
+    }
+    if let Some(v) = &qso.exchange_received {
+        str_to_buf(v, &mut out.exchange_rcvd);
+    }
+    if let Some(v) = &qso.prop_mode {
+        str_to_buf(v, &mut out.prop_mode);
+    }
+    if let Some(v) = &qso.sat_name {
+        str_to_buf(v, &mut out.sat_name);
+    }
+    if let Some(v) = &qso.sat_mode {
+        str_to_buf(v, &mut out.sat_mode);
+    }
+    if let Some(v) = &qso.worked_iota {
+        str_to_buf(v, &mut out.iota);
+    }
+    if let Some(v) = &qso.worked_arrl_section {
+        str_to_buf(v, &mut out.arrl_section);
+    }
+    if let Some(v) = &qso.worked_state {
+        str_to_buf(v, &mut out.worked_state);
+    }
+    if let Some(v) = &qso.worked_county {
+        str_to_buf(v, &mut out.worked_county);
+    }
+    if let Some(v) = &qso.skcc {
+        str_to_buf(v, &mut out.skcc);
+    }
 
     // Time off
     if let Some(ts) = &qso.utc_end_timestamp {

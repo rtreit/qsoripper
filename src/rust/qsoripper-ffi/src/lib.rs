@@ -77,9 +77,15 @@ pub unsafe extern "C" fn qsr_log_qso(
     req: *const QsrLogQsoRequest,
     out: *mut QsrLogQsoResult,
 ) -> i32 {
-    let Some(c) = (unsafe { client.as_mut() }) else { return -1 };
-    let Some(r) = (unsafe { req.as_ref() }) else { return -1 };
-    let Some(o) = (unsafe { out.as_mut() }) else { return -1 };
+    let Some(c) = (unsafe { client.as_mut() }) else {
+        return -1;
+    };
+    let Some(r) = (unsafe { req.as_ref() }) else {
+        return -1;
+    };
+    let Some(o) = (unsafe { out.as_mut() }) else {
+        return -1;
+    };
     c.log_qso(r, o)
 }
 
@@ -95,8 +101,12 @@ pub unsafe extern "C" fn qsr_update_qso(
     client: *mut QsrClient,
     req: *const QsrUpdateQsoRequest,
 ) -> i32 {
-    let Some(c) = (unsafe { client.as_mut() }) else { return -1 };
-    let Some(r) = (unsafe { req.as_ref() }) else { return -1 };
+    let Some(c) = (unsafe { client.as_mut() }) else {
+        return -1;
+    };
+    let Some(r) = (unsafe { req.as_ref() }) else {
+        return -1;
+    };
     c.update_qso(r)
 }
 
@@ -113,9 +123,13 @@ pub unsafe extern "C" fn qsr_get_qso(
     local_id: *const c_char,
     out: *mut QsrQsoDetail,
 ) -> i32 {
-    let Some(c) = (unsafe { client.as_mut() }) else { return -1 };
+    let Some(c) = (unsafe { client.as_mut() }) else {
+        return -1;
+    };
     let id = unsafe { client::cstr_to_str(local_id) };
-    let Some(o) = (unsafe { out.as_mut() }) else { return -1 };
+    let Some(o) = (unsafe { out.as_mut() }) else {
+        return -1;
+    };
     c.get_qso(id, o)
 }
 
@@ -127,11 +141,10 @@ pub unsafe extern "C" fn qsr_get_qso(
 /// # Safety
 /// `client` must be valid. `local_id` must be a null-terminated C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn qsr_delete_qso(
-    client: *mut QsrClient,
-    local_id: *const c_char,
-) -> i32 {
-    let Some(c) = (unsafe { client.as_mut() }) else { return -1 };
+pub unsafe extern "C" fn qsr_delete_qso(client: *mut QsrClient, local_id: *const c_char) -> i32 {
+    let Some(c) = (unsafe { client.as_mut() }) else {
+        return -1;
+    };
     let id = unsafe { client::cstr_to_str(local_id) };
     c.delete_qso(id)
 }
@@ -146,12 +159,13 @@ pub unsafe extern "C" fn qsr_delete_qso(
 /// # Safety
 /// `client` and `out` must be valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn qsr_list_qsos(
-    client: *mut QsrClient,
-    out: *mut QsrQsoList,
-) -> i32 {
-    let Some(c) = (unsafe { client.as_mut() }) else { return -1 };
-    let Some(o) = (unsafe { out.as_mut() }) else { return -1 };
+pub unsafe extern "C" fn qsr_list_qsos(client: *mut QsrClient, out: *mut QsrQsoList) -> i32 {
+    let Some(c) = (unsafe { client.as_mut() }) else {
+        return -1;
+    };
+    let Some(o) = (unsafe { out.as_mut() }) else {
+        return -1;
+    };
     c.list_qsos(o)
 }
 
@@ -161,12 +175,13 @@ pub unsafe extern "C" fn qsr_list_qsos(
 /// `list` must be a `QsrQsoList` populated by `qsr_list_qsos`, or have null `items`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn qsr_free_qso_list(list: *mut QsrQsoList) {
-    let Some(l) = (unsafe { list.as_mut() }) else { return };
+    let Some(l) = (unsafe { list.as_mut() }) else {
+        return;
+    };
     if !l.items.is_null() && l.count > 0 {
         #[allow(clippy::cast_sign_loss)]
-        let slice = unsafe {
-            Box::from_raw(std::slice::from_raw_parts_mut(l.items, l.count as usize))
-        };
+        let slice =
+            unsafe { Box::from_raw(std::slice::from_raw_parts_mut(l.items, l.count as usize)) };
         drop(slice);
         l.items = std::ptr::null_mut();
         l.count = 0;
@@ -186,9 +201,13 @@ pub unsafe extern "C" fn qsr_lookup(
     callsign: *const c_char,
     out: *mut QsrLookupResult,
 ) -> i32 {
-    let Some(c) = (unsafe { client.as_mut() }) else { return -1 };
+    let Some(c) = (unsafe { client.as_mut() }) else {
+        return -1;
+    };
     let call = unsafe { client::cstr_to_str(callsign) };
-    let Some(o) = (unsafe { out.as_mut() }) else { return -1 };
+    let Some(o) = (unsafe { out.as_mut() }) else {
+        return -1;
+    };
     c.lookup(call, o)
 }
 
@@ -200,12 +219,13 @@ pub unsafe extern "C" fn qsr_lookup(
 /// # Safety
 /// `client` and `out` must be valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn qsr_get_rig_status(
-    client: *mut QsrClient,
-    out: *mut QsrRigStatus,
-) -> i32 {
-    let Some(c) = (unsafe { client.as_mut() }) else { return -1 };
-    let Some(o) = (unsafe { out.as_mut() }) else { return -1 };
+pub unsafe extern "C" fn qsr_get_rig_status(client: *mut QsrClient, out: *mut QsrRigStatus) -> i32 {
+    let Some(c) = (unsafe { client.as_mut() }) else {
+        return -1;
+    };
+    let Some(o) = (unsafe { out.as_mut() }) else {
+        return -1;
+    };
     c.get_rig_snapshot(o)
 }
 
@@ -221,7 +241,11 @@ pub unsafe extern "C" fn qsr_get_space_weather(
     client: *mut QsrClient,
     out: *mut QsrSpaceWeather,
 ) -> i32 {
-    let Some(c) = (unsafe { client.as_mut() }) else { return -1 };
-    let Some(o) = (unsafe { out.as_mut() }) else { return -1 };
+    let Some(c) = (unsafe { client.as_mut() }) else {
+        return -1;
+    };
+    let Some(o) = (unsafe { out.as_mut() }) else {
+        return -1;
+    };
     c.get_space_weather(o)
 }
