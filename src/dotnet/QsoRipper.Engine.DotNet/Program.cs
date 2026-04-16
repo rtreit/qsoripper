@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Server.Kestrel.Core;
 using QsoRipper.Engine.DotNet;
 using QsoRipper.Engine.Lookup;
 using QsoRipper.Engine.Lookup.Qrz;
+using QsoRipper.Engine.RigControl;
 using QsoRipper.Engine.Storage;
 using QsoRipper.Engine.Storage.Memory;
 using QsoRipper.Engine.Storage.Sqlite;
@@ -19,10 +20,13 @@ builder.Services.AddSingleton(storage);
 var lookupCoordinator = CreateLookupCoordinator(storage);
 builder.Services.AddSingleton(lookupCoordinator);
 
+var rigControlMonitor = CreateRigControlMonitor();
+
 builder.Services.AddSingleton(provider => new ManagedEngineState(
     options.ConfigPath,
     provider.GetRequiredService<IEngineStorage>(),
-    provider.GetRequiredService<ILookupCoordinator>()));
+    provider.GetRequiredService<ILookupCoordinator>(),
+    rigControlMonitor));
 
 var app = builder.Build();
 app.MapGrpcService<ManagedEngineInfoGrpcService>();
@@ -76,6 +80,43 @@ static ILookupCoordinator CreateLookupCoordinator(IEngineStorage storage)
     }
 
     return new LookupCoordinator(provider, storage.LookupSnapshots);
+}
+
+static RigControlMonitor? CreateRigControlMonitor()
+{
+    var enabled = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_ENABLED")?.Trim();
+
+    // Disabled explicitly: "false" or "0".
+    if (string.Equals(enabled, "false", StringComparison.OrdinalIgnoreCase) || enabled == "0")
+    {
+        return null;
+    }
+
+    // Not set at all: disabled by default in the .NET engine (mirrors Rust: enabled by default
+    // only when the env var is absent, but .NET engine defaults to disabled for safety).
+    if (string.IsNullOrWhiteSpace(enabled))
+    {
+        return null;
+    }
+
+    var host = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_HOST")?.Trim();
+    if (string.IsNullOrWhiteSpace(host))
+    {
+        host = RigctldProvider.DefaultHost;
+    }
+
+    var portStr = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_PORT")?.Trim();
+    var port = int.TryParse(portStr, out var parsedPort) ? parsedPort : RigctldProvider.DefaultPort;
+
+    var readTimeoutStr = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_READ_TIMEOUT_MS")?.Trim();
+    var readTimeoutMs = int.TryParse(readTimeoutStr, out var parsedTimeout) ? parsedTimeout : RigctldProvider.DefaultReadTimeoutMs;
+
+    var staleThresholdStr = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS")?.Trim();
+    var staleThresholdMs = int.TryParse(staleThresholdStr, out var parsedStale) ? parsedStale : RigControlMonitor.DefaultStaleThresholdMs;
+
+    var provider = new RigctldProvider(host, port, TimeSpan.FromMilliseconds(readTimeoutMs));
+    Console.WriteLine($"Rig control enabled: rigctld at {host}:{port} (timeout {readTimeoutMs}ms, stale {staleThresholdMs}ms)");
+    return new RigControlMonitor(provider, TimeSpan.FromMilliseconds(staleThresholdMs));
 }
 
 static void ConfigureListenEndpoint(KestrelServerOptions options, string listenAddress)

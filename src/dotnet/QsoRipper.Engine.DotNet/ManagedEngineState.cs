@@ -5,6 +5,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Engine.Lookup;
+using QsoRipper.Engine.RigControl;
 using QsoRipper.Engine.Storage;
 using QsoRipper.Engine.Storage.Memory;
 using QsoRipper.EngineSelection;
@@ -41,6 +42,7 @@ internal sealed class ManagedEngineState
     private readonly Lock _gate = new();
     private readonly IEngineStorage _storage;
     private readonly ILookupCoordinator _lookupCoordinator;
+    private readonly RigControlMonitor? _rigControlMonitor;
     private readonly string _configPath;
     private string? _qrzXmlUsername;
     private bool _hasQrzXmlPassword;
@@ -53,16 +55,21 @@ internal sealed class ManagedEngineState
     private readonly Dictionary<string, string> _runtimeOverrides;
 
     public ManagedEngineState(string configPath)
-        : this(configPath, new MemoryStorage(), null)
+        : this(configPath, new MemoryStorage(), null, null)
     {
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage)
-        : this(configPath, storage, null)
+        : this(configPath, storage, null, null)
     {
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator)
+        : this(configPath, storage, lookupCoordinator, null)
+    {
+    }
+
+    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
         ArgumentNullException.ThrowIfNull(storage);
@@ -70,6 +77,7 @@ internal sealed class ManagedEngineState
         _configPath = Path.GetFullPath(configPath.Trim());
         _storage = storage;
         _lookupCoordinator = lookupCoordinator ?? CreateDefaultCoordinator(storage);
+        _rigControlMonitor = rigControlMonitor;
         var persisted = LoadPersistedState(_configPath);
         _qrzXmlUsername = NormalizeOptional(persisted.QrzXmlUsername);
         _hasQrzXmlPassword = persisted.HasQrzXmlPassword;
@@ -711,32 +719,49 @@ internal sealed class ManagedEngineState
 
     public GetRigStatusResponse CreateRigStatusResponse()
     {
-        lock (_gate)
+        if (_rigControlMonitor is null)
         {
-            if (_rigControl is null || !_rigControl.Enabled)
+            lock (_gate)
             {
-                return new GetRigStatusResponse
+                if (_rigControl is null || !_rigControl.Enabled)
                 {
-                    Status = RigConnectionStatus.Disabled,
-                    ErrorMessage = "Rig control is disabled in the managed engine.",
+                    return new GetRigStatusResponse
+                    {
+                        Status = RigConnectionStatus.Disabled,
+                        ErrorMessage = "Rig control is disabled in the managed engine.",
+                    };
+                }
+
+                var response = new GetRigStatusResponse
+                {
+                    Status = RigConnectionStatus.Connected,
                 };
-            }
+                if (_rigControl.HasHost && _rigControl.HasPort)
+                {
+                    response.Endpoint = $"{_rigControl.Host}:{_rigControl.Port}";
+                }
 
-            var response = new GetRigStatusResponse
-            {
-                Status = RigConnectionStatus.Connected,
-            };
-            if (_rigControl.HasHost && _rigControl.HasPort)
-            {
-                response.Endpoint = $"{_rigControl.Host}:{_rigControl.Port}";
+                return response;
             }
-
-            return response;
         }
+
+        var snapshot = _rigControlMonitor.CurrentSnapshot();
+        var result = new GetRigStatusResponse { Status = snapshot.Status };
+        if (snapshot.HasErrorMessage)
+        {
+            result.ErrorMessage = snapshot.ErrorMessage;
+        }
+
+        return result;
     }
 
     public RigSnapshot BuildRigSnapshot()
     {
+        if (_rigControlMonitor is not null)
+        {
+            return _rigControlMonitor.CurrentSnapshot();
+        }
+
         var status = CreateRigStatusResponse();
         return new RigSnapshot
         {
@@ -751,6 +776,17 @@ internal sealed class ManagedEngineState
 
     public TestRigConnectionResponse TestRigConnection()
     {
+        if (_rigControlMonitor is not null)
+        {
+            var refreshed = _rigControlMonitor.RefreshSnapshot();
+            return new TestRigConnectionResponse
+            {
+                Success = refreshed.Status == RigConnectionStatus.Connected,
+                ErrorMessage = refreshed.HasErrorMessage ? refreshed.ErrorMessage : null,
+                Snapshot = refreshed.Status == RigConnectionStatus.Connected ? refreshed : null,
+            };
+        }
+
         var snapshot = BuildRigSnapshot();
         return new TestRigConnectionResponse
         {
