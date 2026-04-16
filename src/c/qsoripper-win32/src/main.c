@@ -2036,22 +2036,24 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
 
 static int PaintLookup(HDC hdc, int y_start, int w)
 {
-    int cw = g_state.char_w;
-    int ch = g_state.char_h;
+    int cw = g_state.list_cw;
+    int ch = g_state.list_ch;
     int panel_h = ch * 5 + 8;
-    int pad = cw * 2;
+    int pad = g_state.char_w * 2;
 
     DrawBox(hdc, 4, y_start, w - 8, panel_h, CLR_CYAN);
+    SelectObject(hdc, g_state.hFontSmallBold);
     DrawText_A_BG(hdc, pad, y_start, CLR_CYAN, CLR_BG, " Callsign Lookup ");
+    SelectObject(hdc, g_state.hFontSmall);
 
     int y = y_start + ch + 4;
 
     if (g_state.has_lookup) {
         char line[128];
 
-        SelectObject(hdc, g_state.hFontBold);
+        SelectObject(hdc, g_state.hFontSmallBold);
         DrawText_A(hdc, pad + cw, y, CLR_TEXT, g_state.lookup_name);
-        SelectObject(hdc, g_state.hFont);
+        SelectObject(hdc, g_state.hFontSmall);
         y += ch + 2;
 
         snprintf(line, sizeof(line), "QTH: %s", g_state.lookup_qth);
@@ -2081,6 +2083,7 @@ static int PaintLookup(HDC hdc, int y_start, int w)
         DrawText_A(hdc, pad + cw, y + ch, CLR_DARKGRAY, "");
     }
 
+    SelectObject(hdc, g_state.hFont);
     return y_start + panel_h + 2;
 }
 
