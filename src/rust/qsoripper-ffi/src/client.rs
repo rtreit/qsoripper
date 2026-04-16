@@ -79,6 +79,15 @@ pub(crate) fn buf_to_str(buf: &[u8]) -> &str {
     std::str::from_utf8(&buf[..end]).unwrap_or("")
 }
 
+/// Format a frequency in Hz to radio-style display: "14.225.00" or "3.536.50".
+/// Pattern: `<MHz>.<kHz>.<fractional kHz in 10s of Hz>`
+fn format_freq_radio_style(freq_hz: u64) -> String {
+    let mhz = freq_hz / 1_000_000;
+    let khz = (freq_hz % 1_000_000) / 1_000;
+    let tens_hz = (freq_hz % 1_000) / 10;
+    format!("{mhz}.{khz:03}.{tens_hz:02}")
+}
+
 /// Opaque client handle holding the runtime and gRPC channels.
 pub struct QsrClient {
     runtime: tokio::runtime::Runtime,
@@ -760,7 +769,7 @@ fn populate_rig_status(
 
     if snapshot.frequency_hz > 0 {
         let mhz = snapshot.frequency_hz as f64 / 1_000_000.0;
-        let display = format!("{mhz:.5} MHz");
+        let display = format_freq_radio_style(snapshot.frequency_hz);
         let mhz_str = format!("{mhz:.5}");
         str_to_buf(&display, &mut out.freq_display);
         str_to_buf(&mhz_str, &mut out.freq_mhz);
