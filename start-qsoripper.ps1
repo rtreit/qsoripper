@@ -25,6 +25,7 @@ $ErrorActionPreference = 'Stop'
 $runtimeDirectory = Join-Path $PSScriptRoot 'artifacts' | Join-Path -ChildPath 'run'
 $statePath = Join-Path $runtimeDirectory 'qsoripper-engine.json'
 $dotenvPath = Join-Path $PSScriptRoot '.env'
+$defaultPersistenceLocation = Join-Path (Join-Path '.' 'data') 'qsoripper.db'
 
 function Write-Info([string]$Message) {
     Write-Host $Message -ForegroundColor Cyan
@@ -85,7 +86,7 @@ function Get-TrackedProcess {
     }
 }
 
-function Get-ProbeTarget([string]$Address) {
+function Get-ProbeTargets([string]$Address) {
     if ($Address -match '^\[(?<host>.+)\]:(?<port>\d+)$') {
         $probeHost = $Matches.host
         $probePort = [int]$Matches.port
@@ -98,14 +99,33 @@ function Get-ProbeTarget([string]$Address) {
         throw "Unsupported listen address format: $Address"
     }
 
-    if ($probeHost -in @('0.0.0.0', '::', '[::]', '*', '+')) {
-        $probeHost = '127.0.0.1'
+    $probeHosts = switch ($probeHost) {
+        '0.0.0.0' { @('127.0.0.1') }
+        '::' { @('::1', '127.0.0.1') }
+        '[::]' { @('::1', '127.0.0.1') }
+        '*' { @('127.0.0.1') }
+        '+' { @('127.0.0.1') }
+        default { @($probeHost) }
     }
 
-    [pscustomobject]@{
-        Host = $probeHost
-        Port = $probePort
+    return @(
+        $probeHosts |
+            Select-Object -Unique |
+            ForEach-Object {
+                [pscustomobject]@{
+                    Host = $_
+                    Port = $probePort
+                }
+            }
+    )
+}
+
+function Format-HttpEndpoint([string]$Host, [int]$Port) {
+    if ($Host.Contains(':') -and -not $Host.StartsWith('[')) {
+        return "http://[$Host]:$Port"
     }
+
+    return "http://$Host:$Port"
 }
 
 function Test-TcpEndpoint([string]$TargetHost, [int]$Port) {
@@ -150,6 +170,74 @@ function Stop-TrackedProcess([int]$ProcessId) {
     }
 
     throw "Timed out waiting for process $ProcessId to stop."
+}
+
+function Get-ProcessCommandLine([int]$ProcessId) {
+    if ($IsWindows) {
+        return (Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue).CommandLine
+    }
+
+    $procCommandLinePath = "/proc/$ProcessId/cmdline"
+    if (Test-Path -LiteralPath $procCommandLinePath) {
+        $raw = [System.IO.File]::ReadAllText($procCommandLinePath)
+        return ($raw -replace "`0", ' ').Trim()
+    }
+
+    foreach ($psPath in @('/bin/ps', '/usr/bin/ps')) {
+        if (Test-Path -LiteralPath $psPath) {
+            $commandLine = & $psPath -o command= -p $ProcessId 2>$null | Select-Object -First 1
+            if (-not [string]::IsNullOrWhiteSpace($commandLine)) {
+                return $commandLine.Trim()
+            }
+        }
+    }
+
+    return $null
+}
+
+function Get-UntrackedEngineProcesses {
+    param(
+        [pscustomobject]$Profile,
+        [int]$TrackedProcessId = 0
+    )
+
+    $fragments = [System.Collections.Generic.List[string]]::new()
+    if (-not [string]::IsNullOrWhiteSpace($Profile.LaunchFilePath) -and $Profile.LaunchFilePath -notin @('cargo', 'dotnet')) {
+        $fragments.Add($Profile.LaunchFilePath)
+        $fragments.Add([System.IO.Path]::GetFileName($Profile.LaunchFilePath))
+    }
+
+    foreach ($argument in $Profile.LaunchArguments) {
+        if ([string]::IsNullOrWhiteSpace($argument) -or $argument -match '^\{.+\}$') {
+            continue
+        }
+
+        $fragments.Add($argument)
+        if (Test-Path -LiteralPath $argument) {
+            $fragments.Add([System.IO.Path]::GetFileName($argument))
+        }
+    }
+
+    $matches = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+    foreach ($candidate in Get-Process -ErrorAction SilentlyContinue) {
+        if ($TrackedProcessId -gt 0 -and $candidate.Id -eq $TrackedProcessId) {
+            continue
+        }
+
+        $commandLine = Get-ProcessCommandLine -ProcessId $candidate.Id
+        if ([string]::IsNullOrWhiteSpace($commandLine)) {
+            continue
+        }
+
+        foreach ($fragment in $fragments | Select-Object -Unique) {
+            if ($commandLine.Contains($fragment, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $matches.Add($candidate)
+                break
+            }
+        }
+    }
+
+    return @($matches | Sort-Object Id -Unique)
 }
 
 function Resolve-TemplateValue([string]$Template, [hashtable]$Tokens) {
@@ -232,7 +320,7 @@ function Get-EngineProfiles {
             Aliases = @('local-rust', 'rust', 'rust-tonic')
             DefaultListenAddress = '127.0.0.1:50051'
             DefaultStorage = 'sqlite'
-            DefaultPersistenceLocation = '.\data\qsoripper.db'
+            DefaultPersistenceLocation = $defaultPersistenceLocation
             DefaultConfigPath = Join-Path $runtimeDirectory 'rust-engine.json'
             EnvironmentTemplates = @{
                 QSORIPPER_STORAGE_BACKEND = '{storageBackend}'
@@ -251,7 +339,7 @@ function Get-EngineProfiles {
             Aliases = @('local-dotnet', 'dotnet', 'dotnet-aspnet', 'managed')
             DefaultListenAddress = '127.0.0.1:50052'
             DefaultStorage = 'memory'
-            DefaultPersistenceLocation = '.\data\qsoripper.db'
+            DefaultPersistenceLocation = $defaultPersistenceLocation
             DefaultConfigPath = Join-Path $runtimeDirectory 'dotnet-engine.json'
             EnvironmentTemplates = @{}
             BuildFilePath = 'dotnet'
@@ -301,11 +389,6 @@ if ([string]::IsNullOrWhiteSpace($Engine)) {
 
 $profiles = Get-EngineProfiles
 $profile = Resolve-EngineProfile -RequestedEngine $Engine -Profiles $profiles
-$serverBinaryPath = (
-    $profiles |
-        Where-Object { $_.EngineId -eq 'rust-tonic' } |
-        Select-Object -First 1
-).LaunchFilePath
 $stdoutPath = Join-Path $runtimeDirectory "qsoripper-$($profile.ProfileId).stdout.log"
 $stderrPath = Join-Path $runtimeDirectory "qsoripper-$($profile.ProfileId).stderr.log"
 
@@ -343,19 +426,24 @@ if ($null -ne $existing) {
 }
 
 if ($ForceRestart) {
-    # Kill any untracked qsoripper-server processes (e.g. started outside this script)
-    $orphans = Get-Process -Name 'qsoripper-server' -ErrorAction SilentlyContinue
+    $trackedProcessId = if ($null -ne $existing) { $existing.Process.Id } else { 0 }
+    $orphans = Get-UntrackedEngineProcesses -Profile $profile -TrackedProcessId $trackedProcessId
     foreach ($orphan in $orphans) {
-        Write-Info "Stopping untracked qsoripper-server process $($orphan.Id)."
+        Write-Info "Stopping untracked $($profile.DisplayName) process $($orphan.Id)."
         Stop-TrackedProcess -ProcessId $orphan.Id
     }
 
-    # On Windows the OS may briefly hold a file lock after process exit; wait for the
-    # binary to become writable before starting the build.
-    if ((Test-Path -LiteralPath $serverBinaryPath) -and $orphans) {
+    $launchArtifactPath = if ($profile.LaunchFilePath -eq 'dotnet') {
+        $profile.LaunchArguments | Select-Object -First 1
+    }
+    else {
+        $profile.LaunchFilePath
+    }
+
+    if ($IsWindows -and $orphans -and -not [string]::IsNullOrWhiteSpace($launchArtifactPath) -and (Test-Path -LiteralPath $launchArtifactPath)) {
         for ($lockAttempt = 0; $lockAttempt -lt 20; $lockAttempt++) {
             try {
-                [System.IO.File]::Open($serverBinaryPath, 'Open', 'ReadWrite', 'None').Dispose()
+                [System.IO.File]::Open($launchArtifactPath, 'Open', 'ReadWrite', 'None').Dispose()
                 break
             }
             catch {
@@ -375,10 +463,8 @@ if (-not $SkipBuild) {
 
 $tokens = @{
     configPath = $ConfigPath
-    exeExtension = if ($IsWindows) { '.exe' } else { '' }
     listenAddress = $ListenAddress
     persistenceLocation = if ($Storage -eq 'memory') { '' } else { $PersistenceLocation }
-    sqlitePath = if ($Storage -eq 'memory') { '' } else { $PersistenceLocation }
     storageBackend = $Storage
 }
 
@@ -427,7 +513,6 @@ $state = [pscustomobject]@{
     listenAddress = $ListenAddress
     pid = $process.Id
     persistenceLocation = if ($Storage -eq 'memory' -or [string]::IsNullOrWhiteSpace($PersistenceLocation)) { $null } else { $PersistenceLocation }
-    sqlitePath = if ($Storage -eq 'memory' -or [string]::IsNullOrWhiteSpace($PersistenceLocation)) { $null } else { $PersistenceLocation }
     startedAtUtc = [DateTime]::UtcNow.ToString('O')
     stderrPath = $stderrPath
     stdoutPath = $stdoutPath
@@ -435,7 +520,7 @@ $state = [pscustomobject]@{
 }
 $state | ConvertTo-Json | Set-Content -LiteralPath $statePath
 
-$probeTarget = Get-ProbeTarget -Address $ListenAddress
+$probeTargets = Get-ProbeTargets -Address $ListenAddress
 $deadline = [DateTime]::UtcNow.AddSeconds($StartupTimeoutSeconds)
 
 while ([DateTime]::UtcNow -lt $deadline) {
@@ -447,17 +532,19 @@ while ([DateTime]::UtcNow -lt $deadline) {
         throw "QsoRipper exited during startup.`n$details"
     }
 
-    if (Test-TcpEndpoint -TargetHost $probeTarget.Host -Port $probeTarget.Port) {
-        Write-Host "$($profile.DisplayName) started in the background (PID $($process.Id))." -ForegroundColor Green
-        Write-Host "Endpoint: http://$($probeTarget.Host):$($probeTarget.Port)" -ForegroundColor Green
-        if ($Storage -ne 'memory' -and -not [string]::IsNullOrWhiteSpace($PersistenceLocation)) {
-            Write-Host "Persistence location: $PersistenceLocation" -ForegroundColor Green
+    foreach ($probeTarget in $probeTargets) {
+        if (Test-TcpEndpoint -TargetHost $probeTarget.Host -Port $probeTarget.Port) {
+            Write-Host "$($profile.DisplayName) started in the background (PID $($process.Id))." -ForegroundColor Green
+            Write-Host "Endpoint: $(Format-HttpEndpoint -Host $probeTarget.Host -Port $probeTarget.Port)" -ForegroundColor Green
+            if ($Storage -ne 'memory' -and -not [string]::IsNullOrWhiteSpace($PersistenceLocation)) {
+                Write-Host "Persistence location: $PersistenceLocation" -ForegroundColor Green
+            }
+            if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
+                Write-Host "Config: $ConfigPath" -ForegroundColor Green
+            }
+            Write-Host "Logs: $stdoutPath" -ForegroundColor Green
+            exit 0
         }
-        if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) {
-            Write-Host "Config: $ConfigPath" -ForegroundColor Green
-        }
-        Write-Host "Logs: $stdoutPath" -ForegroundColor Green
-        exit 0
     }
 
     Start-Sleep -Milliseconds 250
@@ -465,4 +552,4 @@ while ([DateTime]::UtcNow -lt $deadline) {
 
 Stop-TrackedProcess -ProcessId $process.Id
 Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
-throw "QsoRipper did not open $($probeTarget.Host):$($probeTarget.Port) within $StartupTimeoutSeconds seconds."
+throw "QsoRipper did not open any expected endpoint ($((@($probeTargets | ForEach-Object { Format-HttpEndpoint -Host $_.Host -Port $_.Port })) -join ', ')) within $StartupTimeoutSeconds seconds."

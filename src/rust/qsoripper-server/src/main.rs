@@ -678,7 +678,9 @@ const RUST_ENGINE_DISPLAY_NAME: &str = "QsoRipper Rust Engine";
 const RUST_ENGINE_CAPABILITIES: &[&str] = &[
     "engine-info",
     "logbook",
-    "lookup",
+    "lookup-cache",
+    "lookup-callsign",
+    "lookup-stream",
     "setup",
     "station-profiles",
     "runtime-config",

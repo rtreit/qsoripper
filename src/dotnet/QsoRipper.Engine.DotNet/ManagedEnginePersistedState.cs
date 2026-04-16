@@ -5,8 +5,6 @@ namespace QsoRipper.Engine.DotNet;
 
 internal sealed class ManagedEnginePersistedState
 {
-    public string? LogFilePath { get; set; }
-
     public string? QrzXmlUsername { get; set; }
 
     public bool HasQrzXmlPassword { get; set; }

@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.Linq;
 
 namespace QsoRipper.EngineSelection;
@@ -8,6 +9,9 @@ public static class EngineCatalog
     public const string EngineProfileEnvironmentVariable = "QSORIPPER_ENGINE";
     public const string LegacyEngineProfileEnvironmentVariable = "QSORIPPER_ENGINE_IMPLEMENTATION";
     public const string EndpointEnvironmentVariable = "QSORIPPER_ENDPOINT";
+
+    private static readonly string StartScriptPath = Path.Combine(".", "start-qsoripper.ps1");
+
     private static readonly IReadOnlyList<EngineTargetProfile> BuiltInProfiles =
     [
         new(
@@ -16,20 +20,30 @@ public static class EngineCatalog
             "QsoRipper Rust Engine",
             "http://127.0.0.1:50051",
             [KnownEngineProfiles.LocalRust, "rust", "rust-tonic"],
-                new EngineLaunchRecipe(
-                    @".\artifacts\run\rust-engine.json",
-                    SupportsStorageSession: true,
-                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                    {
-                        ["QSORIPPER_STORAGE_BACKEND"] = "{storageBackend}",
-                        ["QSORIPPER_SQLITE_PATH"] = "{persistenceLocation}",
-                    },
+            new EngineLaunchRecipe(
+                Path.Combine(".", "artifacts", "run", "rust-engine.json"),
+                SupportsStorageSession: true,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["QSORIPPER_STORAGE_BACKEND"] = "{storageBackend}",
+                    ["QSORIPPER_SQLITE_PATH"] = "{enginePersistenceLocation}",
+                },
                 new EngineCommand(
-                    "cargo",
-                    ["build", "--manifest-path", @"src\rust\Cargo.toml", "-p", "qsoripper-server"]),
-                new EngineCommand(
-                    @"src\rust\target\debug\qsoripper-server{exeExtension}",
-                    ["--listen", "{listenAddress}", "--config", "{configPath}"]))),
+                    "pwsh",
+                    [
+                        "-File",
+                        StartScriptPath,
+                        "-Engine",
+                        KnownEngineProfiles.LocalRust,
+                        "-ListenAddress",
+                        "{listenAddress}",
+                        "-Storage",
+                        "{storageBackend}",
+                        "-PersistenceLocation",
+                        "{persistenceLocation}",
+                        "-ConfigPath",
+                        "{configPath}"
+                    ]))),
         new(
             KnownEngineProfiles.LocalDotNet,
             "dotnet-aspnet",
@@ -37,22 +51,23 @@ public static class EngineCatalog
             "http://127.0.0.1:50052",
             [KnownEngineProfiles.LocalDotNet, "dotnet", "dotnet-aspnet", "managed"],
             new EngineLaunchRecipe(
-                @".\artifacts\run\dotnet-engine.json",
+                Path.Combine(".", "artifacts", "run", "dotnet-engine.json"),
                 SupportsStorageSession: false,
                 new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
                 new EngineCommand(
-                    "dotnet",
-                    ["build", @"src\dotnet\QsoRipper.Engine.DotNet\QsoRipper.Engine.DotNet.csproj", "-c", "Debug"]),
-                new EngineCommand(
-                    "dotnet",
+                    "pwsh",
                     [
-                        "run",
-                        "--project",
-                        @"src\dotnet\QsoRipper.Engine.DotNet\QsoRipper.Engine.DotNet.csproj",
-                        "--",
-                        "--listen",
+                        "-File",
+                        StartScriptPath,
+                        "-Engine",
+                        KnownEngineProfiles.LocalDotNet,
+                        "-ListenAddress",
                         "{listenAddress}",
-                        "--config",
+                        "-Storage",
+                        "memory",
+                        "-PersistenceLocation",
+                        "{persistenceLocation}",
+                        "-ConfigPath",
                         "{configPath}"
                     ]))),
     ];

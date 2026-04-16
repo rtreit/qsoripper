@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Linq;
 using Microsoft.Extensions.Options;
 using QsoRipper.DebugHost.Models;
 
@@ -26,6 +27,10 @@ internal sealed class DebugCommandService
 
     public IReadOnlyList<DebugCommandDefinition> GetCommands()
     {
+        var rustManifestPath = _repositoryPaths.GetRepoRelativePath(_repositoryPaths.RustWorkspaceManifestPath);
+        var dotnetSolutionPath = _repositoryPaths.GetRepoRelativePath(_repositoryPaths.DotnetWorkspaceSolutionPath);
+        var conformanceScriptPath = _repositoryPaths.GetRepoRelativePath(_repositoryPaths.EngineConformanceScriptPath);
+
         return
         [
             new(
@@ -33,7 +38,7 @@ internal sealed class DebugCommandService
                 "Run Rust workspace tests",
                 "Runs the Rust workspace tests using the repo's current source tree.",
                 "cargo",
-                "test --manifest-path src\\rust\\Cargo.toml",
+                BuildArguments("test", "--manifest-path", rustManifestPath),
                 _repositoryPaths.RepoRoot,
                 RequiresProtoc: true),
             new(
@@ -41,7 +46,7 @@ internal sealed class DebugCommandService
                 "Run ADIF integration tests",
                 "Runs only the existing ADIF integration tests from qsoripper-core.",
                 "cargo",
-                "test --manifest-path src\\rust\\Cargo.toml --test adif_integration",
+                BuildArguments("test", "--manifest-path", rustManifestPath, "--test", "adif_integration"),
                 _repositoryPaths.RepoRoot,
                 RequiresProtoc: true),
             new(
@@ -49,22 +54,31 @@ internal sealed class DebugCommandService
                 "Run storage adapter tests",
                 "Runs the memory and SQLite storage adapter tests plus backend-selection coverage in the Rust server host.",
                 "cargo",
-                "test --manifest-path src\\rust\\Cargo.toml -p qsoripper-storage-memory -p qsoripper-storage-sqlite -p qsoripper-server",
+                BuildArguments(
+                    "test",
+                    "--manifest-path",
+                    rustManifestPath,
+                    "-p",
+                    "qsoripper-storage-memory",
+                    "-p",
+                    "qsoripper-storage-sqlite",
+                    "-p",
+                    "qsoripper-server"),
                 _repositoryPaths.RepoRoot,
                 RequiresProtoc: true),
             new(
                 "dotnet-test",
                 "Run .NET workspace tests",
-                "Runs the full .NET workspace test suite through the root src\\dotnet\\QsoRipper.slnx solution.",
+                $"Runs the full .NET workspace test suite through the root {dotnetSolutionPath} solution.",
                 "dotnet",
-                "test src\\dotnet\\QsoRipper.slnx",
+                BuildArguments("test", dotnetSolutionPath),
                 _repositoryPaths.RepoRoot),
             new(
                 "engine-conformance",
                 "Run engine conformance scenario",
                 "Starts the Rust and managed .NET engines one at a time and drives the same CLI setup/log/export scenario against both to verify client-visible parity.",
                 "pwsh",
-                "-File tests\\Run-EngineConformance.ps1",
+                BuildArguments("-File", conformanceScriptPath),
                 _repositoryPaths.RepoRoot),
             new(
                 "buf-lint",
@@ -147,5 +161,22 @@ internal sealed class DebugCommandService
     {
         var now = DateTimeOffset.UtcNow;
         return new CommandExecutionResult(command, -1, string.Empty, error, now, now, new Dictionary<string, string>());
+    }
+
+    private static string BuildArguments(params string[] arguments)
+    {
+        return string.Join(
+            " ",
+            arguments
+                .Where(argument => !string.IsNullOrWhiteSpace(argument))
+                .Select(QuoteArgument));
+    }
+
+    private static string QuoteArgument(string argument)
+    {
+        var escaped = argument.Replace("\"", "\\\"", StringComparison.Ordinal);
+        return escaped.IndexOfAny([' ', '\t']) >= 0
+            ? $"\"{escaped}\""
+            : escaped;
     }
 }

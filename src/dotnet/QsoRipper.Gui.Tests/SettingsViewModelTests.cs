@@ -71,7 +71,8 @@ public class SettingsViewModelTests
 
         Assert.True(viewModel.DidSave);
         Assert.NotNull(client.LastSaveSetupRequest);
-        Assert.Equal(@"C:\logs\portable.db", client.LastSaveSetupRequest.LogFilePath);
+        Assert.False(client.LastSaveSetupRequest.HasLogFilePath);
+        Assert.Equal(string.Empty, client.LastSaveSetupRequest.LogFilePath);
         var persistenceValue = Assert.Single(client.LastSaveSetupRequest.PersistenceValues);
         Assert.Equal(PersistenceSetup.PathKey, persistenceValue.Key);
         Assert.Equal(@"C:\logs\portable.db", persistenceValue.Value);

@@ -198,7 +198,8 @@ public class EditorModelTests
         model.PersistenceFields.Single(field => field.Key == "persistence.bucket").Value = "  archive  ";
         var request = model.ToRequest();
 
-        Assert.Equal(@".\data\updated.db", request.LogFilePath);
+        Assert.False(request.HasLogFilePath);
+        Assert.Equal(string.Empty, request.LogFilePath);
         Assert.Equal(2, request.PersistenceValues.Count);
         Assert.Contains(
             request.PersistenceValues,

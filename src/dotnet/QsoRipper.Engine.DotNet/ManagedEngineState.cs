@@ -11,8 +11,7 @@ namespace QsoRipper.Engine.DotNet;
 
 internal sealed class ManagedEngineState
 {
-    private const string PersistencePathKey = "persistence.path";
-    private const string PersistenceStepDescription = "The managed .NET engine uses an in-memory logbook. No persisted log path is required during setup.";
+    private const string PersistenceStepDescription = "The managed .NET engine keeps its logbook in memory. No persistence input is required during setup.";
     private const string PersistenceStepLabel = "Storage";
     private const string PersistenceSummary = "In-memory logbook";
 
@@ -39,9 +38,6 @@ internal sealed class ManagedEngineState
     private readonly List<QsoRecord> _recentQsos = [];
     private readonly Dictionary<string, LookupResult> _lookupCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _configPath;
-    private readonly string _suggestedLogFilePath;
-
-    private string _logFilePath;
     private string? _qrzXmlUsername;
     private bool _hasQrzXmlPassword;
     private bool _hasQrzLogbookApiKey;
@@ -58,12 +54,7 @@ internal sealed class ManagedEngineState
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
 
         _configPath = Path.GetFullPath(configPath.Trim());
-        _suggestedLogFilePath = Path.Combine(Path.GetDirectoryName(_configPath) ?? AppContext.BaseDirectory, "qsoripper-managed.db");
-
         var persisted = LoadPersistedState(_configPath);
-        _logFilePath = string.IsNullOrWhiteSpace(persisted.LogFilePath)
-            ? _suggestedLogFilePath
-            : persisted.LogFilePath;
         _qrzXmlUsername = NormalizeOptional(persisted.QrzXmlUsername);
         _hasQrzXmlPassword = persisted.HasQrzXmlPassword;
         _hasQrzLogbookApiKey = persisted.HasQrzLogbookApiKey;
@@ -87,7 +78,9 @@ internal sealed class ManagedEngineState
             {
                 "engine-info",
                 "logbook",
-                "lookup",
+                "lookup-cache",
+                "lookup-callsign",
+                "lookup-stream",
                 "setup",
                 "station-profiles",
                 "runtime-config",
@@ -127,7 +120,7 @@ internal sealed class ManagedEngineState
         switch (request.Step)
         {
             case SetupWizardStep.LogFile:
-                ValidateOptionalPersistencePath(response, request);
+                response.Valid = true;
                 break;
             case SetupWizardStep.StationProfiles:
                 var profile = request.StationProfile ?? new StationProfile();
@@ -214,14 +207,6 @@ internal sealed class ManagedEngineState
 
         lock (_gate)
         {
-            var requestedPersistencePath =
-                NormalizeOptional(FindPersistenceValue(request.PersistenceValues))
-                ?? NormalizeOptional(request.LogFilePath);
-            if (!string.IsNullOrWhiteSpace(requestedPersistencePath))
-            {
-                _logFilePath = requestedPersistencePath;
-            }
-
             if (request.StationProfile is not null)
             {
                 SaveStationProfileNoLock(
@@ -1007,7 +992,6 @@ internal sealed class ManagedEngineState
 
         var persisted = new ManagedEnginePersistedState
         {
-            LogFilePath = _logFilePath,
             QrzXmlUsername = _qrzXmlUsername,
             HasQrzXmlPassword = _hasQrzXmlPassword,
             HasQrzLogbookApiKey = _hasQrzLogbookApiKey,
@@ -1045,7 +1029,6 @@ internal sealed class ManagedEngineState
             HasStationProfile = _stationProfiles.Count > 0,
             StationProfile = GetEffectiveActiveProfileNoLock() ?? new StationProfile(),
             StationProfileCount = (uint)_stationProfiles.Count,
-            SuggestedLogFilePath = _suggestedLogFilePath,
             IsFirstRun = !File.Exists(_configPath),
             HasQrzXmlPassword = _hasQrzXmlPassword,
             HasQrzLogbookApiKey = _hasQrzLogbookApiKey,
@@ -1058,11 +1041,6 @@ internal sealed class ManagedEngineState
         status.StorageBackend = StorageBackend.Memory;
 #pragma warning restore CS0612
         status.PersistenceStepEnabled = false;
-
-        if (!string.IsNullOrWhiteSpace(_logFilePath))
-        {
-            status.LogFilePath = _logFilePath;
-        }
 
         if (!string.IsNullOrWhiteSpace(_qrzXmlUsername))
         {
@@ -1462,34 +1440,6 @@ internal sealed class ManagedEngineState
     {
         var active = GetEffectiveActiveProfileNoLock();
         return active is not null && IsStationProfileComplete(active);
-    }
-
-    private static string? FindPersistenceValue(IEnumerable<SetupFieldValue> values)
-    {
-        return values
-            .FirstOrDefault(value => string.Equals(value.Key, PersistencePathKey, StringComparison.OrdinalIgnoreCase))
-            ?.Value;
-    }
-
-    private static void ValidateOptionalPersistencePath(
-        ValidateSetupStepResponse response,
-        ValidateSetupStepRequest request)
-    {
-        var path = NormalizeOptional(FindPersistenceValue(request.PersistenceValues))
-            ?? NormalizeOptional(request.LogFilePath);
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            response.Valid = true;
-            return;
-        }
-
-        var parent = Path.GetDirectoryName(path);
-        var valid = string.IsNullOrWhiteSpace(parent) || Directory.Exists(parent);
-        AddValidation(
-            response,
-            PersistencePathKey,
-            valid,
-            valid ? string.Empty : $"Parent directory '{parent}' does not exist.");
     }
 
     private static void AddValidation(ValidateSetupStepResponse response, string field, bool valid, string message)

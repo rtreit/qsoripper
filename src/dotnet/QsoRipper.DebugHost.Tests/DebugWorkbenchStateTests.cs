@@ -17,15 +17,16 @@ public class DebugWorkbenchStateTests
         {
             DefaultEngineEndpoint = "http://localhost:60051",
             DefaultEngineStorageBackend = "sqlite",
-            DefaultEngineSqlitePath = @".\data\test-qsoripper.db"
+            DefaultEnginePersistenceLocation = Path.Combine(".", "data", "test-qsoripper.db")
         }));
 
         Assert.Equal("http://localhost:60051", state.EngineEndpoint);
         Assert.Equal("sqlite", state.EngineStorageBackend);
-        Assert.Equal(@".\data\test-qsoripper.db", state.EngineSqlitePath);
-        Assert.Contains(@"src\rust\target\debug\qsoripper-server", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Equal(Path.Combine(".", "data", "test-qsoripper.db"), state.EnginePersistenceLocation);
+        Assert.Contains("start-qsoripper.ps1", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Contains("-Engine local-rust", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
         Assert.Equal("sqlite", state.GetEngineEnvironmentOverrides()["QSORIPPER_STORAGE_BACKEND"]);
-        Assert.Equal(@".\data\test-qsoripper.db", state.GetEngineEnvironmentOverrides()["QSORIPPER_SQLITE_PATH"]);
+        Assert.Equal(Path.Combine(".", "data", "test-qsoripper.db"), state.GetEngineEnvironmentOverrides()["QSORIPPER_SQLITE_PATH"]);
     }
 
     [Fact]
@@ -40,7 +41,7 @@ public class DebugWorkbenchStateTests
         Assert.Equal("memory", state.EngineStorageBackend);
         Assert.Equal("memory", state.GetEngineEnvironmentOverrides()["QSORIPPER_STORAGE_BACKEND"]);
         Assert.DoesNotContain("QSORIPPER_SQLITE_PATH", state.GetEngineEnvironmentOverrides().Keys, StringComparer.Ordinal);
-        Assert.Contains(@"src\rust\target\debug\qsoripper-server", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Contains("start-qsoripper.ps1", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -48,12 +49,12 @@ public class DebugWorkbenchStateTests
     {
         var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
 
-        state.UpdateStorageOptions("file-cache", @".\data\portable-store.db");
+        state.UpdateStorageOptions("file-cache", Path.Combine(".", "data", "portable-store.db"));
 
         Assert.Equal("file-cache", state.EngineStorageBackend);
         Assert.Equal("File Cache", state.GetStorageBackendDisplayName());
         Assert.Equal("file-cache", state.GetEngineEnvironmentOverrides()["QSORIPPER_STORAGE_BACKEND"]);
-        Assert.Equal(@".\data\portable-store.db", state.GetEngineEnvironmentOverrides()["QSORIPPER_SQLITE_PATH"]);
+        Assert.Equal(Path.Combine(".", "data", "portable-store.db"), state.GetEngineEnvironmentOverrides()["QSORIPPER_SQLITE_PATH"]);
     }
 
     [Fact]
@@ -67,8 +68,9 @@ public class DebugWorkbenchStateTests
 
         Assert.Equal(KnownEngineProfiles.LocalDotNet, state.EngineProfile.ProfileId);
         Assert.Equal(EngineCatalog.DefaultDotNetEndpoint, state.EngineEndpoint);
-        Assert.Contains(@"QsoRipper.Engine.DotNet", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
-        Assert.Contains("--listen 127.0.0.1:50052", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Contains("start-qsoripper.ps1", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Contains("-Engine local-dotnet", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Contains("-ListenAddress 127.0.0.1:50052", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -94,7 +96,7 @@ public class DebugWorkbenchStateTests
         {
             ActiveStorageBackend = "sqlite",
             PersistenceSummary = "SQLite",
-            PersistenceLocation = @".\data\live-qsoripper.db",
+            PersistenceLocation = Path.Combine(".", "data", "live-qsoripper.db"),
             LookupProviderSummary = "QRZ XML capture-only via https://xmldata.qrz.com/xml/current/",
             Values =
             {
@@ -108,7 +110,7 @@ public class DebugWorkbenchStateTests
                 {
                     Key = "QSORIPPER_SQLITE_PATH",
                     HasValue = true,
-                    DisplayValue = @".\data\live-qsoripper.db"
+                    DisplayValue = Path.Combine(".", "data", "live-qsoripper.db")
                 },
                 new RuntimeConfigValue
                 {
@@ -123,9 +125,9 @@ public class DebugWorkbenchStateTests
         });
 
         Assert.Equal("sqlite", state.EngineStorageBackend);
-        Assert.Equal(@".\data\live-qsoripper.db", state.EngineSqlitePath);
+        Assert.Equal(Path.Combine(".", "data", "live-qsoripper.db"), state.EnginePersistenceLocation);
         Assert.Equal("<redacted>", state.GetEngineEnvironmentOverrides()["QSORIPPER_QRZ_XML_PASSWORD"]);
-        Assert.Contains(@"src\rust\target\debug\qsoripper-server", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Contains("start-qsoripper.ps1", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -193,7 +195,7 @@ public class DebugWorkbenchStateTests
         Assert.NotNull(state.SetupStatus);
         Assert.Null(state.SetupErrorMessage);
         Assert.Equal("memory", state.EngineStorageBackend);
-        Assert.Equal(@".\data\portable-qsoripper.db", state.EngineSqlitePath);
+        Assert.Equal(@".\data\portable-qsoripper.db", state.EnginePersistenceLocation);
     }
 
     [Fact]

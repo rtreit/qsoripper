@@ -30,18 +30,28 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal(EngineCatalog.DotNetProfile.DisplayName, info.DisplayName);
         Assert.Contains("engine-info", info.Capabilities);
         Assert.Contains("logbook", info.Capabilities);
-        Assert.Contains("lookup", info.Capabilities);
+        Assert.Contains("lookup-callsign", info.Capabilities);
+        Assert.Contains("lookup-stream", info.Capabilities);
+        Assert.Contains("lookup-cache", info.Capabilities);
         Assert.Contains("rig-control", info.Capabilities);
     }
 
     [Fact]
-    public void Save_setup_persists_active_profile_and_redacted_runtime_values()
+    public void Save_setup_ignores_persistence_paths_and_redacts_runtime_values()
     {
         var state = CreateState();
 
         var response = state.SaveSetup(new SaveSetupRequest
         {
             LogFilePath = Path.Combine(_tempDirectory, "portable-log.db"),
+            PersistenceValues =
+            {
+                new SetupFieldValue
+                {
+                    Key = "persistence.path",
+                    Value = Path.Combine(_tempDirectory, "portable-from-contract.db")
+                }
+            },
             QrzXmlUsername = "k7rnd",
             QrzXmlPassword = "secret",
             QrzLogbookApiKey = "api-key",
@@ -56,11 +66,13 @@ public sealed class ManagedEngineStateTests : IDisposable
 
         var runtime = state.GetRuntimeConfigSnapshot();
         var profiles = state.ListStationProfiles();
+        var persistedJson = File.ReadAllText(Path.Combine(_tempDirectory, "managed-engine.json"));
 
         Assert.True(response.Status.SetupComplete);
         Assert.True(response.Status.ConfigFileExists);
         Assert.True(response.Status.PersistenceContractExplicit);
-        Assert.Equal(Path.Combine(_tempDirectory, "portable-log.db"), response.Status.LogFilePath);
+        Assert.True(string.IsNullOrWhiteSpace(response.Status.LogFilePath));
+        Assert.True(string.IsNullOrWhiteSpace(response.Status.SuggestedLogFilePath));
         Assert.Equal("K7RND", response.Status.StationProfile.StationCallsign);
         Assert.Single(profiles.Profiles);
         Assert.NotEmpty(profiles.ActiveProfileId);
@@ -75,6 +87,7 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal("***", passwordValue.DisplayValue);
         Assert.True(passwordValue.Secret);
         Assert.True(passwordValue.Redacted);
+        Assert.DoesNotContain("\"logFilePath\"", persistedJson, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -83,7 +96,6 @@ public sealed class ManagedEngineStateTests : IDisposable
         var state = CreateState();
         state.SaveSetup(new SaveSetupRequest
         {
-            LogFilePath = Path.Combine(_tempDirectory, "qsoripper-managed.db"),
             QrzLogbookApiKey = "api-key",
             StationProfile = new StationProfile
             {
@@ -147,7 +159,6 @@ public sealed class ManagedEngineStateTests : IDisposable
         var state = CreateState();
         state.SaveSetup(new SaveSetupRequest
         {
-            LogFilePath = Path.Combine(_tempDirectory, "qsoripper-managed.db"),
             StationProfile = new StationProfile
             {
                 ProfileName = "Home",
@@ -174,7 +185,6 @@ public sealed class ManagedEngineStateTests : IDisposable
         var state = CreateState();
         state.SaveSetup(new SaveSetupRequest
         {
-            LogFilePath = Path.Combine(_tempDirectory, "qsoripper-managed.db"),
             StationProfile = new StationProfile
             {
                 ProfileName = "Home",
@@ -204,7 +214,6 @@ public sealed class ManagedEngineStateTests : IDisposable
         var state = CreateState();
         state.SaveSetup(new SaveSetupRequest
         {
-            LogFilePath = Path.Combine(_tempDirectory, "qsoripper-managed.db"),
             StationProfile = new StationProfile
             {
                 ProfileName = "Home",
@@ -246,7 +255,6 @@ public sealed class ManagedEngineStateTests : IDisposable
         var state = CreateState();
         state.SaveSetup(new SaveSetupRequest
         {
-            LogFilePath = Path.Combine(_tempDirectory, "qsoripper-managed.db"),
             StationProfile = new StationProfile
             {
                 ProfileName = "Home",
@@ -271,7 +279,6 @@ public sealed class ManagedEngineStateTests : IDisposable
         var state = CreateState();
         state.SaveSetup(new SaveSetupRequest
         {
-            LogFilePath = Path.Combine(_tempDirectory, "qsoripper-managed.db"),
             StationProfile = new StationProfile
             {
                 ProfileName = "Home",

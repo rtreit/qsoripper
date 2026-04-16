@@ -52,6 +52,7 @@ internal sealed class SetupEditorModel : StationProfileEditorModelBase
                             Description = PersistenceDescription,
                             Kind = RuntimeConfigValueKind.Path,
                             Required = true,
+                            PopulateLegacyLogFilePath = true,
                             Value = LogFilePath,
                         }
                     ]);

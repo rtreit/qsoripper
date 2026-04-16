@@ -4,6 +4,7 @@ public static class PersistenceSetup
 {
     public const string PathKey = "persistence.path";
     public const string LegacyPathEnvironmentVariable = "QSORIPPER_LOG_FILE";
+    public static string DefaultRelativePersistencePath { get; } = Path.Combine(".", "data", "qsoripper.db");
 
     public static bool HasExplicitMetadata(
         bool contractExplicit,

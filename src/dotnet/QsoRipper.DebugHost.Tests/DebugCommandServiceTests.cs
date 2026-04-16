@@ -19,7 +19,7 @@ public class DebugCommandServiceTests
 
         Assert.Contains(commands, static command => command.Key == "cargo-test" && command.RequiresProtoc);
         Assert.Contains(commands, static command => command.Key == "cargo-storage-tests" && command.Arguments.Contains("-p qsoripper-storage-sqlite", StringComparison.Ordinal));
-        Assert.Contains(commands, static command => command.Key == "dotnet-test" && command.Arguments == "test src\\dotnet\\QsoRipper.slnx");
+        Assert.Contains(commands, command => command.Key == "dotnet-test" && command.Arguments == $"test {Path.Combine("src", "dotnet", "QsoRipper.slnx")}");
         Assert.Contains(commands, static command => command.Key == "engine-conformance" && command.FileName == "pwsh");
         Assert.Contains(commands, static command => command.Key == "buf-lint" && command.RequiredTool == "buf");
     }

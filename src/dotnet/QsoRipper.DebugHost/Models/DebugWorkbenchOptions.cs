@@ -1,3 +1,5 @@
+using QsoRipper.EngineSelection;
+
 namespace QsoRipper.DebugHost.Models;
 
 internal sealed class DebugWorkbenchOptions
@@ -12,7 +14,19 @@ internal sealed class DebugWorkbenchOptions
 
     public string DefaultEngineStorageBackend { get; set; } = "memory";
 
-    public string DefaultEngineSqlitePath { get; set; } = @".\data\qsoripper.db";
+    public string DefaultEnginePersistenceLocation { get; set; } = PersistenceSetup.DefaultRelativePersistencePath;
+
+    public string DefaultEngineSqlitePath
+    {
+        get => DefaultEnginePersistenceLocation;
+        set
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                DefaultEnginePersistenceLocation = value;
+            }
+        }
+    }
 
     public int ProbeTimeoutSeconds { get; set; } = 3;
 

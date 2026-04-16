@@ -26,6 +26,8 @@ internal sealed class PersistenceSetupField : INotifyPropertyChanged
 
     public bool IsRedacted { get; init; }
 
+    public bool PopulateLegacyLogFilePath { get; init; }
+
     public IReadOnlyList<string> AllowedValues { get; init; } = [];
 
     public bool HasChoices => AllowedValues.Count > 0;

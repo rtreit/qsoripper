@@ -58,6 +58,7 @@ internal static class PersistenceSetupFields
                     Secret = definition.Secret || runtimeValue?.Secret == true,
                     HasConfiguredValue = runtimeValue?.HasValue == true,
                     IsRedacted = runtimeValue?.Redacted == true,
+                    PopulateLegacyLogFilePath = false,
                     AllowedValues = definition.AllowedValues.ToArray(),
                     Value = initialValue,
                 });
@@ -151,7 +152,7 @@ internal static class PersistenceSetupFields
                     Value = normalizedValue,
                 });
 
-            if (field.IsPath)
+            if (field.IsPath && field.PopulateLegacyLogFilePath)
             {
                 setLegacyPath(normalizedValue);
             }
@@ -179,6 +180,7 @@ internal static class PersistenceSetupFields
             Kind = RuntimeConfigValueKind.Path,
             Required = true,
             HasConfiguredValue = !string.IsNullOrWhiteSpace(configuredPath),
+            PopulateLegacyLogFilePath = true,
             Value = suggested,
         };
     }

@@ -24,7 +24,7 @@ internal sealed class DebugWorkbenchState
         EngineProfile = EngineCatalog.ResolveProfile(configuredProfile);
         EngineEndpoint = EngineCatalog.ResolveEndpoint(EngineProfile, _options.DefaultEngineEndpoint);
         EngineStorageBackend = NormalizeStorageBackend(_options.DefaultEngineStorageBackend);
-        EngineSqlitePath = NormalizePersistenceLocation(_options.DefaultEngineSqlitePath);
+        EnginePersistenceLocation = NormalizePersistenceLocation(_options.DefaultEnginePersistenceLocation);
     }
 
     public EngineTargetProfile EngineProfile { get; private set; }
@@ -33,7 +33,7 @@ internal sealed class DebugWorkbenchState
 
     public string EngineStorageBackend { get; private set; }
 
-    public string EngineSqlitePath { get; private set; }
+    public string EnginePersistenceLocation { get; private set; }
 
     public EngineInfo? ReportedEngineInfo { get; private set; }
 
@@ -89,7 +89,7 @@ internal sealed class DebugWorkbenchState
         ArgumentNullException.ThrowIfNull(persistenceLocation);
 
         EngineStorageBackend = NormalizeStorageBackend(backend);
-        EngineSqlitePath = NormalizePersistenceLocation(persistenceLocation);
+        EnginePersistenceLocation = NormalizePersistenceLocation(persistenceLocation);
     }
 
     public void UpdateRuntimeConfig(RuntimeConfigSnapshot snapshot)
@@ -102,7 +102,7 @@ internal sealed class DebugWorkbenchState
 
         if (!string.IsNullOrWhiteSpace(snapshot.PersistenceLocation))
         {
-            EngineSqlitePath = NormalizePersistenceLocation(snapshot.PersistenceLocation);
+            EnginePersistenceLocation = NormalizePersistenceLocation(snapshot.PersistenceLocation);
         }
     }
 
@@ -127,7 +127,7 @@ internal sealed class DebugWorkbenchState
 #pragma warning restore CS0612
         if (!string.IsNullOrWhiteSpace(persistedLogFilePath))
         {
-            EngineSqlitePath = NormalizePersistenceLocation(persistedLogFilePath);
+            EnginePersistenceLocation = NormalizePersistenceLocation(persistedLogFilePath);
         }
     }
 
@@ -184,9 +184,9 @@ internal sealed class DebugWorkbenchState
             return RuntimeConfigSnapshot.PersistenceLocation;
         }
 
-        return string.IsNullOrWhiteSpace(EngineSqlitePath)
+        return string.IsNullOrWhiteSpace(EnginePersistenceLocation)
             ? null
-            : EngineSqlitePath;
+            : EnginePersistenceLocation;
     }
 
     public string GetSelectedEngineDisplayName()
@@ -207,7 +207,7 @@ internal sealed class DebugWorkbenchState
             return "No local launch recipe is registered for the selected engine profile.";
         }
 
-        return BuildCommandPreview(recipe.LaunchCommand, BuildRecipeTokens(recipe));
+        return BuildCommandPreview(recipe.Command, BuildRecipeTokens(recipe));
     }
 
     public IReadOnlyDictionary<string, string> GetEngineEnvironmentOverrides()
@@ -408,7 +408,7 @@ internal sealed class DebugWorkbenchState
     private static string NormalizePersistenceLocation(string persistenceLocation)
     {
         return string.IsNullOrWhiteSpace(persistenceLocation)
-            ? @".\data\qsoripper.db"
+            ? PersistenceSetup.DefaultRelativePersistencePath
             : persistenceLocation.Trim();
     }
 
@@ -442,17 +442,17 @@ internal sealed class DebugWorkbenchState
         var configPath = string.IsNullOrWhiteSpace(recipe.DefaultConfigPath)
             ? string.Empty
             : recipe.DefaultConfigPath;
-        var persistenceLocation = string.Equals(EngineStorageBackend, "memory", StringComparison.OrdinalIgnoreCase)
+        var persistenceLocation = EnginePersistenceLocation;
+        var enginePersistenceLocation = string.Equals(EngineStorageBackend, "memory", StringComparison.OrdinalIgnoreCase)
             ? string.Empty
-            : EngineSqlitePath;
+            : EnginePersistenceLocation;
 
         return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["configPath"] = configPath,
-            ["exeExtension"] = OperatingSystem.IsWindows() ? ".exe" : string.Empty,
+            ["enginePersistenceLocation"] = enginePersistenceLocation,
             ["listenAddress"] = GetListenAddress(),
             ["persistenceLocation"] = persistenceLocation,
-            ["sqlitePath"] = persistenceLocation,
             ["storageBackend"] = EngineStorageBackend,
         };
     }

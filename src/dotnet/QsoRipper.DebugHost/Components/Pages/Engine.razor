@@ -982,9 +982,9 @@
 
 <div class="card shadow-sm mt-4">
     <div class="card-body">
-        <h2 class="h5">Local launch preview</h2>
+        <h2 class="h5">Local launcher preview</h2>
         <div class="small text-muted mb-2">
-            The command below matches the selected engine profile. Profiles that support storage-session overrides reflect the storage state configured on this page.
+            The command below uses the repo launcher helper for the selected engine profile. Profiles that support storage-session overrides reflect the storage state configured on this page.
         </div>
         <pre class="payload-view">@WorkbenchState.BuildEngineLaunchCommand()</pre>
         <div class="small text-muted mt-2 mb-1">Equivalent environment</div>
@@ -1004,7 +1004,7 @@
     private ProtoPayloadView? activeStationProfilePayload;
     private ProtoPayloadView? persistedStationProfilePayload;
     private ProtoPayloadView? activeStationContextPayload;
-    private SetupEditorModel setupEditor = SetupEditorModel.Create(null, @".\data\qsoripper.db");
+    private SetupEditorModel setupEditor = SetupEditorModel.Create(null, PersistenceSetup.DefaultRelativePersistencePath);
     private StationProfileEditorModel stationProfileEditor = StationProfileEditorModel.CreateEmpty();
     private EditContext setupEditContext = default!;
     private EditContext stationProfileEditContext = default!;
@@ -1032,7 +1032,7 @@
     {
         endpoint = WorkbenchState.EngineEndpoint;
         tools = ToolchainLocator.GetToolAvailability();
-        ReplaceSetupEditor(SetupEditorModel.Create(null, WorkbenchState.EngineSqlitePath));
+        ReplaceSetupEditor(SetupEditorModel.Create(null, WorkbenchState.EnginePersistenceLocation));
         ReplaceStationProfileEditor(StationProfileEditorModel.CreateEmpty());
         await Task.WhenAll(
             RefreshSetupStatusAsync(),
@@ -1078,7 +1078,7 @@
             RefreshSetupPayload();
             ReplaceSetupEditor(SetupEditorModel.Create(
                 WorkbenchState.SetupStatus,
-                WorkbenchState.EngineSqlitePath));
+                WorkbenchState.EnginePersistenceLocation));
             InitializeSetupExpansionDefault();
         }
         finally
@@ -1103,7 +1103,7 @@
             RefreshSetupPayload();
             ReplaceSetupEditor(SetupEditorModel.Create(
                 status,
-                WorkbenchState.EngineSqlitePath));
+                WorkbenchState.EnginePersistenceLocation));
             isSetupExpanded = status.SetupComplete != true;
             await RefreshStationProfilesAsync();
             await RefreshRuntimeConfigAsync();
