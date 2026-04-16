@@ -1,0 +1,23 @@
+[package]
+name = "qsoripper-ffi"
+description = "C-ABI gRPC client shim for the QsoRipper engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+qsoripper-core = { path = "../qsoripper-core", version = "0.1.0" }
+prost-types = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+
+[build-dependencies]
+cbindgen = "0.28"
+
+[lints]
+workspace = true

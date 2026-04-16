@@ -16,6 +16,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdint.h>
+#include "qsoripper_ffi.h"
 
 /* ── Compile-time settings ─────────────────────────────────────────────── */
 
@@ -299,6 +301,7 @@ typedef struct {
 } AppState;
 
 static AppState g_state;
+static struct QsrClient *g_client;
 
 /* ── Forward declarations ──────────────────────────────────────────────── */
 
@@ -318,7 +321,6 @@ static void LoadSelectedQso(void);
 static void DeleteSelectedQso(void);
 static int  PaintAdvancedForm(HDC hdc, int y_start, int w);
 
-static char *RunQrCommand(const char *args);
 static char *FieldBuffer(enum Field f);
 static int   FieldMaxLen(enum Field f);
 static void  DrawField(HDC, int, int, int, const char *, int, int, int, int);
@@ -342,210 +344,6 @@ static void safe_strcat(char *dst, size_t dstsz, const char *src)
     size_t avail = dstsz - cur;
     if (avail <= 1) return;
     safe_strcpy(dst + cur, avail, src);
-}
-
-/* ── Minimal JSON value extractor (no dependency) ──────────────────────── */
-
-/* Finds "key": "value" or "key": number in a JSON string.
-   Returns a malloc'd string with the value, or NULL.  */
-static char *json_get_string(const char *json, const char *key)
-{
-    char pattern[128];
-    snprintf(pattern, sizeof(pattern), "\"%s\"", key);
-    const char *p = strstr(json, pattern);
-    if (!p) return NULL;
-    p += strlen(pattern);
-    while (*p == ' ' || *p == ':' || *p == '\t') p++;
-    if (*p == '"') {
-        p++;
-        const char *end = strchr(p, '"');
-        if (!end) return NULL;
-        size_t len = (size_t)(end - p);
-        char *val = (char *)malloc(len + 1);
-        if (!val) return NULL;
-        memcpy(val, p, len);
-        val[len] = 0;
-        return val;
-    }
-    /* Numeric or boolean */
-    {
-        const char *end = p;
-        while (*end && *end != ',' && *end != '}' && *end != ' ' && *end != '\n') end++;
-        size_t len = (size_t)(end - p);
-        char *val = (char *)malloc(len + 1);
-        if (!val) return NULL;
-        memcpy(val, p, len);
-        val[len] = 0;
-        return val;
-    }
-}
-
-static double json_get_double(const char *json, const char *key, double dflt)
-{
-    char *v = json_get_string(json, key);
-    if (!v) return dflt;
-    double d = atof(v);
-    free(v);
-    return d;
-}
-
-static int json_get_int(const char *json, const char *key, int dflt)
-{
-    char *v = json_get_string(json, key);
-    if (!v) return dflt;
-    int i = atoi(v);
-    free(v);
-    return i;
-}
-
-/* ── Find entries in a JSON array ──────────────────────────────────────── */
-
-/* Returns pointer to the nth { in a JSON array, or NULL */
-static const char *json_array_nth(const char *json, int n)
-{
-    const char *p = strchr(json, '[');
-    if (!p) return NULL;
-    p++;
-    int depth = 0, idx = 0;
-    for (; *p; p++) {
-        if (*p == '{') {
-            if (depth == 0) {
-                if (idx == n) return p;
-                idx++;
-            }
-            depth++;
-        } else if (*p == '}') {
-            depth--;
-        } else if (*p == ']' && depth == 0) {
-            break;
-        }
-    }
-    return NULL;
-}
-
-/* Extract a substring from { to matching } inclusive */
-static char *json_extract_object(const char *start)
-{
-    if (!start || *start != '{') return NULL;
-    int depth = 0;
-    const char *p = start;
-    for (; *p; p++) {
-        if (*p == '{') depth++;
-        else if (*p == '}') { depth--; if (depth == 0) { p++; break; } }
-    }
-    size_t len = (size_t)(p - start);
-    char *obj = (char *)malloc(len + 1);
-    if (!obj) return NULL;
-    memcpy(obj, start, len);
-    obj[len] = 0;
-    return obj;
-}
-
-/* ── CLI runner: execute `qr <args>` and capture stdout ────────────────── */
-
-static char g_cli_path[MAX_PATH];
-
-static void FindCliPath(void)
-{
-    /* Try to find QsoRipper.Cli.exe relative to our own exe:
-       We're at: .../artifacts/publish/qsoripper-win32/Release/qsoripper-win32.exe
-       CLI is at: .../artifacts/publish/QsoRipper.Cli/Release/QsoRipper.Cli.exe */
-    char module[MAX_PATH];
-    GetModuleFileNameA(NULL, module, MAX_PATH);
-
-    /* Walk up to artifacts/publish */
-    char *p = strrchr(module, '\\');
-    if (p) *p = 0; /* strip exe name */
-    p = strrchr(module, '\\');
-    if (p) *p = 0; /* strip Release */
-    p = strrchr(module, '\\');
-    if (p) *p = 0; /* strip qsoripper-win32 */
-
-    /* Try sibling directory */
-    snprintf(g_cli_path, MAX_PATH, "%s\\QsoRipper.Cli\\Release\\QsoRipper.Cli.exe", module);
-    if (GetFileAttributesA(g_cli_path) != INVALID_FILE_ATTRIBUTES)
-        return;
-
-    /* Try QSORIPPER_CLI_PATH env var */
-    if (GetEnvironmentVariableA("QSORIPPER_CLI_PATH", g_cli_path, MAX_PATH) > 0)
-        if (GetFileAttributesA(g_cli_path) != INVALID_FILE_ATTRIBUTES)
-            return;
-
-    /* Fallback: assume on PATH */
-    safe_strcpy(g_cli_path, MAX_PATH, "QsoRipper.Cli.exe");
-}
-
-static char *RunQrCommand(const char *args)
-{
-    SECURITY_ATTRIBUTES sa = {0};
-    sa.nLength = sizeof(sa);
-    sa.bInheritHandle = TRUE;
-
-    HANDLE hReadPipe, hWritePipe;
-    if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0))
-        return NULL;
-    SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
-
-    char cmdline[8192];
-    snprintf(cmdline, sizeof(cmdline), "\"%s\" %s", g_cli_path, args);
-
-    STARTUPINFOA si = {0};
-    si.cb = sizeof(si);
-    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
-    si.hStdOutput = hWritePipe;
-    si.hStdError  = hWritePipe;
-    si.hStdInput  = INVALID_HANDLE_VALUE;
-    si.wShowWindow = SW_HIDE;
-
-    PROCESS_INFORMATION pi = {0};
-
-    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE,
-                        CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
-        CloseHandle(hReadPipe);
-        CloseHandle(hWritePipe);
-        return NULL;
-    }
-    CloseHandle(hWritePipe);
-
-    /* Read all stdout */
-    char *output = (char *)malloc(8192);
-    if (!output) {
-        WaitForSingleObject(pi.hProcess, 5000);
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-        CloseHandle(hReadPipe);
-        return NULL;
-    }
-    DWORD totalRead = 0;
-    DWORD capacity = 8192;
-    for (;;) {
-        if (totalRead + 1024 > capacity) {
-            DWORD newCapacity = capacity * 2;
-            char *grown = (char *)realloc(output, newCapacity);
-            if (!grown) {
-                free(output);
-                WaitForSingleObject(pi.hProcess, 5000);
-                CloseHandle(pi.hProcess);
-                CloseHandle(pi.hThread);
-                CloseHandle(hReadPipe);
-                return NULL;
-            }
-            output = grown;
-            capacity = newCapacity;
-        }
-        DWORD bytesRead = 0;
-        if (!ReadFile(hReadPipe, output + totalRead, 1024, &bytesRead, NULL) || bytesRead == 0)
-            break;
-        totalRead += bytesRead;
-    }
-    output[totalRead] = 0;
-
-    WaitForSingleObject(pi.hProcess, 5000);
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    CloseHandle(hReadPipe);
-
-    return output;
 }
 
 /* ── Field buffer accessor ─────────────────────────────────────────────── */
@@ -883,16 +681,63 @@ static void SetStatus(const char *msg, int is_error)
     g_state.status_created_at = GetTickCount64();
 }
 
-/* ── CLI integration: Log QSO ──────────────────────────────────────────── */
+/* ── FFI integration: Log QSO ──────────────────────────────────────────── */
 
-static void AppendArg(char *cmd, size_t cmd_sz, const char *flag, const char *val)
+static void fill_log_request(QsrLogQsoRequest *req)
 {
-    if (!val || !val[0]) return;
-    safe_strcat(cmd, cmd_sz, " ");
-    safe_strcat(cmd, cmd_sz, flag);
-    safe_strcat(cmd, cmd_sz, " \"");
-    safe_strcat(cmd, cmd_sz, val);
-    safe_strcat(cmd, cmd_sz, "\"");
+    memset(req, 0, sizeof(*req));
+    safe_strcpy((char *)req->callsign, sizeof(req->callsign), g_state.callsign);
+    safe_strcpy((char *)req->band, sizeof(req->band), BANDS[g_state.band_idx]);
+    safe_strcpy((char *)req->mode, sizeof(req->mode), MODES[g_state.mode_idx]);
+
+    char dt[64];
+    snprintf(dt, sizeof(dt), "%s %s", g_state.date, g_state.time_str);
+    safe_strcpy((char *)req->datetime, sizeof(req->datetime), dt);
+
+    /* Parse RST strings into components */
+    int len = (int)strlen(g_state.rst_sent);
+    if (len >= 2) {
+        req->rst_sent.readability = g_state.rst_sent[0] - '0';
+        req->rst_sent.strength    = g_state.rst_sent[1] - '0';
+        if (len >= 3) req->rst_sent.tone = g_state.rst_sent[2] - '0';
+    }
+    len = (int)strlen(g_state.rst_rcvd);
+    if (len >= 2) {
+        req->rst_rcvd.readability = g_state.rst_rcvd[0] - '0';
+        req->rst_rcvd.strength    = g_state.rst_rcvd[1] - '0';
+        if (len >= 3) req->rst_rcvd.tone = g_state.rst_rcvd[2] - '0';
+    }
+
+    if (g_state.freq_mhz[0]) {
+        unsigned long long freq_khz =
+            (unsigned long long)(atof(g_state.freq_mhz) * 1000.0 + 0.5);
+        req->freq_khz = freq_khz;
+    }
+
+    safe_strcpy((char *)req->comment,       sizeof(req->comment),       g_state.comment);
+    safe_strcpy((char *)req->notes,          sizeof(req->notes),          g_state.notes);
+    safe_strcpy((char *)req->worked_name,    sizeof(req->worked_name),    g_state.worked_name);
+    safe_strcpy((char *)req->tx_power,       sizeof(req->tx_power),       g_state.tx_power);
+    safe_strcpy((char *)req->submode,        sizeof(req->submode),        g_state.submode);
+    safe_strcpy((char *)req->contest_id,     sizeof(req->contest_id),     g_state.contest_id);
+    safe_strcpy((char *)req->serial_sent,    sizeof(req->serial_sent),    g_state.serial_sent);
+    safe_strcpy((char *)req->serial_rcvd,    sizeof(req->serial_rcvd),    g_state.serial_rcvd);
+    safe_strcpy((char *)req->exchange_sent,  sizeof(req->exchange_sent),  g_state.exchange_sent);
+    safe_strcpy((char *)req->exchange_rcvd,  sizeof(req->exchange_rcvd),  g_state.exchange_rcvd);
+    safe_strcpy((char *)req->prop_mode,      sizeof(req->prop_mode),      g_state.prop_mode);
+    safe_strcpy((char *)req->sat_name,       sizeof(req->sat_name),       g_state.sat_name);
+    safe_strcpy((char *)req->sat_mode,       sizeof(req->sat_mode),       g_state.sat_mode);
+    safe_strcpy((char *)req->iota,           sizeof(req->iota),           g_state.iota);
+    safe_strcpy((char *)req->arrl_section,   sizeof(req->arrl_section),   g_state.arrl_section);
+    safe_strcpy((char *)req->worked_state,   sizeof(req->worked_state),   g_state.worked_state);
+    safe_strcpy((char *)req->worked_county,  sizeof(req->worked_county),  g_state.worked_county);
+    safe_strcpy((char *)req->skcc,           sizeof(req->skcc),           g_state.skcc);
+
+    if (g_state.time_off[0] && g_state.date[0]) {
+        char off[64];
+        snprintf(off, sizeof(off), "%s %s", g_state.date, g_state.time_off);
+        safe_strcpy((char *)req->time_off, sizeof(req->time_off), off);
+    }
 }
 
 static void LogQso(void)
@@ -902,87 +747,38 @@ static void LogQso(void)
         return;
     }
 
-    char cmd[4096];
     int is_update = g_state.editing_local_id[0] != 0;
 
     if (is_update) {
-        snprintf(cmd, sizeof(cmd),
-                  "update %s --band %s --mode %s --at \"%s %s\" "
-                  "--rst-sent %s --rst-rcvd %s",
-                  g_state.editing_local_id,
-                  BANDS[g_state.band_idx],
-                  MODES[g_state.mode_idx],
-                  g_state.date, g_state.time_str,
-                  g_state.rst_sent,
-                  g_state.rst_rcvd);
-    } else {
-        snprintf(cmd, sizeof(cmd),
-                  "log %s %s %s --at \"%s %s\" --rst-sent %s --rst-rcvd %s",
-                  g_state.callsign,
-                  BANDS[g_state.band_idx],
-                  MODES[g_state.mode_idx],
-                  g_state.date, g_state.time_str,
-                  g_state.rst_sent,
-                  g_state.rst_rcvd);
-    }
-
-    if (g_state.freq_mhz[0]) {
-        unsigned long long freq_khz =
-            (unsigned long long)(atof(g_state.freq_mhz) * 1000.0 + 0.5);
-        if (freq_khz > 0) {
-            char freq_arg[32];
-            snprintf(freq_arg, sizeof(freq_arg), " --freq %llu", freq_khz);
-            safe_strcat(cmd, sizeof(cmd), freq_arg);
-        }
-    }
-
-    AppendArg(cmd, sizeof(cmd), "--comment", g_state.comment);
-    AppendArg(cmd, sizeof(cmd), "--notes", g_state.notes);
-    AppendArg(cmd, sizeof(cmd), "--name", g_state.worked_name);
-    AppendArg(cmd, sizeof(cmd), "--tx-power", g_state.tx_power);
-    AppendArg(cmd, sizeof(cmd), "--submode", g_state.submode);
-    AppendArg(cmd, sizeof(cmd), "--contest-id", g_state.contest_id);
-    AppendArg(cmd, sizeof(cmd), "--serial-sent", g_state.serial_sent);
-    AppendArg(cmd, sizeof(cmd), "--serial-rcvd", g_state.serial_rcvd);
-    AppendArg(cmd, sizeof(cmd), "--exchange-sent", g_state.exchange_sent);
-    AppendArg(cmd, sizeof(cmd), "--exchange-rcvd", g_state.exchange_rcvd);
-    AppendArg(cmd, sizeof(cmd), "--prop-mode", g_state.prop_mode);
-    AppendArg(cmd, sizeof(cmd), "--sat-name", g_state.sat_name);
-    AppendArg(cmd, sizeof(cmd), "--sat-mode", g_state.sat_mode);
-    AppendArg(cmd, sizeof(cmd), "--iota", g_state.iota);
-    AppendArg(cmd, sizeof(cmd), "--arrl-section", g_state.arrl_section);
-    AppendArg(cmd, sizeof(cmd), "--state", g_state.worked_state);
-    AppendArg(cmd, sizeof(cmd), "--worked-county", g_state.worked_county);
-    AppendArg(cmd, sizeof(cmd), "--skcc", g_state.skcc);
-
-    if (g_state.time_off[0] && g_state.date[0]) {
-        char time_off_str[64];
-        snprintf(time_off_str, sizeof(time_off_str), "%s %s",
-                  g_state.date, g_state.time_off);
-        AppendArg(cmd, sizeof(cmd), "--time-off", time_off_str);
-    }
-
-    char *result = RunQrCommand(cmd);
-    if (result) {
-        if (is_update) {
+        QsrUpdateQsoRequest ureq;
+        memset(&ureq, 0, sizeof(ureq));
+        safe_strcpy((char *)ureq.local_id, sizeof(ureq.local_id), g_state.editing_local_id);
+        fill_log_request(&ureq.qso);
+        if (qsr_update_qso(g_client, &ureq) == 0) {
             SetStatus("QSO updated", 0);
         } else {
+            SetStatus("Failed to update QSO", 1);
+        }
+    } else {
+        QsrLogQsoRequest req;
+        QsrLogQsoResult res;
+        fill_log_request(&req);
+        if (qsr_log_qso(g_client, &req, &res) == 0) {
             char msg[128];
             snprintf(msg, sizeof(msg), "Logged %s on %s %s",
                       g_state.callsign, BANDS[g_state.band_idx],
                       MODES[g_state.mode_idx]);
             SetStatus(msg, 0);
+        } else {
+            SetStatus("Failed to log QSO", 1);
         }
-        free(result);
-    } else {
-        SetStatus("Failed to run qr command", 1);
     }
 
     ClearForm();
     RefreshQsoList();
 }
 
-/* ── CLI integration: Refresh QSO list ─────────────────────────────────── */
+/* ── FFI integration: Refresh QSO list ─────────────────────────────────── */
 
 typedef struct {
     HWND hwnd;
@@ -1000,104 +796,29 @@ static unsigned __stdcall QsoLoadThread(void *param)
     QsoLoadResult *res = (QsoLoadResult *)calloc(1, sizeof(QsoLoadResult));
     if (!res) { free(arg); return 0; }
 
-    char *result = RunQrCommand("list --limit 0 --json");
-    if (result) {
-        for (int i = 0; ; i++) {
-            const char *obj_start = json_array_nth(result, i);
-            if (!obj_start) break;
+    QsrQsoList list;
+    memset(&list, 0, sizeof(list));
 
-            char *obj = json_extract_object(obj_start);
-            if (!obj) break;
-
-            if (res->count >= res->capacity) {
-                int new_cap = res->capacity == 0 ? 64 : res->capacity * 2;
-                RecentQso *tmp = (RecentQso *)realloc(res->qsos,
-                                                       (size_t)new_cap * sizeof(RecentQso));
-                if (!tmp) { free(obj); break; }
-                res->qsos = tmp;
-                res->capacity = new_cap;
+    if (qsr_list_qsos(g_client, &list) == 0 && list.count > 0) {
+        res->qsos = (RecentQso *)calloc((size_t)list.count, sizeof(RecentQso));
+        if (res->qsos) {
+            res->count = list.count;
+            res->capacity = list.count;
+            for (int i = 0; i < list.count; i++) {
+                QsrQsoSummary *s = &list.items[i];
+                RecentQso *q = &res->qsos[i];
+                safe_strcpy(q->utc,      sizeof(q->utc),      (const char *)s->utc);
+                safe_strcpy(q->callsign, sizeof(q->callsign), (const char *)s->callsign);
+                safe_strcpy(q->band,     sizeof(q->band),     (const char *)s->band);
+                safe_strcpy(q->mode,     sizeof(q->mode),     (const char *)s->mode);
+                safe_strcpy(q->rst_sent, sizeof(q->rst_sent), (const char *)s->rst_sent);
+                safe_strcpy(q->rst_rcvd, sizeof(q->rst_rcvd), (const char *)s->rst_rcvd);
+                safe_strcpy(q->country,  sizeof(q->country),  (const char *)s->country);
+                safe_strcpy(q->grid,     sizeof(q->grid),     (const char *)s->grid);
+                safe_strcpy(q->local_id, sizeof(q->local_id), (const char *)s->local_id);
             }
-
-            RecentQso *q = &res->qsos[res->count];
-            memset(q, 0, sizeof(*q));
-
-            char *v;
-            v = json_get_string(obj, "utcTimestamp");
-            if (!v) v = json_get_string(obj, "utc");
-            if (v) {
-                if (strlen(v) >= 16) {
-                    char buf[6];
-                    buf[0] = v[11]; buf[1] = v[12]; buf[2] = ':';
-                    buf[3] = v[14]; buf[4] = v[15]; buf[5] = 0;
-                    safe_strcpy(q->utc, sizeof(q->utc), buf);
-                } else {
-                    safe_strcpy(q->utc, sizeof(q->utc), v);
-                }
-                free(v);
-            }
-
-            v = json_get_string(obj, "workedCallsign");
-            if (!v) v = json_get_string(obj, "callsign");
-            if (v) { safe_strcpy(q->callsign, sizeof(q->callsign), v); free(v); }
-
-            v = json_get_string(obj, "band");
-            if (v) {
-                const char *display = v;
-                if (strncmp(display, "BAND_", 5) == 0) display += 5;
-                safe_strcpy(q->band, sizeof(q->band), display);
-                free(v);
-            }
-
-            v = json_get_string(obj, "mode");
-            if (v) {
-                const char *display = v;
-                if (strncmp(display, "MODE_", 5) == 0) display += 5;
-                safe_strcpy(q->mode, sizeof(q->mode), display);
-                free(v);
-            }
-
-            {
-                int r = json_get_int(obj, "readability", 0);
-                int s = json_get_int(obj, "strength", 0);
-                int t = json_get_int(obj, "tone", 0);
-                if (r > 0) {
-                    if (t > 0) snprintf(q->rst_sent, sizeof(q->rst_sent), "%d%d%d", r, s, t);
-                    else       snprintf(q->rst_sent, sizeof(q->rst_sent), "%d%d", r, s);
-                }
-            }
-
-            {
-                const char *rcvd_pos = strstr(obj, "rstReceived");
-                if (rcvd_pos) {
-                    int r = json_get_int(rcvd_pos, "readability", 0);
-                    int s = json_get_int(rcvd_pos, "strength", 0);
-                    int t = json_get_int(rcvd_pos, "tone", 0);
-                    if (r > 0) {
-                        if (t > 0) snprintf(q->rst_rcvd, sizeof(q->rst_rcvd), "%d%d%d", r, s, t);
-                        else       snprintf(q->rst_rcvd, sizeof(q->rst_rcvd), "%d%d", r, s);
-                    }
-                }
-            }
-
-            v = json_get_string(obj, "country");
-            if (!v) {
-                const char *snap = strstr(obj, "stationSnapshot");
-                if (snap) v = json_get_string(snap, "country");
-            }
-            if (v) { safe_strcpy(q->country, sizeof(q->country), v); free(v); }
-
-            v = json_get_string(obj, "workedGrid");
-            if (!v) v = json_get_string(obj, "grid");
-            if (v) { safe_strcpy(q->grid, sizeof(q->grid), v); free(v); }
-
-            v = json_get_string(obj, "localId");
-            if (!v) v = json_get_string(obj, "local_id");
-            if (v) { safe_strcpy(q->local_id, sizeof(q->local_id), v); free(v); }
-
-            res->count++;
-            free(obj);
         }
-        free(result);
+        qsr_free_qso_list(&list);
     }
 
     if (!PostMessage(arg->hwnd, WM_APP_QSO_LOADED, 0, (LPARAM)res))
@@ -1123,7 +844,7 @@ static void RefreshQsoList(void)
     RefreshQsoListAsync(g_state.hwnd);
 }
 
-/* ── CLI integration: Lookup callsign ──────────────────────────────────── */
+/* ── FFI integration: Lookup callsign ──────────────────────────────────── */
 
 static void ClearLookupDisplay(void)
 {
@@ -1145,35 +866,15 @@ static unsigned __stdcall LookupThread(void *param)
 
     safe_strcpy(res->callsign, sizeof(res->callsign), arg->callsign);
 
-    char cmd[128];
-    snprintf(cmd, sizeof(cmd), "lookup %s --json", arg->callsign);
-    char *result = RunQrCommand(cmd);
-
-    if (result) {
-        const char *record_pos = strstr(result, "\"record\"");
-        if (record_pos) {
-            char *v;
-            v = json_get_string(record_pos, "formattedName");
-            if (!v) v = json_get_string(record_pos, "firstName");
-            if (v) {
-                safe_strcpy(res->name, sizeof(res->name), v);
-                res->has_data = 1;
-                free(v);
-            }
-            v = json_get_string(record_pos, "addr2");
-            if (!v) v = json_get_string(record_pos, "qth");
-            if (v) { safe_strcpy(res->qth, sizeof(res->qth), v); free(v); }
-
-            v = json_get_string(record_pos, "gridSquare");
-            if (!v) v = json_get_string(record_pos, "grid");
-            if (v) { safe_strcpy(res->grid, sizeof(res->grid), v); free(v); }
-
-            v = json_get_string(record_pos, "country");
-            if (v) { safe_strcpy(res->country, sizeof(res->country), v); free(v); }
-
-            res->cq_zone = json_get_int(record_pos, "cqZone", 0);
-        }
-        free(result);
+    QsrLookupResult lr;
+    memset(&lr, 0, sizeof(lr));
+    if (qsr_lookup(g_client, arg->callsign, &lr) == 0 && lr.has_data) {
+        res->has_data = 1;
+        safe_strcpy(res->name,    sizeof(res->name),    (const char *)lr.name);
+        safe_strcpy(res->qth,     sizeof(res->qth),     (const char *)lr.qth);
+        safe_strcpy(res->grid,    sizeof(res->grid),    (const char *)lr.grid);
+        safe_strcpy(res->country, sizeof(res->country), (const char *)lr.country);
+        res->cq_zone = lr.cq_zone;
     }
 
     if (!PostMessage(arg->hwnd, WM_APP_LOOKUP_DONE, 0, (LPARAM)res))
@@ -1183,7 +884,7 @@ static unsigned __stdcall LookupThread(void *param)
     return 0;
 }
 
-/* ── CLI integration: Rig snapshot poll ────────────────────────────────── */
+/* ── FFI integration: Rig snapshot poll ────────────────────────────────── */
 
 static unsigned __stdcall RigPollThread(void *param)
 {
@@ -1191,23 +892,14 @@ static unsigned __stdcall RigPollThread(void *param)
     RigPollResult *res = (RigPollResult *)calloc(1, sizeof(RigPollResult));
     if (!res) { free(arg); return 0; }
 
-    char *result = RunQrCommand("rig-status --json");
-    if (result) {
-        char *status = json_get_string(result, "status");
-        if (status && _stricmp(status, "connected") == 0) {
-            char *v;
-            res->connected = 1;
-            v = json_get_string(result, "frequencyDisplay");
-            if (v) { safe_strcpy(res->freq_display, sizeof(res->freq_display), v); free(v); }
-            v = json_get_string(result, "frequencyMhz");
-            if (v) { safe_strcpy(res->freq_mhz, sizeof(res->freq_mhz), v); free(v); }
-            v = json_get_string(result, "band");
-            if (v) { safe_strcpy(res->band, sizeof(res->band), v); free(v); }
-            v = json_get_string(result, "mode");
-            if (v) { safe_strcpy(res->mode, sizeof(res->mode), v); free(v); }
-        }
-        if (status) free(status);
-        free(result);
+    QsrRigStatus rs;
+    memset(&rs, 0, sizeof(rs));
+    if (qsr_get_rig_status(g_client, &rs) == 0 && rs.connected) {
+        res->connected = 1;
+        safe_strcpy(res->freq_display, sizeof(res->freq_display), (const char *)rs.freq_display);
+        safe_strcpy(res->freq_mhz,    sizeof(res->freq_mhz),     (const char *)rs.freq_mhz);
+        safe_strcpy(res->band,         sizeof(res->band),          (const char *)rs.band);
+        safe_strcpy(res->mode,         sizeof(res->mode),          (const char *)rs.mode);
     }
 
     if (!PostMessage(arg->hwnd, WM_APP_RIG_DONE, 0, (LPARAM)res))
@@ -1217,28 +909,21 @@ static unsigned __stdcall RigPollThread(void *param)
     return 0;
 }
 
-/* ── CLI integration: Fetch space weather ──────────────────────────────── */
+/* ── FFI integration: Fetch space weather ──────────────────────────────── */
 
 static void FetchSpaceWeather(void)
 {
-    char *result = RunQrCommand("space-weather --json");
-    if (!result) return;
-
-    g_state.k_index = json_get_double(result, "planetaryKIndex", 0.0);
-    if (g_state.k_index == 0.0)
-        g_state.k_index = json_get_double(result, "k_index", 0.0);
-    g_state.solar_flux = json_get_double(result, "solarFluxIndex", 0.0);
-    if (g_state.solar_flux == 0.0)
-        g_state.solar_flux = json_get_double(result, "solar_flux", 0.0);
-    g_state.sunspot_number = json_get_int(result, "sunspotNumber", 0);
-    if (g_state.sunspot_number == 0)
-        g_state.sunspot_number = json_get_int(result, "sunspot_number", 0);
-    g_state.has_weather = 1;
-
-    free(result);
+    QsrSpaceWeather sw;
+    memset(&sw, 0, sizeof(sw));
+    if (qsr_get_space_weather(g_client, &sw) == 0 && sw.has_data) {
+        g_state.k_index = sw.k_index;
+        g_state.solar_flux = sw.solar_flux;
+        g_state.sunspot_number = sw.sunspot_number;
+        g_state.has_weather = 1;
+    }
 }
 
-/* ── CLI integration: Load selected QSO into form ──────────────────────── */
+/* ── FFI integration: Load selected QSO into form ──────────────────────── */
 
 static void LoadSelectedQso(void)
 {
@@ -1251,154 +936,73 @@ static void LoadSelectedQso(void)
         return;
     }
 
-    char cmd[128];
-    snprintf(cmd, sizeof(cmd), "get %s --json", q->local_id);
-    char *result = RunQrCommand(cmd);
-    if (!result) {
+    QsrQsoDetail detail;
+    memset(&detail, 0, sizeof(detail));
+    if (qsr_get_qso(g_client, q->local_id, &detail) != 0) {
         SetStatus("Failed to load QSO data", 1);
         return;
     }
 
     ClearForm();
 
-    char *v;
+    safe_strcpy(g_state.callsign, sizeof(g_state.callsign), (const char *)detail.callsign);
 
-    v = json_get_string(result, "workedCallsign");
-    if (!v) v = json_get_string(result, "callsign");
-    if (v) { safe_strcpy(g_state.callsign, sizeof(g_state.callsign), v); free(v); }
-
-    v = json_get_string(result, "band");
-    if (v) {
-        const char *disp = v;
-        if (strncmp(disp, "BAND_", 5) == 0) disp += 5;
+    /* Match band to index */
+    {
+        const char *b = (const char *)detail.band;
         for (int i = 0; i < NUM_BANDS; i++) {
-            if (_stricmp(BANDS[i], disp) == 0) { g_state.band_idx = i; break; }
+            if (_stricmp(BANDS[i], b) == 0) { g_state.band_idx = i; break; }
         }
-        free(v);
     }
 
-    v = json_get_string(result, "mode");
-    if (v) {
-        const char *disp = v;
-        if (strncmp(disp, "MODE_", 5) == 0) disp += 5;
+    /* Match mode to index */
+    {
+        const char *m = (const char *)detail.mode;
         for (int i = 0; i < NUM_MODES; i++) {
-            if (_stricmp(MODES[i], disp) == 0) { g_state.mode_idx = i; break; }
+            if (_stricmp(MODES[i], m) == 0) { g_state.mode_idx = i; break; }
         }
-        free(v);
     }
 
-    v = json_get_string(result, "frequencyKhz");
-    if (v) {
-        double khz = atof(v);
-        if (khz > 0)
-            snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz), "%.3f", khz / 1000.0);
-        free(v);
-    } else {
+    safe_strcpy(g_state.date,     sizeof(g_state.date),     (const char *)detail.date);
+    safe_strcpy(g_state.time_str, sizeof(g_state.time_str), (const char *)detail.time);
+
+    if (detail.freq_mhz[0])
+        safe_strcpy(g_state.freq_mhz, sizeof(g_state.freq_mhz), (const char *)detail.freq_mhz);
+    else
         snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
                   "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
-    }
 
-    v = json_get_string(result, "utcTimestamp");
-    if (v && strlen(v) >= 16) {
-        char date_buf[12];
-        memcpy(date_buf, v, 10); date_buf[10] = 0;
-        safe_strcpy(g_state.date, sizeof(g_state.date), date_buf);
-        char time_buf[8];
-        memcpy(time_buf, v + 11, 5); time_buf[5] = 0;
-        safe_strcpy(g_state.time_str, sizeof(g_state.time_str), time_buf);
-    }
-    if (v) free(v);
+    if (detail.rst_sent[0])
+        safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), (const char *)detail.rst_sent);
+    else
+        safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
 
-    v = json_get_string(result, "utcEndTimestamp");
-    if (v && strlen(v) >= 16) {
-        char time_buf[8];
-        memcpy(time_buf, v + 11, 5); time_buf[5] = 0;
-        safe_strcpy(g_state.time_off, sizeof(g_state.time_off), time_buf);
-    }
-    if (v) free(v);
+    if (detail.rst_rcvd[0])
+        safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), (const char *)detail.rst_rcvd);
+    else
+        safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
 
-    {
-        int r = json_get_int(result, "readability", 0);
-        int s = json_get_int(result, "strength", 0);
-        int t = json_get_int(result, "tone", 0);
-        if (r > 0) {
-            if (t > 0) snprintf(g_state.rst_sent, sizeof(g_state.rst_sent), "%d%d%d", r, s, t);
-            else       snprintf(g_state.rst_sent, sizeof(g_state.rst_sent), "%d%d", r, s);
-        } else {
-            safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
-        }
-    }
+    if (detail.time_off[0])
+        safe_strcpy(g_state.time_off, sizeof(g_state.time_off), (const char *)detail.time_off);
 
-    {
-        const char *rcvd_pos = strstr(result, "rstReceived");
-        if (rcvd_pos) {
-            int r = json_get_int(rcvd_pos, "readability", 0);
-            int s = json_get_int(rcvd_pos, "strength", 0);
-            int t = json_get_int(rcvd_pos, "tone", 0);
-            if (r > 0) {
-                if (t > 0) snprintf(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "%d%d%d", r, s, t);
-                else       snprintf(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "%d%d", r, s);
-            } else {
-                safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
-            }
-        } else {
-            safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
-        }
-    }
-
-    v = json_get_string(result, "comment");
-    if (v) { safe_strcpy(g_state.comment, sizeof(g_state.comment), v); free(v); }
-
-    v = json_get_string(result, "notes");
-    if (v) { safe_strcpy(g_state.notes, sizeof(g_state.notes), v); free(v); }
-
-    v = json_get_string(result, "workedOperatorName");
-    if (v) { safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), v); free(v); }
-
-    v = json_get_string(result, "txPower");
-    if (v) { safe_strcpy(g_state.tx_power, sizeof(g_state.tx_power), v); free(v); }
-
-    v = json_get_string(result, "submode");
-    if (v) { safe_strcpy(g_state.submode, sizeof(g_state.submode), v); free(v); }
-
-    v = json_get_string(result, "contestId");
-    if (v) { safe_strcpy(g_state.contest_id, sizeof(g_state.contest_id), v); free(v); }
-
-    v = json_get_string(result, "serialSent");
-    if (v) { safe_strcpy(g_state.serial_sent, sizeof(g_state.serial_sent), v); free(v); }
-
-    v = json_get_string(result, "serialReceived");
-    if (v) { safe_strcpy(g_state.serial_rcvd, sizeof(g_state.serial_rcvd), v); free(v); }
-
-    v = json_get_string(result, "exchangeSent");
-    if (v) { safe_strcpy(g_state.exchange_sent, sizeof(g_state.exchange_sent), v); free(v); }
-
-    v = json_get_string(result, "exchangeReceived");
-    if (v) { safe_strcpy(g_state.exchange_rcvd, sizeof(g_state.exchange_rcvd), v); free(v); }
-
-    v = json_get_string(result, "propMode");
-    if (v) { safe_strcpy(g_state.prop_mode, sizeof(g_state.prop_mode), v); free(v); }
-
-    v = json_get_string(result, "satName");
-    if (v) { safe_strcpy(g_state.sat_name, sizeof(g_state.sat_name), v); free(v); }
-
-    v = json_get_string(result, "satMode");
-    if (v) { safe_strcpy(g_state.sat_mode, sizeof(g_state.sat_mode), v); free(v); }
-
-    v = json_get_string(result, "workedIota");
-    if (v) { safe_strcpy(g_state.iota, sizeof(g_state.iota), v); free(v); }
-
-    v = json_get_string(result, "workedArrlSection");
-    if (v) { safe_strcpy(g_state.arrl_section, sizeof(g_state.arrl_section), v); free(v); }
-
-    v = json_get_string(result, "workedState");
-    if (v) { safe_strcpy(g_state.worked_state, sizeof(g_state.worked_state), v); free(v); }
-
-    v = json_get_string(result, "workedCounty");
-    if (v) { safe_strcpy(g_state.worked_county, sizeof(g_state.worked_county), v); free(v); }
-
-    v = json_get_string(result, "skcc");
-    if (v) { safe_strcpy(g_state.skcc, sizeof(g_state.skcc), v); free(v); }
+    safe_strcpy(g_state.comment,       sizeof(g_state.comment),       (const char *)detail.comment);
+    safe_strcpy(g_state.notes,          sizeof(g_state.notes),          (const char *)detail.notes);
+    safe_strcpy(g_state.worked_name,    sizeof(g_state.worked_name),    (const char *)detail.worked_name);
+    safe_strcpy(g_state.tx_power,       sizeof(g_state.tx_power),       (const char *)detail.tx_power);
+    safe_strcpy(g_state.submode,        sizeof(g_state.submode),        (const char *)detail.submode);
+    safe_strcpy(g_state.contest_id,     sizeof(g_state.contest_id),     (const char *)detail.contest_id);
+    safe_strcpy(g_state.serial_sent,    sizeof(g_state.serial_sent),    (const char *)detail.serial_sent);
+    safe_strcpy(g_state.serial_rcvd,    sizeof(g_state.serial_rcvd),    (const char *)detail.serial_rcvd);
+    safe_strcpy(g_state.exchange_sent,  sizeof(g_state.exchange_sent),  (const char *)detail.exchange_sent);
+    safe_strcpy(g_state.exchange_rcvd,  sizeof(g_state.exchange_rcvd),  (const char *)detail.exchange_rcvd);
+    safe_strcpy(g_state.prop_mode,      sizeof(g_state.prop_mode),      (const char *)detail.prop_mode);
+    safe_strcpy(g_state.sat_name,       sizeof(g_state.sat_name),       (const char *)detail.sat_name);
+    safe_strcpy(g_state.sat_mode,       sizeof(g_state.sat_mode),       (const char *)detail.sat_mode);
+    safe_strcpy(g_state.iota,           sizeof(g_state.iota),           (const char *)detail.iota);
+    safe_strcpy(g_state.arrl_section,   sizeof(g_state.arrl_section),   (const char *)detail.arrl_section);
+    safe_strcpy(g_state.worked_state,   sizeof(g_state.worked_state),   (const char *)detail.worked_state);
+    safe_strcpy(g_state.worked_county,  sizeof(g_state.worked_county),  (const char *)detail.worked_county);
+    safe_strcpy(g_state.skcc,           sizeof(g_state.skcc),           (const char *)detail.skcc);
 
     safe_strcpy(g_state.editing_local_id, sizeof(g_state.editing_local_id), q->local_id);
 
@@ -1411,12 +1015,11 @@ static void LoadSelectedQso(void)
 
     g_state.qso_list_focused = 0;
     SetFocusField(FIELD_CALLSIGN);
-    free(result);
 
     SetStatus("QSO loaded for editing", 0);
 }
 
-/* ── CLI integration: Delete selected QSO ──────────────────────────────── */
+/* ── FFI integration: Delete selected QSO ──────────────────────────────── */
 
 static void DeleteSelectedQso(void)
 {
@@ -1429,14 +1032,10 @@ static void DeleteSelectedQso(void)
         return;
     }
 
-    char cmd[128];
-    snprintf(cmd, sizeof(cmd), "delete %s", q->local_id);
-    char *result = RunQrCommand(cmd);
-    if (result) {
+    if (qsr_delete_qso(g_client, q->local_id) == 0) {
         char msg[128];
         snprintf(msg, sizeof(msg), "Deleted QSO with %s", q->callsign);
         SetStatus(msg, 0);
-        free(result);
     } else {
         SetStatus("Failed to delete QSO", 1);
     }
@@ -2983,6 +2582,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (g_state.hFontSmall) DeleteObject(g_state.hFontSmall);
         if (g_state.hFontSmallBold) DeleteObject(g_state.hFontSmallBold);
         free(g_state.recent_qsos);
+        if (g_client) { qsr_disconnect(g_client); g_client = NULL; }
         PostQuitMessage(0);
         break;
 
@@ -3309,7 +2909,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     /* Initialize app state */
     InitState();
-    FindCliPath();
+    g_client = qsr_connect("http://127.0.0.1:50051");
+    if (!g_client) {
+        MessageBoxA(NULL, qsr_last_error(), "Connection Failed", MB_ICONERROR);
+        return 1;
+    }
 
     /* Register window class */
     WNDCLASSEXW wc = {0};
