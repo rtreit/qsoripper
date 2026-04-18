@@ -187,6 +187,48 @@
 
         <Separator />
 
+        <!-- Persistence -->
+        <StackPanel Spacing="8">
+          <TextBlock Text="{Binding PersistenceSectionTitle}"
+                     FontSize="16" FontWeight="SemiBold" />
+          <TextBlock Text="{Binding PersistenceDescription}"
+                     Opacity="0.6"
+                     TextWrapping="Wrap"
+                     IsVisible="{Binding PersistenceDescription, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+
+          <ItemsControl ItemsSource="{Binding PersistenceFields}"
+                        IsVisible="{Binding HasPersistenceInputs}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Grid ColumnDefinitions="140,*"
+                      ColumnSpacing="12"
+                      Margin="0,0,0,8">
+                  <TextBlock Grid.Column="0"
+                             Text="{Binding Label}"
+                             VerticalAlignment="Center" />
+                  <ComboBox Grid.Column="1"
+                            ItemsSource="{Binding AllowedValues}"
+                            SelectedItem="{Binding Value, Mode=TwoWay}"
+                            IsVisible="{Binding HasChoices}" />
+                  <TextBox Grid.Column="1"
+                           Text="{Binding Value, Mode=TwoWay}"
+                           IsVisible="{Binding !HasChoices}"
+                           TextWrapping="NoWrap"
+                           ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                           ToolTip.Tip="{Binding Value}" />
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+
+          <TextBlock Text="No additional persistence input is required for this engine."
+                     IsVisible="{Binding ShowsPersistenceInfoOnly}"
+                     Opacity="0.8"
+                     TextWrapping="Wrap" />
+        </StackPanel>
+
+        <Separator />
+
         <!-- QRZ XML Credentials -->
         <StackPanel Spacing="8">
           <TextBlock Text="QRZ XML Lookup"
@@ -356,48 +398,6 @@
                      Text="{Binding RigControlStaleThresholdMs, Mode=TwoWay}"
                      PlaceholderText="5000" />
           </Grid>
-        </StackPanel>
-
-        <Separator />
-
-        <!-- Persistence -->
-        <StackPanel Spacing="8">
-          <TextBlock Text="{Binding PersistenceSectionTitle}"
-                      FontSize="16" FontWeight="SemiBold" />
-          <TextBlock Text="{Binding PersistenceDescription}"
-                     Opacity="0.6"
-                     TextWrapping="Wrap"
-                     IsVisible="{Binding PersistenceDescription, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-
-          <ItemsControl ItemsSource="{Binding PersistenceFields}"
-                        IsVisible="{Binding HasPersistenceInputs}">
-            <ItemsControl.ItemTemplate>
-              <DataTemplate>
-                <Grid ColumnDefinitions="140,*"
-                      ColumnSpacing="12"
-                      Margin="0,0,0,8">
-                  <TextBlock Grid.Column="0"
-                             Text="{Binding Label}"
-                             VerticalAlignment="Center" />
-                  <ComboBox Grid.Column="1"
-                            ItemsSource="{Binding AllowedValues}"
-                            SelectedItem="{Binding Value, Mode=TwoWay}"
-                            IsVisible="{Binding HasChoices}" />
-                  <TextBox Grid.Column="1"
-                           Text="{Binding Value, Mode=TwoWay}"
-                           IsVisible="{Binding !HasChoices}"
-                           TextWrapping="NoWrap"
-                           ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                           ToolTip.Tip="{Binding Value}" />
-                </Grid>
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
-
-          <TextBlock Text="No additional persistence input is required for this engine."
-                     IsVisible="{Binding ShowsPersistenceInfoOnly}"
-                     Opacity="0.8"
-                     TextWrapping="Wrap" />
         </StackPanel>
 
         <!-- Saving indicator -->
