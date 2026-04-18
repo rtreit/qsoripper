@@ -107,8 +107,12 @@ Returns metadata about the running engine.
 
 **Behavior:**
 - Must always succeed if the engine is running.
-- Returns the engine's name (e.g., `"qsoripper-server"`), version string, implementation language (e.g., `"rust"`, `"csharp"`), and a list of supported capability flags.
-- The response must include the storage backend currently in use (see `StorageBackend` enum).
+- Returns the engine's identity (`engine_id`, `display_name`), version string, and a list of supported capability strings.
+- The response is an `EngineInfo` message (see `proto/services/engine_info.proto`) containing:
+  - `engine_id` — stable identifier (e.g., `"rust-tonic"`, `"dotnet-managed"`)
+  - `display_name` — human-readable label
+  - `version` — semver string
+  - `capabilities` — repeated list of capability names (see §8)
 
 **Error semantics:**
 - This RPC should never fail under normal operation.
@@ -1148,15 +1152,16 @@ Every engine must implement `GetEngineInfo` to report its identity and capabilit
 
 **Required response fields:**
 
-| Field | Example (Rust) | Example (.NET) |
+| Proto field | Example (Rust) | Example (.NET) |
 |---|---|---|
-| Engine name | `qsoripper-server` | `qsoripper-engine-dotnet` |
-| Version | `0.1.0` | `0.1.0` |
-| Language | `rust` | `csharp` |
-| Storage backend | `sqlite` | `memory` |
-| Capabilities | List of supported feature flags | List of supported feature flags |
+| `engine_id` | `rust-tonic` | `dotnet-managed` |
+| `display_name` | `QsoRipper Rust Engine` | `QsoRipper .NET Engine` |
+| `version` | `0.1.0` | `0.1.0` |
+| `capabilities` | List of supported capability strings | List of supported capability strings |
 
-**Capability flags** indicate which optional features the engine supports. Clients use these to enable or disable UI features. Examples:
+> **Note:** Earlier drafts of this spec referenced `engine_language` and `storage_backend` fields. These were never added to the `EngineInfo` proto message. Use `engine_id` to infer the implementation language if needed.
+
+**Capability strings** indicate which optional features the engine supports. Clients use these to enable or disable UI features. Examples:
 
 - `logbook` — core QSO CRUD
 - `lookup` — callsign lookup
