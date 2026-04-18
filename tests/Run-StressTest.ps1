@@ -55,12 +55,24 @@ try {
     Write-Step 'Building Rust server and stress test'
     Push-Location $rustDir
     cargo build -p qsoripper-server 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "cargo build -p qsoripper-server failed with exit code $LASTEXITCODE"
+    }
     cargo test --test stress_test --no-run 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "cargo test --test stress_test --no-run failed with exit code $LASTEXITCODE"
+    }
     Pop-Location
 
     Write-Step 'Building C# stress client'
     Push-Location $dotnetDir
     dotnet build --nologo -v quiet 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Pop-Location
+        throw "dotnet build for stress client failed with exit code $LASTEXITCODE"
+    }
     Pop-Location
 
     # ---- Run Rust in-process stress test ----
