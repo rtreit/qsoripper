@@ -14,13 +14,6 @@
 
   <Window.KeyBindings>
     <KeyBinding Gesture="Escape" Command="{Binding CancelCommand}" />
-    <KeyBinding Gesture="Ctrl+1" Command="{Binding SelectStationSectionCommand}" />
-    <KeyBinding Gesture="Ctrl+2" Command="{Binding SelectDisplaySectionCommand}" />
-    <KeyBinding Gesture="Ctrl+3" Command="{Binding SelectStorageSyncSectionCommand}" />
-    <KeyBinding Gesture="Ctrl+4" Command="{Binding SelectQrzSectionCommand}" />
-    <KeyBinding Gesture="Ctrl+5" Command="{Binding SelectRigSectionCommand}" />
-    <KeyBinding Gesture="Ctrl+Tab" Command="{Binding SelectNextSectionCommand}" />
-    <KeyBinding Gesture="Ctrl+Shift+Tab" Command="{Binding SelectPreviousSectionCommand}" />
   </Window.KeyBindings>
 
   <Window.Styles>
