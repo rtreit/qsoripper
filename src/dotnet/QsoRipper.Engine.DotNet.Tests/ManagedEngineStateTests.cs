@@ -427,6 +427,63 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.True(text.IndexOf("W1OLD", StringComparison.Ordinal) < text.IndexOf("W1NEW", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Update_qso_preserves_fields_not_present_in_partial_update()
+    {
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87"
+            }
+        });
+
+        var logged = state.LogQso(new LogQsoRequest
+        {
+            SyncToQrz = false,
+            Qso = new QsoRecord
+            {
+                WorkedCallsign = "W1AW",
+                Band = Band._20M,
+                Mode = Mode.Ft8,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-01T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture)),
+                RstSent = new RstReport { Raw = "59" },
+                RstReceived = new RstReport { Raw = "57" },
+                Notes = "Initial notes",
+                FrequencyKhz = 14074,
+            }
+        });
+
+        // Update with only Comment changed — all other fields should be preserved.
+        var updateResponse = state.UpdateQso(new UpdateQsoRequest
+        {
+            SyncToQrz = false,
+            Qso = new QsoRecord
+            {
+                LocalId = logged.LocalId,
+                WorkedCallsign = "W1AW",
+                Band = Band._20M,
+                Mode = Mode.Ft8,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-01T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture)),
+                Comment = "Updated comment",
+            }
+        });
+
+        var stored = state.GetQso(logged.LocalId);
+
+        Assert.True(updateResponse.Success);
+        Assert.NotNull(stored);
+        Assert.Equal("Updated comment", stored!.Comment);
+        Assert.Equal("59", stored.RstSent?.Raw);
+        Assert.Equal("57", stored.RstReceived?.Raw);
+        Assert.Equal("Initial notes", stored.Notes);
+        Assert.Equal(14074UL, stored.FrequencyKhz);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDirectory))
