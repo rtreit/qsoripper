@@ -507,14 +507,17 @@ internal sealed class ManagedEngineState
                 return new UpdateQsoResponse { Success = false, Error = $"QSO '{qso.LocalId}' was not found." };
             }
 
-            ApplyStationContextNoLock(qso, existing);
-            ManagedQsoParity.NormalizeQsoForPersistence(qso);
-            ValidateQsoNoLock(qso);
-            FinalizeQsoForWrite(qso, isNew: false);
+            // Merge incoming partial record into existing so unspecified fields are preserved.
+            var merged = ManagedQsoParity.MergeQsoForUpdate(existing, qso);
+
+            ApplyStationContextNoLock(merged, existing);
+            ManagedQsoParity.NormalizeQsoForPersistence(merged);
+            ValidateQsoNoLock(merged);
+            FinalizeQsoForWrite(merged, isNew: false);
 
             var response = new UpdateQsoResponse { Success = true };
-            ApplySyncFlagsNoLock(qso, request.SyncToQrz, response);
-            Sync(_storage.Logbook.UpdateQsoAsync(qso));
+            ApplySyncFlagsNoLock(merged, request.SyncToQrz, response);
+            Sync(_storage.Logbook.UpdateQsoAsync(merged));
             return response;
         }
     }
