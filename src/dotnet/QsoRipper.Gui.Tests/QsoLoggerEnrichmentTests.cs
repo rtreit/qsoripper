@@ -126,8 +126,29 @@ public sealed class QsoLoggerEnrichmentTests
         Assert.True(logger.IsLogEnabled);
     }
 
+    [Fact]
+    public async Task LogQsoCommandPopulatesUtcEndTimestamp()
+    {
+        var engine = new FakeEngineClient();
+        var logger = new QsoLoggerViewModel(engine)
+        {
+            Callsign = "KW5CW",
+        };
+
+        await logger.LogQsoCommand.ExecuteAsync(null);
+
+        Assert.NotNull(engine.LastLoggedQso);
+        Assert.NotNull(engine.LastLoggedQso!.UtcTimestamp);
+        Assert.NotNull(engine.LastLoggedQso.UtcEndTimestamp);
+        Assert.True(
+            engine.LastLoggedQso.UtcEndTimestamp.ToDateTimeOffset()
+            >= engine.LastLoggedQso.UtcTimestamp.ToDateTimeOffset());
+    }
+
     private sealed class FakeEngineClient : IEngineClient
     {
+        public QsoRecord? LastLoggedQso { get; private set; }
+
         public Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default) =>
             throw new NotImplementedException();
 
@@ -164,8 +185,11 @@ public sealed class QsoLoggerEnrichmentTests
         public Task<DeleteQsoResponse> DeleteQsoAsync(string localId, bool deleteFromQrz = false, CancellationToken ct = default) =>
             throw new NotImplementedException();
 
-        public Task<LogQsoResponse> LogQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default) =>
-            throw new NotImplementedException();
+        public Task<LogQsoResponse> LogQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default)
+        {
+            LastLoggedQso = qso.Clone();
+            return Task.FromResult(new LogQsoResponse { LocalId = "logged-qso" });
+        }
 
         public Task<GetRigSnapshotResponse> GetRigSnapshotAsync(CancellationToken ct = default) =>
             throw new NotImplementedException();
