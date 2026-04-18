@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Data.Converters;
+using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Threading;
 using QsoRipper.Domain;
@@ -72,6 +73,16 @@ internal sealed partial class SettingsView : Window
         base.OnClosed(e);
     }
 
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (TryHandleSectionShortcut(e))
+        {
+            return;
+        }
+
+        base.OnKeyDown(e);
+    }
+
     private void OnOpened(object? sender, EventArgs e)
     {
         FocusSelectedSectionStarter();
@@ -102,6 +113,57 @@ internal sealed partial class SettingsView : Window
         Dispatcher.UIThread.Post(
             () => target.Focus(),
             DispatcherPriority.Input);
+    }
+
+    private bool TryHandleSectionShortcut(KeyEventArgs e)
+    {
+        if (DataContext is not SettingsViewModel vm || !e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            return false;
+        }
+
+        switch (e.Key)
+        {
+            case Key.D1:
+            case Key.NumPad1:
+                vm.SelectStationSectionCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            case Key.D2:
+            case Key.NumPad2:
+                vm.SelectDisplaySectionCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            case Key.D3:
+            case Key.NumPad3:
+                vm.SelectStorageSyncSectionCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            case Key.D4:
+            case Key.NumPad4:
+                vm.SelectQrzSectionCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            case Key.D5:
+            case Key.NumPad5:
+                vm.SelectRigSectionCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            case Key.Tab:
+                if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+                {
+                    vm.SelectPreviousSectionCommand.Execute(null);
+                }
+                else
+                {
+                    vm.SelectNextSectionCommand.Execute(null);
+                }
+
+                e.Handled = true;
+                return true;
+            default:
+                return false;
+        }
     }
 
     private sealed class ConflictPolicyIndexConverter : IValueConverter

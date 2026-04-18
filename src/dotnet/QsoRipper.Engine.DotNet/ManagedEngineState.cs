@@ -772,11 +772,11 @@ internal sealed class ManagedEngineState
 
     public GetRigStatusResponse CreateRigStatusResponse()
     {
-        if (_rigControlMonitor is null)
+        lock (_gate)
         {
-            lock (_gate)
+            if (_rigControl is not null)
             {
-                if (_rigControl is null || !_rigControl.Enabled)
+                if (!_rigControl.Enabled)
                 {
                     return new GetRigStatusResponse
                     {
@@ -785,75 +785,76 @@ internal sealed class ManagedEngineState
                     };
                 }
 
-                var response = new GetRigStatusResponse
-                {
-                    Status = RigConnectionStatus.Connected,
-                };
-                if (_rigControl.HasHost && _rigControl.HasPort)
-                {
-                    response.Endpoint = $"{_rigControl.Host}:{_rigControl.Port}";
-                }
-
-                return response;
+                var snapshot = BuildConfiguredRigSnapshotNoLock(_rigControl);
+                return BuildRigStatusResponse(snapshot, _rigControl);
             }
         }
 
-        var snapshot = _rigControlMonitor.CurrentSnapshot();
-        var result = new GetRigStatusResponse { Status = snapshot.Status };
-        if (snapshot.HasErrorMessage)
+        if (_rigControlMonitor is null)
         {
-            result.ErrorMessage = snapshot.ErrorMessage;
+            return new GetRigStatusResponse
+            {
+                Status = RigConnectionStatus.Disabled,
+                ErrorMessage = "Rig control is disabled in the managed engine.",
+            };
         }
 
-        return result;
+        var snapshot = _rigControlMonitor.CurrentSnapshot();
+        return BuildRigStatusResponse(snapshot, null);
     }
 
     public RigSnapshot BuildRigSnapshot()
     {
+        lock (_gate)
+        {
+            if (_rigControl is not null)
+            {
+                if (!_rigControl.Enabled)
+                {
+                    return BuildRigSnapshot(
+                        new GetRigStatusResponse
+                        {
+                            Status = RigConnectionStatus.Disabled,
+                            ErrorMessage = "Rig control is disabled in the managed engine.",
+                        });
+                }
+
+                return BuildConfiguredRigSnapshotNoLock(_rigControl);
+            }
+        }
+
         if (_rigControlMonitor is not null)
         {
             return _rigControlMonitor.CurrentSnapshot();
         }
 
-        var status = CreateRigStatusResponse();
-        var snapshot = new RigSnapshot
-        {
-            FrequencyHz = status.Status == RigConnectionStatus.Connected ? 14_074_000UL : 0UL,
-            Band = status.Status == RigConnectionStatus.Connected ? Band._20M : Band.Unspecified,
-            Mode = status.Status == RigConnectionStatus.Connected ? Mode.Ft8 : Mode.Unspecified,
-            Status = status.Status,
-            SampledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
-        };
-
-        if (status.HasErrorMessage)
-        {
-            snapshot.ErrorMessage = status.ErrorMessage;
-        }
-
-        return snapshot;
+        return BuildRigSnapshot(CreateRigStatusResponse());
     }
 
     public TestRigConnectionResponse TestRigConnection()
     {
+        lock (_gate)
+        {
+            if (_rigControl is not null)
+            {
+                if (!_rigControl.Enabled)
+                {
+                    return new TestRigConnectionResponse
+                    {
+                        Success = false,
+                        ErrorMessage = "Rig control is disabled in the managed engine.",
+                    };
+                }
+
+                var refreshed = BuildConfiguredRigSnapshotNoLock(_rigControl);
+                return BuildTestRigConnectionResponse(refreshed);
+            }
+        }
+
         if (_rigControlMonitor is not null)
         {
             var refreshed = _rigControlMonitor.RefreshSnapshot();
-            var response = new TestRigConnectionResponse
-            {
-                Success = refreshed.Status == RigConnectionStatus.Connected,
-            };
-
-            if (refreshed.HasErrorMessage)
-            {
-                response.ErrorMessage = refreshed.ErrorMessage;
-            }
-
-            if (refreshed.Status == RigConnectionStatus.Connected)
-            {
-                response.Snapshot = refreshed;
-            }
-
-            return response;
+            return BuildTestRigConnectionResponse(refreshed);
         }
 
         var snapshot = BuildRigSnapshot();
@@ -872,6 +873,82 @@ internal sealed class ManagedEngineState
         }
 
         return fallbackResponse;
+    }
+
+    private static RigSnapshot BuildRigSnapshot(GetRigStatusResponse status)
+    {
+        var snapshot = new RigSnapshot
+        {
+            FrequencyHz = status.Status == RigConnectionStatus.Connected ? 14_074_000UL : 0UL,
+            Band = status.Status == RigConnectionStatus.Connected ? Band._20M : Band.Unspecified,
+            Mode = status.Status == RigConnectionStatus.Connected ? Mode.Ft8 : Mode.Unspecified,
+            Status = status.Status,
+            SampledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        if (status.HasErrorMessage)
+        {
+            snapshot.ErrorMessage = status.ErrorMessage;
+        }
+
+        return snapshot;
+    }
+
+    private RigSnapshot BuildConfiguredRigSnapshotNoLock(RigControlSettings settings)
+    {
+        var host = settings.HasHost && !string.IsNullOrWhiteSpace(settings.Host)
+            ? settings.Host
+            : RigctldProvider.DefaultHost;
+        var port = settings.HasPort && settings.Port > 0
+            ? (int)settings.Port
+            : RigctldProvider.DefaultPort;
+        var readTimeoutMs = settings.HasReadTimeoutMs && settings.ReadTimeoutMs > 0
+            ? (int)settings.ReadTimeoutMs
+            : RigctldProvider.DefaultReadTimeoutMs;
+        var staleThresholdMs = settings.HasStaleThresholdMs && settings.StaleThresholdMs > 0
+            ? (int)settings.StaleThresholdMs
+            : RigControlMonitor.DefaultStaleThresholdMs;
+        var monitor = new RigControlMonitor(
+            new RigctldProvider(host, port, TimeSpan.FromMilliseconds(readTimeoutMs)),
+            TimeSpan.FromMilliseconds(staleThresholdMs));
+
+        return monitor.CurrentSnapshot();
+    }
+
+    private static GetRigStatusResponse BuildRigStatusResponse(RigSnapshot snapshot, RigControlSettings? configuredSettings)
+    {
+        var result = new GetRigStatusResponse { Status = snapshot.Status };
+        if (snapshot.HasErrorMessage)
+        {
+            result.ErrorMessage = snapshot.ErrorMessage;
+        }
+
+        if (configuredSettings is not null && configuredSettings.HasHost && configuredSettings.HasPort)
+        {
+            result.Endpoint = $"{configuredSettings.Host}:{configuredSettings.Port}";
+        }
+
+        return result;
+    }
+
+    private static TestRigConnectionResponse BuildTestRigConnectionResponse(RigSnapshot refreshed)
+    {
+        var response = new TestRigConnectionResponse
+        {
+            Success = refreshed.Status == RigConnectionStatus.Connected,
+        };
+
+        if (refreshed.HasErrorMessage)
+        {
+            response.ErrorMessage = refreshed.ErrorMessage;
+        }
+
+        if (refreshed.Status == RigConnectionStatus.Connected)
+        {
+            response.Snapshot = refreshed;
+        }
+
+        return response;
     }
 
     public SpaceWeatherSnapshot BuildSpaceWeatherSnapshot(bool refreshed)
