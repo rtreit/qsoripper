@@ -224,6 +224,13 @@ async fn download_phase(
 
     // Process each remote QSO.
     for remote in &remote_qsos {
+        // Defense-in-depth: skip records that lack the minimum fields needed
+        // for matching and storage. These are artefacts of ADIF
+        // header/trailer fragments that slip through the parser.
+        if remote.worked_callsign.trim().is_empty() || remote.utc_timestamp.is_none() {
+            continue;
+        }
+
         let remote_logid = extract_qrz_logid(remote);
 
         let local_match = remote_logid
@@ -388,8 +395,22 @@ async fn update_metadata(
     counters: &mut SyncCounters,
 ) {
     let now = chrono::Utc::now();
+
+    // Refresh the QRZ QSO count from what the local store now knows.
+    // After a successful bidirectional sync the number of locally-synced
+    // QSOs is the best available estimate of the remote logbook count.
+    let qrz_qso_count = match store.qso_counts().await {
+        Ok(counts) => counts
+            .local_qso_count
+            .saturating_sub(counts.pending_upload_count),
+        Err(err) => {
+            eprintln!("[sync] Failed to refresh local QSO counts: {err}");
+            prev_metadata.qrz_qso_count
+        }
+    };
+
     let updated = SyncMetadata {
-        qrz_qso_count: prev_metadata.qrz_qso_count,
+        qrz_qso_count,
         last_sync: Some(prost_types::Timestamp {
             seconds: now.timestamp(),
             nanos: 0,
@@ -917,6 +938,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn metadata_qrz_count_refreshed_after_download() {
+        let store = MemoryStorage::new();
+
+        // Download two remote QSOs — they arrive as Synced.
+        let remote1 = {
+            let mut q = make_qso("W1AW", "K7ABC", Band::Band20m, Mode::Ft8, 1_700_000_000);
+            q.qrz_logid = Some("QRZ001".into());
+            q
+        };
+        let remote2 = {
+            let mut q = make_qso("W1AW", "JA1ZZZ", Band::Band40m, Mode::Cw, 1_700_000_100);
+            q.qrz_logid = Some("QRZ002".into());
+            q
+        };
+        let api = MockQrzApi::new(Ok(vec![remote1, remote2]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+        drop(collect_final(rx).await);
+
+        let metadata = store.get_sync_metadata().await.unwrap();
+        assert!(metadata.last_sync.is_some(), "last_sync should be set");
+        assert_eq!(
+            metadata.qrz_qso_count, 2,
+            "qrz_qso_count should reflect the two synced remote QSOs"
+        );
+    }
+
+    #[tokio::test]
     async fn fuzzy_match_links_by_callsign_time_band_mode() {
         let store = MemoryStorage::new();
 
@@ -1339,5 +1390,59 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].sync_status, SyncStatus::Synced as i32);
         assert_eq!(all[0].notes.as_deref(), Some("remote tie"));
+    }
+
+    #[tokio::test]
+    async fn download_skips_ghost_records_with_empty_callsign() {
+        let store = MemoryStorage::new();
+
+        // One valid remote QSO and one ghost (empty callsign, no timestamp).
+        let valid = {
+            let mut q = make_qso("W1AW", "K7ABC", Band::Band20m, Mode::Ft8, 1_700_000_000);
+            q.qrz_logid = Some("QRZ001".into());
+            q
+        };
+        let ghost = QsoRecord::default();
+
+        let api = MockQrzApi::new(Ok(vec![valid, ghost]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.downloaded_records, 1, "ghost should be skipped");
+
+        let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
+        assert_eq!(all.len(), 1, "only the valid QSO should be stored");
+        assert_eq!(all[0].worked_callsign, "K7ABC");
+    }
+
+    #[tokio::test]
+    async fn download_skips_records_with_callsign_but_no_timestamp() {
+        let store = MemoryStorage::new();
+
+        let no_ts = QsoRecord {
+            worked_callsign: "W1AW".to_string(),
+            utc_timestamp: None,
+            ..Default::default()
+        };
+
+        let api = MockQrzApi::new(Ok(vec![no_ts]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(
+            final_msg.downloaded_records, 0,
+            "record without timestamp should be skipped"
+        );
+
+        let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
+        assert!(all.is_empty());
     }
 }

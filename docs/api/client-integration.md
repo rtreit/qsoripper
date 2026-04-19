@@ -1,17 +1,54 @@
 # Client Integration Guide
 
-This guide covers everything you need to connect a client application to the QsoRipper engine over gRPC.
+This guide covers everything you need to connect a client application to a QsoRipper engine host over gRPC, or to stand up another engine implementation that honors the same contracts.
 
 ## Endpoint Defaults
 
-The engine listens on `http://127.0.0.1:50051` by default when started with:
+QsoRipper does not have a single privileged engine endpoint. The built-in local profiles are:
+
+| Profile | Engine ID | Default endpoint |
+|---|---|---|
+| `local-rust` | `rust-tonic` | `http://127.0.0.1:50051` |
+| `local-dotnet` | `dotnet-aspnet` | `http://127.0.0.1:50052` |
+
+Recommended local startup:
+
+```powershell
+.\start-qsoripper.ps1 -Engine local-rust
+.\start-qsoripper.ps1 -Engine local-dotnet
+```
+
+`-ForceRestart` is scoped to the requested profile, so restarting `local-rust` does not stop `local-dotnet` (and vice versa).
+
+## Shared Selector and Runtime Switching
+
+All .NET clients use the shared selector rules from `QsoRipper.EngineSelection`:
+
+1. explicit runtime/profile choice (when supported by the client)
+2. `QSORIPPER_ENGINE` (legacy `QSORIPPER_ENGINE_IMPLEMENTATION`)
+3. `QSORIPPER_ENDPOINT`
+4. built-in profile defaults
+
+Local running-engine discovery is based on launcher state under `artifacts\run\` (`qsoripper-*.state.json` plus legacy `qsoripper-engine*.json`) and validates entries with PID + transport checks before presenting them as active.
+
+Current client behavior:
+
+- `QsoRipper.Cli`: per-invocation `--engine` / `--endpoint` plus shared env fallback.
+- `QsoRipper.DebugHost`: runtime profile/endpoint picker with probe/apply flow.
+- `QsoRipper.Gui`: runtime switching from **Tools → Use Rust Engine / Use .NET Engine** and **Refresh Engine Status**.
+
+Direct engine-host startup is also available when you want to work on a specific implementation:
 
 ```
 cd src/rust
 cargo run -p qsoripper-server
 ```
 
-The listen address can be overridden at startup:
+```
+dotnet run --project src/dotnet/QsoRipper.Engine.DotNet/QsoRipper.Engine.DotNet.csproj
+```
+
+The Rust host listen address can be overridden at startup:
 
 ```
 cargo run -p qsoripper-server -- --listen 0.0.0.0:50051
@@ -25,7 +62,7 @@ QSORIPPER_SERVER_ADDR=0.0.0.0:50051 cargo run -p qsoripper-server
 
 ## Generating Client Stubs
 
-The proto files under `proto/` are the authoritative contract. Use standard protobuf/gRPC tooling for your language to generate client stubs.
+The proto files under `proto/` are the authoritative contract. Use standard protobuf/gRPC tooling for your language to generate stubs from that contract rather than hand-writing client or server shapes.
 
 QsoRipper follows protobuf 1-1-1 by default: one top-level entity per file, service files that contain only the `service`, and method-specific `XxxRequest` / `XxxResponse` envelopes for every RPC. Your code generation step therefore needs to include the split service support files, not just the `*service.proto` declarations.
 
@@ -79,7 +116,7 @@ Required packages:
 <PackageReference Include="Grpc.Tools" Version="..." PrivateAssets="All" />
 ```
 
-The debug workbench under `src/dotnet/QsoRipper.DebugHost/` is a working example of this pattern.
+The repository’s .NET clients (`QsoRipper.Cli`, `QsoRipper.Gui`, and `QsoRipper.DebugHost`) are working examples of this pattern.
 
 ### Rust
 
@@ -170,7 +207,7 @@ Standard `protoc` invocations work for any language with a gRPC plugin. The prot
 
 ## Native Clients (Desktop, TUI, CLI)
 
-Native clients connect directly to the engine with a standard gRPC channel over HTTP/2.
+Native clients connect directly to whichever engine host they target with a standard gRPC channel over HTTP/2.
 
 **C# example:**
 

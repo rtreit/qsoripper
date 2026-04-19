@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Net.Http;
 using BenchmarkDotNet.Attributes;
 using Grpc.Net.Client;
+using QsoRipper.EngineSelection;
 using QsoRipper.Services;
 
 namespace QsoRipper.DebugHost.Benchmarks;
@@ -12,7 +13,8 @@ namespace QsoRipper.DebugHost.Benchmarks;
     Justification = "BenchmarkDotNet benchmark types are discovered and activated via reflection.")]
 public abstract class EngineBenchmarkBase
 {
-    private const int DefaultPort = 50051;
+    private const string BenchmarkProfileEnvironmentVariable = "QSORIPPER_BENCHMARK_ENGINE";
+    private const string LegacyBenchmarkProfileEnvironmentVariable = "QSORIPPER_BENCHMARK_ENGINE_IMPLEMENTATION";
 
     [Params("localhost", "127.0.0.1")]
     public string Host { get; set; } = string.Empty;
@@ -50,7 +52,10 @@ public abstract class EngineBenchmarkBase
         var rawPort = Environment.GetEnvironmentVariable("QSORIPPER_BENCHMARK_ENGINE_PORT");
         if (string.IsNullOrWhiteSpace(rawPort))
         {
-            return DefaultPort;
+            var profile = EngineCatalog.ResolveProfile(
+                Environment.GetEnvironmentVariable(BenchmarkProfileEnvironmentVariable)
+                ?? Environment.GetEnvironmentVariable(LegacyBenchmarkProfileEnvironmentVariable));
+            return EngineCatalog.GetDefaultPort(profile);
         }
 
         if (int.TryParse(rawPort, out var port) && port is > 0 and <= 65535)

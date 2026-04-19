@@ -52,19 +52,24 @@
       <Setter Property="CanUserSortColumns" Value="True" />
       <Setter Property="HeadersVisibility" Value="Column" />
       <Setter Property="GridLinesVisibility" Value="Horizontal" />
-      <Setter Property="FrozenColumnCount" Value="5" />
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="SelectionMode" Value="Extended" />
       <Setter Property="IsReadOnly" Value="False" />
     </Style>
 
+    <!-- Compact density: override Fluent theme MinHeight so RowHeight/ColumnHeaderHeight bindings control sizing -->
+    <Style Selector="DataGrid#RecentQsoGrid DataGridRow">
+      <Setter Property="MinHeight" Value="0" />
+    </Style>
+
     <Style Selector="DataGrid#RecentQsoGrid DataGridColumnHeader">
-      <Setter Property="Padding" Value="4,1" />
+      <Setter Property="MinHeight" Value="0" />
+      <Setter Property="Padding" Value="2,0" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
 
     <Style Selector="DataGrid#RecentQsoGrid DataGridCell">
-      <Setter Property="Padding" Value="4,1" />
+      <Setter Property="Padding" Value="2,0" />
       <Setter Property="BorderThickness" Value="0" />
     </Style>
 
@@ -82,13 +87,19 @@
 
     <!-- Prevent text clipping when editing cells -->
     <Style Selector="DataGrid#RecentQsoGrid DataGridCell:editing TextBox">
-      <Setter Property="Padding" Value="4,2" />
+      <Setter Property="Padding" Value="2,1" />
       <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
 
-    <!-- Consistent text styling for data grid content -->
+    <!-- Consistent text styling for data grid content.
+         Margin="0" overrides the Fluent theme's DataGridCellTextBlockTheme
+         which sets Margin="12,0,12,0" (24px hidden horizontal overhead). -->
     <Style Selector="DataGrid#RecentQsoGrid DataGridCell TextBlock">
+      <Setter Property="Margin" Value="0" />
       <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextWrapping" Value="NoWrap" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+      <Setter Property="ClipToBounds" Value="True" />
     </Style>
 
   </Window.Styles>
@@ -133,6 +144,13 @@
       <MenuItem Header="_Tools">
         <MenuItem Header="Sync _Now" InputGesture="F6"
                   Command="{Binding SyncNowCommand}" />
+        <Separator />
+        <MenuItem Header="Use _Rust Engine"
+                  Command="{Binding SwitchToRustEngineCommand}" />
+        <MenuItem Header="Use _.NET Engine"
+                  Command="{Binding SwitchToDotNetEngineCommand}" />
+        <MenuItem Header="_Refresh Engine Status"
+                  Command="{Binding RefreshEngineAvailabilityCommand}" />
       </MenuItem>
     </Menu>
 
@@ -142,30 +160,13 @@
         <Grid Grid.Row="0"
               MinHeight="44"
               Margin="10,6,10,6"
-              ColumnDefinitions="Auto,*,Auto"
+              ColumnDefinitions="*,Auto"
               ColumnSpacing="12">
-          <StackPanel Grid.Column="0"
-                      Orientation="Horizontal"
-                      Spacing="10"
-                      VerticalAlignment="Center">
-            <TextBlock Text="QsoRipper"
-                       FontSize="13"
-                       FontWeight="SemiBold"
-                       VerticalAlignment="Center" />
-            <TextBlock Classes="commandCaption"
-                       Text="{Binding ActiveLogText}"
-                       ToolTip.Tip="{Binding ActiveLogText}" />
-            <TextBlock Classes="commandCaption"
-                       Text="{Binding ActiveProfileText}"
-                       ToolTip.Tip="{Binding ActiveProfileText}" />
-            <TextBlock Classes="commandCaption"
-                       Text="{Binding ActiveStationText}"
-                       ToolTip.Tip="{Binding ActiveStationText}" />
-          </StackPanel>
-
-          <Grid Grid.Column="1"
+          <Grid Grid.Column="0"
                 ColumnDefinitions="Auto,*"
                 ColumnSpacing="8"
+                MinWidth="0"
+                ClipToBounds="True"
                 VerticalAlignment="Center">
              <TextBox x:Name="RecentQsoSearchBox"
                       Grid.Column="0"
@@ -178,6 +179,7 @@
                      Text="{Binding RecentQsos.SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
 
             <ScrollViewer Grid.Column="1"
+                          MinWidth="0"
                           HorizontalScrollBarVisibility="Hidden"
                           VerticalScrollBarVisibility="Disabled"
                           IsVisible="{Binding RecentQsos.HasActiveFilterTokens}">
@@ -198,7 +200,7 @@
             </ScrollViewer>
           </Grid>
 
-          <StackPanel Grid.Column="2"
+          <StackPanel Grid.Column="1"
                       Orientation="Horizontal"
                       Spacing="10"
                       VerticalAlignment="Center">
@@ -210,10 +212,6 @@
                     MinWidth="62"
                     MinHeight="28"
                     IsVisible="{Binding IsSetupIncomplete}" />
-            <TextBlock Classes="commandCaption"
-                       Text="{Binding RecentQsos.RefreshIndicatorText}"
-                       MaxWidth="140"
-                       TextTrimming="CharacterEllipsis" />
             <Button x:Name="SyncNowButton"
                     AutomationProperties.AutomationId="SyncNowButton"
                     Content="⟳ Sync"
@@ -221,13 +219,6 @@
                     MinHeight="28"
                     MinWidth="54"
                     ToolTip.Tip="Sync with QRZ (F6)" />
-            <TextBlock Text="{Binding CurrentUtcTime}"
-                       FontFamily="Cascadia Mono, Consolas, monospace"
-                       FontSize="12.5"
-                       FontWeight="SemiBold"
-                       VerticalAlignment="Center" />
-            <TextBlock Classes="commandCaption"
-                       Text="{Binding CurrentUtcDate}" />
             <Button x:Name="SortButton"
                     AutomationProperties.AutomationId="SortButton"
                     Content="Sort"
@@ -403,7 +394,7 @@
                          SelectedItem="{Binding RecentQsos.SelectedQso, Mode=TwoWay}">
                 <DataGrid.Columns>
                   <DataGridTextColumn Header="UTC"
-                                      Width="138"
+                                      Width="130"
                                       MinWidth="96"
                                       Binding="{ReflectionBinding UtcDisplay, Mode=TwoWay}"
                                       SortMemberPath="UtcSortKey" />
@@ -430,8 +421,8 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Band"
-                                          Width="72"
-                                          MinWidth="64"
+                                          Width="68"
+                                          MinWidth="56"
                                           SortMemberPath="Band">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -449,8 +440,8 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Mode"
-                                          Width="76"
-                                          MinWidth="64"
+                                          Width="74"
+                                          MinWidth="56"
                                           SortMemberPath="Mode">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -468,8 +459,8 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Freq"
-                                          Width="82"
-                                          MinWidth="80"
+                                          Width="76"
+                                          MinWidth="68"
                                           SortMemberPath="FrequencySortKey">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -488,25 +479,25 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="S"
-                                      Width="56"
-                                      MinWidth="48"
+                                      Width="36"
+                                      MinWidth="28"
                                       Binding="{ReflectionBinding RstSent}"
                                       SortMemberPath="RstSent"
                                       IsReadOnly="True" />
                   <DataGridTextColumn Header="R"
-                                      Width="56"
-                                      MinWidth="48"
+                                      Width="36"
+                                      MinWidth="28"
                                       Binding="{ReflectionBinding RstReceived}"
                                       SortMemberPath="RstReceived"
                                       IsReadOnly="True" />
                   <DataGridTextColumn Header="DXCC"
-                                      Width="76"
-                                      MinWidth="64"
+                                      Width="70"
+                                      MinWidth="48"
                                       Binding="{ReflectionBinding Dxcc, Mode=TwoWay}"
                                       SortMemberPath="DxccSortKey" />
                   <DataGridTemplateColumn Header="Country"
-                                          Width="108"
-                                          MinWidth="96"
+                                          Width="100"
+                                          MinWidth="80"
                                           SortMemberPath="Country">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -527,8 +518,8 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Name"
-                                          Width="108"
-                                          MinWidth="96"
+                                          Width="96"
+                                          MinWidth="80"
                                           SortMemberPath="OperatorName">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -549,18 +540,18 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="Grid"
-                                      Width="66"
-                                      MinWidth="60"
+                                      Width="62"
+                                      MinWidth="56"
                                       Binding="{ReflectionBinding Grid, Mode=TwoWay}"
                                       SortMemberPath="Grid" />
                   <DataGridTextColumn Header="Exch"
-                                      Width="70"
-                                      MinWidth="64"
+                                      Width="62"
+                                      MinWidth="52"
                                       Binding="{ReflectionBinding Exchange, Mode=TwoWay}"
                                       SortMemberPath="Exchange" />
                   <DataGridTemplateColumn Header="Contest"
-                                          Width="98"
-                                          MinWidth="80"
+                                          Width="84"
+                                          MinWidth="68"
                                           SortMemberPath="Contest">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -581,8 +572,8 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="Station"
-                                      Width="82"
-                                      MinWidth="72"
+                                      Width="74"
+                                      MinWidth="64"
                                       Binding="{ReflectionBinding Station, Mode=TwoWay}"
                                       SortMemberPath="Station" />
                   <DataGridTemplateColumn Header="Note"
@@ -608,8 +599,8 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Comment"
-                                          Width="120"
-                                          MinWidth="80"
+                                          Width="110"
+                                          MinWidth="72"
                                           SortMemberPath="Comment">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -704,81 +695,85 @@
               </Border>
             </Grid>
 
-            <Border x:Name="InspectorPanel"
-                    AutomationProperties.AutomationId="InspectorPanel"
-                    Grid.Column="1"
-                    Width="320"
-                    Padding="12,10"
-                    BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
-                    BorderThickness="1,0,0,0"
-                    Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
-                    IsVisible="{Binding IsInspectorOpen}">
-              <ScrollViewer>
-                <StackPanel Spacing="10">
-                  <TextBlock Text="Inspector"
-                             FontSize="13"
-                             FontWeight="SemiBold" />
+            <ContentControl Grid.Column="1"
+                            Content="{Binding InspectorPanelHost}">
+              <ContentControl.DataTemplates>
+                <DataTemplate x:DataType="vm:MainWindowViewModel">
+                  <Border AutomationProperties.AutomationId="InspectorPanel"
+                          Width="320"
+                          Padding="12,10"
+                          BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                          BorderThickness="1,0,0,0"
+                          Background="{DynamicResource SystemControlBackgroundAltHighBrush}">
+                    <ScrollViewer>
+                      <StackPanel Spacing="10">
+                        <TextBlock Text="Inspector"
+                                   FontSize="13"
+                                   FontWeight="SemiBold" />
 
-                  <StackPanel Spacing="6"
-                              IsVisible="{Binding HasInspectorQso}">
-                    <Grid ColumnDefinitions="Auto,*"
-                          ColumnSpacing="10"
-                          RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
-                      <TextBlock Text="Call" Grid.Row="0" Opacity="0.68" />
-                      <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding InspectorQso.WorkedCallsign}" />
-                      <TextBlock Text="UTC" Grid.Row="1" Opacity="0.68" />
-                      <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding InspectorQso.UtcDisplay}" />
-                      <TextBlock Text="Band" Grid.Row="2" Opacity="0.68" />
-                      <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding InspectorQso.Band}" />
-                      <TextBlock Text="Mode" Grid.Row="3" Opacity="0.68" />
-                      <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding InspectorQso.Mode}" />
-                      <TextBlock Text="Freq" Grid.Row="4" Opacity="0.68" />
-                      <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding InspectorQso.Frequency}" />
-                      <TextBlock Text="RST" Grid.Row="5" Opacity="0.68" />
-                      <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding InspectorQso.Rst}" />
-                      <TextBlock Text="DXCC" Grid.Row="6" Opacity="0.68" />
-                      <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding InspectorQso.Dxcc}" />
-                      <TextBlock Text="Country" Grid.Row="7" Opacity="0.68" />
-                      <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding InspectorQso.Country}" />
-                      <TextBlock Text="Name" Grid.Row="8" Opacity="0.68" />
-                      <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding InspectorQso.OperatorName}" TextWrapping="Wrap" />
-                      <TextBlock Text="Grid" Grid.Row="9" Opacity="0.68" />
-                      <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding InspectorQso.Grid}" />
-                      <TextBlock Text="QTH" Grid.Row="10" Opacity="0.68" />
-                      <TextBlock Grid.Row="10" Grid.Column="1" Text="{Binding InspectorQso.Qth}" TextWrapping="Wrap" />
-                      <TextBlock Text="State" Grid.Row="11" Opacity="0.68" />
-                      <TextBlock Grid.Row="11" Grid.Column="1" Text="{Binding InspectorQso.State}" />
-                      <TextBlock Text="County" Grid.Row="12" Opacity="0.68" />
-                      <TextBlock Grid.Row="12" Grid.Column="1" Text="{Binding InspectorQso.County}" />
-                      <TextBlock Text="Cont" Grid.Row="13" Opacity="0.68" />
-                      <TextBlock Grid.Row="13" Grid.Column="1" Text="{Binding InspectorQso.Continent}" />
-                      <TextBlock Text="CQ Zone" Grid.Row="14" Opacity="0.68" />
-                      <TextBlock Grid.Row="14" Grid.Column="1" Text="{Binding InspectorQso.CqZone}" />
-                      <TextBlock Text="ITU Zone" Grid.Row="15" Opacity="0.68" />
-                      <TextBlock Grid.Row="15" Grid.Column="1" Text="{Binding InspectorQso.ItuZone}" />
-                      <TextBlock Text="Contest" Grid.Row="16" Opacity="0.68" />
-                      <TextBlock Grid.Row="16" Grid.Column="1" Text="{Binding InspectorQso.Contest}" />
-                      <TextBlock Text="Exch" Grid.Row="17" Opacity="0.68" />
-                      <TextBlock Grid.Row="17" Grid.Column="1" Text="{Binding InspectorQso.Exchange}" />
-                      <TextBlock Text="Station" Grid.Row="18" Opacity="0.68" />
-                      <TextBlock Grid.Row="18" Grid.Column="1" Text="{Binding InspectorQso.Station}" />
-                      <TextBlock Text="End" Grid.Row="19" Opacity="0.68" />
-                      <TextBlock Grid.Row="19" Grid.Column="1" Text="{Binding InspectorQso.UtcEndDisplay}" />
-                      <TextBlock Text="Sync" Grid.Row="20" Opacity="0.68" />
-                      <TextBlock Grid.Row="20" Grid.Column="1" Text="{Binding InspectorQso.SyncStatus}" />
-                      <TextBlock Text="Comment" Grid.Row="21" Opacity="0.68" />
-                      <TextBlock Grid.Row="21" Grid.Column="1" Text="{Binding InspectorQso.Comment}" TextWrapping="Wrap" />
-                      <TextBlock Text="Note" Grid.Row="22" Opacity="0.68" />
-                      <TextBlock Grid.Row="22" Grid.Column="1" Text="{Binding InspectorQso.Note}" TextWrapping="Wrap" />
-                    </Grid>
-                  </StackPanel>
+                        <StackPanel Spacing="6"
+                                    IsVisible="{Binding HasInspectorQso}">
+                          <Grid ColumnDefinitions="Auto,*"
+                                ColumnSpacing="10"
+                                RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+                            <TextBlock Text="Call" Grid.Row="0" Opacity="0.68" />
+                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding InspectorQso.WorkedCallsign}" />
+                            <TextBlock Text="UTC" Grid.Row="1" Opacity="0.68" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding InspectorQso.UtcDisplay}" />
+                            <TextBlock Text="Band" Grid.Row="2" Opacity="0.68" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding InspectorQso.Band}" />
+                            <TextBlock Text="Mode" Grid.Row="3" Opacity="0.68" />
+                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding InspectorQso.Mode}" />
+                            <TextBlock Text="Freq" Grid.Row="4" Opacity="0.68" />
+                            <TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding InspectorQso.Frequency}" />
+                            <TextBlock Text="RST" Grid.Row="5" Opacity="0.68" />
+                            <TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding InspectorQso.Rst}" />
+                            <TextBlock Text="DXCC" Grid.Row="6" Opacity="0.68" />
+                            <TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding InspectorQso.Dxcc}" />
+                            <TextBlock Text="Country" Grid.Row="7" Opacity="0.68" />
+                            <TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding InspectorQso.Country}" />
+                            <TextBlock Text="Name" Grid.Row="8" Opacity="0.68" />
+                            <TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding InspectorQso.OperatorName}" TextWrapping="Wrap" />
+                            <TextBlock Text="Grid" Grid.Row="9" Opacity="0.68" />
+                            <TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding InspectorQso.Grid}" />
+                            <TextBlock Text="QTH" Grid.Row="10" Opacity="0.68" />
+                            <TextBlock Grid.Row="10" Grid.Column="1" Text="{Binding InspectorQso.Qth}" TextWrapping="Wrap" />
+                            <TextBlock Text="State" Grid.Row="11" Opacity="0.68" />
+                            <TextBlock Grid.Row="11" Grid.Column="1" Text="{Binding InspectorQso.State}" />
+                            <TextBlock Text="County" Grid.Row="12" Opacity="0.68" />
+                            <TextBlock Grid.Row="12" Grid.Column="1" Text="{Binding InspectorQso.County}" />
+                            <TextBlock Text="Cont" Grid.Row="13" Opacity="0.68" />
+                            <TextBlock Grid.Row="13" Grid.Column="1" Text="{Binding InspectorQso.Continent}" />
+                            <TextBlock Text="CQ Zone" Grid.Row="14" Opacity="0.68" />
+                            <TextBlock Grid.Row="14" Grid.Column="1" Text="{Binding InspectorQso.CqZone}" />
+                            <TextBlock Text="ITU Zone" Grid.Row="15" Opacity="0.68" />
+                            <TextBlock Grid.Row="15" Grid.Column="1" Text="{Binding InspectorQso.ItuZone}" />
+                            <TextBlock Text="Contest" Grid.Row="16" Opacity="0.68" />
+                            <TextBlock Grid.Row="16" Grid.Column="1" Text="{Binding InspectorQso.Contest}" />
+                            <TextBlock Text="Exch" Grid.Row="17" Opacity="0.68" />
+                            <TextBlock Grid.Row="17" Grid.Column="1" Text="{Binding InspectorQso.Exchange}" />
+                            <TextBlock Text="Station" Grid.Row="18" Opacity="0.68" />
+                            <TextBlock Grid.Row="18" Grid.Column="1" Text="{Binding InspectorQso.Station}" />
+                            <TextBlock Text="End" Grid.Row="19" Opacity="0.68" />
+                            <TextBlock Grid.Row="19" Grid.Column="1" Text="{Binding InspectorQso.UtcEndDisplay}" />
+                            <TextBlock Text="Sync" Grid.Row="20" Opacity="0.68" />
+                            <TextBlock Grid.Row="20" Grid.Column="1" Text="{Binding InspectorQso.SyncStatus}" />
+                            <TextBlock Text="Comment" Grid.Row="21" Opacity="0.68" />
+                            <TextBlock Grid.Row="21" Grid.Column="1" Text="{Binding InspectorQso.Comment}" TextWrapping="Wrap" />
+                            <TextBlock Text="Note" Grid.Row="22" Opacity="0.68" />
+                            <TextBlock Grid.Row="22" Grid.Column="1" Text="{Binding InspectorQso.Note}" TextWrapping="Wrap" />
+                          </Grid>
+                        </StackPanel>
 
-                  <TextBlock Text="No QSO selected."
-                             Opacity="0.68"
-                             IsVisible="{Binding !HasInspectorQso}" />
-                </StackPanel>
-              </ScrollViewer>
-            </Border>
+                        <TextBlock Text="No QSO selected."
+                                   Opacity="0.68"
+                                   IsVisible="{Binding !HasInspectorQso}" />
+                      </StackPanel>
+                    </ScrollViewer>
+                  </Border>
+                </DataTemplate>
+              </ContentControl.DataTemplates>
+            </ContentControl>
           </Grid>
 
           <Border x:Name="SortChooserPanel"
@@ -792,6 +787,7 @@
                   BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
                   BorderThickness="1"
                   IsVisible="{Binding IsSortChooserOpen}">
+            <ScrollViewer MaxHeight="480" VerticalScrollBarVisibility="Auto">
             <StackPanel Spacing="6">
               <TextBlock Text="Sort recent QSOs"
                          FontSize="12.5"
@@ -823,9 +819,33 @@
               <Button Content="9  Note"
                       Command="{Binding RecentQsos.SortByColumnCommand}"
                       CommandParameter="{x:Static vm:RecentQsoSortColumn.Note}" />
+              <Separator Margin="0,2" />
+              <Button Content="A  Comment"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Comment}" />
+              <Button Content="B  Grid"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Grid}" />
+              <Button Content="C  RST Sent"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.RstSent}" />
+              <Button Content="D  RST Rcvd"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.RstReceived}" />
+              <Button Content="E  Name"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Name}" />
+              <Button Content="F  Station"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Station}" />
+              <Button Content="G  Exchange"
+                      Command="{Binding RecentQsos.SortByColumnCommand}"
+                      CommandParameter="{x:Static vm:RecentQsoSortColumn.Exchange}" />
+              <Separator Margin="0,2" />
               <Button Content="0  Reverse direction"
                       Command="{Binding RecentQsos.ReverseSortDirectionCommand}" />
             </StackPanel>
+            </ScrollViewer>
           </Border>
 
           <Border x:Name="ColumnChooserPanel"
@@ -843,7 +863,7 @@
               <TextBlock Text="Visible columns"
                          FontSize="12.5"
                          FontWeight="SemiBold" />
-              <ScrollViewer MaxHeight="400"
+              <ScrollViewer MaxHeight="280"
                             VerticalScrollBarVisibility="Auto">
                 <ItemsControl ItemsSource="{Binding RecentQsos.ColumnOptions}">
                   <ItemsControl.ItemTemplate>
@@ -854,60 +874,65 @@
                   </ItemsControl.ItemTemplate>
                 </ItemsControl>
               </ScrollViewer>
+              <Separator Margin="0,2" />
+              <Button Content="Reset Layout"
+                      Command="{Binding ResetColumnLayoutCommand}"
+                      HorizontalAlignment="Stretch"
+                      HorizontalContentAlignment="Center"
+                      MinHeight="28"
+                      FontSize="11.5"
+                      ToolTip.Tip="Reset column order, widths, and visibility to defaults" />
             </StackPanel>
           </Border>
 
           <!-- Callsign Card overlay -->
-          <Border x:Name="CallsignCardPanel"
-                  AutomationProperties.AutomationId="CallsignCardPanel"
-                  HorizontalAlignment="Right"
-                  VerticalAlignment="Top"
-                  Margin="0,8,14,8"
-                  IsVisible="{Binding IsCallsignCardOpen}">
-            <v:CallsignCardView DataContext="{Binding CallsignCard}" />
-          </Border>
+          <ContentControl Content="{Binding CallsignCard}">
+            <ContentControl.DataTemplates>
+              <DataTemplate x:DataType="vm:CallsignCardViewModel">
+                <Border AutomationProperties.AutomationId="CallsignCardPanel"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Top"
+                        Margin="0,8,14,8">
+                  <v:CallsignCardView />
+                </Border>
+              </DataTemplate>
+            </ContentControl.DataTemplates>
+          </ContentControl>
         </Panel>
 
         <Border Grid.Row="3"
                 BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
                 BorderThickness="1,0,0,0"
                 Padding="10,4">
-          <Grid ColumnDefinitions="*,Auto"
-                ColumnSpacing="12">
-            <StackPanel Orientation="Horizontal"
-                        Spacing="10"
-                        VerticalAlignment="Center"
-                        ClipToBounds="True">
-              <TextBlock Text="{Binding RecentQsos.CountStatusText}" FontSize="11.5" />
-              <TextBlock Text="|" Opacity="0.45" />
-              <TextBlock Text="{Binding RecentQsos.FilterStatusText}" FontSize="11.5" TextTrimming="CharacterEllipsis" />
-              <TextBlock Text="|" Opacity="0.45" />
-              <TextBlock Text="{Binding RecentQsos.SortStatusText}" FontSize="11.5" TextTrimming="CharacterEllipsis" />
-              <TextBlock Text="|" Opacity="0.45" />
-              <TextBlock Text="{Binding RecentQsos.EditStatusText}" FontSize="11.5" />
-              <TextBlock Text="|" Opacity="0.45" />
-              <TextBlock Text="{Binding RecentQsos.GridZoomStatusText}" FontSize="11.5" />
-              <TextBlock Text="|" Opacity="0.45" />
-              <TextBlock Text="{Binding ActiveStationText}" FontSize="11.5" TextTrimming="CharacterEllipsis" />
-              <TextBlock Text="|" Opacity="0.45" />
-              <TextBlock Text="{Binding RecentQsos.SyncSummaryText}"
-                         FontSize="11.5"
-                         TextTrimming="CharacterEllipsis"
-                         MaxWidth="200" />
-              <TextBlock Text="|" Opacity="0.45" />
-              <TextBlock Text="{Binding SyncStatusText}"
-                         FontSize="11.5"
-                         TextTrimming="CharacterEllipsis"
-                         MaxWidth="140" />
-            </StackPanel>
-
-            <TextBlock Grid.Column="1"
-                       Text="Ctrl+Enter Log &#x2022; Ctrl+L Expand &#x2022; F1 Help &#x2022; F3 Grid &#x2022; F4 Search &#x2022; Ctrl+N Logger &#x2022; Ctrl+R Rig &#x2022; Ctrl+W Weather"
+          <StackPanel Orientation="Horizontal"
+                      Spacing="10"
+                      VerticalAlignment="Center"
+                      ClipToBounds="True">
+            <TextBlock Text="{Binding RecentQsos.CountStatusText}" FontSize="11.5" />
+            <TextBlock Text="|" Opacity="0.45" />
+            <TextBlock Text="{Binding RecentQsos.FilterStatusText}" FontSize="11.5" TextTrimming="CharacterEllipsis" />
+            <TextBlock Text="|" Opacity="0.45" />
+            <TextBlock Text="{Binding RecentQsos.SortStatusText}" FontSize="11.5" TextTrimming="CharacterEllipsis" />
+            <TextBlock Text="|" Opacity="0.45" />
+            <TextBlock Text="{Binding RecentQsos.EditStatusText}" FontSize="11.5" />
+            <TextBlock Text="|" Opacity="0.45" />
+            <TextBlock Text="{Binding SyncStatusText}"
                        FontSize="11.5"
-                       Opacity="0.68"
-                       VerticalAlignment="Center"
-                       HorizontalAlignment="Right" />
-          </Grid>
+                       TextTrimming="CharacterEllipsis"
+                       MaxWidth="140" />
+            <TextBlock Text="|" Opacity="0.45" />
+            <TextBlock Text="{Binding ActiveStationText}" FontSize="11.5" TextTrimming="CharacterEllipsis" MaxWidth="180" />
+            <TextBlock Text="|" Opacity="0.45" />
+            <TextBlock Text="{Binding ActiveProfileText}" FontSize="11.5" TextTrimming="CharacterEllipsis" MaxWidth="180" />
+            <TextBlock Text="|" Opacity="0.45" />
+            <TextBlock Text="{Binding ActiveEngineText}" FontSize="11.5" TextTrimming="CharacterEllipsis" MaxWidth="260" />
+            <TextBlock Text="|" Opacity="0.45" IsVisible="{Binding HasEngineSwitchStatus}" />
+            <TextBlock Text="{Binding EngineSwitchStatusText}"
+                       FontSize="11.5"
+                       TextTrimming="CharacterEllipsis"
+                       MaxWidth="240"
+                       IsVisible="{Binding HasEngineSwitchStatus}" />
+          </StackPanel>
         </Border>
       </Grid>
 
@@ -940,9 +965,11 @@
                         HorizontalAlignment="Right">
               <Button Content="Cancel"
                       MinWidth="80"
+                      Foreground="{DynamicResource SystemControlForegroundBaseHighBrush}"
                       Command="{Binding RecentQsos.CancelDeleteCommand}" />
               <Button Content="Delete"
                       MinWidth="80"
+                      Foreground="White"
                       Classes="accent"
                       Command="{Binding RecentQsos.ConfirmDeleteCommand}" />
             </StackPanel>
@@ -951,39 +978,48 @@
       </Border>
 
       <!-- Full QSO Card overlay -->
-      <Border x:Name="FullQsoCardOverlay"
-              AutomationProperties.AutomationId="FullQsoCardOverlay"
-              IsVisible="{Binding IsFullQsoCardOpen}"
-              Background="#80000000"
-              HorizontalAlignment="Stretch"
-              VerticalAlignment="Stretch">
-        <v:FullQsoCardView DataContext="{Binding FullQsoCard}"
-                           HorizontalAlignment="Center"
-                           VerticalAlignment="Center" />
-      </Border>
+      <ContentControl Content="{Binding FullQsoCard}">
+        <ContentControl.DataTemplates>
+          <DataTemplate x:DataType="vm:FullQsoCardViewModel">
+            <Border AutomationProperties.AutomationId="FullQsoCardOverlay"
+                    Background="#80000000"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Stretch">
+              <v:FullQsoCardView HorizontalAlignment="Center"
+                                 VerticalAlignment="Center" />
+            </Border>
+          </DataTemplate>
+        </ContentControl.DataTemplates>
+      </ContentControl>
 
       <!-- Help overlay -->
-      <Border x:Name="HelpOverlay"
-              AutomationProperties.AutomationId="HelpOverlay"
-              IsVisible="{Binding IsHelpOpen}"
-              Background="#80000000">
-        <v:HelpOverlayView DataContext="{Binding HelpOverlay}" />
-      </Border>
+      <ContentControl Content="{Binding HelpOverlay}">
+        <ContentControl.DataTemplates>
+          <DataTemplate x:DataType="vm:HelpOverlayViewModel">
+            <Border AutomationProperties.AutomationId="HelpOverlay"
+                    Background="#80000000">
+              <v:HelpOverlayView />
+            </Border>
+          </DataTemplate>
+        </ContentControl.DataTemplates>
+      </ContentControl>
 
-      <Border x:Name="SetupWizardOverlay"
-              AutomationProperties.AutomationId="SetupWizardOverlay"
-              IsVisible="{Binding IsWizardOpen}"
-              Background="#80000000">
-        <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
-                CornerRadius="8"
-                Margin="40,24"
-                BoxShadow="0 8 32 0 #40000000"
-                ClipToBounds="True">
-          <v:SetupWizardView x:Name="SetupWizardView"
-                             AutomationProperties.AutomationId="SetupWizardView"
-                             DataContext="{Binding WizardViewModel}" />
-        </Border>
-      </Border>
+      <ContentControl Content="{Binding WizardViewModel}">
+        <ContentControl.DataTemplates>
+          <DataTemplate x:DataType="vm:SetupWizardViewModel">
+            <Border AutomationProperties.AutomationId="SetupWizardOverlay"
+                    Background="#80000000">
+              <Border Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                      CornerRadius="8"
+                      Margin="40,24"
+                      BoxShadow="0 8 32 0 #40000000"
+                      ClipToBounds="True">
+                <v:SetupWizardView AutomationProperties.AutomationId="SetupWizardView" />
+              </Border>
+            </Border>
+          </DataTemplate>
+        </ContentControl.DataTemplates>
+      </ContentControl>
     </Panel>
   </DockPanel>
 </Window>

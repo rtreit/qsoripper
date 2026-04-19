@@ -70,6 +70,7 @@ public class RecentQsoListViewModelTests
         Assert.Equal("2 QSOs", viewModel.CountStatusText);
         Assert.Equal("No filter", viewModel.FilterStatusText);
         Assert.Equal("Sync local", viewModel.TopSyncIndicatorText);
+        Assert.Equal(200, engine.LastRecentQsoLimit);
     }
 
     [Fact]
@@ -309,10 +310,14 @@ public class RecentQsoListViewModelTests
 
         Assert.Equal(12, viewModel.GridFontSize);
         Assert.Equal("Zoom 100%", viewModel.GridZoomStatusText);
+        Assert.Equal(18, viewModel.GridRowHeight);
+        Assert.Equal(20, viewModel.GridHeaderHeight);
 
         Assert.True(viewModel.AdjustZoom(1));
         Assert.Equal(13, viewModel.GridFontSize);
         Assert.Equal("Zoom 108%", viewModel.GridZoomStatusText);
+        Assert.Equal(20, viewModel.GridRowHeight);
+        Assert.Equal(22, viewModel.GridHeaderHeight);
 
         viewModel.ApplyPersistedGridFontSize(99);
         Assert.Equal(18, viewModel.GridFontSize);
@@ -321,6 +326,15 @@ public class RecentQsoListViewModelTests
 
         viewModel.ResetGridZoom();
         Assert.Equal(12, viewModel.GridFontSize);
+    }
+
+    [Fact]
+    public void GridDensityUsesCompactDefaultHeights()
+    {
+        var viewModel = new RecentQsoListViewModel(new FakeEngineClient());
+
+        Assert.Equal(18, viewModel.GridRowHeight);
+        Assert.Equal(20, viewModel.GridHeaderHeight);
     }
 
     private static QsoRecord CreateQso(
@@ -373,6 +387,8 @@ public class RecentQsoListViewModelTests
 
         public List<QsoRecord> UpdatedQsos { get; } = [];
 
+        public int? LastRecentQsoLimit { get; private set; }
+
         public Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default) =>
             throw new NotImplementedException();
 
@@ -393,6 +409,7 @@ public class RecentQsoListViewModelTests
 
         public Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default)
         {
+            LastRecentQsoLimit = limit;
             if (RefreshException is not null)
             {
                 throw RefreshException;

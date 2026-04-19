@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\QsoRipper.Cli\QsoRipper.Cli.csproj" />
+    <ProjectReference Include="..\QsoRipper.EngineSelection\QsoRipper.EngineSelection.csproj" />
   </ItemGroup>
 
 </Project>

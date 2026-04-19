@@ -15,7 +15,10 @@ public class RepositoryPathsTests
 
         Assert.Equal(root, paths.RepoRoot);
         Assert.Equal(Path.Combine(root, "src", "rust"), paths.RustWorkspaceRoot);
+        Assert.Equal(Path.Combine(root, "src", "rust", "Cargo.toml"), paths.RustWorkspaceManifestPath);
         Assert.Equal(Path.Combine(root, "src", "dotnet", "QsoRipper.slnx"), paths.DotnetWorkspaceSolutionPath);
+        Assert.Equal(Path.Combine(root, "tests", "Run-EngineConformance.ps1"), paths.EngineConformanceScriptPath);
+        Assert.Equal(Path.Combine("src", "rust", "Cargo.toml"), paths.GetRepoRelativePath(paths.RustWorkspaceManifestPath));
     }
 }
 #pragma warning restore CA1707

@@ -2,24 +2,33 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Grpc.Net.Client;
+using QsoRipper.Domain;
+using QsoRipper.EngineSelection;
 using QsoRipper.Gui.Services;
+using QsoRipper.Gui.Utilities;
+using QsoRipper.Shared.Persistence;
 
 namespace QsoRipper.Gui.ViewModels;
 
 internal sealed partial class MainWindowViewModel : ObservableObject, IDisposable
 {
+    private static readonly TimeSpan PreferredEngineSwitchTimeout = TimeSpan.FromSeconds(1.5);
+
     private readonly IEngineClient _engine;
+    private readonly SwitchableEngineClient? _switchableEngine;
     private readonly DispatcherTimer _utcTimer;
     private readonly DispatcherTimer _rigTimer;
     private readonly DispatcherTimer _spaceWeatherTimer;
     private bool _setupCompleteBeforeWizard;
+    private string? _preferredEngineProfileId;
+    private string? _preferredEngineEndpoint;
 
     [ObservableProperty]
     private bool _isSettingsOpen;
@@ -46,6 +55,23 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private string _activeStationText = "Station: -";
 
     [ObservableProperty]
+    private string _activeEngineText = "Engine: -";
+
+    [ObservableProperty]
+    private string _availableEnginesText = "Engines: unknown";
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasEngineSwitchStatus))]
+    private string _engineSwitchStatusText = "Switch: idle";
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SwitchToRustEngineCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SwitchToDotNetEngineCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RefreshEngineAvailabilityCommand))]
+    private bool _isEngineSwitching;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(InspectorPanelHost))]
     private bool _isInspectorOpen;
 
     [ObservableProperty]
@@ -99,16 +125,19 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     [ObservableProperty]
     private bool _isLoggerFocused;
 
-    internal MainWindowViewModel(string endpoint)
+    internal MainWindowViewModel(EngineTargetProfile engineProfile, string endpoint)
     {
+        ArgumentNullException.ThrowIfNull(engineProfile);
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
 
-        _engine = new EngineGrpcService(GrpcChannel.ForAddress(endpoint));
+        _switchableEngine = new SwitchableEngineClient(engineProfile, endpoint);
+        _engine = _switchableEngine;
         RecentQsos = new RecentQsoListViewModel(_engine);
         RecentQsos.PropertyChanged += OnRecentQsosPropertyChanged;
         Logger = new QsoLoggerViewModel(_engine);
         Logger.QsoLogged += OnQsoLogged;
         Logger.LoggerFocusRequested += OnLoggerFocusRequested;
+        ActiveEngineText = BuildEngineText(engineProfile, endpoint);
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
         _rigTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -119,12 +148,25 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     internal MainWindowViewModel(IEngineClient engine)
     {
+        ArgumentNullException.ThrowIfNull(engine);
+
+        _switchableEngine = engine as SwitchableEngineClient;
         _engine = engine;
         RecentQsos = new RecentQsoListViewModel(engine);
         RecentQsos.PropertyChanged += OnRecentQsosPropertyChanged;
         Logger = new QsoLoggerViewModel(engine);
         Logger.QsoLogged += OnQsoLogged;
         Logger.LoggerFocusRequested += OnLoggerFocusRequested;
+        if (_switchableEngine is not null)
+        {
+            ActiveEngineText = BuildEngineText(_switchableEngine.CurrentProfile, _switchableEngine.CurrentEndpoint);
+        }
+        else
+        {
+            ActiveEngineText = "Engine: fixture";
+            AvailableEnginesText = "Engines: unavailable";
+        }
+
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
         _rigTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
@@ -137,6 +179,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     public QsoLoggerViewModel Logger { get; }
 
+    public bool HasEngineSwitchStatus =>
+        !string.IsNullOrWhiteSpace(EngineSwitchStatusText)
+        && !string.Equals(EngineSwitchStatusText, "Switch: idle", StringComparison.Ordinal);
+
     /// <summary>
     /// Proxy for <see cref="RecentQsoListViewModel.SelectedQso"/> so the Inspector
     /// panel can bind via a single-level property path from the window DataContext.
@@ -144,6 +190,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     public RecentQsoItemViewModel? InspectorQso => RecentQsos.SelectedQso;
 
     public bool HasInspectorQso => InspectorQso is not null;
+
+    public MainWindowViewModel? InspectorPanelHost => IsInspectorOpen ? this : null;
 
     public event EventHandler? SearchFocusRequested;
 
@@ -164,19 +212,31 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         try
         {
-            var state = await _engine.GetWizardStateAsync();
-            ApplySetupContext(state);
-            IsSetupIncomplete = !state.Status.SetupComplete;
+            GuiPerformanceTrace.Write(nameof(CheckFirstRunAsync) + ".start");
+            await ApplyPreferredEngineSelectionAsync();
+            GuiPerformanceTrace.Write(nameof(CheckFirstRunAsync) + ".afterPreferredEngine");
+            StatusMessage = "Loading recent QSOs...";
+            var recentQsoRefreshTask = RecentQsos.RefreshAsync();
+            var status = (await _engine.GetSetupStatusAsync()).Status;
+            GuiPerformanceTrace.Write(
+                nameof(CheckFirstRunAsync) + ".afterSetupStatus",
+                $"firstRun={status.IsFirstRun}; setupComplete={status.SetupComplete}");
+            ApplySetupContext(status);
+            IsSetupIncomplete = !status.SetupComplete;
 
-            if (state.Status.IsFirstRun)
+            if (status.IsFirstRun)
             {
                 StatusMessage = "Welcome";
                 await OpenWizardAsync();
+                await recentQsoRefreshTask;
             }
             else
             {
-                await ActivateDashboardAsync(focusSearch);
+                await ActivateDashboardAsync(focusSearch, recentQsoRefreshTask);
             }
+
+            Dispatcher.UIThread.Post(UpdateAvailableEngineSummary, DispatcherPriority.Background);
+            GuiPerformanceTrace.Write(nameof(CheckFirstRunAsync) + ".complete");
         }
         catch (Grpc.Core.RpcException)
         {
@@ -240,13 +300,168 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     partial void OnIsWizardOpenChanged(bool value)
     {
         SyncNowCommand.NotifyCanExecuteChanged();
+        SwitchToRustEngineCommand.NotifyCanExecuteChanged();
+        SwitchToDotNetEngineCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSwitchEngines))]
+    private Task SwitchToRustEngineAsync()
+    {
+        return SwitchEngineProfileAsync(KnownEngineProfiles.LocalRust);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSwitchEngines))]
+    private Task SwitchToDotNetEngineAsync()
+    {
+        return SwitchEngineProfileAsync(KnownEngineProfiles.LocalDotNet);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRefreshEngineAvailability))]
+    private void RefreshEngineAvailability()
+    {
+        UpdateAvailableEngineSummary();
+    }
+
+    private bool CanSwitchEngines()
+    {
+        return _switchableEngine is not null && !IsWizardOpen && !IsEngineSwitching;
+    }
+
+    private bool CanRefreshEngineAvailability()
+    {
+        return _switchableEngine is not null && !IsEngineSwitching;
+    }
+
+    private async Task SwitchEngineProfileAsync(string profileId)
+    {
+        if (_switchableEngine is null)
+        {
+            return;
+        }
+
+        var targetProfile = EngineCatalog.GetProfile(profileId);
+        var targetEndpoint = ResolveSwitchEndpoint(targetProfile);
+        IsEngineSwitching = true;
+        EngineSwitchStatusText = $"Switching to {targetProfile.DisplayName}\u2026";
+        try
+        {
+            using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var result = await _switchableEngine.SwitchAsync(targetProfile, targetEndpoint, timeoutSource.Token);
+            EngineSwitchStatusText = string.IsNullOrWhiteSpace(result.Message)
+                ? "Switch: ready"
+                : result.Message;
+            if (!result.Success)
+            {
+                return;
+            }
+
+            ActiveEngineText = BuildEngineText(result.Profile, result.Endpoint);
+            await RefreshSetupContextAsync();
+            await RecentQsos.RefreshAsync();
+            await RefreshSyncStatusAsync();
+        }
+        finally
+        {
+            IsEngineSwitching = false;
+            UpdateAvailableEngineSummary();
+        }
+    }
+
+    private async Task ApplyPreferredEngineSelectionAsync()
+    {
+        if (_switchableEngine is null)
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_preferredEngineProfileId)
+            && string.IsNullOrWhiteSpace(_preferredEngineEndpoint))
+        {
+            return;
+        }
+
+        var targetProfile = EngineCatalog.ResolveProfile(_preferredEngineProfileId);
+        var targetEndpoint = EngineCatalog.ResolveEndpoint(targetProfile, _preferredEngineEndpoint);
+        if (string.Equals(targetProfile.ProfileId, _switchableEngine.CurrentProfile.ProfileId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(targetEndpoint, _switchableEngine.CurrentEndpoint, StringComparison.OrdinalIgnoreCase))
+        {
+            _preferredEngineProfileId = null;
+            _preferredEngineEndpoint = null;
+            return;
+        }
+
+        using var timeoutSource = new CancellationTokenSource(PreferredEngineSwitchTimeout);
+        GuiPerformanceTrace.Write(
+            nameof(ApplyPreferredEngineSelectionAsync) + ".switchStart",
+            $"profile={targetProfile.ProfileId}; endpoint={targetEndpoint}");
+        var result = await _switchableEngine.SwitchAsync(targetProfile, targetEndpoint, timeoutSource.Token);
+        if (result.Success)
+        {
+            ActiveEngineText = BuildEngineText(result.Profile, result.Endpoint);
+        }
+        else
+        {
+            EngineSwitchStatusText = string.IsNullOrWhiteSpace(result.Message)
+                ? "Switch: ready"
+                : result.Message;
+        }
+
+        GuiPerformanceTrace.Write(
+            nameof(ApplyPreferredEngineSelectionAsync) + ".switchComplete",
+            $"success={result.Success}; endpoint={result.Endpoint}");
+        _preferredEngineProfileId = null;
+        _preferredEngineEndpoint = null;
+    }
+
+    private void UpdateAvailableEngineSummary()
+    {
+        if (_switchableEngine is null)
+        {
+            AvailableEnginesText = "Engines: unavailable";
+            return;
+        }
+
+        var runtimeEntries = EngineRuntimeDiscovery.DiscoverLocalEngines(new EngineRuntimeDiscoveryOptions
+        {
+            ValidateTcpReachability = false
+        });
+        var runningLabels = runtimeEntries
+            .Where(static entry => entry.IsRunning)
+            .Select(static entry => entry.Profile.DisplayName.Replace("QsoRipper ", string.Empty, StringComparison.Ordinal))
+            .ToArray();
+
+        AvailableEnginesText = runningLabels.Length == 0
+            ? "Engines: none running"
+            : $"Engines: {string.Join(", ", runningLabels)}";
+    }
+
+    private static string ResolveSwitchEndpoint(EngineTargetProfile targetProfile)
+    {
+        var runtimeEntries = EngineRuntimeDiscovery.DiscoverLocalEngines(new EngineRuntimeDiscoveryOptions
+        {
+            ValidateTcpReachability = false
+        });
+        var runningEntry = runtimeEntries.FirstOrDefault(entry =>
+            entry.IsRunning
+            && string.Equals(entry.Profile.ProfileId, targetProfile.ProfileId, StringComparison.OrdinalIgnoreCase));
+        return runningEntry?.Endpoint ?? targetProfile.DefaultEndpoint;
+    }
+
+    private static string BuildEngineText(EngineTargetProfile profile, string endpoint)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
+        return $"Engine: {profile.DisplayName} @ {endpoint.Trim()}";
     }
 
     /// <summary>
     /// Creates a <see cref="SettingsViewModel"/> wired to the shared engine client.
     /// Called by the View layer when handling <see cref="SettingsRequested"/>.
     /// </summary>
-    internal SettingsViewModel CreateSettingsViewModel() => new(_engine);
+    internal SettingsViewModel CreateSettingsViewModel() => new(_engine)
+    {
+        IsSpaceWeatherVisible = IsSpaceWeatherVisible
+    };
 
     /// <summary>
     /// Called by the View layer after the Settings dialog closes.
@@ -258,6 +473,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         {
             await RefreshSetupContextAsync();
             await ActivateDashboardAsync(focusSearch: false);
+        }
+    }
+
+    internal void ApplySettingsUiPreferences(bool isSpaceWeatherVisible)
+    {
+        IsSpaceWeatherVisible = isSpaceWeatherVisible;
+        if (IsSpaceWeatherVisible && string.IsNullOrEmpty(SpaceWeatherText))
+        {
+            _ = FetchSpaceWeatherAsync();
         }
     }
 
@@ -377,6 +601,19 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         }
     }
 
+    /// <summary>
+    /// Raised when the user requests a column layout reset. The View subscribes
+    /// and resets DisplayIndex/width/visibility to XAML defaults.
+    /// </summary>
+    internal event EventHandler? ColumnLayoutResetRequested;
+
+    [RelayCommand]
+    private void ResetColumnLayout()
+    {
+        ColumnLayoutResetRequested?.Invoke(this, EventArgs.Empty);
+        IsColumnChooserOpen = false;
+    }
+
     [RelayCommand]
     private void OpenCallsignCard()
     {
@@ -408,6 +645,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
         var vm = new CallsignCardViewModel(_engine);
         vm.CloseRequested += OnCallsignCardCloseRequested;
+        vm.RecordLoaded += OnCallsignCardRecordLoaded;
         CallsignCard = vm;
         IsCallsignCardOpen = true;
         _ = vm.LoadAsync(callsign);
@@ -419,6 +657,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         if (CallsignCard is { } card)
         {
             card.CloseRequested -= OnCallsignCardCloseRequested;
+            card.RecordLoaded -= OnCallsignCardRecordLoaded;
         }
 
         var wasLoggerFocused = IsLoggerFocused;
@@ -438,6 +677,11 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private void OnCallsignCardCloseRequested(object? sender, EventArgs e)
     {
         CloseCallsignCard();
+    }
+
+    private void OnCallsignCardRecordLoaded(object? sender, CallsignRecord record)
+    {
+        Logger.AcceptLookupRecord(record);
     }
 
     private void CloseHelp()
@@ -611,20 +855,75 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         _spaceWeatherTimer.Stop();
         _spaceWeatherTimer.Tick -= OnSpaceWeatherTimerTick;
 
-        if (_engine is IDisposable disposable)
+        if (_switchableEngine is not null)
+        {
+            _switchableEngine.Dispose();
+        }
+        else if (_engine is IDisposable disposable)
         {
             disposable.Dispose();
         }
     }
 
-    private async Task ActivateDashboardAsync(bool focusSearch)
+    /// <summary>
+    /// Restores persisted UI preferences (rig control, space weather, inspector).
+    /// Call after construction but before or during <see cref="ActivateDashboardAsync"/>.
+    /// </summary>
+    internal void ApplyPreferences(UiPreferences? prefs)
     {
+        if (prefs is null)
+        {
+            return;
+        }
+
+        if (prefs.IsRigEnabled)
+        {
+            ToggleRigControl();
+        }
+
+        if (prefs.IsSpaceWeatherVisible)
+        {
+            IsSpaceWeatherVisible = true;
+        }
+
+        if (prefs.IsInspectorOpen)
+        {
+            IsInspectorOpen = true;
+        }
+
+        _preferredEngineProfileId = string.IsNullOrWhiteSpace(prefs.EngineProfileId)
+            ? null
+            : prefs.EngineProfileId.Trim();
+        _preferredEngineEndpoint = string.IsNullOrWhiteSpace(prefs.EngineEndpoint)
+            ? null
+            : prefs.EngineEndpoint.Trim();
+    }
+
+    /// <summary>
+    /// Captures current UI toggle state for persistence across restarts.
+    /// </summary>
+    internal UiPreferences CapturePreferences() => new()
+    {
+        IsRigEnabled = IsRigEnabled,
+        IsSpaceWeatherVisible = IsSpaceWeatherVisible,
+        IsInspectorOpen = IsInspectorOpen,
+        EngineProfileId = _switchableEngine?.CurrentProfile.ProfileId,
+        EngineEndpoint = _switchableEngine?.CurrentEndpoint,
+    };
+
+    private async Task ActivateDashboardAsync(bool focusSearch, Task? recentQsoRefreshTask = null)
+    {
+        GuiPerformanceTrace.Write(nameof(ActivateDashboardAsync) + ".start");
+        StatusMessage = "Loading recent QSOs...";
+        recentQsoRefreshTask ??= RecentQsos.RefreshAsync();
+        await recentQsoRefreshTask;
+        GuiPerformanceTrace.Write(nameof(ActivateDashboardAsync) + ".afterRecentQsosRefresh");
         StatusMessage = "Ready";
-        await RecentQsos.RefreshAsync();
-        await RefreshSyncStatusAsync();
+        _ = RefreshSyncStatusAsync();
 
         _ = FetchSpaceWeatherAsync();
         _spaceWeatherTimer.Start();
+        await Task.Yield();
 
         if (IsWizardOpen)
         {
@@ -640,6 +939,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             // Default: focus the QSO logger callsign field for immediate entry
             Logger.FocusLogger();
         }
+
+        GuiPerformanceTrace.Write(nameof(ActivateDashboardAsync) + ".complete");
     }
 
     private void UtcTimerOnTick(object? sender, EventArgs e)
@@ -669,7 +970,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         try
         {
-            ApplySetupContext(await _engine.GetWizardStateAsync());
+            ApplySetupContext((await _engine.GetSetupStatusAsync()).Status);
         }
         catch (Grpc.Core.RpcException)
         {
@@ -677,23 +978,24 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         }
     }
 
-    private void ApplySetupContext(QsoRipper.Services.GetSetupWizardStateResponse state)
+    private void ApplySetupContext(QsoRipper.Services.SetupStatus status)
     {
-        var activeProfile = state.StationProfiles.FirstOrDefault(profile => profile.IsActive)?.Profile
-            ?? state.Status.StationProfile;
-        ActiveLogText = BuildLogText(state.Status.LogFilePath);
+        var activeProfile = status.StationProfile;
+        ActiveLogText = BuildLogText(status);
         ActiveProfileText = BuildProfileText(activeProfile);
         ActiveStationText = BuildStationText(activeProfile);
     }
 
-    private static string BuildLogText(string? logFilePath)
+    private static string BuildLogText(QsoRipper.Services.SetupStatus status)
     {
-        if (string.IsNullOrWhiteSpace(logFilePath))
+        var persistenceFields = PersistenceSetupFields.FromStatus(status, status.SuggestedLogFilePath ?? string.Empty);
+        var pathValue = PersistenceSetupFields.GetPathValue(persistenceFields);
+        if (string.IsNullOrWhiteSpace(pathValue))
         {
-            return "Log: -";
+            return "Log: engine-managed";
         }
 
-        return $"Log: {Path.GetFileNameWithoutExtension(logFilePath.Trim())}";
+        return $"Log: {Path.GetFileNameWithoutExtension(pathValue.Trim())}";
     }
 
     private static string BuildProfileText(QsoRipper.Domain.StationProfile? profile)

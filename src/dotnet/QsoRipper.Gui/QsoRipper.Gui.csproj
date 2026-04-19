@@ -6,6 +6,10 @@
     <ApplicationIcon>Assets\qsoripper.ico</ApplicationIcon>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <PublishReadyToRun>true</PublishReadyToRun>
+  </PropertyGroup>
+
   <ItemGroup>
     <AvaloniaResource Include="Assets\qsoripper.ico" />
   </ItemGroup>
@@ -32,6 +36,15 @@
               GrpcServices="None" />
     <Protobuf Update="..\..\..\proto\services\*service.proto"
               GrpcServices="Client" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\QsoRipper.EngineSelection\QsoRipper.EngineSelection.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Shared\Persistence\*.cs"
+             Link="Shared\Persistence\%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

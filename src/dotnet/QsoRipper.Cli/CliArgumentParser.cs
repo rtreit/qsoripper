@@ -1,14 +1,18 @@
+using QsoRipper.EngineSelection;
+
 namespace QsoRipper.Cli;
 
 internal static class CliArgumentParser
 {
-    public const string DefaultEndpoint = "http://127.0.0.1:50051";
+    public static string DefaultEndpoint => EngineCatalog.DefaultRustEndpoint;
 
     public static CliArguments Parse(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
 
-        var endpoint = Environment.GetEnvironmentVariable("QSORIPPER_ENDPOINT") ?? DefaultEndpoint;
+        var engineProfile = EngineCatalog.ResolveProfile();
+        var endpoint = EngineCatalog.ResolveEndpoint(engineProfile);
+        var hasExplicitEndpoint = false;
         string? command = null;
         string? callsign = null;
         var skipCache = false;
@@ -28,10 +32,41 @@ internal static class CliArgumentParser
             {
                 if (command is null)
                 {
-                    return new CliArguments("help", endpoint, ShowHelp: true);
+                    return new CliArguments("help", endpoint, engineProfile, ShowHelp: true);
                 }
 
                 remaining.Add(arg);
+                continue;
+            }
+
+            if (arg == "--engine")
+            {
+                if (i == args.Length - 1)
+                {
+                    return new CliArguments(
+                        "help",
+                        endpoint,
+                        engineProfile,
+                        ShowHelp: true,
+                        Error: "Missing value for --engine.");
+                }
+
+                if (!EngineCatalog.TryResolveProfile(args[++i], out var parsedProfile))
+                {
+                    return new CliArguments(
+                        "help",
+                        endpoint,
+                        engineProfile,
+                        ShowHelp: true,
+                        Error: $"Unknown engine profile '{args[i]}'. Known values: {EngineCatalog.GetKnownProfileList()}.");
+                }
+
+                engineProfile = parsedProfile;
+                if (!hasExplicitEndpoint)
+                {
+                    endpoint = EngineCatalog.ResolveEndpoint(engineProfile);
+                }
+
                 continue;
             }
 
@@ -39,10 +74,16 @@ internal static class CliArgumentParser
             {
                 if (i == args.Length - 1)
                 {
-                    return new CliArguments("help", endpoint, ShowHelp: true, Error: "Missing value for --endpoint.");
+                    return new CliArguments(
+                        "help",
+                        endpoint,
+                        engineProfile,
+                        ShowHelp: true,
+                        Error: "Missing value for --endpoint.");
                 }
 
                 endpoint = args[++i];
+                hasExplicitEndpoint = true;
                 continue;
             }
 
@@ -102,6 +143,7 @@ internal static class CliArgumentParser
         return new CliArguments(
             command ?? "help",
             endpoint,
+            engineProfile,
             ShowHelp: command is null,
             Callsign: callsign,
             SkipCache: skipCache,

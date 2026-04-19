@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.AspNetCore" />
+    <PackageReference Include="Grpc.Tools">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Tomlyn" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="..\..\..\proto\services\*.proto"
+              ProtoRoot="..\..\..\proto"
+              GrpcServices="None" />
+    <Protobuf Update="..\..\..\proto\services\*service.proto"
+              GrpcServices="Server" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\QsoRipper.Engine.Lookup.Abstractions\QsoRipper.Engine.Lookup.Abstractions.csproj" />
+    <ProjectReference Include="..\QsoRipper.Engine.Lookup.Qrz\QsoRipper.Engine.Lookup.Qrz.csproj" />
+    <ProjectReference Include="..\QsoRipper.Engine.RigControl\QsoRipper.Engine.RigControl.csproj" />
+    <ProjectReference Include="..\QsoRipper.Engine.SpaceWeather\QsoRipper.Engine.SpaceWeather.csproj" />
+    <ProjectReference Include="..\QsoRipper.Engine.QrzLogbook\QsoRipper.Engine.QrzLogbook.csproj" />
+    <ProjectReference Include="..\QsoRipper.Engine.Storage.Abstractions\QsoRipper.Engine.Storage.Abstractions.csproj" />
+    <ProjectReference Include="..\QsoRipper.Engine.Storage.Memory\QsoRipper.Engine.Storage.Memory.csproj" />
+    <ProjectReference Include="..\QsoRipper.Engine.Storage.Sqlite\QsoRipper.Engine.Storage.Sqlite.csproj" />
+    <ProjectReference Include="..\QsoRipper.EngineSelection\QsoRipper.EngineSelection.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\..\shared\adif-data\submode_aliases.tsv"
+                      LogicalName="QsoRipper.Engine.DotNet.submode_aliases.tsv" />
+    <EmbeddedResource Include="..\..\..\shared\adif-data\dxcc_entities.tsv"
+                      LogicalName="QsoRipper.Engine.DotNet.dxcc_entities.tsv" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="QsoRipper.Engine.DotNet.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -32,6 +32,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     private bool _rstManuallySet;
     private bool _bandManuallySet;
     private bool _modeManuallySet;
+    private CallsignRecord? _lastLookupRecord;
 
     // ── Observable properties ────────────────────────────────────────────
 
@@ -55,6 +56,15 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
     [ObservableProperty]
     private string _comment = string.Empty;
+
+    [ObservableProperty]
+    private string _notes = string.Empty;
+
+    [ObservableProperty]
+    private string _contestId = string.Empty;
+
+    [ObservableProperty]
+    private string _exchangeSent = string.Empty;
 
     [ObservableProperty]
     private string _elapsedTimeText = "00:00";
@@ -115,6 +125,13 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
     partial void OnCallsignChanged(string value)
     {
+        var normalized = NormalizeCallsignInput(value);
+        if (!string.Equals(value, normalized, StringComparison.Ordinal))
+        {
+            Callsign = normalized;
+            return;
+        }
+
         UpdateLogEnabled();
 
         if (!string.IsNullOrWhiteSpace(value) && !_timerRunning)
@@ -137,7 +154,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
         // Debounced lookup
         _lookupCts = new CancellationTokenSource();
-        _ = DebouncedLookupAsync(value.Trim().ToUpperInvariant(), _lookupCts.Token);
+        _ = DebouncedLookupAsync(value.Trim(), _lookupCts.Token);
     }
 
     partial void OnSelectedBandIndexChanged(int value)
@@ -214,6 +231,8 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
         var band = SelectedBand;
         var mode = SelectedMode;
+        var utcEnd = DateTimeOffset.UtcNow;
+        var utcStart = _timerRunning ? _qsoStartTime : utcEnd;
 
         var qso = new QsoRecord
         {
@@ -222,7 +241,8 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
             Mode = mode.ProtoMode,
             RstSent = ParseRst(RstSent.Trim()),
             RstReceived = ParseRst(RstRcvd.Trim()),
-            UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            UtcTimestamp = Timestamp.FromDateTimeOffset(utcStart),
+            UtcEndTimestamp = Timestamp.FromDateTimeOffset(utcEnd),
         };
 
         if (!string.IsNullOrWhiteSpace(mode.Submode))
@@ -241,6 +261,23 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
             qso.Comment = Comment.Trim();
         }
 
+        if (!string.IsNullOrWhiteSpace(Notes))
+        {
+            qso.Notes = Notes.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(ContestId))
+        {
+            qso.ContestId = ContestId.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(ExchangeSent))
+        {
+            qso.ExchangeSent = ExchangeSent.Trim();
+        }
+
+        EnrichFromLookup(qso, _lastLookupRecord);
+
         LogStatusText = "Logging\u2026";
         IsLogEnabled = false;
 
@@ -258,6 +295,69 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Copies cached callsign-lookup fields into the QSO record so the logged
+    /// contact includes operator name, grid, country, DXCC, and zone data.
+    /// </summary>
+    internal static void EnrichFromLookup(QsoRecord qso, CallsignRecord? record)
+    {
+        if (record is not { } rec)
+        {
+            return;
+        }
+
+        var name = BuildName(rec.FirstName, rec.LastName);
+        if (!string.IsNullOrEmpty(name))
+        {
+            qso.WorkedOperatorName = name;
+        }
+
+        if (!string.IsNullOrEmpty(rec.GridSquare))
+        {
+            qso.WorkedGrid = rec.GridSquare;
+        }
+
+        if (!string.IsNullOrEmpty(rec.Country))
+        {
+            qso.WorkedCountry = rec.Country;
+        }
+
+        if (rec.DxccEntityId != 0)
+        {
+            qso.WorkedDxcc = rec.DxccEntityId;
+        }
+
+        if (!string.IsNullOrEmpty(rec.State))
+        {
+            qso.WorkedState = rec.State;
+        }
+
+        if (rec.HasCqZone)
+        {
+            qso.WorkedCqZone = rec.CqZone;
+        }
+
+        if (rec.HasItuZone)
+        {
+            qso.WorkedItuZone = rec.ItuZone;
+        }
+
+        if (!string.IsNullOrEmpty(rec.County))
+        {
+            qso.WorkedCounty = rec.County;
+        }
+
+        if (!string.IsNullOrEmpty(rec.Iota))
+        {
+            qso.WorkedIota = rec.Iota;
+        }
+
+        if (!string.IsNullOrEmpty(rec.DxccContinent))
+        {
+            qso.WorkedContinent = rec.DxccContinent;
+        }
+    }
+
     // ── Clear / reset commands ───────────────────────────────────────────
 
     [RelayCommand]
@@ -266,6 +366,9 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         _lookupCts?.Cancel();
         Callsign = string.Empty;
         Comment = string.Empty;
+        Notes = string.Empty;
+        ContestId = string.Empty;
+        ExchangeSent = string.Empty;
         LogStatusText = string.Empty;
         ClearLookupFields();
         _frequencyManuallySet = false;
@@ -347,6 +450,26 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         LoggerFocusRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// Accept a <see cref="CallsignRecord"/> resolved externally (e.g. from
+    /// the F8 callsign card) so the next logged QSO includes enrichment data.
+    /// Only applied when the callsign matches the current entry.
+    /// </summary>
+    public void AcceptLookupRecord(CallsignRecord record)
+    {
+        if (string.Equals(
+                record.Callsign,
+                Callsign.Trim(),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _lastLookupRecord = record;
+            LookupName = BuildName(record.FirstName, record.LastName);
+            LookupGrid = record.GridSquare ?? string.Empty;
+            LookupCountry = record.Country ?? string.Empty;
+            LookupStatusText = string.Empty;
+        }
+    }
+
     // ── Debounced callsign lookup ───────────────────────────────────────
 
     private async Task DebouncedLookupAsync(string callsign, CancellationToken ct)
@@ -381,6 +504,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
                 var record = result.Record;
                 if (record is not null)
                 {
+                    _lastLookupRecord = record;
                     LookupName = BuildName(record.FirstName, record.LastName);
                     LookupGrid = record.GridSquare ?? string.Empty;
                     LookupCountry = record.Country ?? string.Empty;
@@ -409,6 +533,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
     private void ClearLookupFields()
     {
+        _lastLookupRecord = null;
         LookupName = string.Empty;
         LookupGrid = string.Empty;
         LookupCountry = string.Empty;
@@ -429,6 +554,13 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         }
 
         return string.Join(" ", parts);
+    }
+
+    private static string NormalizeCallsignInput(string value)
+    {
+        return string.IsNullOrEmpty(value)
+            ? string.Empty
+            : value.ToUpperInvariant();
     }
 
     // ── Timer helpers ────────────────────────────────────────────────────

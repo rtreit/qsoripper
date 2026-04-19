@@ -1,6 +1,7 @@
 using System.Text;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
+using QsoRipper.EngineSelection;
 using QsoRipper.Services;
 namespace QsoRipper.Cli.Tests;
 
@@ -23,8 +24,8 @@ public sealed class CliUtilityTests
     [Fact]
     public void IsCommandHelp_detects_help_tokens_in_primary_or_remaining_args()
     {
-        var byPrimaryArg = new CliArguments("lookup", CliArgumentParser.DefaultEndpoint, Callsign: "-?");
-        var byRemainingArg = new CliArguments("log", CliArgumentParser.DefaultEndpoint, RemainingArgs: ["--help"]);
+        var byPrimaryArg = new CliArguments("lookup", CliArgumentParser.DefaultEndpoint, EngineCatalog.DefaultProfile, Callsign: "-?");
+        var byRemainingArg = new CliArguments("log", CliArgumentParser.DefaultEndpoint, EngineCatalog.DefaultProfile, RemainingArgs: ["--help"]);
 
         Assert.True(CliCommandMetadata.IsCommandHelp(byPrimaryArg));
         Assert.True(CliCommandMetadata.IsCommandHelp(byRemainingArg));
@@ -148,6 +149,30 @@ public sealed class CliUtilityTests
     }
 
     [Fact]
+    public void TimeParser_treats_offsetless_timestamp_as_utc()
+    {
+        var parsed = TimeParser.Parse("2024-06-15 14:30:00");
+
+        Assert.NotNull(parsed);
+        Assert.Equal(new DateTime(2024, 6, 15, 14, 30, 0, DateTimeKind.Utc), parsed!.ToDateTime());
+    }
+
+    [Theory]
+    [InlineData("2024-06-15T14:30:00")]
+    [InlineData("2024-06-15 14:30:00")]
+    [InlineData("06/15/2024 14:30:00")]
+    public void TimeParser_offsetless_timestamps_are_not_shifted_by_local_timezone(string input)
+    {
+        var parsed = TimeParser.Parse(input);
+
+        Assert.NotNull(parsed);
+        var dt = parsed!.ToDateTime();
+        Assert.Equal(DateTimeKind.Utc, dt.Kind);
+        Assert.Equal(14, dt.Hour);
+        Assert.Equal(30, dt.Minute);
+    }
+
+    [Fact]
     public void JsonOutput_Print_writes_indented_json()
     {
         var output = ConsoleCapture.Out(() => JsonOutput.Print(new GetSyncStatusResponse { LocalQsoCount = 3 }));
@@ -178,6 +203,17 @@ public sealed class CliUtilityTests
         var help = CliHelpText.GetGeneralHelp();
 
         Assert.Contains("space-weather [--refresh]", help, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetCommandHelp_setup_uses_qrz_xml_environment_names()
+    {
+        var help = CliHelpText.GetCommandHelp("setup");
+
+        Assert.Contains("QSORIPPER_QRZ_XML_USERNAME", help, StringComparison.Ordinal);
+        Assert.Contains("QSORIPPER_QRZ_XML_PASSWORD", help, StringComparison.Ordinal);
+        Assert.DoesNotContain("QSORIPPER_QRZ_USERNAME", help, StringComparison.Ordinal);
+        Assert.DoesNotContain("QSORIPPER_QRZ_PASSWORD", help, StringComparison.Ordinal);
     }
 }
 #pragma warning restore CA1707

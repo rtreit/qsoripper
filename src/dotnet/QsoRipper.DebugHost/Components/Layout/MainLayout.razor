@@ -1,5 +1,7 @@
 @inherits LayoutComponentBase
+@implements IDisposable
 @inject RepositoryPaths RepositoryPaths
+@inject DebugWorkbenchState WorkbenchState
 
 <div class="page">
     <div class="sidebar">
@@ -12,7 +14,11 @@
                 <strong>QsoRipper Debug Workbench</strong>
                 <span class="text-muted ms-2">Developer-only tooling for engine inspection and debugging.</span>
             </div>
-            <code>@RepositoryPaths.RepoRoot</code>
+            <div class="engine-indicator">
+                <span class="engine-dot @ProbeStatusCss" title="@ProbeTooltip"></span>
+                <span class="engine-label">@WorkbenchState.EngineProfile.DisplayName</span>
+                <span class="engine-endpoint">@WorkbenchState.EngineEndpoint</span>
+            </div>
         </div>
 
         <article class="content px-4">
@@ -26,3 +32,34 @@
     <a href="." class="reload">Reload</a>
     <span class="dismiss">🗙</span>
 </div>
+
+@code {
+    protected override void OnInitialized()
+    {
+        WorkbenchState.StateChanged += HandleWorkbenchStateChanged;
+    }
+
+    public void Dispose()
+    {
+        WorkbenchState.StateChanged -= HandleWorkbenchStateChanged;
+    }
+
+    private void HandleWorkbenchStateChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private string ProbeStatusCss => WorkbenchState.LastProbe switch
+    {
+        { IsSuccess: true } => "dot-connected",
+        { IsSuccess: false } => "dot-error",
+        _ => "dot-unknown",
+    };
+
+    private string ProbeTooltip => WorkbenchState.LastProbe switch
+    {
+        { IsSuccess: true } => $"Connected — {WorkbenchState.ReportedEngineInfo?.DisplayName ?? "unknown"}",
+        { IsSuccess: false } => $"Probe failed — {WorkbenchState.LastProbe.Summary}",
+        _ => "Not probed yet — visit Engine Session to connect",
+    };
+}

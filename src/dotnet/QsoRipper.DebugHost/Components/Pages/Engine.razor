@@ -1,6 +1,7 @@
 @page "/engine"
 @using QsoRipper.DebugHost.Models
 @using QsoRipper.Domain
+@using QsoRipper.EngineSelection
 @using QsoRipper.Services
 @using Microsoft.AspNetCore.Components.Forms
 @inject DebugWorkbenchState WorkbenchState
@@ -14,16 +15,25 @@
 
 <h1 class="mb-3">Engine Session</h1>
 <p class="text-muted">
-    Configure the Rust engine endpoint the debug workbench should target. The probe checks TCP reachability then performs a live gRPC call to <code>GetSyncStatus</code> to verify that the engine is actually serving the expected QsoRipper services. When the host is reachable, this page also lets you exercise setup and station-profile gRPC contracts directly without dropping to <code>grpcurl</code>.
+    Configure the engine profile and endpoint the debug workbench should target. The probe checks TCP reachability, asks the endpoint to identify its engine implementation, then performs a live <code>GetSyncStatus</code> call to verify that the expected QsoRipper services are live. When the host is reachable, this page also lets you exercise setup and station-profile gRPC contracts directly without dropping to <code>grpcurl</code>.
 </p>
 
 <EditForm Model="this" OnSubmit="SaveEndpointAsync">
     <div class="row g-3 align-items-end">
-        <div class="col-lg-8">
+        <div class="col-lg-4">
+            <label class="form-label" for="engine-profile">Engine profile</label>
+            <InputSelect id="engine-profile" class="form-select" @bind-Value="engineProfileId">
+                @foreach (var profile in localEngineProfiles)
+                {
+                    <option value="@profile.ProfileId">@profile.DisplayName (@profile.EngineId)</option>
+                }
+            </InputSelect>
+        </div>
+        <div class="col-lg-5">
             <label class="form-label" for="engine-endpoint">Engine endpoint</label>
             <InputText id="engine-endpoint" class="form-control" @bind-Value="endpoint" />
         </div>
-        <div class="col-lg-4 d-flex gap-2">
+        <div class="col-lg-3 d-flex gap-2 flex-wrap">
             <button type="submit" class="btn btn-primary">Save endpoint</button>
             <button type="button" class="btn btn-outline-primary" @onclick="ProbeAsync">Probe engine</button>
         </div>
@@ -86,14 +96,36 @@
     </div>
 }
 
+@if (WorkbenchState.ReportedEngineInfo is not null)
+{
+    <div class="card shadow-sm mt-3">
+        <div class="card-body">
+            <h2 class="h5 mb-2">Reported engine identity</h2>
+            <div><strong>Name:</strong> @WorkbenchState.ReportedEngineInfo.DisplayName</div>
+            <div><strong>Engine ID:</strong> <code>@WorkbenchState.ReportedEngineInfo.EngineId</code></div>
+            @if (!string.IsNullOrWhiteSpace(WorkbenchState.ReportedEngineInfo.Version))
+            {
+                <div><strong>Version:</strong> @WorkbenchState.ReportedEngineInfo.Version</div>
+            }
+            @if (WorkbenchState.ReportedEngineInfo.Capabilities.Count > 0)
+            {
+                <div class="mt-2">
+                    <strong>Capabilities:</strong>
+                    @string.Join(", ", WorkbenchState.ReportedEngineInfo.Capabilities)
+                </div>
+            }
+        </div>
+    </div>
+}
+
 <div class="row g-4 mt-1">
     <div class="col-xl-7">
         <div class="card shadow-sm h-100">
             <div class="card-body">
                 <h2 class="h5">Current session notes</h2>
                 <ul class="mb-0">
-                    <li>The workbench stores endpoint selection per Blazor server circuit.</li>
-                    <li>Use <code>http://127.0.0.1:50051</code> by default for local Rust gRPC development.</li>
+                    <li>The workbench stores engine selection and endpoint selection per Blazor server circuit.</li>
+                    <li>Use <code>http://127.0.0.1:50051</code> for local Rust work and <code>http://127.0.0.1:50052</code> for the managed .NET engine by default.</li>
                     <li>The setup and station-profile forms call the same gRPC contracts that <code>grpcurl</code> would use.</li>
                     <li>The lookup and storage workbench pages use this endpoint automatically.</li>
                 </ul>
@@ -333,6 +365,13 @@
                                        disabled="@isStationProfilesBusy" />
                         </div>
                         <div class="col-md-4">
+                            <label class="form-label" for="station-arrl-section">ARRL section</label>
+                            <InputText id="station-arrl-section"
+                                       class="form-control"
+                                       @bind-Value="stationProfileEditor.ArrlSection"
+                                       disabled="@isStationProfilesBusy" />
+                        </div>
+                        <div class="col-md-4">
                             <label class="form-label" for="station-dxcc">DXCC</label>
                             <InputNumber id="station-dxcc"
                                          class="form-control"
@@ -511,7 +550,7 @@
             </div>
             <div class="row g-3 mb-3">
                 <div class="col-lg-4">
-                    <strong>Persisted log file:</strong> @GetSetupLogFileSummary(setupStatus)
+                    <strong>Persistence:</strong> @GetSetupLogFileSummary(setupStatus)
                 </div>
                 <div class="col-lg-4">
                     <strong>QRZ XML:</strong>
@@ -533,7 +572,7 @@
         @if (WorkbenchState.SetupStatus?.SetupComplete == true && !isSetupExpanded)
         {
             <div class="small text-muted">
-                Bootstrap setup is complete. Expand this section if you want to inspect or edit the log file path, QRZ credentials, shared rig control settings, or the currently active persisted station profile.
+                Bootstrap setup is complete. Expand this section if you want to inspect or edit persisted storage, QRZ credentials, shared rig control settings, or the currently active persisted station profile.
             </div>
         }
         else
@@ -573,7 +612,7 @@
                     <div>
                         <h3 class="h6 mb-1">Setup editor</h3>
                         <div class="small text-muted">
-                            This form calls <code>SetupService.SaveSetup</code> to edit persisted engine-wide settings: the log file path, QRZ credentials, shared rig-control defaults, and the currently active bootstrap station profile. Use the station profile editor above to add additional profiles. If QRZ XML is enabled, the service requires both username and password on save.
+                            This form calls <code>SetupService.SaveSetup</code> to edit persisted engine-wide settings: storage bootstrap settings, QRZ credentials, shared rig-control defaults, and the currently active bootstrap station profile. Use the station profile editor above to add additional profiles. If QRZ XML is enabled, the service requires both username and password on save.
                         </div>
                     </div>
                     @if (WorkbenchState.SetupStatus?.HasQrzXmlPassword == true)
@@ -588,12 +627,42 @@
 
                     <div class="row g-3">
                         <div class="col-md-12">
-                            <label class="form-label" for="setup-log-file-path">Log file path</label>
-                            <InputText id="setup-log-file-path"
-                                       class="form-control"
-                                       @bind-Value="setupEditor.LogFilePath"
-                                       disabled="@isSetupBusy" />
-                            <ValidationMessage For="@(() => setupEditor.LogFilePath)" />
+                            <label class="form-label">@setupEditor.PersistenceLabel</label>
+                            @if (setupEditor.HasPersistenceInputs)
+                            {
+                                @foreach (var field in setupEditor.PersistenceFields)
+                                {
+                                    <div class="mb-3">
+                                        <label class="form-label">@field.Label</label>
+                                        @if (field.HasChoices)
+                                        {
+                                            <InputSelect class="form-select"
+                                                         @bind-Value="field.Value"
+                                                         disabled="@isSetupBusy">
+                                                @foreach (var allowedValue in field.AllowedValues)
+                                                {
+                                                    <option value="@allowedValue">@allowedValue</option>
+                                                }
+                                            </InputSelect>
+                                        }
+                                        else
+                                        {
+                                            <InputText class="form-control"
+                                                       @bind-Value="field.Value"
+                                                       disabled="@isSetupBusy" />
+                                        }
+
+                                        @if (!string.IsNullOrWhiteSpace(field.Description))
+                                        {
+                                            <div class="form-text">@field.Description</div>
+                                        }
+                                    </div>
+                                }
+                            }
+                            else
+                            {
+                                <div class="alert alert-secondary mb-0">@setupEditor.PersistenceDescription</div>
+                            }
                         </div>
 
                         <div class="col-md-6">
@@ -801,7 +870,12 @@
         else
         {
             <div class="mb-3">
-                <strong>Active storage:</strong> @WorkbenchState.GetStorageBackendDisplayName()<br />
+                <strong>Persistence:</strong> @WorkbenchState.GetStorageBackendDisplayName()
+                @if (!string.IsNullOrWhiteSpace(WorkbenchState.GetPersistenceLocation()))
+                {
+                    <span> using <code>@WorkbenchState.GetPersistenceLocation()</code></span>
+                }
+                <br />
                 <strong>Lookup provider:</strong> @WorkbenchState.RuntimeConfigSnapshot?.LookupProviderSummary
             </div>
 
@@ -915,11 +989,11 @@
 
 <div class="card shadow-sm mt-4">
     <div class="card-body">
-        <h2 class="h5">Rust host launch preview</h2>
+        <h2 class="h5">Local launcher preview</h2>
         <div class="small text-muted mb-2">
-            The command below matches the storage session configured in this page.
+            The command below uses the repo launcher helper for the selected engine profile. The environment block only includes explicit overrides, so the shared config file remains the default source of durable storage selection.
         </div>
-        <pre class="payload-view">@WorkbenchState.BuildRustServerCommand()</pre>
+        <pre class="payload-view">@WorkbenchState.BuildEngineLaunchCommand()</pre>
         <div class="small text-muted mt-2 mb-1">Equivalent environment</div>
         @foreach (var variable in WorkbenchState.GetEngineEnvironmentOverrides())
         {
@@ -929,6 +1003,7 @@
 </div>
 
 @code {
+    private static readonly IReadOnlyList<EngineTargetProfile> localEngineProfiles = EngineCatalog.LocalProfiles;
     private string endpoint = string.Empty;
     private string? statusMessage;
     private IReadOnlyList<ToolAvailability> tools = Array.Empty<ToolAvailability>();
@@ -936,7 +1011,7 @@
     private ProtoPayloadView? activeStationProfilePayload;
     private ProtoPayloadView? persistedStationProfilePayload;
     private ProtoPayloadView? activeStationContextPayload;
-    private SetupEditorModel setupEditor = SetupEditorModel.Create(null, @".\data\qsoripper.db");
+    private SetupEditorModel setupEditor = SetupEditorModel.Create(null, PersistenceSetup.DefaultRelativePersistencePath);
     private StationProfileEditorModel stationProfileEditor = StationProfileEditorModel.CreateEmpty();
     private EditContext setupEditContext = default!;
     private EditContext stationProfileEditContext = default!;
@@ -945,11 +1020,26 @@
     private bool isStationProfilesBusy;
     private bool isRuntimeConfigBusy;
 
+    private string engineProfileId
+    {
+        get => WorkbenchState.EngineProfile.ProfileId;
+        set
+        {
+            if (string.Equals(WorkbenchState.EngineProfile.ProfileId, value, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            WorkbenchState.UpdateEngineProfile(value);
+            endpoint = WorkbenchState.EngineEndpoint;
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         endpoint = WorkbenchState.EngineEndpoint;
         tools = ToolchainLocator.GetToolAvailability();
-        ReplaceSetupEditor(SetupEditorModel.Create(null, WorkbenchState.EngineSqlitePath));
+        ReplaceSetupEditor(SetupEditorModel.Create(null, WorkbenchState.EnginePersistenceLocation));
         ReplaceStationProfileEditor(StationProfileEditorModel.CreateEmpty());
         await Task.WhenAll(
             RefreshSetupStatusAsync(),
@@ -960,7 +1050,7 @@
     private Task SaveEndpointAsync()
     {
         WorkbenchState.UpdateEngineEndpoint(endpoint);
-        statusMessage = $"Saved engine session for '{WorkbenchState.EngineEndpoint}'.";
+        statusMessage = $"Saved {WorkbenchState.GetSelectedEngineDisplayName()} session for '{WorkbenchState.EngineEndpoint}'.";
         return Task.CompletedTask;
     }
 
@@ -995,7 +1085,7 @@
             RefreshSetupPayload();
             ReplaceSetupEditor(SetupEditorModel.Create(
                 WorkbenchState.SetupStatus,
-                WorkbenchState.EngineSqlitePath));
+                WorkbenchState.EnginePersistenceLocation));
             InitializeSetupExpansionDefault();
         }
         finally
@@ -1020,7 +1110,7 @@
             RefreshSetupPayload();
             ReplaceSetupEditor(SetupEditorModel.Create(
                 status,
-                WorkbenchState.EngineSqlitePath));
+                WorkbenchState.EnginePersistenceLocation));
             isSetupExpanded = status.SetupComplete != true;
             await RefreshStationProfilesAsync();
             await RefreshRuntimeConfigAsync();
@@ -1356,6 +1446,13 @@
 
     private static string GetSetupLogFileSummary(SetupStatus status)
     {
+        if (HasExplicitPersistenceMetadata(status) && !status.PersistenceStepEnabled)
+        {
+            return string.IsNullOrWhiteSpace(status.PersistenceDescription)
+                ? "No persisted storage input required."
+                : status.PersistenceDescription;
+        }
+
         if (!string.IsNullOrWhiteSpace(status.LogFilePath))
         {
             return status.LogFilePath;
@@ -1369,6 +1466,14 @@
         }
 
         return $"Not configured (suggested: {status.SuggestedLogFilePath})";
+    }
+
+    private static bool HasExplicitPersistenceMetadata(SetupStatus status)
+    {
+        return status.PersistenceStepEnabled
+            || !string.IsNullOrWhiteSpace(status.PersistenceLabel)
+            || !string.IsNullOrWhiteSpace(status.PersistenceDescription)
+            || status.PersistenceDefinitions.Count > 0;
     }
 
     private static string GetSetupRigControlSummary(SetupStatus status)

@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using QsoRipper.DebugHost.Models;
 using QsoRipper.DebugHost.Services;
 using QsoRipper.Domain;
+using QsoRipper.EngineSelection;
 using QsoRipper.Services;
 
 namespace QsoRipper.DebugHost.Tests;
@@ -16,14 +17,33 @@ public class DebugWorkbenchStateTests
         {
             DefaultEngineEndpoint = "http://localhost:60051",
             DefaultEngineStorageBackend = "sqlite",
-            DefaultEngineSqlitePath = @".\data\test-qsoripper.db"
+            DefaultEnginePersistenceLocation = Path.Combine(".", "data", "test-qsoripper.db")
         }));
 
         Assert.Equal("http://localhost:60051", state.EngineEndpoint);
-        Assert.Equal(EngineStorageBackend.Sqlite, state.EngineStorageBackend);
-        Assert.Equal(@".\data\test-qsoripper.db", state.EngineSqlitePath);
-        Assert.Contains("--storage sqlite", state.BuildRustServerCommand(), StringComparison.Ordinal);
-        Assert.Contains("--sqlite-path .\\data\\test-qsoripper.db", state.BuildRustServerCommand(), StringComparison.Ordinal);
+        Assert.Equal("sqlite", state.EngineStorageBackend);
+        Assert.Equal(Path.Combine(".", "data", "test-qsoripper.db"), state.EnginePersistenceLocation);
+        Assert.Contains("start-qsoripper.ps1", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Contains("-Engine local-rust", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Equal("sqlite", state.GetEngineEnvironmentOverrides()["QSORIPPER_STORAGE_BACKEND"]);
+        Assert.Equal(Path.Combine(".", "data", "test-qsoripper.db"), state.GetEngineEnvironmentOverrides()["QSORIPPER_SQLITE_PATH"]);
+    }
+
+    [Fact]
+    public void Initializes_default_launcher_preview_without_storage_overrides()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions
+        {
+            DefaultEngineEndpoint = "http://localhost:60051"
+        }));
+
+        Assert.Equal("http://localhost:60051", state.EngineEndpoint);
+        Assert.True(string.IsNullOrWhiteSpace(state.EngineStorageBackend));
+        Assert.Equal(Path.Combine(".", "data", "qsoripper.db"), state.EnginePersistenceLocation);
+        Assert.Contains("start-qsoripper.ps1", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.DoesNotContain("-Storage", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.DoesNotContain("-PersistenceLocation", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Empty(state.GetEngineEnvironmentOverrides());
     }
 
     [Fact]
@@ -32,13 +52,58 @@ public class DebugWorkbenchStateTests
         var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
 
         state.UpdateEngineEndpoint(" http://localhost:50061 ");
-        state.UpdateStorageOptions(EngineStorageBackend.Memory, "   ");
+        state.UpdateStorageOptions("memory", "   ");
 
         Assert.Equal("http://localhost:50061", state.EngineEndpoint);
-        Assert.Equal(EngineStorageBackend.Memory, state.EngineStorageBackend);
+        Assert.Equal("memory", state.EngineStorageBackend);
         Assert.Equal("memory", state.GetEngineEnvironmentOverrides()["QSORIPPER_STORAGE_BACKEND"]);
         Assert.DoesNotContain("QSORIPPER_SQLITE_PATH", state.GetEngineEnvironmentOverrides().Keys, StringComparer.Ordinal);
-        Assert.Equal("cargo run -p qsoripper-server -- --storage memory", state.BuildRustServerCommand());
+        Assert.Contains("start-qsoripper.ps1", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Update_storage_options_preserves_custom_backend_identifier()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
+
+        state.UpdateStorageOptions("file-cache", Path.Combine(".", "data", "portable-store.db"));
+
+        Assert.Equal("file-cache", state.EngineStorageBackend);
+        Assert.Equal("File Cache", state.GetStorageBackendDisplayName());
+        Assert.Equal("file-cache", state.GetEngineEnvironmentOverrides()["QSORIPPER_STORAGE_BACKEND"]);
+        Assert.Equal(Path.Combine(".", "data", "portable-store.db"), state.GetEngineEnvironmentOverrides()["QSORIPPER_SQLITE_PATH"]);
+    }
+
+    [Fact]
+    public void Initializes_dotnet_engine_defaults_from_options()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions
+        {
+            DefaultEngineProfile = "dotnet",
+            DefaultEngineEndpoint = ""
+        }));
+
+        Assert.Equal(KnownEngineProfiles.LocalDotNet, state.EngineProfile.ProfileId);
+        Assert.Equal(EngineCatalog.DefaultDotNetEndpoint, state.EngineEndpoint);
+        Assert.Contains("start-qsoripper.ps1", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Contains("-Engine local-dotnet", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Contains("-ListenAddress 127.0.0.1:50052", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.DoesNotContain("-Storage", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
+        Assert.Empty(state.GetEngineEnvironmentOverrides());
+    }
+
+    [Fact]
+    public void Update_engine_profile_swaps_default_endpoint_but_preserves_custom_endpoint()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions()));
+
+        state.UpdateEngineProfile(KnownEngineProfiles.LocalDotNet);
+        Assert.Equal(EngineCatalog.DefaultDotNetEndpoint, state.EngineEndpoint);
+
+        state.UpdateEngineEndpoint("http://localhost:61234");
+        state.UpdateEngineProfile(KnownEngineProfiles.LocalRust);
+
+        Assert.Equal("http://localhost:61234", state.EngineEndpoint);
     }
 
     [Fact]
@@ -49,6 +114,8 @@ public class DebugWorkbenchStateTests
         state.UpdateRuntimeConfig(new RuntimeConfigSnapshot
         {
             ActiveStorageBackend = "sqlite",
+            PersistenceSummary = "SQLite",
+            PersistenceLocation = Path.Combine(".", "data", "live-qsoripper.db"),
             LookupProviderSummary = "QRZ XML capture-only via https://xmldata.qrz.com/xml/current/",
             Values =
             {
@@ -62,7 +129,7 @@ public class DebugWorkbenchStateTests
                 {
                     Key = "QSORIPPER_SQLITE_PATH",
                     HasValue = true,
-                    DisplayValue = @".\data\live-qsoripper.db"
+                    DisplayValue = Path.Combine(".", "data", "live-qsoripper.db")
                 },
                 new RuntimeConfigValue
                 {
@@ -76,10 +143,10 @@ public class DebugWorkbenchStateTests
             }
         });
 
-        Assert.Equal(EngineStorageBackend.Sqlite, state.EngineStorageBackend);
-        Assert.Equal(@".\data\live-qsoripper.db", state.EngineSqlitePath);
+        Assert.Equal("sqlite", state.EngineStorageBackend);
+        Assert.Equal(Path.Combine(".", "data", "live-qsoripper.db"), state.EnginePersistenceLocation);
         Assert.Equal("<redacted>", state.GetEngineEnvironmentOverrides()["QSORIPPER_QRZ_XML_PASSWORD"]);
-        Assert.Contains("--storage sqlite", state.BuildRustServerCommand(), StringComparison.Ordinal);
+        Assert.Contains("start-qsoripper.ps1", state.BuildEngineLaunchCommand(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -120,7 +187,7 @@ public class DebugWorkbenchStateTests
 
         Assert.Equal("K7RND", state.GetEngineEnvironmentOverrides()["QSORIPPER_STATION_CALLSIGN"]);
         Assert.Equal("CN87", state.GetEngineEnvironmentOverrides()["QSORIPPER_STATION_GRID"]);
-        Assert.Equal(EngineStorageBackend.Memory, state.EngineStorageBackend);
+        Assert.Equal("memory", state.EngineStorageBackend);
     }
 
     [Fact]
@@ -146,8 +213,8 @@ public class DebugWorkbenchStateTests
 
         Assert.NotNull(state.SetupStatus);
         Assert.Null(state.SetupErrorMessage);
-        Assert.Equal(EngineStorageBackend.Sqlite, state.EngineStorageBackend);
-        Assert.Equal(@".\data\portable-qsoripper.db", state.EngineSqlitePath);
+        Assert.True(string.IsNullOrWhiteSpace(state.EngineStorageBackend));
+        Assert.Equal(@".\data\portable-qsoripper.db", state.EnginePersistenceLocation);
     }
 
     [Fact]
@@ -200,6 +267,24 @@ public class DebugWorkbenchStateTests
         Assert.Equal("home", state.StationProfileCatalog.ActiveProfileId);
         Assert.Equal("K7RND/P", state.ActiveStationContext.EffectiveActiveProfile.StationCallsign);
         Assert.True(state.ActiveStationContext.HasSessionOverride);
+    }
+
+    [Fact]
+    public async Task ProbeAsync_invalid_endpoint_updates_state_and_notifies_listeners()
+    {
+        var state = new DebugWorkbenchState(Options.Create(new DebugWorkbenchOptions
+        {
+            DefaultEngineEndpoint = "not-a-valid-uri"
+        }));
+        var notifications = 0;
+        state.StateChanged += () => notifications++;
+
+        var result = await state.ProbeAsync();
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(EngineProbeStage.InvalidEndpoint, result.Stage);
+        Assert.Same(result, state.LastProbe);
+        Assert.Equal(1, notifications);
     }
 }
 #pragma warning restore CA1707

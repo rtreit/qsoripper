@@ -2,7 +2,7 @@
 
 ## Overview
 
-QsoRipper uses **Protocol Buffers (proto3)** as the canonical schema definition for all shared domain types. Proto files are the single source of truth — Rust structs and C# classes are generated from them, ensuring zero drift between the two language runtimes.
+QsoRipper uses **Protocol Buffers (proto3)** as the canonical schema definition for all shared domain types and engine/client service contracts. Proto files are the single source of truth — Rust structs and C# classes are generated from them, keeping engine hosts and clients aligned across language boundaries.
 
 ## Why Protocol Buffers?
 
@@ -56,19 +56,16 @@ proto/
     └── ... one top-level service envelope/support type per file
 ```
 
-## Language Split
+## Engine and client split
 
 | Component | Language | Rationale |
 |---|---|---|
-| Core engine (log storage, lookup coordinator, cache, ADIF parser) | Rust | Performance-critical hot path |
-| TUI | Rust (ratatui) | Same-process access to core engine |
-| QRZ providers (XML lookup, logbook API) | Rust | Same process as coordinator for cancellation/dedup |
-| gRPC server | Rust (tonic) | Exposes core engine to other processes |
-| GUI | C# / .NET (Avalonia) | Rich cross-platform UI framework |
-| Reporting / contest analytics | C# / .NET | Strong library ecosystem |
-| gRPC client | C# (Grpc.Net.Client) | GUI calls into Rust core |
+| Rust engine host (`qsoripper-server`) | Rust | Main high-performance engine/runtime path |
+| .NET engine host (`QsoRipper.Engine.DotNet`) | C# / .NET | Second real engine implementation behind the same contracts |
+| TUI client | Rust (ratatui) | Keyboard-first client proving Rust can consume the gRPC seam too |
+| CLI / GUI / DebugHost clients | C# / .NET | Rich client and debugging surfaces on the shared contracts |
 
-**Key rule:** The Rust process is the **engine** — it owns the log database, QRZ integration, caching, and lookup orchestration. The .NET process is the **rich client** — it consumes the gRPC API.
+**Key rule:** the protobuf/gRPC contract is the stable core. Any process that implements it can be an engine host, and any process that consumes it can be a client. Rust is no longer "the engine" as an architectural requirement; it is one engine implementation in the current repository.
 
 ## Core Domain Types
 
@@ -126,7 +123,7 @@ Includes: state enum, optional CallsignRecord, cache_hit flag, lookup_latency_ms
 The app-facing lookup interface from the architecture diagram:
 
 ```
-TUI/GUI → LookupService → LookupCoordinator → CallsignProvider → QrzProvider
+Client → LookupService → Engine-specific lookup coordinator/provider chain
 ```
 
 Key RPCs:
@@ -136,7 +133,7 @@ Key RPCs:
 - `GetDxccEntity` — DXCC entity lookup
 - `BatchLookup` — contest prefetch
 
-Each RPC returns a unique service envelope such as `LookupResponse`, `StreamLookupResponse`, or `GetCachedCallsignResponse`. Shared payloads like `LookupResult` stay nested inside those envelopes so each RPC can evolve independently.
+Each RPC returns a unique service envelope such as `LookupResponse`, `StreamLookupResponse`, or `GetCachedCallsignResponse`. Shared payloads like `LookupResult` stay nested inside those envelopes so each RPC can evolve independently. Current built-in engine hosts implement the unary/stream/cache lookup slice and advertise those capabilities explicitly; DXCC and batch lookup remain reserved for later expansion.
 
 ### LogbookService
 
@@ -157,7 +154,7 @@ ADIF (Amateur Data Interchange Format) is used exclusively for:
 2. **File import/export** — standard `.adi` files from other logging programs
 3. **Contest log submission** — Cabrillo/ADIF export
 
-ADIF is **never** used for internal IPC. The Rust-side ADIF parser converts to/from proto QsoRecord at the edge.
+ADIF is **never** used for internal IPC. Engine-specific ADIF adapters convert to/from proto `QsoRecord` at the edge.
 
 ### ADIF Round-Trip Strategy
 

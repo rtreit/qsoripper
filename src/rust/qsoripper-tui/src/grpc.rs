@@ -49,6 +49,11 @@ pub(crate) async fn log_qso(
     let (mode, submode) = resolve_mode(mode_str);
 
     let utc_timestamp = parse_timestamp(&form.date, &form.time).ok();
+    let utc_end_timestamp = if form.time_off.is_empty() {
+        None
+    } else {
+        parse_timestamp(&form.date, &form.time_off).ok()
+    };
 
     let frequency_khz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_khz);
 
@@ -60,6 +65,7 @@ pub(crate) async fn log_qso(
         band: i32::from(band),
         mode: i32::from(mode),
         utc_timestamp,
+        utc_end_timestamp,
         frequency_khz,
         submode: if form.submode_override.is_empty() {
             submode.map(str::to_string)
@@ -145,16 +151,17 @@ pub(crate) async fn list_recent_qsos(
             .unwrap_or_default();
 
         result.push(RecentQso {
-            local_id: qso.local_id,
+            local_id: qso.local_id.clone(),
             utc,
-            callsign: qso.worked_callsign,
+            callsign: qso.worked_callsign.clone(),
             band,
             mode,
             rst_sent,
             rst_rcvd,
-            country: qso.worked_country,
-            grid: qso.worked_grid,
-            name: qso.worked_operator_name,
+            country: qso.worked_country.clone(),
+            grid: qso.worked_grid.clone(),
+            name: qso.worked_operator_name.clone(),
+            source_record: qso,
         });
     }
 
@@ -200,7 +207,12 @@ pub(crate) async fn lookup_callsign(
     Ok(Some(CallsignInfo {
         callsign: record.callsign,
         name,
-        qth: record.addr2,
+        qth: match (record.addr2.as_deref(), record.state.as_deref()) {
+            (Some(city), Some(st)) if !st.is_empty() => Some(format!("{city}, {st}")),
+            (Some(city), _) => Some(city.to_string()),
+            (None, Some(st)) if !st.is_empty() => Some(st.to_string()),
+            _ => None,
+        },
         grid: record.grid_square,
         country: record.country,
         cq_zone: record.cq_zone,
@@ -289,11 +301,16 @@ pub(crate) async fn get_rig_snapshot(channel: Channel) -> anyhow::Result<Option<
 }
 
 /// Update an existing QSO record identified by `local_id` with data from the form.
+///
+/// `base` is the original `QsoRecord` loaded during editing. When present, form values
+/// are overlaid on the clone so that non-form fields (QSL status, metadata, extra ADIF
+/// fields, etc.) are preserved.  When `None`, falls back to a default record.
 pub(crate) async fn update_qso(
     channel: Channel,
     local_id: &str,
     form: &LogForm,
     lookup: LookupEnrichment,
+    base: Option<qsoripper_core::proto::qsoripper::domain::QsoRecord>,
 ) -> anyhow::Result<()> {
     let mut client = LogbookServiceClient::new(channel);
 
@@ -306,41 +323,54 @@ pub(crate) async fn update_qso(
     let (mode, submode) = resolve_mode(mode_str);
 
     let utc_timestamp = parse_timestamp(&form.date, &form.time).ok();
+    let utc_end_timestamp = if form.time_off.is_empty() {
+        None
+    } else {
+        parse_timestamp(&form.date, &form.time_off).ok()
+    };
     let frequency_khz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_khz);
 
     let (worked_grid, worked_country, worked_cq_zone, worked_dxcc) =
         lookup.unwrap_or((None, None, None, None));
 
-    let qso = qsoripper_core::proto::qsoripper::domain::QsoRecord {
-        local_id: local_id.to_string(),
-        worked_callsign: form.callsign.to_uppercase(),
-        band: i32::from(band),
-        mode: i32::from(mode),
-        utc_timestamp,
-        frequency_khz,
-        submode: if form.submode_override.is_empty() {
-            submode.map(str::to_string)
-        } else {
-            Some(form.submode_override.clone())
-        },
-        rst_sent: parse_rst(&form.rst_sent),
-        rst_received: parse_rst(&form.rst_rcvd),
-        comment: opt_string(&form.comment),
-        notes: opt_string(&form.notes),
-        tx_power: opt_string(&form.tx_power),
-        contest_id: opt_string(&form.contest_id),
-        serial_sent: opt_string(&form.serial_sent),
-        serial_received: opt_string(&form.serial_rcvd),
-        exchange_sent: opt_string(&form.exchange_sent),
-        exchange_received: opt_string(&form.exchange_rcvd),
-        worked_grid,
-        worked_country,
-        worked_cq_zone,
-        worked_dxcc,
-        worked_operator_name: opt_string(&form.worked_name),
-        skcc: opt_string(&form.skcc),
-        ..Default::default()
+    // Start from the original record to preserve non-form fields, then overlay
+    // every field that the edit form controls.
+    let mut qso = base.unwrap_or_default();
+    qso.local_id = local_id.to_string();
+    qso.worked_callsign = form.callsign.to_uppercase();
+    qso.band = i32::from(band);
+    qso.mode = i32::from(mode);
+    qso.utc_timestamp = utc_timestamp;
+    qso.utc_end_timestamp = utc_end_timestamp;
+    qso.frequency_khz = frequency_khz;
+    qso.submode = if form.submode_override.is_empty() {
+        submode.map(str::to_string)
+    } else {
+        Some(form.submode_override.clone())
     };
+    qso.rst_sent = parse_rst(&form.rst_sent);
+    qso.rst_received = parse_rst(&form.rst_rcvd);
+    qso.comment = opt_string(&form.comment);
+    qso.notes = opt_string(&form.notes);
+    qso.tx_power = opt_string(&form.tx_power);
+    qso.contest_id = opt_string(&form.contest_id);
+    qso.serial_sent = opt_string(&form.serial_sent);
+    qso.serial_received = opt_string(&form.serial_rcvd);
+    qso.exchange_sent = opt_string(&form.exchange_sent);
+    qso.exchange_received = opt_string(&form.exchange_rcvd);
+    qso.worked_grid = worked_grid;
+    qso.worked_country = worked_country;
+    qso.worked_cq_zone = worked_cq_zone;
+    qso.worked_dxcc = worked_dxcc;
+    qso.worked_operator_name = opt_string(&form.worked_name);
+    qso.worked_iota = opt_string(&form.iota);
+    qso.worked_arrl_section = opt_string(&form.arrl_section);
+    qso.worked_state = opt_string(&form.worked_state);
+    qso.worked_county = opt_string(&form.worked_county);
+    qso.skcc = opt_string(&form.skcc);
+    qso.prop_mode = opt_string(&form.prop_mode);
+    qso.sat_name = opt_string(&form.sat_name);
+    qso.sat_mode = opt_string(&form.sat_mode);
 
     client
         .update_qso(UpdateQsoRequest {

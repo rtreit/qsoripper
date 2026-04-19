@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -17,6 +18,7 @@ namespace QsoRipper.Gui.Views;
 internal sealed partial class MainWindow : Window
 {
     private readonly RecentQsoGridLayoutStore _gridLayoutStore = new();
+    private readonly UiPreferencesStore _preferencesStore = new();
     private readonly MenuItem? _fileMenuItem;
     private readonly TextBox? _recentQsoSearchBox;
     private readonly DataGrid? _recentQsoGrid;
@@ -27,6 +29,7 @@ internal sealed partial class MainWindow : Window
     private MainWindowViewModel? _viewModel;
     private bool _gridLayoutApplied;
     private bool _menuAccessKeysPrimed;
+    private bool _loggedFirstRecentQsoRow;
     private Dictionary<RecentQsoGridColumn, DataGridColumn> _columnMap = [];
     internal bool IsInspectionMode { get; set; }
 
@@ -52,21 +55,31 @@ internal sealed partial class MainWindow : Window
     protected override async void OnOpened(EventArgs e)
     {
         base.OnOpened(e);
+        GuiPerformanceTrace.Write(nameof(OnOpened) + ".start");
         ClampToCurrentScreen();
         if (!IsInspectionMode)
         {
-            PrimeMenuAccessKeys();
+            GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterScheduleMenuAccessKeys");
             ApplyPersistedGridLayout();
+            GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPersistedGridLayout");
             if (DataContext is MainWindowViewModel vm)
             {
+                vm.ApplyPreferences(_preferencesStore.Load());
+                GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterApplyPreferences");
                 await vm.CheckFirstRunAsync();
+                GuiPerformanceTrace.Write(nameof(OnOpened) + ".afterCheckFirstRun");
             }
+
+            Dispatcher.UIThread.Post(PrimeMenuAccessKeys, DispatcherPriority.Background);
         }
+
+        EnsureColumnHeadersFit();
     }
 
     protected override void OnClosed(EventArgs e)
     {
         SaveGridLayout();
+        SavePreferences();
 
         if (_viewModel is not null)
         {
@@ -75,6 +88,7 @@ internal sealed partial class MainWindow : Window
             _viewModel.GridFocusRequested -= OnGridFocusRequested;
             _viewModel.SettingsRequested -= OnSettingsRequested;
             _viewModel.LoggerFocusRequested -= OnLoggerFocusRequested;
+            _viewModel.ColumnLayoutResetRequested -= OnColumnLayoutResetRequested;
             UnsubscribeColumnOptions(_viewModel.RecentQsos);
             _viewModel = null;
         }
@@ -113,6 +127,14 @@ internal sealed partial class MainWindow : Window
         }
 
         if (HandleRecentQsoGridKeyDown(e))
+        {
+            return;
+        }
+
+        // Global navigation keys — handled explicitly so they work even when
+        // focus is inside a TextBox (e.g. the QSO logger fields) where the
+        // XAML KeyBinding may not fire reliably.
+        if (TryHandleGlobalNavigationKey(e))
         {
             return;
         }
@@ -277,6 +299,28 @@ internal sealed partial class MainWindow : Window
         return false;
     }
 
+    private bool TryHandleGlobalNavigationKey(KeyEventArgs e)
+    {
+        if (_viewModel is null || e.KeyModifiers != KeyModifiers.None)
+        {
+            return false;
+        }
+
+        switch (e.Key)
+        {
+            case Key.F3:
+                _viewModel.FocusGridCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            case Key.F4:
+                _viewModel.FocusSearchCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private bool TryHandleRecentQsoZoomKey(KeyEventArgs e)
     {
         if (_viewModel is null || !e.KeyModifiers.HasFlag(KeyModifiers.Control))
@@ -342,6 +386,7 @@ internal sealed partial class MainWindow : Window
             _viewModel.GridFocusRequested -= OnGridFocusRequested;
             _viewModel.SettingsRequested -= OnSettingsRequested;
             _viewModel.LoggerFocusRequested -= OnLoggerFocusRequested;
+            _viewModel.ColumnLayoutResetRequested -= OnColumnLayoutResetRequested;
             UnsubscribeColumnOptions(_viewModel.RecentQsos);
         }
 
@@ -353,6 +398,7 @@ internal sealed partial class MainWindow : Window
             _viewModel.GridFocusRequested += OnGridFocusRequested;
             _viewModel.SettingsRequested += OnSettingsRequested;
             _viewModel.LoggerFocusRequested += OnLoggerFocusRequested;
+            _viewModel.ColumnLayoutResetRequested += OnColumnLayoutResetRequested;
             SubscribeColumnOptions(_viewModel.RecentQsos);
             ApplyDefaultColumnVisibility();
             WireLoggerFocusTracking();
@@ -370,7 +416,24 @@ internal sealed partial class MainWindow : Window
 
     private void OnGridFocusRequested(object? sender, EventArgs e)
     {
-        _recentQsoGrid?.Focus();
+        if (_recentQsoGrid is null)
+        {
+            return;
+        }
+
+        // Defer focus so the current key event finishes processing first —
+        // synchronous Focus() during a KeyBinding handler doesn't reliably
+        // move focus away from the active TextBox.
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                _recentQsoGrid.Focus();
+                if (_recentQsoGrid.SelectedIndex < 0 && _viewModel?.RecentQsos.VisibleItems.Count > 0)
+                {
+                    _recentQsoGrid.SelectedIndex = 0;
+                }
+            },
+            DispatcherPriority.Input);
     }
 
     private async void OnSettingsRequested(object? sender, EventArgs e)
@@ -482,6 +545,12 @@ internal sealed partial class MainWindow : Window
 
         var dialog = new SettingsView { DataContext = settingsVm };
         await dialog.ShowDialog(this);
+        if (settingsVm.DidSave)
+        {
+            _viewModel.ApplySettingsUiPreferences(settingsVm.IsSpaceWeatherVisible);
+            SavePreferences();
+        }
+
         await _viewModel.OnSettingsClosedAsync(settingsVm.DidSave);
     }
     private void CommitAndSaveGridEdits()
@@ -539,6 +608,13 @@ internal sealed partial class MainWindow : Window
         if (e.Row.DataContext is RecentQsoItemViewModel item)
         {
             e.Row.Background = item.ContinentBrush;
+            if (!_loggedFirstRecentQsoRow)
+            {
+                _loggedFirstRecentQsoRow = true;
+                GuiPerformanceTrace.Write(
+                    nameof(OnRecentQsoGridLoadingRow) + ".firstRow",
+                    $"callsign={item.WorkedCallsign}; utc={item.UtcDisplay}");
+            }
         }
     }
 
@@ -715,6 +791,89 @@ internal sealed partial class MainWindow : Window
         _gridLayoutStore.Save(state);
     }
 
+    private void SavePreferences()
+    {
+        if (IsInspectionMode || _viewModel is null)
+        {
+            return;
+        }
+
+        _preferencesStore.Save(_viewModel.CapturePreferences());
+    }
+
+    private void OnColumnLayoutResetRequested(object? sender, EventArgs e)
+    {
+        ResetGridLayout();
+    }
+
+    private void ResetGridLayout()
+    {
+        if (_viewModel is null || _recentQsoGrid is null || _columnMap.Count == 0)
+        {
+            return;
+        }
+
+        // Reset display indices to XAML declaration order.
+        var xamlOrder = 0;
+        foreach (var column in _recentQsoGrid.Columns)
+        {
+            column.DisplayIndex = xamlOrder++;
+        }
+
+        // Reset visibility and widths to defaults.
+        _viewModel.RecentQsos.ResetColumnOptions();
+        ApplyDefaultColumnVisibility();
+
+        // Delete the persisted file so a fresh save captures clean state.
+        _gridLayoutStore.Delete();
+        _gridLayoutApplied = false;
+
+        _recentQsoGrid.Focus();
+    }
+
+    /// <summary>
+    /// Measures each column's header text at runtime and ensures both MinWidth
+    /// and current Width are large enough to display the full header label at
+    /// any DPI, font, or theme configuration. Accounts for sort-indicator glyph
+    /// and cell padding overhead inside the DataGridColumnHeader.
+    /// </summary>
+    private void EnsureColumnHeadersFit()
+    {
+        if (_recentQsoGrid is null)
+        {
+            return;
+        }
+
+        // Sort glyph MinWidth (~32px from Fluent theme) + cell padding (2+2=4px)
+        const double headerOverhead = 36;
+
+        foreach (var column in _recentQsoGrid.Columns)
+        {
+            if (column.Header is not string headerText || string.IsNullOrEmpty(headerText))
+            {
+                continue;
+            }
+
+            var measure = new TextBlock
+            {
+                Text = headerText,
+                FontWeight = FontWeight.SemiBold,
+            };
+            measure.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            double requiredWidth = Math.Ceiling(measure.DesiredSize.Width + headerOverhead);
+
+            if (column.MinWidth < requiredWidth)
+            {
+                column.MinWidth = requiredWidth;
+            }
+
+            if (!column.Width.IsStar && column.Width.Value < requiredWidth)
+            {
+                column.Width = new DataGridLength(requiredWidth);
+            }
+        }
+    }
+
     private static bool HandleZoomAction(Action handler, KeyEventArgs e)
     {
         handler();
@@ -750,6 +909,7 @@ internal sealed partial class MainWindow : Window
         }
 
         // Digit shortcuts: 1-9 select a sort column, 0 reverses direction.
+        // Letter shortcuts A-G select additional columns.
         RecentQsoSortColumn? column = e.Key switch
         {
             Key.D1 or Key.NumPad1 => RecentQsoSortColumn.Utc,
@@ -761,6 +921,13 @@ internal sealed partial class MainWindow : Window
             Key.D7 or Key.NumPad7 => RecentQsoSortColumn.Country,
             Key.D8 or Key.NumPad8 => RecentQsoSortColumn.Contest,
             Key.D9 or Key.NumPad9 => RecentQsoSortColumn.Note,
+            Key.A => RecentQsoSortColumn.Comment,
+            Key.B => RecentQsoSortColumn.Grid,
+            Key.C => RecentQsoSortColumn.RstSent,
+            Key.D => RecentQsoSortColumn.RstReceived,
+            Key.E => RecentQsoSortColumn.Name,
+            Key.F => RecentQsoSortColumn.Station,
+            Key.G => RecentQsoSortColumn.Exchange,
             _ => null
         };
 

@@ -21,6 +21,7 @@ use tonic::{Request, Response, Status};
 use qsoripper_core::proto::qsoripper::domain::{Band, ConflictPolicy, Mode};
 use qsoripper_core::proto::qsoripper::services::{
     developer_control_service_server::{DeveloperControlService, DeveloperControlServiceServer},
+    engine_service_server::{EngineService, EngineServiceServer},
     logbook_service_server::{LogbookService, LogbookServiceServer},
     lookup_service_server::{LookupService, LookupServiceServer},
     rig_control_service_server::{RigControlService, RigControlServiceServer},
@@ -28,17 +29,18 @@ use qsoripper_core::proto::qsoripper::services::{
     space_weather_service_server::{SpaceWeatherService, SpaceWeatherServiceServer},
     station_profile_service_server::StationProfileServiceServer,
     AdifChunk, ApplyRuntimeConfigRequest, ApplyRuntimeConfigResponse, BatchLookupRequest,
-    BatchLookupResponse, DeleteQsoRequest, DeleteQsoResponse, ExportAdifRequest,
+    BatchLookupResponse, DeleteQsoRequest, DeleteQsoResponse, EngineInfo, ExportAdifRequest,
     ExportAdifResponse, GetCachedCallsignRequest, GetCachedCallsignResponse,
     GetCurrentSpaceWeatherRequest, GetCurrentSpaceWeatherResponse, GetDxccEntityRequest,
-    GetDxccEntityResponse, GetQsoRequest, GetQsoResponse, GetRigSnapshotRequest,
-    GetRigSnapshotResponse, GetRigStatusRequest, GetRigStatusResponse, GetRuntimeConfigRequest,
-    GetRuntimeConfigResponse, GetSyncStatusRequest, GetSyncStatusResponse, ImportAdifRequest,
-    ImportAdifResponse, ListQsosRequest, ListQsosResponse, LogQsoRequest, LogQsoResponse,
-    LookupRequest, LookupResponse, QsoSortOrder as ProtoQsoSortOrder, RefreshSpaceWeatherRequest,
-    RefreshSpaceWeatherResponse, ResetRuntimeConfigRequest, ResetRuntimeConfigResponse,
-    StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse,
-    TestRigConnectionRequest, TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
+    GetDxccEntityResponse, GetEngineInfoRequest, GetEngineInfoResponse, GetQsoRequest,
+    GetQsoResponse, GetRigSnapshotRequest, GetRigSnapshotResponse, GetRigStatusRequest,
+    GetRigStatusResponse, GetRuntimeConfigRequest, GetRuntimeConfigResponse, GetSyncStatusRequest,
+    GetSyncStatusResponse, ImportAdifRequest, ImportAdifResponse, ListQsosRequest,
+    ListQsosResponse, LogQsoRequest, LogQsoResponse, LookupRequest, LookupResponse,
+    QsoSortOrder as ProtoQsoSortOrder, RefreshSpaceWeatherRequest, RefreshSpaceWeatherResponse,
+    ResetRuntimeConfigRequest, ResetRuntimeConfigResponse, StreamLookupRequest,
+    StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse, TestRigConnectionRequest,
+    TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
 };
 use qsoripper_core::rig_control::{
     RigControlProvider, RigctldConfig, RigctldProvider, DEFAULT_RIGCTLD_HOST, DEFAULT_RIGCTLD_PORT,
@@ -78,6 +80,7 @@ where
     let logbook_service =
         DeveloperLogbookService::new(runtime_config.clone(), sync_scheduler.clone());
     let lookup_service = DeveloperLookupService::new(runtime_config.clone());
+    let engine_service = EngineControlSurface;
     let developer_control_service = DeveloperControlSurface::new(runtime_config.clone());
     let setup_service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
     let station_profile_service =
@@ -114,6 +117,7 @@ where
 
     let (shutdown_sender, shutdown_receiver) = tokio::sync::oneshot::channel::<()>();
     let server = Server::builder()
+        .add_service(EngineServiceServer::new(engine_service))
         .add_service(LogbookServiceServer::new(logbook_service))
         .add_service(LookupServiceServer::new(lookup_service))
         .add_service(SetupServiceServer::new(setup_service))
@@ -279,6 +283,37 @@ impl DeveloperLogbookService {
             sync_scheduler,
         }
     }
+
+    /// Build a QRZ logbook client from the current runtime configuration.
+    /// Returns a human-readable error string on failure (suitable for gRPC
+    /// response fields, not `Status`).
+    async fn build_qrz_logbook_client(
+        &self,
+    ) -> Result<qsoripper_core::qrz_logbook::QrzLogbookClient, String> {
+        let effective = self.runtime_config.effective_values().await;
+
+        let api_key = effective
+            .get(runtime_config::QRZ_LOGBOOK_API_KEY_ENV_VAR)
+            .cloned()
+            .unwrap_or_default();
+        if api_key.trim().is_empty() {
+            return Err("QRZ Logbook API key is not configured.".into());
+        }
+
+        let base_url = effective
+            .get(runtime_config::QRZ_LOGBOOK_BASE_URL_ENV_VAR)
+            .cloned()
+            .unwrap_or_else(|| runtime_config::DEFAULT_QRZ_LOGBOOK_BASE_URL.to_string());
+
+        let config = qsoripper_core::qrz_logbook::QrzLogbookConfig::new(
+            api_key,
+            base_url,
+            "QsoRipper/1.0".to_string(),
+        );
+
+        qsoripper_core::qrz_logbook::QrzLogbookClient::new(config)
+            .map_err(|err| format!("Failed to create QRZ logbook client: {err}"))
+    }
 }
 
 #[tonic::async_trait]
@@ -336,12 +371,41 @@ impl LogbookService for DeveloperLogbookService {
     ) -> Result<Response<DeleteQsoResponse>, Status> {
         let engine = self.runtime_config.logbook_engine().await;
         let request = request.into_inner();
+
+        // When the caller requests QRZ deletion, look up the QSO first so we
+        // can grab the qrz_logid before removing the local row.
+        let (qrz_delete_success, qrz_delete_error) = if request.delete_from_qrz {
+            match engine.get_qso(&request.local_id).await {
+                Ok(qso) => match qso.qrz_logid.as_deref() {
+                    Some(logid) if !logid.is_empty() => {
+                        match self.build_qrz_logbook_client().await {
+                            Ok(client) => match client.delete_qso(logid).await {
+                                Ok(()) => (true, None),
+                                Err(err) => (false, Some(format!("QRZ delete failed: {err}"))),
+                            },
+                            Err(err) => (false, Some(err)),
+                        }
+                    }
+                    _ => (
+                        false,
+                        Some("QSO has no QRZ logid — it may not have been synced yet.".into()),
+                    ),
+                },
+                Err(_) => (
+                    false,
+                    Some("Could not look up QSO to retrieve QRZ logid.".into()),
+                ),
+            }
+        } else {
+            (true, None)
+        };
+
+        // Always delete locally, even if the QRZ delete failed — the user
+        // explicitly asked to remove it from the local logbook.
         engine
             .delete_qso(&request.local_id)
             .await
             .map_err(map_logbook_error)?;
-        let (qrz_delete_success, qrz_delete_error) =
-            sync_result(request.delete_from_qrz, "QRZ delete");
 
         Ok(Response::new(DeleteQsoResponse {
             success: true,
@@ -393,33 +457,13 @@ impl LogbookService for DeveloperLogbookService {
         request: Request<SyncWithQrzRequest>,
     ) -> Result<Response<Self::SyncWithQrzStream>, Status> {
         let request = request.into_inner();
+
+        let client = self
+            .build_qrz_logbook_client()
+            .await
+            .map_err(Status::failed_precondition)?;
+
         let effective = self.runtime_config.effective_values().await;
-
-        let api_key = effective
-            .get(runtime_config::QRZ_LOGBOOK_API_KEY_ENV_VAR)
-            .cloned()
-            .unwrap_or_default();
-        if api_key.trim().is_empty() {
-            return Err(Status::failed_precondition(
-                "QRZ Logbook API key is not configured. Set it via setup or runtime config.",
-            ));
-        }
-
-        let base_url = effective
-            .get(runtime_config::QRZ_LOGBOOK_BASE_URL_ENV_VAR)
-            .cloned()
-            .unwrap_or_else(|| runtime_config::DEFAULT_QRZ_LOGBOOK_BASE_URL.to_string());
-
-        let config = qsoripper_core::qrz_logbook::QrzLogbookConfig::new(
-            api_key,
-            base_url,
-            "QsoRipper/1.0".to_string(),
-        );
-
-        let client = qsoripper_core::qrz_logbook::QrzLogbookClient::new(config).map_err(|err| {
-            Status::internal(format!("Failed to create QRZ logbook client: {err}"))
-        })?;
-
         let conflict_policy = match effective
             .get(runtime_config::SYNC_CONFLICT_POLICY_ENV_VAR)
             .map(String::as_str)
@@ -626,6 +670,44 @@ struct DeveloperControlSurface {
 impl DeveloperControlSurface {
     fn new(runtime_config: Arc<RuntimeConfigManager>) -> Self {
         Self { runtime_config }
+    }
+}
+
+const RUST_ENGINE_ID: &str = "rust-tonic";
+const RUST_ENGINE_DISPLAY_NAME: &str = "QsoRipper Rust Engine";
+const RUST_ENGINE_CAPABILITIES: &[&str] = &[
+    "engine-info",
+    "logbook",
+    "lookup-cache",
+    "lookup-callsign",
+    "lookup-stream",
+    "setup",
+    "station-profiles",
+    "runtime-config",
+    "rig-control",
+    "space-weather",
+];
+
+#[derive(Debug, Default)]
+struct EngineControlSurface;
+
+#[tonic::async_trait]
+impl EngineService for EngineControlSurface {
+    async fn get_engine_info(
+        &self,
+        _request: Request<GetEngineInfoRequest>,
+    ) -> Result<Response<GetEngineInfoResponse>, Status> {
+        Ok(Response::new(GetEngineInfoResponse {
+            engine: Some(EngineInfo {
+                engine_id: RUST_ENGINE_ID.to_string(),
+                display_name: RUST_ENGINE_DISPLAY_NAME.to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                capabilities: RUST_ENGINE_CAPABILITIES
+                    .iter()
+                    .map(|value| (*value).to_string())
+                    .collect(),
+            }),
+        }))
     }
 }
 
