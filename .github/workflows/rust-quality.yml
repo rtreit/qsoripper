@@ -67,6 +67,7 @@ jobs:
           cargo llvm-cov \
             --manifest-path src/rust/Cargo.toml \
             --workspace \
+            --exclude qsoripper-ffi \
             --exclude qsoripper-stress \
             --exclude qsoripper-stress-tui \
             --lcov \
@@ -76,7 +77,7 @@ jobs:
         run: |
           cargo llvm-cov report \
             --manifest-path src/rust/Cargo.toml \
-            --ignore-filename-regex "qsoripper-stress" \
+            --ignore-filename-regex "qsoripper-(stress|ffi)" \
             --json \
             --summary-only \
             --output-path rust-coverage-summary.json

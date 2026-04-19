@@ -102,6 +102,22 @@ function Build-Rust {
         Copy-Item -Path $stressTuiSrc -Destination $StressTuiPublishDir -Force
         Write-Host "  -> $StressTuiPublishDir"
     }
+
+    # Publish qsoripper-ffi DLL and import library (Windows only)
+    if ($IsWindows) {
+        $ffiDll = Join-Path $PSScriptRoot 'src' 'rust' 'target' $RustTargetProfile 'qsoripper_ffi.dll'
+        $ffiLib = Join-Path $PSScriptRoot 'src' 'rust' 'target' $RustTargetProfile 'qsoripper_ffi.dll.lib'
+        if (Test-Path $ffiDll) {
+            Write-Step "Publishing qsoripper-ffi ($Configuration)"
+            $ffiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-ffi' | Join-Path -ChildPath $Configuration
+            $null = New-Item -ItemType Directory -Force -Path $ffiPublishDir
+            Copy-Item -Path $ffiDll -Destination $ffiPublishDir -Force
+            if (Test-Path $ffiLib) {
+                Copy-Item -Path $ffiLib -Destination $ffiPublishDir -Force
+            }
+            Write-Host "  -> $ffiPublishDir"
+        }
+    }
 }
 
 function Find-VcVarsAll {
@@ -208,6 +224,15 @@ function Build-Win32 {
         return
     }
 
+    # Verify FFI library is available (built by Build-Rust) — optional with dynamic loading
+    $ffiLibDir = Join-Path $PSScriptRoot 'src' 'rust' 'target' $RustTargetProfile
+    $ffiDll    = Join-Path $ffiLibDir 'qsoripper_ffi.dll'
+    $ffiInclude = Join-Path $Win32SourceDir 'include'
+
+    if (-not (Test-Path $ffiDll)) {
+        Write-Host "FFI DLL not found at $ffiDll — Win32 app will run in CLI-only mode." -ForegroundColor Yellow
+    }
+
     # cppcheck static analysis — fails the build on error-severity findings
     Write-Step 'Win32 static analysis (cppcheck, optional)'
     $cppcheckExe = Get-Command cppcheck -ErrorAction SilentlyContinue
@@ -239,7 +264,7 @@ function Build-Win32 {
     @"
 @echo off
 call "$vcvars" $arch >nul 2>&1
-cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE "$Win32Source" /Fe:"$exe" /link user32.lib gdi32.lib shell32.lib comctl32.lib
+cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" "$Win32Source" /Fe:"$exe" /link user32.lib gdi32.lib shell32.lib comctl32.lib
 "@ | Set-Content -LiteralPath $buildScript -Encoding ASCII
 
     Push-Location $Win32PublishDir
@@ -252,6 +277,11 @@ cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE "$Win32Source" /Fe:"$exe" /li
     }
     finally {
         Pop-Location
+    }
+
+    # Copy FFI DLL alongside the win32 executable
+    if (Test-Path $ffiDll) {
+        Copy-Item -Path $ffiDll -Destination $Win32PublishDir -Force
     }
 
     # Clean intermediate files

@@ -16,6 +16,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <stdint.h>
+#include "qsoripper_ffi.h"
 
 /* ── Compile-time settings ─────────────────────────────────────────────── */
 
@@ -294,15 +296,59 @@ typedef struct {
     /* GDI objects */
     HFONT hFont;
     HFONT hFontBold;
+    HFONT hFontMed;
+    HFONT hFontMedBold;
     HFONT hFontSmall;
     HFONT hFontSmallBold;
     int char_w, char_h;
+    int med_cw, med_ch;
     int list_cw, list_ch;
 
     HWND hwnd;
 } AppState;
 
 static AppState g_state;
+
+/* ── Backend mode ──────────────────────────────────────────────────────── */
+
+enum BackendMode { BACKEND_CLI, BACKEND_FFI };
+
+/* Function pointer types for dynamically loaded FFI functions */
+typedef struct QsrClient *(*fn_qsr_connect)(const char *);
+typedef void (*fn_qsr_disconnect)(struct QsrClient *);
+typedef const char *(*fn_qsr_last_error)(void);
+typedef int32_t (*fn_qsr_log_qso)(struct QsrClient *, const struct QsrLogQsoRequest *, struct QsrLogQsoResult *);
+typedef int32_t (*fn_qsr_update_qso)(struct QsrClient *, const struct QsrUpdateQsoRequest *);
+typedef int32_t (*fn_qsr_get_qso)(struct QsrClient *, const char *, struct QsrQsoDetail *);
+typedef int32_t (*fn_qsr_delete_qso)(struct QsrClient *, const char *);
+typedef int32_t (*fn_qsr_list_qsos)(struct QsrClient *, struct QsrQsoList *);
+typedef void (*fn_qsr_free_qso_list)(struct QsrQsoList *);
+typedef int32_t (*fn_qsr_lookup)(struct QsrClient *, const char *, struct QsrLookupResult *);
+typedef int32_t (*fn_qsr_get_rig_status)(struct QsrClient *, struct QsrRigStatus *);
+typedef int32_t (*fn_qsr_get_space_weather)(struct QsrClient *, struct QsrSpaceWeather *);
+
+static struct {
+    enum BackendMode mode;
+
+    /* FFI state */
+    HMODULE           ffi_dll;
+    struct QsrClient *ffi_client;
+    fn_qsr_connect          pf_connect;
+    fn_qsr_disconnect       pf_disconnect;
+    fn_qsr_last_error       pf_last_error;
+    fn_qsr_log_qso          pf_log_qso;
+    fn_qsr_update_qso       pf_update_qso;
+    fn_qsr_get_qso          pf_get_qso;
+    fn_qsr_delete_qso       pf_delete_qso;
+    fn_qsr_list_qsos        pf_list_qsos;
+    fn_qsr_free_qso_list    pf_free_qso_list;
+    fn_qsr_lookup            pf_lookup;
+    fn_qsr_get_rig_status   pf_get_rig_status;
+    fn_qsr_get_space_weather pf_get_space_weather;
+
+    /* CLI state */
+    char cli_path[MAX_PATH];
+} g_backend;
 
 /* ── Forward declarations ──────────────────────────────────────────────── */
 
@@ -321,8 +367,9 @@ static void FetchSpaceWeather(void);
 static void LoadSelectedQso(void);
 static void DeleteSelectedQso(void);
 static int  PaintAdvancedForm(HDC hdc, int y_start, int w);
+static void InitBackend(void);
+static void ShutdownBackend(void);
 
-static char *RunQrCommand(const char *args);
 static char *FieldBuffer(enum Field f);
 static int   FieldMaxLen(enum Field f);
 static void  DrawField(HDC, int, int, int, const char *, int, int, int, int);
@@ -348,33 +395,56 @@ static void safe_strcat(char *dst, size_t dstsz, const char *src)
     safe_strcpy(dst + cur, avail, src);
 }
 
+/* Convert raw MHz decimal string to radio-style: "14.22500" -> "14.225.00" */
+static void freq_to_radio_style(const char *mhz_str, char *out, size_t outsz)
+{
+    double mhz = atof(mhz_str);
+    unsigned long long hz = (unsigned long long)(mhz * 1000000.0 + 0.5);
+    unsigned long long whole_mhz = hz / 1000000;
+    unsigned long long khz = (hz % 1000000) / 1000;
+    unsigned long long tens = (hz % 1000) / 10;
+    snprintf(out, outsz, "%llu.%03llu.%02llu", whole_mhz, khz, tens);
+}
+
+/* Parse radio-style freq "14.225.00" to raw MHz double (14.22500).
+   Also accepts plain decimal "14.22500". */
+static double freq_parse_mhz(const char *s)
+{
+    /* Count dots to detect radio-style format */
+    int dots = 0;
+    for (const char *p = s; *p; p++)
+        if (*p == '.') dots++;
+
+    if (dots == 2) {
+        /* Radio-style: MHz.kHz.tens_hz */
+        unsigned long long whole_mhz = 0, khz = 0, tens = 0;
+        if (sscanf(s, "%llu.%llu.%llu", &whole_mhz, &khz, &tens) >= 1)
+            return (double)whole_mhz + (double)khz / 1000.0 + (double)tens / 100000.0;
+        return 0.0;
+    }
+    return atof(s);
+}
+
 /* ── Minimal JSON value extractor (no dependency) ──────────────────────── */
 
 /* Finds "key": "value" or "key": number in a JSON string.
    Returns a malloc'd string with the value, or NULL.  */
 static char *json_get_string(const char *json, const char *key)
 {
+    if (!json || !key) return NULL;
     char pattern[128];
     snprintf(pattern, sizeof(pattern), "\"%s\"", key);
     const char *p = strstr(json, pattern);
     if (!p) return NULL;
     p += strlen(pattern);
-    while (*p == ' ' || *p == ':' || *p == '\t') p++;
+    while (*p == ' ' || *p == ':') p++;
     if (*p == '"') {
         p++;
-        const char *end = strchr(p, '"');
-        if (!end) return NULL;
-        size_t len = (size_t)(end - p);
-        char *val = (char *)malloc(len + 1);
-        if (!val) return NULL;
-        memcpy(val, p, len);
-        val[len] = 0;
-        return val;
-    }
-    /* Numeric or boolean */
-    {
         const char *end = p;
-        while (*end && *end != ',' && *end != '}' && *end != ' ' && *end != '\n') end++;
+        while (*end && *end != '"') {
+            if (*end == '\\' && *(end + 1)) end++;
+            end++;
+        }
         size_t len = (size_t)(end - p);
         char *val = (char *)malloc(len + 1);
         if (!val) return NULL;
@@ -382,29 +452,36 @@ static char *json_get_string(const char *json, const char *key)
         val[len] = 0;
         return val;
     }
+    /* Numeric or boolean value */
+    const char *end = p;
+    while (*end && *end != ',' && *end != '}' && *end != ']' && *end != '\n') end++;
+    size_t len = (size_t)(end - p);
+    while (len > 0 && (p[len - 1] == ' ' || p[len - 1] == '\r')) len--;
+    char *val = (char *)malloc(len + 1);
+    if (!val) return NULL;
+    memcpy(val, p, len);
+    val[len] = 0;
+    return val;
 }
 
 static double json_get_double(const char *json, const char *key, double dflt)
 {
     char *v = json_get_string(json, key);
     if (!v) return dflt;
-    double d = atof(v);
+    double r = atof(v);
     free(v);
-    return d;
+    return r;
 }
 
 static int json_get_int(const char *json, const char *key, int dflt)
 {
     char *v = json_get_string(json, key);
     if (!v) return dflt;
-    int i = atoi(v);
+    int r = atoi(v);
     free(v);
-    return i;
+    return r;
 }
 
-/* ── Find entries in a JSON array ──────────────────────────────────────── */
-
-/* Returns pointer to the nth { in a JSON array, or NULL */
 static const char *json_array_nth(const char *json, int n)
 {
     const char *p = strchr(json, '[');
@@ -413,13 +490,12 @@ static const char *json_array_nth(const char *json, int n)
     int depth = 0, idx = 0;
     for (; *p; p++) {
         if (*p == '{') {
-            if (depth == 0) {
-                if (idx == n) return p;
-                idx++;
-            }
+            if (depth == 0 && idx == n) return p;
             depth++;
         } else if (*p == '}') {
             depth--;
+        } else if (*p == ',' && depth == 0) {
+            idx++;
         } else if (*p == ']' && depth == 0) {
             break;
         }
@@ -427,7 +503,6 @@ static const char *json_array_nth(const char *json, int n)
     return NULL;
 }
 
-/* Extract a substring from { to matching } inclusive */
 static char *json_extract_object(const char *start)
 {
     if (!start || *start != '{') return NULL;
@@ -435,9 +510,10 @@ static char *json_extract_object(const char *start)
     const char *p = start;
     for (; *p; p++) {
         if (*p == '{') depth++;
-        else if (*p == '}') { depth--; if (depth == 0) { p++; break; } }
+        else if (*p == '}') { depth--; if (depth == 0) break; }
     }
-    size_t len = (size_t)(p - start);
+    if (depth != 0) return NULL;
+    size_t len = (size_t)(p - start + 1);
     char *obj = (char *)malloc(len + 1);
     if (!obj) return NULL;
     memcpy(obj, start, len);
@@ -589,6 +665,52 @@ static char *RunQrCommand(const char *args)
     CloseHandle(hReadPipe);
 
     return output;
+}
+
+/* Append a properly quoted Windows command-line argument to cmd.
+   Follows the Microsoft C/C++ argument parsing rules:
+     - Wrap the value in double quotes.
+     - Escape every embedded " as \".
+     - Before each " (including the closing one), double any immediately
+       preceding run of backslashes so they are not mis-parsed as escapes.
+   See: https://learn.microsoft.com/en-us/cpp/c-language/parsing-c-command-line-arguments */
+static void AppendArg(char *cmd, size_t cmd_sz, const char *flag, const char *val)
+{
+    if (!val || !val[0]) return;
+    safe_strcat(cmd, cmd_sz, " ");
+    safe_strcat(cmd, cmd_sz, flag);
+    safe_strcat(cmd, cmd_sz, " \"");
+
+    size_t cur = strlen(cmd);
+    const char *s = val;
+    while (*s) {
+        size_t num_bs = 0;
+        while (*s == '\\') {
+            num_bs++;
+            s++;
+        }
+
+        if (*s == '"') {
+            for (size_t i = 0; i < num_bs * 2 + 1; i++) {
+                if (cur + 1 < cmd_sz) cmd[cur++] = '\\';
+            }
+            if (cur + 1 < cmd_sz) cmd[cur++] = '"';
+            s++;
+        } else if (*s == '\0') {
+            for (size_t i = 0; i < num_bs * 2; i++) {
+                if (cur + 1 < cmd_sz) cmd[cur++] = '\\';
+            }
+        } else {
+            for (size_t i = 0; i < num_bs; i++) {
+                if (cur + 1 < cmd_sz) cmd[cur++] = '\\';
+            }
+            if (cur + 1 < cmd_sz) cmd[cur++] = *s;
+            s++;
+        }
+    }
+    cmd[cur] = '\0';
+
+    safe_strcat(cmd, cmd_sz, "\"");
 }
 
 /* ── Field buffer accessor ─────────────────────────────────────────────── */
@@ -857,11 +979,11 @@ static void InitState(void)
     g_state.mode_idx = 0;
     g_state.qso_selected = -1;
     g_state.running = 1;
+    g_state.rig_enabled = 1;
     safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
     safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
 
-    snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-              "%.3f", BAND_DEFAULT_FREQS[DEFAULT_BAND_IDX]);
+    { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[DEFAULT_BAND_IDX]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
 
     SetCurrentDateTime();
 }
@@ -871,8 +993,7 @@ static void ClearForm(void)
     g_state.callsign[0] = 0;
     g_state.comment[0] = 0;
     g_state.notes[0] = 0;
-    snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-              "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
+    { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
     SetCurrentDateTime();
 
     g_state.has_lookup = 0;
@@ -926,53 +1047,63 @@ static void SetStatus(const char *msg, int is_error)
     g_state.status_created_at = GetTickCount64();
 }
 
-/* ── CLI integration: Log QSO ──────────────────────────────────────────── */
+/* ── FFI integration: Log QSO ──────────────────────────────────────────── */
 
-/* Append a properly quoted Windows command-line argument to cmd.
-   Follows the Microsoft C/C++ argument parsing rules:
-     - Wrap the value in double quotes.
-     - Escape every embedded " as \".
-     - Before each " (including the closing one), double any immediately
-       preceding run of backslashes so they are not mis-parsed as escapes.
-   See: https://learn.microsoft.com/en-us/cpp/c-language/parsing-c-command-line-arguments */
-static void AppendArg(char *cmd, size_t cmd_sz, const char *flag, const char *val)
+static void fill_log_request(QsrLogQsoRequest *req)
 {
-    if (!val || !val[0]) return;
-    safe_strcat(cmd, cmd_sz, " ");
-    safe_strcat(cmd, cmd_sz, flag);
-    safe_strcat(cmd, cmd_sz, " \"");
+    memset(req, 0, sizeof(*req));
+    safe_strcpy((char *)req->callsign, sizeof(req->callsign), g_state.callsign);
+    safe_strcpy((char *)req->band, sizeof(req->band), BANDS[g_state.band_idx]);
+    safe_strcpy((char *)req->mode, sizeof(req->mode), MODES[g_state.mode_idx]);
 
-    size_t cur = strlen(cmd);
-    const char *s = val;
-    while (*s) {
-        /* Count consecutive backslashes */
-        size_t num_bs = 0;
-        while (*s == '\\') { num_bs++; s++; }
+    char dt[64];
+    snprintf(dt, sizeof(dt), "%s %s", g_state.date, g_state.time_str);
+    safe_strcpy((char *)req->datetime, sizeof(req->datetime), dt);
 
-        if (*s == '"') {
-            /* Double backslashes before an embedded quote, then escape the quote */
-            for (size_t i = 0; i < num_bs * 2 + 1; i++) {
-                if (cur + 1 < cmd_sz) cmd[cur++] = '\\';
-            }
-            if (cur + 1 < cmd_sz) cmd[cur++] = '"';
-            s++;
-        } else if (*s == '\0') {
-            /* End of string: double trailing backslashes before the closing quote */
-            for (size_t i = 0; i < num_bs * 2; i++) {
-                if (cur + 1 < cmd_sz) cmd[cur++] = '\\';
-            }
-        } else {
-            /* Backslashes not before a quote are literal */
-            for (size_t i = 0; i < num_bs; i++) {
-                if (cur + 1 < cmd_sz) cmd[cur++] = '\\';
-            }
-            if (cur + 1 < cmd_sz) cmd[cur++] = *s;
-            s++;
-        }
+    /* Parse RST strings into components */
+    int len = (int)strlen(g_state.rst_sent);
+    if (len >= 2) {
+        req->rst_sent.readability = g_state.rst_sent[0] - '0';
+        req->rst_sent.strength    = g_state.rst_sent[1] - '0';
+        if (len >= 3) req->rst_sent.tone = g_state.rst_sent[2] - '0';
     }
-    cmd[cur] = '\0';
+    len = (int)strlen(g_state.rst_rcvd);
+    if (len >= 2) {
+        req->rst_rcvd.readability = g_state.rst_rcvd[0] - '0';
+        req->rst_rcvd.strength    = g_state.rst_rcvd[1] - '0';
+        if (len >= 3) req->rst_rcvd.tone = g_state.rst_rcvd[2] - '0';
+    }
 
-    safe_strcat(cmd, cmd_sz, "\"");
+    if (g_state.freq_mhz[0]) {
+        unsigned long long freq_khz =
+            (unsigned long long)(freq_parse_mhz(g_state.freq_mhz) * 1000.0 + 0.5);
+        req->freq_khz = freq_khz;
+    }
+
+    safe_strcpy((char *)req->comment,       sizeof(req->comment),       g_state.comment);
+    safe_strcpy((char *)req->notes,          sizeof(req->notes),          g_state.notes);
+    safe_strcpy((char *)req->worked_name,    sizeof(req->worked_name),    g_state.worked_name);
+    safe_strcpy((char *)req->tx_power,       sizeof(req->tx_power),       g_state.tx_power);
+    safe_strcpy((char *)req->submode,        sizeof(req->submode),        g_state.submode);
+    safe_strcpy((char *)req->contest_id,     sizeof(req->contest_id),     g_state.contest_id);
+    safe_strcpy((char *)req->serial_sent,    sizeof(req->serial_sent),    g_state.serial_sent);
+    safe_strcpy((char *)req->serial_rcvd,    sizeof(req->serial_rcvd),    g_state.serial_rcvd);
+    safe_strcpy((char *)req->exchange_sent,  sizeof(req->exchange_sent),  g_state.exchange_sent);
+    safe_strcpy((char *)req->exchange_rcvd,  sizeof(req->exchange_rcvd),  g_state.exchange_rcvd);
+    safe_strcpy((char *)req->prop_mode,      sizeof(req->prop_mode),      g_state.prop_mode);
+    safe_strcpy((char *)req->sat_name,       sizeof(req->sat_name),       g_state.sat_name);
+    safe_strcpy((char *)req->sat_mode,       sizeof(req->sat_mode),       g_state.sat_mode);
+    safe_strcpy((char *)req->iota,           sizeof(req->iota),           g_state.iota);
+    safe_strcpy((char *)req->arrl_section,   sizeof(req->arrl_section),   g_state.arrl_section);
+    safe_strcpy((char *)req->worked_state,   sizeof(req->worked_state),   g_state.worked_state);
+    safe_strcpy((char *)req->worked_county,  sizeof(req->worked_county),  g_state.worked_county);
+    safe_strcpy((char *)req->skcc,           sizeof(req->skcc),           g_state.skcc);
+
+    if (g_state.time_off[0] && g_state.date[0]) {
+        char off[64];
+        snprintf(off, sizeof(off), "%s %s", g_state.date, g_state.time_off);
+        safe_strcpy((char *)req->time_off, sizeof(req->time_off), off);
+    }
 }
 
 static void LogQso(void)
@@ -993,84 +1124,107 @@ static void LogQso(void)
 
     char cmd[4096];
 
-    if (is_update) {
-        snprintf(cmd, sizeof(cmd),
-                  "update %s --band %s --mode %s --at \"%s %s\" "
-                  "--rst-sent %s --rst-rcvd %s",
-                  g_state.editing_local_id,
-                  BANDS[g_state.band_idx],
-                  MODES[g_state.mode_idx],
-                  g_state.date, g_state.time_str,
-                  g_state.rst_sent,
-                  g_state.rst_rcvd);
-    } else {
-        snprintf(cmd, sizeof(cmd),
-                  "log %s %s %s --at \"%s %s\" --rst-sent %s --rst-rcvd %s",
-                  g_state.callsign,
-                  BANDS[g_state.band_idx],
-                  MODES[g_state.mode_idx],
-                  g_state.date, g_state.time_str,
-                  g_state.rst_sent,
-                  g_state.rst_rcvd);
-    }
-
-    if (g_state.freq_mhz[0]) {
-        unsigned long long freq_khz =
-            (unsigned long long)(atof(g_state.freq_mhz) * 1000.0 + 0.5);
-        if (freq_khz > 0) {
-            char freq_arg[32];
-            snprintf(freq_arg, sizeof(freq_arg), " --freq %llu", freq_khz);
-            safe_strcat(cmd, sizeof(cmd), freq_arg);
-        }
-    }
-
-    AppendArg(cmd, sizeof(cmd), "--comment", g_state.comment);
-    AppendArg(cmd, sizeof(cmd), "--notes", g_state.notes);
-    AppendArg(cmd, sizeof(cmd), "--name", g_state.worked_name);
-    AppendArg(cmd, sizeof(cmd), "--tx-power", g_state.tx_power);
-    AppendArg(cmd, sizeof(cmd), "--submode", g_state.submode);
-    AppendArg(cmd, sizeof(cmd), "--contest-id", g_state.contest_id);
-    AppendArg(cmd, sizeof(cmd), "--serial-sent", g_state.serial_sent);
-    AppendArg(cmd, sizeof(cmd), "--serial-rcvd", g_state.serial_rcvd);
-    AppendArg(cmd, sizeof(cmd), "--exchange-sent", g_state.exchange_sent);
-    AppendArg(cmd, sizeof(cmd), "--exchange-rcvd", g_state.exchange_rcvd);
-    AppendArg(cmd, sizeof(cmd), "--prop-mode", g_state.prop_mode);
-    AppendArg(cmd, sizeof(cmd), "--sat-name", g_state.sat_name);
-    AppendArg(cmd, sizeof(cmd), "--sat-mode", g_state.sat_mode);
-    AppendArg(cmd, sizeof(cmd), "--iota", g_state.iota);
-    AppendArg(cmd, sizeof(cmd), "--arrl-section", g_state.arrl_section);
-    AppendArg(cmd, sizeof(cmd), "--state", g_state.worked_state);
-    AppendArg(cmd, sizeof(cmd), "--worked-county", g_state.worked_county);
-    AppendArg(cmd, sizeof(cmd), "--skcc", g_state.skcc);
-
-    if (g_state.time_off[0] && g_state.date[0]) {
-        char time_off_str[64];
-        snprintf(time_off_str, sizeof(time_off_str), "%s %s",
-                  g_state.date, g_state.time_off);
-        AppendArg(cmd, sizeof(cmd), "--time-off", time_off_str);
-    }
-
-    char *result = RunQrCommand(cmd);
-    if (result) {
+    if (g_backend.mode == BACKEND_FFI) {
         if (is_update) {
-            SetStatus("QSO updated", 0);
+            QsrUpdateQsoRequest ureq;
+            memset(&ureq, 0, sizeof(ureq));
+            safe_strcpy((char *)ureq.local_id, sizeof(ureq.local_id), g_state.editing_local_id);
+            fill_log_request(&ureq.qso);
+            if (g_backend.pf_update_qso(g_backend.ffi_client, &ureq) == 0) {
+                SetStatus("QSO updated", 0);
+            } else {
+                SetStatus("Failed to update QSO", 1);
+            }
         } else {
-            char msg[128];
-            snprintf(msg, sizeof(msg), "Logged %s on %s %s",
-                      g_state.callsign, BANDS[g_state.band_idx],
-                      MODES[g_state.mode_idx]);
-            SetStatus(msg, 0);
+            QsrLogQsoRequest req;
+            QsrLogQsoResult res;
+            fill_log_request(&req);
+            if (g_backend.pf_log_qso(g_backend.ffi_client, &req, &res) == 0) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Logged %s on %s %s",
+                          g_state.callsign, BANDS[g_state.band_idx],
+                          MODES[g_state.mode_idx]);
+                SetStatus(msg, 0);
+            } else {
+                SetStatus("Failed to log QSO", 1);
+            }
         }
-        free(result);
     } else {
-        SetStatus("Failed to run qr command", 1);
+        /* CLI path */
+        char cmd[4096];
+        if (is_update)
+            snprintf(cmd, sizeof(cmd), "update --id \"%s\"", g_state.editing_local_id);
+        else
+            safe_strcpy(cmd, sizeof(cmd), "log");
+
+        AppendArg(cmd, sizeof(cmd), "--call",      g_state.callsign);
+        AppendArg(cmd, sizeof(cmd), "--band",      BANDS[g_state.band_idx]);
+        AppendArg(cmd, sizeof(cmd), "--mode",      MODES[g_state.mode_idx]);
+
+        char dt[64];
+        snprintf(dt, sizeof(dt), "%s %s", g_state.date, g_state.time_str);
+        AppendArg(cmd, sizeof(cmd), "--datetime",  dt);
+
+        AppendArg(cmd, sizeof(cmd), "--rst-sent",  g_state.rst_sent);
+        AppendArg(cmd, sizeof(cmd), "--rst-rcvd",  g_state.rst_rcvd);
+
+        if (g_state.freq_mhz[0]) {
+            char freq_arg[32];
+            unsigned long long freq_khz =
+                (unsigned long long)(freq_parse_mhz(g_state.freq_mhz) * 1000.0 + 0.5);
+            snprintf(freq_arg, sizeof(freq_arg), "%llu", freq_khz);
+            AppendArg(cmd, sizeof(cmd), "--freq", freq_arg);
+        }
+
+        AppendArg(cmd, sizeof(cmd), "--comment",        g_state.comment);
+        AppendArg(cmd, sizeof(cmd), "--notes",           g_state.notes);
+        AppendArg(cmd, sizeof(cmd), "--name",            g_state.worked_name);
+        AppendArg(cmd, sizeof(cmd), "--power",           g_state.tx_power);
+        AppendArg(cmd, sizeof(cmd), "--submode",         g_state.submode);
+        AppendArg(cmd, sizeof(cmd), "--contest",         g_state.contest_id);
+        AppendArg(cmd, sizeof(cmd), "--serial-sent",     g_state.serial_sent);
+        AppendArg(cmd, sizeof(cmd), "--serial-rcvd",     g_state.serial_rcvd);
+        AppendArg(cmd, sizeof(cmd), "--exchange-sent",   g_state.exchange_sent);
+        AppendArg(cmd, sizeof(cmd), "--exchange-rcvd",   g_state.exchange_rcvd);
+        AppendArg(cmd, sizeof(cmd), "--prop-mode",       g_state.prop_mode);
+        AppendArg(cmd, sizeof(cmd), "--sat-name",        g_state.sat_name);
+        AppendArg(cmd, sizeof(cmd), "--sat-mode",        g_state.sat_mode);
+        AppendArg(cmd, sizeof(cmd), "--iota",            g_state.iota);
+        AppendArg(cmd, sizeof(cmd), "--arrl-section",    g_state.arrl_section);
+        AppendArg(cmd, sizeof(cmd), "--state",           g_state.worked_state);
+        AppendArg(cmd, sizeof(cmd), "--county",          g_state.worked_county);
+        AppendArg(cmd, sizeof(cmd), "--skcc",            g_state.skcc);
+
+        if (g_state.time_off[0] && g_state.date[0]) {
+            char off[64];
+            snprintf(off, sizeof(off), "%s %s", g_state.date, g_state.time_off);
+            AppendArg(cmd, sizeof(cmd), "--time-off", off);
+        }
+
+        safe_strcat(cmd, sizeof(cmd), " --json");
+
+        char *out = RunQrCommand(cmd);
+        if (out) {
+            if (is_update)
+                SetStatus("QSO updated", 0);
+            else {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "Logged %s on %s %s",
+                          g_state.callsign, BANDS[g_state.band_idx],
+                          MODES[g_state.mode_idx]);
+                SetStatus(msg, 0);
+            }
+            free(out);
+        } else {
+            SetStatus(is_update ? "Failed to update QSO" : "Failed to log QSO", 1);
+        }
     }
 
     ClearForm();
     RefreshQsoList();
 }
 
-/* ── CLI integration: Refresh QSO list ─────────────────────────────────── */
+/* ── FFI integration: Refresh QSO list ─────────────────────────────────── */
 
 typedef struct {
     HWND hwnd;
@@ -1088,104 +1242,79 @@ static unsigned __stdcall QsoLoadThread(void *param)
     QsoLoadResult *res = (QsoLoadResult *)calloc(1, sizeof(QsoLoadResult));
     if (!res) { free(arg); return 0; }
 
-    char *result = RunQrCommand("list --limit 0 --json");
-    if (result) {
-        for (int i = 0; ; i++) {
-            const char *obj_start = json_array_nth(result, i);
-            if (!obj_start) break;
+    if (g_backend.mode == BACKEND_FFI) {
+        QsrQsoList list;
+        memset(&list, 0, sizeof(list));
 
-            char *obj = json_extract_object(obj_start);
-            if (!obj) break;
-
-            if (res->count >= res->capacity) {
-                int new_cap = res->capacity == 0 ? 64 : res->capacity * 2;
-                RecentQso *tmp = (RecentQso *)realloc(res->qsos,
-                                                       (size_t)new_cap * sizeof(RecentQso));
-                if (!tmp) { free(obj); break; }
-                res->qsos = tmp;
-                res->capacity = new_cap;
-            }
-
-            RecentQso *q = &res->qsos[res->count];
-            memset(q, 0, sizeof(*q));
-
-            char *v;
-            v = json_get_string(obj, "utcTimestamp");
-            if (!v) v = json_get_string(obj, "utc");
-            if (v) {
-                if (strlen(v) >= 16) {
-                    char buf[6];
-                    buf[0] = v[11]; buf[1] = v[12]; buf[2] = ':';
-                    buf[3] = v[14]; buf[4] = v[15]; buf[5] = 0;
-                    safe_strcpy(q->utc, sizeof(q->utc), buf);
-                } else {
-                    safe_strcpy(q->utc, sizeof(q->utc), v);
-                }
-                free(v);
-            }
-
-            v = json_get_string(obj, "workedCallsign");
-            if (!v) v = json_get_string(obj, "callsign");
-            if (v) { safe_strcpy(q->callsign, sizeof(q->callsign), v); free(v); }
-
-            v = json_get_string(obj, "band");
-            if (v) {
-                const char *display = v;
-                if (strncmp(display, "BAND_", 5) == 0) display += 5;
-                safe_strcpy(q->band, sizeof(q->band), display);
-                free(v);
-            }
-
-            v = json_get_string(obj, "mode");
-            if (v) {
-                const char *display = v;
-                if (strncmp(display, "MODE_", 5) == 0) display += 5;
-                safe_strcpy(q->mode, sizeof(q->mode), display);
-                free(v);
-            }
-
-            {
-                int r = json_get_int(obj, "readability", 0);
-                int s = json_get_int(obj, "strength", 0);
-                int t = json_get_int(obj, "tone", 0);
-                if (r > 0) {
-                    if (t > 0) snprintf(q->rst_sent, sizeof(q->rst_sent), "%d%d%d", r, s, t);
-                    else       snprintf(q->rst_sent, sizeof(q->rst_sent), "%d%d", r, s);
+        if (g_backend.pf_list_qsos(g_backend.ffi_client, &list) == 0 && list.count > 0) {
+            res->qsos = (RecentQso *)calloc((size_t)list.count, sizeof(RecentQso));
+            if (res->qsos) {
+                res->count = list.count;
+                res->capacity = list.count;
+                for (int i = 0; i < list.count; i++) {
+                    QsrQsoSummary *s = &list.items[i];
+                    RecentQso *q = &res->qsos[i];
+                    safe_strcpy(q->utc,      sizeof(q->utc),      (const char *)s->utc);
+                    safe_strcpy(q->callsign, sizeof(q->callsign), (const char *)s->callsign);
+                    safe_strcpy(q->band,     sizeof(q->band),     (const char *)s->band);
+                    safe_strcpy(q->mode,     sizeof(q->mode),     (const char *)s->mode);
+                    safe_strcpy(q->rst_sent, sizeof(q->rst_sent), (const char *)s->rst_sent);
+                    safe_strcpy(q->rst_rcvd, sizeof(q->rst_rcvd), (const char *)s->rst_rcvd);
+                    safe_strcpy(q->country,  sizeof(q->country),  (const char *)s->country);
+                    safe_strcpy(q->grid,     sizeof(q->grid),     (const char *)s->grid);
+                    safe_strcpy(q->local_id, sizeof(q->local_id), (const char *)s->local_id);
                 }
             }
+            g_backend.pf_free_qso_list(&list);
+        }
+    } else {
+        /* CLI path */
+        char *out = RunQrCommand("list --limit 0 --json");
+        if (out) {
+            /* Count QSOs in the JSON array */
+            int count = 0;
+            for (int i = 0; ; i++) {
+                if (!json_array_nth(out, i)) break;
+                count++;
+            }
+            if (count > 0) {
+                res->qsos = (RecentQso *)calloc((size_t)count, sizeof(RecentQso));
+                if (res->qsos) {
+                    res->count = count;
+                    res->capacity = count;
+                    for (int i = 0; i < count; i++) {
+                        const char *elem = json_array_nth(out, i);
+                        if (!elem) break;
+                        char *obj = json_extract_object(elem);
+                        if (!obj) continue;
+                        RecentQso *q = &res->qsos[i];
 
-            {
-                const char *rcvd_pos = strstr(obj, "rstReceived");
-                if (rcvd_pos) {
-                    int r = json_get_int(rcvd_pos, "readability", 0);
-                    int s = json_get_int(rcvd_pos, "strength", 0);
-                    int t = json_get_int(rcvd_pos, "tone", 0);
-                    if (r > 0) {
-                        if (t > 0) snprintf(q->rst_rcvd, sizeof(q->rst_rcvd), "%d%d%d", r, s, t);
-                        else       snprintf(q->rst_rcvd, sizeof(q->rst_rcvd), "%d%d", r, s);
+                        char *v;
+                        v = json_get_string(obj, "utc");
+                        if (v) { safe_strcpy(q->utc, sizeof(q->utc), v); free(v); }
+                        v = json_get_string(obj, "callsign");
+                        if (v) { safe_strcpy(q->callsign, sizeof(q->callsign), v); free(v); }
+                        v = json_get_string(obj, "band");
+                        if (v) { safe_strcpy(q->band, sizeof(q->band), v); free(v); }
+                        v = json_get_string(obj, "mode");
+                        if (v) { safe_strcpy(q->mode, sizeof(q->mode), v); free(v); }
+                        v = json_get_string(obj, "rstSent");
+                        if (v) { safe_strcpy(q->rst_sent, sizeof(q->rst_sent), v); free(v); }
+                        v = json_get_string(obj, "rstRcvd");
+                        if (v) { safe_strcpy(q->rst_rcvd, sizeof(q->rst_rcvd), v); free(v); }
+                        v = json_get_string(obj, "country");
+                        if (v) { safe_strcpy(q->country, sizeof(q->country), v); free(v); }
+                        v = json_get_string(obj, "grid");
+                        if (v) { safe_strcpy(q->grid, sizeof(q->grid), v); free(v); }
+                        v = json_get_string(obj, "localId");
+                        if (v) { safe_strcpy(q->local_id, sizeof(q->local_id), v); free(v); }
+
+                        free(obj);
                     }
                 }
             }
-
-            v = json_get_string(obj, "country");
-            if (!v) {
-                const char *snap = strstr(obj, "stationSnapshot");
-                if (snap) v = json_get_string(snap, "country");
-            }
-            if (v) { safe_strcpy(q->country, sizeof(q->country), v); free(v); }
-
-            v = json_get_string(obj, "workedGrid");
-            if (!v) v = json_get_string(obj, "grid");
-            if (v) { safe_strcpy(q->grid, sizeof(q->grid), v); free(v); }
-
-            v = json_get_string(obj, "localId");
-            if (!v) v = json_get_string(obj, "local_id");
-            if (v) { safe_strcpy(q->local_id, sizeof(q->local_id), v); free(v); }
-
-            res->count++;
-            free(obj);
+            free(out);
         }
-        free(result);
     }
 
     if (!PostMessage(arg->hwnd, WM_APP_QSO_LOADED, 0, (LPARAM)res))
@@ -1211,7 +1340,7 @@ static void RefreshQsoList(void)
     RefreshQsoListAsync(g_state.hwnd);
 }
 
-/* ── CLI integration: Lookup callsign ──────────────────────────────────── */
+/* ── FFI integration: Lookup callsign ──────────────────────────────────── */
 
 static void ClearLookupDisplay(void)
 {
@@ -1225,6 +1354,11 @@ static void ClearLookupDisplay(void)
     g_state.lookup_country[0] = 0;
     g_state.lookup_cq_zone = 0;
     g_state.last_looked_up[0] = 0;
+    /* Clear form fields that were auto-populated from lookup */
+    g_state.worked_name[0] = 0;
+    g_state.cursor_pos[FIELD_WORKED_NAME] = 0;
+    g_state.qth[0] = 0;
+    g_state.cursor_pos[FIELD_QTH] = 0;
 }
 
 static unsigned __stdcall LookupThread(void *param)
@@ -1235,52 +1369,51 @@ static unsigned __stdcall LookupThread(void *param)
 
     safe_strcpy(res->callsign, sizeof(res->callsign), arg->callsign);
 
-    char cmd[128];
-    snprintf(cmd, sizeof(cmd), "lookup %s --json", arg->callsign);
-    char *result = RunQrCommand(cmd);
-
-    if (result) {
-        /* Check the lookup state first — error or not_found mean no record */
-        char *state = json_get_string(result, "state");
-        if (state) {
-            if (strstr(state, "NOT_FOUND")) {
-                res->not_found = 1;
-            } else if (strstr(state, "ERROR")) {
-                char *emsg = json_get_string(result, "errorMessage");
-                if (emsg) {
-                    safe_strcpy(res->error_msg, sizeof(res->error_msg), emsg);
-                    free(emsg);
-                } else {
-                    safe_strcpy(res->error_msg, sizeof(res->error_msg), "Lookup error");
-                }
-            }
-            free(state);
-        }
-
-        const char *record_pos = strstr(result, "\"record\"");
-        if (record_pos) {
-            char *v;
-            v = json_get_string(record_pos, "formattedName");
-            if (!v) v = json_get_string(record_pos, "firstName");
-            if (v) {
-                safe_strcpy(res->name, sizeof(res->name), v);
+    if (g_backend.mode == BACKEND_FFI) {
+        QsrLookupResult lr;
+        memset(&lr, 0, sizeof(lr));
+        if (g_backend.pf_lookup(g_backend.ffi_client, arg->callsign, &lr) == 0) {
+            if (lr.has_data) {
                 res->has_data = 1;
-                free(v);
+                safe_strcpy(res->name,    sizeof(res->name),    (const char *)lr.name);
+                safe_strcpy(res->qth,     sizeof(res->qth),     (const char *)lr.qth);
+                safe_strcpy(res->grid,    sizeof(res->grid),    (const char *)lr.grid);
+                safe_strcpy(res->country, sizeof(res->country), (const char *)lr.country);
+                res->cq_zone = lr.cq_zone;
+            } else if (lr.not_found) {
+                res->not_found = 1;
+            } else if (lr.error_msg[0]) {
+                safe_strcpy(res->error_msg, sizeof(res->error_msg), (const char *)lr.error_msg);
             }
-            v = json_get_string(record_pos, "addr2");
-            if (!v) v = json_get_string(record_pos, "qth");
-            if (v) { safe_strcpy(res->qth, sizeof(res->qth), v); free(v); }
-
-            v = json_get_string(record_pos, "gridSquare");
-            if (!v) v = json_get_string(record_pos, "grid");
-            if (v) { safe_strcpy(res->grid, sizeof(res->grid), v); free(v); }
-
-            v = json_get_string(record_pos, "country");
-            if (v) { safe_strcpy(res->country, sizeof(res->country), v); free(v); }
-
-            res->cq_zone = json_get_int(record_pos, "cqZone", 0);
         }
-        free(result);
+    } else {
+        /* CLI path */
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd), "lookup \"%s\" --json", arg->callsign);
+        char *out = RunQrCommand(cmd);
+        if (out) {
+            char *v = json_get_string(out, "notFound");
+            if (v && (strcmp(v, "true") == 0 || strcmp(v, "1") == 0)) {
+                res->not_found = 1;
+                free(v);
+            } else {
+                free(v);
+                v = json_get_string(out, "name");
+                if (v) {
+                    res->has_data = 1;
+                    safe_strcpy(res->name, sizeof(res->name), v);
+                    free(v);
+                }
+                v = json_get_string(out, "qth");
+                if (v) { safe_strcpy(res->qth, sizeof(res->qth), v); free(v); }
+                v = json_get_string(out, "grid");
+                if (v) { safe_strcpy(res->grid, sizeof(res->grid), v); free(v); }
+                v = json_get_string(out, "country");
+                if (v) { safe_strcpy(res->country, sizeof(res->country), v); free(v); }
+                res->cq_zone = json_get_int(out, "cqZone", 0);
+            }
+            free(out);
+        }
     }
 
     if (!PostMessage(arg->hwnd, WM_APP_LOOKUP_DONE, 0, (LPARAM)res))
@@ -1290,7 +1423,7 @@ static unsigned __stdcall LookupThread(void *param)
     return 0;
 }
 
-/* ── CLI integration: Rig snapshot poll ────────────────────────────────── */
+/* ── FFI integration: Rig snapshot poll ────────────────────────────────── */
 
 static unsigned __stdcall RigPollThread(void *param)
 {
@@ -1298,23 +1431,37 @@ static unsigned __stdcall RigPollThread(void *param)
     RigPollResult *res = (RigPollResult *)calloc(1, sizeof(RigPollResult));
     if (!res) { free(arg); return 0; }
 
-    char *result = RunQrCommand("rig-status --json");
-    if (result) {
-        char *status = json_get_string(result, "status");
-        if (status && _stricmp(status, "connected") == 0) {
-            char *v;
+    if (g_backend.mode == BACKEND_FFI) {
+        QsrRigStatus rs;
+        memset(&rs, 0, sizeof(rs));
+        if (g_backend.pf_get_rig_status(g_backend.ffi_client, &rs) == 0 && rs.connected) {
             res->connected = 1;
-            v = json_get_string(result, "frequencyDisplay");
-            if (v) { safe_strcpy(res->freq_display, sizeof(res->freq_display), v); free(v); }
-            v = json_get_string(result, "frequencyMhz");
-            if (v) { safe_strcpy(res->freq_mhz, sizeof(res->freq_mhz), v); free(v); }
-            v = json_get_string(result, "band");
-            if (v) { safe_strcpy(res->band, sizeof(res->band), v); free(v); }
-            v = json_get_string(result, "mode");
-            if (v) { safe_strcpy(res->mode, sizeof(res->mode), v); free(v); }
+            safe_strcpy(res->freq_display, sizeof(res->freq_display), (const char *)rs.freq_display);
+            safe_strcpy(res->freq_mhz,    sizeof(res->freq_mhz),     (const char *)rs.freq_mhz);
+            safe_strcpy(res->band,         sizeof(res->band),          (const char *)rs.band);
+            safe_strcpy(res->mode,         sizeof(res->mode),          (const char *)rs.mode);
         }
-        if (status) free(status);
-        free(result);
+    } else {
+        /* CLI path */
+        char *out = RunQrCommand("rig-status --json");
+        if (out) {
+            char *v = json_get_string(out, "connected");
+            if (v && (strcmp(v, "true") == 0 || strcmp(v, "1") == 0)) {
+                res->connected = 1;
+                free(v);
+                v = json_get_string(out, "freqDisplay");
+                if (v) { safe_strcpy(res->freq_display, sizeof(res->freq_display), v); free(v); }
+                v = json_get_string(out, "freqMhz");
+                if (v) { safe_strcpy(res->freq_mhz, sizeof(res->freq_mhz), v); free(v); }
+                v = json_get_string(out, "band");
+                if (v) { safe_strcpy(res->band, sizeof(res->band), v); free(v); }
+                v = json_get_string(out, "mode");
+                if (v) { safe_strcpy(res->mode, sizeof(res->mode), v); free(v); }
+            } else {
+                free(v);
+            }
+            free(out);
+        }
     }
 
     if (!PostMessage(arg->hwnd, WM_APP_RIG_DONE, 0, (LPARAM)res))
@@ -1324,28 +1471,34 @@ static unsigned __stdcall RigPollThread(void *param)
     return 0;
 }
 
-/* ── CLI integration: Fetch space weather ──────────────────────────────── */
+/* ── FFI integration: Fetch space weather ──────────────────────────────── */
 
 static void FetchSpaceWeather(void)
 {
-    char *result = RunQrCommand("space-weather --json");
-    if (!result) return;
-
-    g_state.k_index = json_get_double(result, "planetaryKIndex", 0.0);
-    if (g_state.k_index == 0.0)
-        g_state.k_index = json_get_double(result, "k_index", 0.0);
-    g_state.solar_flux = json_get_double(result, "solarFluxIndex", 0.0);
-    if (g_state.solar_flux == 0.0)
-        g_state.solar_flux = json_get_double(result, "solar_flux", 0.0);
-    g_state.sunspot_number = json_get_int(result, "sunspotNumber", 0);
-    if (g_state.sunspot_number == 0)
-        g_state.sunspot_number = json_get_int(result, "sunspot_number", 0);
-    g_state.has_weather = 1;
-
-    free(result);
+    if (g_backend.mode == BACKEND_FFI) {
+        QsrSpaceWeather sw;
+        memset(&sw, 0, sizeof(sw));
+        if (g_backend.pf_get_space_weather(g_backend.ffi_client, &sw) == 0 && sw.has_data) {
+            g_state.k_index = sw.k_index;
+            g_state.solar_flux = sw.solar_flux;
+            g_state.sunspot_number = sw.sunspot_number;
+            g_state.has_weather = 1;
+        }
+    } else {
+        /* CLI path */
+        char *out = RunQrCommand("space-weather --json");
+        if (out) {
+            g_state.k_index = json_get_double(out, "kIndex", 0.0);
+            g_state.solar_flux = json_get_double(out, "solarFlux", 0.0);
+            g_state.sunspot_number = json_get_int(out, "sunspotNumber", 0);
+            if (g_state.solar_flux > 0 || g_state.k_index > 0)
+                g_state.has_weather = 1;
+            free(out);
+        }
+    }
 }
 
-/* ── CLI integration: Load selected QSO into form ──────────────────────── */
+/* ── FFI integration: Load selected QSO into form ──────────────────────── */
 
 static void LoadSelectedQso(void)
 {
@@ -1358,154 +1511,145 @@ static void LoadSelectedQso(void)
         return;
     }
 
-    char cmd[128];
-    snprintf(cmd, sizeof(cmd), "get %s --json", q->local_id);
-    char *result = RunQrCommand(cmd);
-    if (!result) {
+    /* Temporary struct to hold detail fields regardless of path */
+    QsrQsoDetail detail;
+    memset(&detail, 0, sizeof(detail));
+    int loaded = 0;
+
+    if (g_backend.mode == BACKEND_FFI) {
+        if (g_backend.pf_get_qso(g_backend.ffi_client, q->local_id, &detail) == 0)
+            loaded = 1;
+    } else {
+        /* CLI path */
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd), "get \"%s\" --json", q->local_id);
+        char *out = RunQrCommand(cmd);
+        if (out) {
+            char *v;
+            v = json_get_string(out, "callsign");
+            if (v) { safe_strcpy((char *)detail.callsign, sizeof(detail.callsign), v); free(v); }
+            v = json_get_string(out, "band");
+            if (v) { safe_strcpy((char *)detail.band, sizeof(detail.band), v); free(v); }
+            v = json_get_string(out, "mode");
+            if (v) { safe_strcpy((char *)detail.mode, sizeof(detail.mode), v); free(v); }
+            v = json_get_string(out, "date");
+            if (v) { safe_strcpy((char *)detail.date, sizeof(detail.date), v); free(v); }
+            v = json_get_string(out, "time");
+            if (v) { safe_strcpy((char *)detail.time, sizeof(detail.time), v); free(v); }
+            v = json_get_string(out, "freqMhz");
+            if (v) { safe_strcpy((char *)detail.freq_mhz, sizeof(detail.freq_mhz), v); free(v); }
+            v = json_get_string(out, "rstSent");
+            if (v) { safe_strcpy((char *)detail.rst_sent, sizeof(detail.rst_sent), v); free(v); }
+            v = json_get_string(out, "rstRcvd");
+            if (v) { safe_strcpy((char *)detail.rst_rcvd, sizeof(detail.rst_rcvd), v); free(v); }
+            v = json_get_string(out, "timeOff");
+            if (v) { safe_strcpy((char *)detail.time_off, sizeof(detail.time_off), v); free(v); }
+            v = json_get_string(out, "comment");
+            if (v) { safe_strcpy((char *)detail.comment, sizeof(detail.comment), v); free(v); }
+            v = json_get_string(out, "notes");
+            if (v) { safe_strcpy((char *)detail.notes, sizeof(detail.notes), v); free(v); }
+            v = json_get_string(out, "workedName");
+            if (v) { safe_strcpy((char *)detail.worked_name, sizeof(detail.worked_name), v); free(v); }
+            v = json_get_string(out, "txPower");
+            if (v) { safe_strcpy((char *)detail.tx_power, sizeof(detail.tx_power), v); free(v); }
+            v = json_get_string(out, "submode");
+            if (v) { safe_strcpy((char *)detail.submode, sizeof(detail.submode), v); free(v); }
+            v = json_get_string(out, "contestId");
+            if (v) { safe_strcpy((char *)detail.contest_id, sizeof(detail.contest_id), v); free(v); }
+            v = json_get_string(out, "serialSent");
+            if (v) { safe_strcpy((char *)detail.serial_sent, sizeof(detail.serial_sent), v); free(v); }
+            v = json_get_string(out, "serialRcvd");
+            if (v) { safe_strcpy((char *)detail.serial_rcvd, sizeof(detail.serial_rcvd), v); free(v); }
+            v = json_get_string(out, "exchangeSent");
+            if (v) { safe_strcpy((char *)detail.exchange_sent, sizeof(detail.exchange_sent), v); free(v); }
+            v = json_get_string(out, "exchangeRcvd");
+            if (v) { safe_strcpy((char *)detail.exchange_rcvd, sizeof(detail.exchange_rcvd), v); free(v); }
+            v = json_get_string(out, "propMode");
+            if (v) { safe_strcpy((char *)detail.prop_mode, sizeof(detail.prop_mode), v); free(v); }
+            v = json_get_string(out, "satName");
+            if (v) { safe_strcpy((char *)detail.sat_name, sizeof(detail.sat_name), v); free(v); }
+            v = json_get_string(out, "satMode");
+            if (v) { safe_strcpy((char *)detail.sat_mode, sizeof(detail.sat_mode), v); free(v); }
+            v = json_get_string(out, "iota");
+            if (v) { safe_strcpy((char *)detail.iota, sizeof(detail.iota), v); free(v); }
+            v = json_get_string(out, "arrlSection");
+            if (v) { safe_strcpy((char *)detail.arrl_section, sizeof(detail.arrl_section), v); free(v); }
+            v = json_get_string(out, "workedState");
+            if (v) { safe_strcpy((char *)detail.worked_state, sizeof(detail.worked_state), v); free(v); }
+            v = json_get_string(out, "workedCounty");
+            if (v) { safe_strcpy((char *)detail.worked_county, sizeof(detail.worked_county), v); free(v); }
+            v = json_get_string(out, "skcc");
+            if (v) { safe_strcpy((char *)detail.skcc, sizeof(detail.skcc), v); free(v); }
+
+            loaded = 1;
+            free(out);
+        }
+    }
+
+    if (!loaded) {
         SetStatus("Failed to load QSO data", 1);
         return;
     }
 
     ClearForm();
 
-    char *v;
+    safe_strcpy(g_state.callsign, sizeof(g_state.callsign), (const char *)detail.callsign);
 
-    v = json_get_string(result, "workedCallsign");
-    if (!v) v = json_get_string(result, "callsign");
-    if (v) { safe_strcpy(g_state.callsign, sizeof(g_state.callsign), v); free(v); }
-
-    v = json_get_string(result, "band");
-    if (v) {
-        const char *disp = v;
-        if (strncmp(disp, "BAND_", 5) == 0) disp += 5;
+    /* Match band to index */
+    {
+        const char *b = (const char *)detail.band;
         for (int i = 0; i < NUM_BANDS; i++) {
-            if (_stricmp(BANDS[i], disp) == 0) { g_state.band_idx = i; break; }
+            if (_stricmp(BANDS[i], b) == 0) { g_state.band_idx = i; break; }
         }
-        free(v);
     }
 
-    v = json_get_string(result, "mode");
-    if (v) {
-        const char *disp = v;
-        if (strncmp(disp, "MODE_", 5) == 0) disp += 5;
+    /* Match mode to index */
+    {
+        const char *m = (const char *)detail.mode;
         for (int i = 0; i < NUM_MODES; i++) {
-            if (_stricmp(MODES[i], disp) == 0) { g_state.mode_idx = i; break; }
-        }
-        free(v);
-    }
-
-    v = json_get_string(result, "frequencyKhz");
-    if (v) {
-        double khz = atof(v);
-        if (khz > 0)
-            snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz), "%.3f", khz / 1000.0);
-        free(v);
-    } else {
-        snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-                  "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
-    }
-
-    v = json_get_string(result, "utcTimestamp");
-    if (v && strlen(v) >= 16) {
-        char date_buf[12];
-        memcpy(date_buf, v, 10); date_buf[10] = 0;
-        safe_strcpy(g_state.date, sizeof(g_state.date), date_buf);
-        char time_buf[8];
-        memcpy(time_buf, v + 11, 5); time_buf[5] = 0;
-        safe_strcpy(g_state.time_str, sizeof(g_state.time_str), time_buf);
-    }
-    if (v) free(v);
-
-    v = json_get_string(result, "utcEndTimestamp");
-    if (v && strlen(v) >= 16) {
-        char time_buf[8];
-        memcpy(time_buf, v + 11, 5); time_buf[5] = 0;
-        safe_strcpy(g_state.time_off, sizeof(g_state.time_off), time_buf);
-    }
-    if (v) free(v);
-
-    {
-        int r = json_get_int(result, "readability", 0);
-        int s = json_get_int(result, "strength", 0);
-        int t = json_get_int(result, "tone", 0);
-        if (r > 0) {
-            if (t > 0) snprintf(g_state.rst_sent, sizeof(g_state.rst_sent), "%d%d%d", r, s, t);
-            else       snprintf(g_state.rst_sent, sizeof(g_state.rst_sent), "%d%d", r, s);
-        } else {
-            safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
+            if (_stricmp(MODES[i], m) == 0) { g_state.mode_idx = i; break; }
         }
     }
 
-    {
-        const char *rcvd_pos = strstr(result, "rstReceived");
-        if (rcvd_pos) {
-            int r = json_get_int(rcvd_pos, "readability", 0);
-            int s = json_get_int(rcvd_pos, "strength", 0);
-            int t = json_get_int(rcvd_pos, "tone", 0);
-            if (r > 0) {
-                if (t > 0) snprintf(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "%d%d%d", r, s, t);
-                else       snprintf(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "%d%d", r, s);
-            } else {
-                safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
-            }
-        } else {
-            safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
-        }
-    }
+    safe_strcpy(g_state.date,     sizeof(g_state.date),     (const char *)detail.date);
+    safe_strcpy(g_state.time_str, sizeof(g_state.time_str), (const char *)detail.time);
 
-    v = json_get_string(result, "comment");
-    if (v) { safe_strcpy(g_state.comment, sizeof(g_state.comment), v); free(v); }
+    if (detail.freq_mhz[0])
+        freq_to_radio_style((const char *)detail.freq_mhz, g_state.freq_mhz, sizeof(g_state.freq_mhz));
+    else
+        { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
 
-    v = json_get_string(result, "notes");
-    if (v) { safe_strcpy(g_state.notes, sizeof(g_state.notes), v); free(v); }
+    if (detail.rst_sent[0])
+        safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), (const char *)detail.rst_sent);
+    else
+        safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
 
-    v = json_get_string(result, "workedOperatorName");
-    if (v) { safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), v); free(v); }
+    if (detail.rst_rcvd[0])
+        safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), (const char *)detail.rst_rcvd);
+    else
+        safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
 
-    v = json_get_string(result, "txPower");
-    if (v) { safe_strcpy(g_state.tx_power, sizeof(g_state.tx_power), v); free(v); }
+    if (detail.time_off[0])
+        safe_strcpy(g_state.time_off, sizeof(g_state.time_off), (const char *)detail.time_off);
 
-    v = json_get_string(result, "submode");
-    if (v) { safe_strcpy(g_state.submode, sizeof(g_state.submode), v); free(v); }
-
-    v = json_get_string(result, "contestId");
-    if (v) { safe_strcpy(g_state.contest_id, sizeof(g_state.contest_id), v); free(v); }
-
-    v = json_get_string(result, "serialSent");
-    if (v) { safe_strcpy(g_state.serial_sent, sizeof(g_state.serial_sent), v); free(v); }
-
-    v = json_get_string(result, "serialReceived");
-    if (v) { safe_strcpy(g_state.serial_rcvd, sizeof(g_state.serial_rcvd), v); free(v); }
-
-    v = json_get_string(result, "exchangeSent");
-    if (v) { safe_strcpy(g_state.exchange_sent, sizeof(g_state.exchange_sent), v); free(v); }
-
-    v = json_get_string(result, "exchangeReceived");
-    if (v) { safe_strcpy(g_state.exchange_rcvd, sizeof(g_state.exchange_rcvd), v); free(v); }
-
-    v = json_get_string(result, "propMode");
-    if (v) { safe_strcpy(g_state.prop_mode, sizeof(g_state.prop_mode), v); free(v); }
-
-    v = json_get_string(result, "satName");
-    if (v) { safe_strcpy(g_state.sat_name, sizeof(g_state.sat_name), v); free(v); }
-
-    v = json_get_string(result, "satMode");
-    if (v) { safe_strcpy(g_state.sat_mode, sizeof(g_state.sat_mode), v); free(v); }
-
-    v = json_get_string(result, "workedIota");
-    if (v) { safe_strcpy(g_state.iota, sizeof(g_state.iota), v); free(v); }
-
-    v = json_get_string(result, "workedArrlSection");
-    if (v) { safe_strcpy(g_state.arrl_section, sizeof(g_state.arrl_section), v); free(v); }
-
-    v = json_get_string(result, "workedState");
-    if (v) { safe_strcpy(g_state.worked_state, sizeof(g_state.worked_state), v); free(v); }
-
-    v = json_get_string(result, "workedCounty");
-    if (v) { safe_strcpy(g_state.worked_county, sizeof(g_state.worked_county), v); free(v); }
-
-    v = json_get_string(result, "skcc");
-    if (v) { safe_strcpy(g_state.skcc, sizeof(g_state.skcc), v); free(v); }
+    safe_strcpy(g_state.comment,       sizeof(g_state.comment),       (const char *)detail.comment);
+    safe_strcpy(g_state.notes,          sizeof(g_state.notes),          (const char *)detail.notes);
+    safe_strcpy(g_state.worked_name,    sizeof(g_state.worked_name),    (const char *)detail.worked_name);
+    safe_strcpy(g_state.tx_power,       sizeof(g_state.tx_power),       (const char *)detail.tx_power);
+    safe_strcpy(g_state.submode,        sizeof(g_state.submode),        (const char *)detail.submode);
+    safe_strcpy(g_state.contest_id,     sizeof(g_state.contest_id),     (const char *)detail.contest_id);
+    safe_strcpy(g_state.serial_sent,    sizeof(g_state.serial_sent),    (const char *)detail.serial_sent);
+    safe_strcpy(g_state.serial_rcvd,    sizeof(g_state.serial_rcvd),    (const char *)detail.serial_rcvd);
+    safe_strcpy(g_state.exchange_sent,  sizeof(g_state.exchange_sent),  (const char *)detail.exchange_sent);
+    safe_strcpy(g_state.exchange_rcvd,  sizeof(g_state.exchange_rcvd),  (const char *)detail.exchange_rcvd);
+    safe_strcpy(g_state.prop_mode,      sizeof(g_state.prop_mode),      (const char *)detail.prop_mode);
+    safe_strcpy(g_state.sat_name,       sizeof(g_state.sat_name),       (const char *)detail.sat_name);
+    safe_strcpy(g_state.sat_mode,       sizeof(g_state.sat_mode),       (const char *)detail.sat_mode);
+    safe_strcpy(g_state.iota,           sizeof(g_state.iota),           (const char *)detail.iota);
+    safe_strcpy(g_state.arrl_section,   sizeof(g_state.arrl_section),   (const char *)detail.arrl_section);
+    safe_strcpy(g_state.worked_state,   sizeof(g_state.worked_state),   (const char *)detail.worked_state);
+    safe_strcpy(g_state.worked_county,  sizeof(g_state.worked_county),  (const char *)detail.worked_county);
+    safe_strcpy(g_state.skcc,           sizeof(g_state.skcc),           (const char *)detail.skcc);
 
     safe_strcpy(g_state.editing_local_id, sizeof(g_state.editing_local_id), q->local_id);
 
@@ -1518,12 +1662,11 @@ static void LoadSelectedQso(void)
 
     g_state.qso_list_focused = 0;
     SetFocusField(FIELD_CALLSIGN);
-    free(result);
 
     SetStatus("QSO loaded for editing", 0);
 }
 
-/* ── CLI integration: Delete selected QSO ──────────────────────────────── */
+/* ── FFI integration: Delete selected QSO ──────────────────────────────── */
 
 static void DeleteSelectedQso(void)
 {
@@ -1536,14 +1679,20 @@ static void DeleteSelectedQso(void)
         return;
     }
 
-    char cmd[128];
-    snprintf(cmd, sizeof(cmd), "delete %s", q->local_id);
-    char *result = RunQrCommand(cmd);
-    if (result) {
+    int ok = 0;
+    if (g_backend.mode == BACKEND_FFI) {
+        ok = (g_backend.pf_delete_qso(g_backend.ffi_client, q->local_id) == 0);
+    } else {
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd), "delete \"%s\" --json", q->local_id);
+        char *out = RunQrCommand(cmd);
+        if (out) { ok = 1; free(out); }
+    }
+
+    if (ok) {
         char msg[128];
         snprintf(msg, sizeof(msg), "Deleted QSO with %s", q->callsign);
         SetStatus(msg, 0);
-        free(result);
     } else {
         SetStatus("Failed to delete QSO", 1);
     }
@@ -1564,9 +1713,9 @@ static void PaintHeader(HDC hdc, RECT *rc)
 
     FillRect_Color(hdc, 0, 0, w, header_h, CLR_HEADER_BG);
 
-    /* Left: title */
+    /* Left: title (top-justified with small padding) */
     SelectObject(hdc, g_state.hFontBold);
-    DrawText_A(hdc, cw, ch, CLR_HEADER_FG, "QsoRipper");
+    DrawText_A(hdc, cw, 2, CLR_HEADER_FG, "QsoRipper");
     SelectObject(hdc, g_state.hFont);
 
     /* Center: space weather */
@@ -1652,18 +1801,21 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
     int row_h = ch + 8;
     int pad = cw * 2;
     int label_w = cw * 10;
-    int form_h = row_h * 9 + ch + 10;
+    /* 8 content rows + border padding */
+    int form_h = row_h * 8 + 10;
     int focused_form = !g_state.qso_list_focused && !g_state.search_focused;
 
     /* Form border */
     COLORREF border_clr = focused_form ? CLR_FORM_BORDER : CLR_DARKGRAY;
     DrawBox(hdc, 4, y_start, w - 8, form_h, border_clr);
 
-    /* Title */
+    /* Title (small font) */
     {
         const char *title = g_state.editing_local_id[0] ? " Edit QSO " : " Log QSO ";
         COLORREF title_clr = g_state.editing_local_id[0] ? CLR_ORANGE : CLR_CYAN;
+        SelectObject(hdc, g_state.hFontSmallBold);
         DrawText_A_BG(hdc, pad, y_start, title_clr, CLR_BG, title);
+        SelectObject(hdc, g_state.hFont);
     }
 
     int y = y_start + ch + 4;
@@ -1770,27 +1922,6 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
     }
     y += row_h;
 
-    /* Row 7: padding */
-    y += 4;
-
-    /* Row 8: Hint chips */
-    {
-        int cx = pad;
-        const char *submit_label = g_state.editing_local_id[0]
-                                       ? "F10 Update QSO" : "F10 Log QSO";
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, submit_label, cw, ch);
-        cx += ((int)strlen(submit_label) * cw + 16);
-
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "Esc Clear", cw, ch);
-        cx += (9 * cw + 16);
-
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F3 QSO List", cw, ch);
-        cx += (11 * cw + 16);
-
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F4 Search", cw, ch);
-    }
-    y += row_h;
-
     return y_start + form_h;
 }
 
@@ -1884,18 +2015,20 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
 
     fields = AdvTabFields(tab, &field_count);
     num_rows = CountAdvancedRows(fields, field_count);
-    /* form_h: title + tab bar + field rows + padding + hint row + margin */
-    form_h = ch + 4 + row_h * (num_rows + 2) + 12;
+    /* form_h: title + tab bar + field rows + margin */
+    form_h = ch + 4 + row_h * (num_rows + 1) + 12;
 
     border_clr = focused_form ? CLR_MAGENTA : CLR_DARKGRAY;
     DrawBox(hdc, 4, y_start, w - 8, form_h, border_clr);
 
-    /* Title */
+    /* Title (small font) */
     {
         char title[64];
         const char *pfx = g_state.editing_local_id[0] ? "Edit" : "Advanced";
         snprintf(title, sizeof(title), " %s - %s ", pfx, ADV_TAB_NAMES[tab]);
+        SelectObject(hdc, g_state.hFontSmallBold);
         DrawText_A_BG(hdc, pad, y_start, CLR_MAGENTA, CLR_BG, title);
+        SelectObject(hdc, g_state.hFont);
     }
 
     y = y_start + ch + 4;
@@ -1986,29 +2119,6 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
         }
     }
 
-    y += 4;
-
-    /* Hint chips */
-    {
-        int cx = pad;
-        const char *submit_label = g_state.editing_local_id[0]
-                                       ? "F10 Update QSO" : "F10 Log QSO";
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, submit_label,
-                 cw, ch);
-        cx += ((int)strlen(submit_label) * cw + 16);
-
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "Esc Basic View",
-                 cw, ch);
-        cx += (14 * cw + 16);
-
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F5/F6 Tabs",
-                 cw, ch);
-        cx += (10 * cw + 16);
-
-        DrawChip(hdc, cx, y, CLR_FOOTER_BG, CLR_FOOTER_FG, "F3 QSO List",
-                 cw, ch);
-    }
-
     return y_start + form_h;
 }
 
@@ -2016,22 +2126,24 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
 
 static int PaintLookup(HDC hdc, int y_start, int w)
 {
-    int cw = g_state.char_w;
-    int ch = g_state.char_h;
+    int cw = g_state.med_cw;
+    int ch = g_state.med_ch;
     int panel_h = ch * 5 + 8;
-    int pad = cw * 2;
+    int pad = g_state.char_w * 2;
 
     DrawBox(hdc, 4, y_start, w - 8, panel_h, CLR_CYAN);
+    SelectObject(hdc, g_state.hFontSmallBold);
     DrawText_A_BG(hdc, pad, y_start, CLR_CYAN, CLR_BG, " Callsign Lookup ");
+    SelectObject(hdc, g_state.hFontMed);
 
     int y = y_start + ch + 4;
 
     if (g_state.has_lookup) {
         char line[128];
 
-        SelectObject(hdc, g_state.hFontBold);
+        SelectObject(hdc, g_state.hFontMedBold);
         DrawText_A(hdc, pad + cw, y, CLR_TEXT, g_state.lookup_name);
-        SelectObject(hdc, g_state.hFont);
+        SelectObject(hdc, g_state.hFontMed);
         y += ch + 2;
 
         snprintf(line, sizeof(line), "QTH: %s", g_state.lookup_qth);
@@ -2054,13 +2166,14 @@ static int PaintLookup(HDC hdc, int y_start, int w)
         snprintf(line, sizeof(line), "Looking up%s", dots[frame]);
         DrawText_A(hdc, pad + cw, y + ch, CLR_CYAN, line);
     } else if (g_state.lookup_not_found) {
-        DrawText_A(hdc, pad + cw, y + ch, CLR_YELLOW, "Callsign not found");
+        DrawText_A(hdc, pad + cw, y + ch, CLR_ORANGE, "Callsign not found");
     } else if (g_state.lookup_error[0]) {
         DrawText_A(hdc, pad + cw, y + ch, CLR_RED, g_state.lookup_error);
     } else {
         DrawText_A(hdc, pad + cw, y + ch, CLR_DARKGRAY, "");
     }
 
+    SelectObject(hdc, g_state.hFont);
     return y_start + panel_h + 2;
 }
 
@@ -2070,8 +2183,8 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
 {
     int cw = g_state.char_w;
     int ch = g_state.char_h;
-    int lcw = g_state.list_cw;
-    int lch = g_state.list_ch;
+    int lcw = g_state.med_cw;
+    int lch = g_state.med_ch;
     int pad = cw * 2;
     int list_row_h = lch + 3;
     int panel_h = bottom - y_start - list_row_h - 4;
@@ -2090,7 +2203,7 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
 
     DrawBox(hdc, 4, y_start, w - 8, panel_h, border_clr);
 
-    /* Title with total count (drawn using main font) */
+    /* Title with total count (small font) */
     {
         char title[64];
         if (g_state.qso_loading)
@@ -2101,7 +2214,9 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
             snprintf(title, sizeof(title), " QSOs (%d) (focused) ", g_state.recent_count);
         else
             snprintf(title, sizeof(title), " QSOs (%d) ", g_state.recent_count);
+        SelectObject(hdc, g_state.hFontSmallBold);
         DrawText_A_BG(hdc, pad, y_start, border_clr, CLR_BG, title);
+        SelectObject(hdc, g_state.hFont);
     }
 
     int y = y_start + ch + 4;
@@ -2114,8 +2229,8 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
         y += (ch + 4) + 2;
     }
 
-    /* Switch to small font for table header and rows */
-    SelectObject(hdc, g_state.hFontSmallBold);
+    /* Switch to medium font for table header and rows */
+    SelectObject(hdc, g_state.hFontMedBold);
 
     /* Table header */
     {
@@ -2125,7 +2240,7 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
                   "UTC", "Callsign", "Band", "Mode",
                   "Sent", "Rcvd", "Country", "Grid");
         DrawText_A(hdc, pad + lcw, y + 1, CLR_HIGHLIGHT, hdr);
-        SelectObject(hdc, g_state.hFontSmall);
+        SelectObject(hdc, g_state.hFontMed);
         y += list_row_h;
         DrawHLine(hdc, pad, w - pad, y, CLR_DARKGRAY);
         y += 2;
@@ -2187,9 +2302,9 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
             int call_x = pad + lcw + 20 * lcw;
             char call_part[16];
             snprintf(call_part, sizeof(call_part), "%-10s ", q->callsign);
-            SelectObject(hdc, g_state.hFontSmallBold);
+            SelectObject(hdc, g_state.hFontMedBold);
             DrawText_A(hdc, call_x, y + 2, CLR_HIGHLIGHT, call_part);
-            SelectObject(hdc, g_state.hFontSmall);
+            SelectObject(hdc, g_state.hFontMed);
 
             int rest_x = call_x + 11 * lcw;
             char rest_part[128];
@@ -2217,13 +2332,14 @@ static int PaintRecentQsos(HDC hdc, int y_start, int w, int bottom)
 
 static void PaintFooter(HDC hdc, int y, int w)
 {
-    int cw = g_state.char_w;
-    int ch = g_state.char_h;
+    int cw = g_state.list_cw;
+    int ch = g_state.list_ch;
     int bar_h = ch + 4;
 
     FillRect_Color(hdc, 0, y, w, bar_h, CLR_BG);
     DrawHLine(hdc, 0, w, y, CLR_CYAN);
 
+    SelectObject(hdc, g_state.hFontSmall);
     int x = cw;
     y += 2;
 
@@ -2233,9 +2349,10 @@ static void PaintFooter(HDC hdc, int y, int w)
     };
     for (int i = 0; shortcuts[i]; i++) {
         DrawChip(hdc, x, y, CLR_FOOTER_BG, CLR_FOOTER_FG, shortcuts[i], cw, ch);
-        x += (int)strlen(shortcuts[i]) * cw + 14;
+        x += (int)strlen(shortcuts[i]) * cw + 10;
         if (x > w - 10 * cw) break;
     }
+    SelectObject(hdc, g_state.hFont);
 }
 
 /* ── Drawing: Help overlay ─────────────────────────────────────────────── */
@@ -2366,8 +2483,8 @@ static void PaintAll(HWND hwnd, HDC hdc_screen, RECT *rc)
     y = PaintLookup(hdc, y, w);
     y += 2;
 
-    /* Footer position */
-    int footer_y = h - ch - 6;
+    /* Footer position (small font height) */
+    int footer_y = h - g_state.list_ch - 6;
 
     /* Recent QSOs (fill between lookup and footer) */
     PaintRecentQsos(hdc, y, w, footer_y);
@@ -2455,8 +2572,7 @@ static void TypeSelectBand(char c)
         int idx = (g_state.band_idx + 1 + attempt) % NUM_BANDS;
         if (toupper((unsigned char)BANDS[idx][0]) == c) {
             g_state.band_idx = idx;
-            snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-                      "%.3f", BAND_DEFAULT_FREQS[idx]);
+            { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
             return;
         }
@@ -2818,8 +2934,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
     if (vk == VK_LEFT) {
         if (g_state.focused_field == FIELD_BAND) {
             g_state.band_idx = (g_state.band_idx + NUM_BANDS - 1) % NUM_BANDS;
-            snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-                      "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
+            { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
             g_state.mode_idx = (g_state.mode_idx + NUM_MODES - 1) % NUM_MODES;
@@ -2839,8 +2954,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
     if (vk == VK_RIGHT) {
         if (g_state.focused_field == FIELD_BAND) {
             g_state.band_idx = (g_state.band_idx + 1) % NUM_BANDS;
-            snprintf(g_state.freq_mhz, sizeof(g_state.freq_mhz),
-                      "%.3f", BAND_DEFAULT_FREQS[g_state.band_idx]);
+            { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
             g_state.mode_idx = (g_state.mode_idx + 1) % NUM_MODES;
@@ -3002,6 +3116,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         HDC hdc = GetDC(hwnd);
         int dpi = GetDeviceCaps(hdc, LOGPIXELSY);
         int fontHeight = -MulDiv(FONT_SIZE, dpi, 72);
+        int medFontHeight = -MulDiv(11, dpi, 72);
         int smallFontHeight = -MulDiv(9, dpi, 72);
 
         g_state.hFont = CreateFontW(
@@ -3011,6 +3126,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         g_state.hFontBold = CreateFontW(
             fontHeight, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, FONT_NAME);
+
+        g_state.hFontMed = CreateFontW(
+            medFontHeight, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, FONT_NAME);
+
+        g_state.hFontMedBold = CreateFontW(
+            medFontHeight, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN, FONT_NAME);
 
@@ -3030,6 +3155,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         GetTextMetricsW(hdc, &tm);
         g_state.char_w = tm.tmAveCharWidth;
         g_state.char_h = tm.tmHeight;
+
+        /* Measure medium font character size */
+        SelectObject(hdc, g_state.hFontMed);
+        GetTextMetricsW(hdc, &tm);
+        g_state.med_cw = tm.tmAveCharWidth;
+        g_state.med_ch = tm.tmHeight;
 
         /* Measure small font character size */
         SelectObject(hdc, g_state.hFontSmall);
@@ -3065,6 +3196,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         /* Kick off async data loads so the window appears immediately */
         RefreshQsoListAsync(hwnd);
         FetchSpaceWeather();
+        if (g_backend.mode == BACKEND_FFI)
+            SetStatus("Connected via gRPC (FFI)", 0);
+        else
+            SetStatus("Using CLI proxy", 0);
         break;
     }
 
@@ -3091,9 +3226,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         KillTimer(hwnd, TIMER_ID);
         if (g_state.hFont) DeleteObject(g_state.hFont);
         if (g_state.hFontBold) DeleteObject(g_state.hFontBold);
+        if (g_state.hFontMed) DeleteObject(g_state.hFontMed);
+        if (g_state.hFontMedBold) DeleteObject(g_state.hFontMedBold);
         if (g_state.hFontSmall) DeleteObject(g_state.hFontSmall);
         if (g_state.hFontSmallBold) DeleteObject(g_state.hFontSmallBold);
         free(g_state.recent_qsos);
+        ShutdownBackend();
         PostQuitMessage(0);
         break;
 
@@ -3174,10 +3312,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                     g_state.has_lookup = 1;
                     g_state.lookup_not_found = 0;
                     g_state.lookup_error[0] = 0;
-                    if (g_state.worked_name[0] == 0)
-                        safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), res->name);
-                    if (g_state.qth[0] == 0)
-                        safe_strcpy(g_state.qth, sizeof(g_state.qth), res->qth);
+                    /* Always populate from lookup (overwrite stale data from previous callsign) */
+                    safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), res->name);
+                    g_state.cursor_pos[FIELD_WORKED_NAME] = (int)strlen(g_state.worked_name);
+                    safe_strcpy(g_state.qth, sizeof(g_state.qth), res->qth);
+                    g_state.cursor_pos[FIELD_QTH] = (int)strlen(g_state.qth);
                 } else if (res->not_found) {
                     g_state.lookup_not_found = 1;
                     g_state.lookup_error[0] = 0;
@@ -3221,8 +3360,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                                 break;
                             }
                         }
-                        if (res->freq_mhz[0])
-                            safe_strcpy(g_state.freq_mhz, sizeof(g_state.freq_mhz), res->freq_mhz);
+                        if (res->freq_display[0])
+                            safe_strcpy(g_state.freq_mhz, sizeof(g_state.freq_mhz), res->freq_display);
                     }
                 }
             }
@@ -3415,6 +3554,96 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     return 0;
 }
 
+/* ── Backend initialization ────────────────────────────────────────────── */
+
+static int InitFFIBackend(void)
+{
+    /* Build absolute path to DLL next to our EXE */
+    char dll_path[MAX_PATH];
+    GetModuleFileNameA(NULL, dll_path, MAX_PATH);
+    char *slash = strrchr(dll_path, '\\');
+    if (slash) *(slash + 1) = 0;
+    safe_strcat(dll_path, MAX_PATH, "qsoripper_ffi.dll");
+
+    g_backend.ffi_dll = LoadLibraryA(dll_path);
+    if (!g_backend.ffi_dll) return 0;
+
+    /* Resolve all function pointers */
+    #define RESOLVE(name) \
+        g_backend.pf_##name = (fn_qsr_##name)(void *)GetProcAddress(g_backend.ffi_dll, "qsr_" #name); \
+        if (!g_backend.pf_##name) { FreeLibrary(g_backend.ffi_dll); g_backend.ffi_dll = NULL; return 0; }
+
+    RESOLVE(connect)
+    RESOLVE(disconnect)
+    RESOLVE(last_error)
+    RESOLVE(log_qso)
+    RESOLVE(update_qso)
+    RESOLVE(get_qso)
+    RESOLVE(delete_qso)
+    RESOLVE(list_qsos)
+    RESOLVE(free_qso_list)
+    RESOLVE(lookup)
+    RESOLVE(get_rig_status)
+    RESOLVE(get_space_weather)
+    #undef RESOLVE
+
+    /* Try to connect */
+    g_backend.ffi_client = g_backend.pf_connect("http://127.0.0.1:50051");
+    if (!g_backend.ffi_client) {
+        FreeLibrary(g_backend.ffi_dll);
+        g_backend.ffi_dll = NULL;
+        return 0;
+    }
+
+    return 1;
+}
+
+static void InitBackend(void)
+{
+    char env_val[32] = {0};
+    GetEnvironmentVariableA("QSORIPPER_BACKEND", env_val, sizeof(env_val));
+
+    if (_stricmp(env_val, "cli") == 0) {
+        /* Forced CLI mode */
+        FindCliPath();
+        g_backend.mode = BACKEND_CLI;
+        return;
+    }
+
+    if (_stricmp(env_val, "ffi") == 0) {
+        /* Forced FFI mode — fail hard if unavailable */
+        if (!InitFFIBackend()) {
+            MessageBoxA(NULL, "FFI backend requested but qsoripper_ffi.dll not available or server not running.",
+                        "Backend Error", MB_ICONERROR);
+            ExitProcess(1);
+        }
+        g_backend.mode = BACKEND_FFI;
+        return;
+    }
+
+    /* Auto: try FFI first, fall back to CLI */
+    if (InitFFIBackend()) {
+        g_backend.mode = BACKEND_FFI;
+    } else {
+        FindCliPath();
+        g_backend.mode = BACKEND_CLI;
+    }
+}
+
+static void ShutdownBackend(void)
+{
+    if (g_backend.mode == BACKEND_FFI) {
+        if (g_backend.ffi_client) {
+            g_backend.pf_disconnect(g_backend.ffi_client);
+            g_backend.ffi_client = NULL;
+        }
+        if (g_backend.ffi_dll) {
+            FreeLibrary(g_backend.ffi_dll);
+            g_backend.ffi_dll = NULL;
+        }
+    }
+}
+
 /* ── Entry point ───────────────────────────────────────────────────────── */
 
 _Use_decl_annotations_
@@ -3430,7 +3659,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     /* Initialize app state */
     InitState();
-    FindCliPath();
+    InitBackend();
 
     /* Register window class */
     WNDCLASSEXW wc = {0};
@@ -3450,9 +3679,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         return 1;
     }
 
-    /* Calculate initial window size: 100 cols x 45 rows equivalent */
+    /* Calculate initial window size: 100 cols x 40 rows equivalent */
     int init_w = 1100;
-    int init_h = 780;
+    int init_h = 700;
 
     HWND hwnd = CreateWindowExW(
         0, WINDOW_CLASS, APP_TITLE,

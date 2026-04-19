@@ -5,7 +5,21 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_executable(qsoripper-win32 WIN32 src/main.c)
-target_link_libraries(qsoripper-win32 PRIVATE user32 gdi32 shell32 comctl32)
+
+# FFI library from the Rust qsoripper-ffi crate
+# The .dll.lib import library and header are produced by `cargo build -p qsoripper-ffi`
+set(FFI_ROOT "${CMAKE_SOURCE_DIR}/../../rust/qsoripper-ffi")
+set(FFI_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# Allow override via -DFFI_LIB_DIR for CI or custom layouts
+if(NOT DEFINED FFI_LIB_DIR)
+    set(FFI_LIB_DIR "${CMAKE_SOURCE_DIR}/../../rust/target/release")
+endif()
+
+target_include_directories(qsoripper-win32 PRIVATE ${FFI_INCLUDE})
+target_link_libraries(qsoripper-win32 PRIVATE
+    user32 gdi32 shell32 comctl32
+)
 
 # Enable Unicode
 target_compile_definitions(qsoripper-win32 PRIVATE UNICODE _UNICODE)
