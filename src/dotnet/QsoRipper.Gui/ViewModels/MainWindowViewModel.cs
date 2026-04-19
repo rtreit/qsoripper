@@ -490,7 +490,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         if (!IsWizardOpen)
         {
-            CloseTransientPanels();
+            CloseTransientPanels(restoreGridFocus: false);
             SearchFocusRequested?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -500,7 +500,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         if (!IsWizardOpen)
         {
-            CloseTransientPanels();
+            CloseTransientPanels(restoreGridFocus: false);
             Logger.FocusLogger();
         }
     }
@@ -510,7 +510,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         if (!IsWizardOpen)
         {
-            CloseTransientPanels();
+            CloseTransientPanels(restoreGridFocus: false);
             GridFocusRequested?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -652,7 +652,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     [RelayCommand]
-    private void CloseCallsignCard()
+    private void CloseCallsignCard(bool restoreFocus = true)
     {
         if (CallsignCard is { } card)
         {
@@ -663,6 +663,11 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         var wasLoggerFocused = IsLoggerFocused;
         IsCallsignCardOpen = false;
         CallsignCard = null;
+
+        if (!restoreFocus)
+        {
+            return;
+        }
 
         if (wasLoggerFocused)
         {
@@ -796,12 +801,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     }
 
     [RelayCommand]
-    private void CloseTransientPanels()
+    private void CloseTransientPanels(bool restoreGridFocus = true)
     {
         IsSortChooserOpen = false;
         IsColumnChooserOpen = false;
-        CloseCallsignCard();
-        GridFocusRequested?.Invoke(this, EventArgs.Empty);
+        CloseCallsignCard(restoreFocus: false);
+        if (restoreGridFocus)
+        {
+            GridFocusRequested?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     [RelayCommand]
