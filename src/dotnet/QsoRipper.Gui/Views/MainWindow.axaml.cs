@@ -139,22 +139,10 @@ internal sealed partial class MainWindow : Window
             return;
         }
 
-        base.OnKeyDown(e);
-
-        if (e.Handled || _viewModel is null || _viewModel.IsWizardOpen)
-        {
-            return;
-        }
-
-        if (string.Equals(e.KeySymbol, "/", StringComparison.Ordinal)
-            && e.Source is not TextBox
-            && !(_recentQsoSearchBox?.IsFocused ?? false))
-        {
-            FocusRecentQsoSearchBox();
-            e.Handled = true;
-            return;
-        }
-
+        // Close open panels on Escape BEFORE base.OnKeyDown so the Menu
+        // control cannot consume the key first (Alt+Enter activates the
+        // menu bar; a subsequent Escape would deactivate it instead of
+        // closing the inspector/card if we let base handle it first).
         if (e.Key == Key.Escape)
         {
             if (_viewModel.IsFullQsoCardOpen)
@@ -182,7 +170,24 @@ internal sealed partial class MainWindow : Window
             {
                 _viewModel.ToggleInspectorCommand.Execute(null);
                 e.Handled = true;
+                return;
             }
+        }
+
+        base.OnKeyDown(e);
+
+        if (e.Handled || _viewModel is null || _viewModel.IsWizardOpen)
+        {
+            return;
+        }
+
+        if (string.Equals(e.KeySymbol, "/", StringComparison.Ordinal)
+            && e.Source is not TextBox
+            && !(_recentQsoSearchBox?.IsFocused ?? false))
+        {
+            FocusRecentQsoSearchBox();
+            e.Handled = true;
+            return;
         }
     }
 
