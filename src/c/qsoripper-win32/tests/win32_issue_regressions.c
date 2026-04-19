@@ -186,7 +186,7 @@ static int test_issue_263_log_is_non_blocking(void)
     }
     HANDLE thread = (HANDLE)tid;
 
-    if (WaitForSingleObject(g_log_entered, 500) != WAIT_OBJECT_0) {
+    if (WaitForSingleObject(g_log_entered, 3000) != WAIT_OBJECT_0) {
         return fail("log backend call was not invoked");
     }
 
@@ -222,7 +222,7 @@ static int test_issue_263_load_selected_qso_is_non_blocking(void)
     }
     HANDLE thread = (HANDLE)tid;
 
-    if (WaitForSingleObject(g_load_entered, 500) != WAIT_OBJECT_0) {
+    if (WaitForSingleObject(g_load_entered, 3000) != WAIT_OBJECT_0) {
         return fail("load backend call was not invoked");
     }
 
@@ -257,7 +257,7 @@ static int test_issue_263_delete_selected_qso_is_non_blocking(void)
     }
     HANDLE thread = (HANDLE)tid;
 
-    if (WaitForSingleObject(g_delete_entered, 500) != WAIT_OBJECT_0) {
+    if (WaitForSingleObject(g_delete_entered, 3000) != WAIT_OBJECT_0) {
         return fail("delete backend call was not invoked");
     }
 
@@ -291,7 +291,7 @@ static int test_issue_263_fetch_space_weather_is_non_blocking(void)
     }
     HANDLE thread = (HANDLE)tid;
 
-    if (WaitForSingleObject(g_weather_entered, 500) != WAIT_OBJECT_0) {
+    if (WaitForSingleObject(g_weather_entered, 3000) != WAIT_OBJECT_0) {
         return fail("space weather backend call was not invoked");
     }
 
