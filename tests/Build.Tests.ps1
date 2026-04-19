@@ -10,6 +10,8 @@
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repoRoot 'build.ps1'
 $scriptContent = Get-Content $scriptPath -Raw
+$win32MainPath = Join-Path $repoRoot 'src' 'c' 'qsoripper-win32' 'src' 'main.c'
+$win32MainContent = Get-Content $win32MainPath -Raw
 
 # Extract function bodies for targeted checks
 function Get-FunctionBody([string]$Content, [string]$FunctionName) {
@@ -58,5 +60,17 @@ Describe 'build.ps1 Check-Dotnet CI parity (Bug #202)' {
     It 'runs vulnerable package check' {
         # Must reference --vulnerable for package vulnerability scanning
         $checkDotnetBody | Should Match '--vulnerable'
+    }
+}
+
+Describe 'Win32 CLI publish/discovery path contract (WIN32-BUG-2)' {
+
+    It 'publishes CLI to artifacts\publish\qsoripper-cli\<Configuration>' {
+        $scriptContent | Should Match "'qsoripper-cli'"
+    }
+
+    It 'probes the qsoripper-cli directory from FindCliPath candidates' {
+        $win32MainContent | Should Match 'qsoripper-cli'
+        $win32MainContent | Should Not Match 'QsoRipper\.Cli\\\\%s\\\\(?:net10\.0\\\\)?QsoRipper\.Cli\.exe'
     }
 }
