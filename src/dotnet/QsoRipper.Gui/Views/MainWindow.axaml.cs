@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -71,6 +72,8 @@ internal sealed partial class MainWindow : Window
 
             Dispatcher.UIThread.Post(PrimeMenuAccessKeys, DispatcherPriority.Background);
         }
+
+        EnsureColumnHeadersFit();
     }
 
     protected override void OnClosed(EventArgs e)
@@ -826,6 +829,49 @@ internal sealed partial class MainWindow : Window
         _gridLayoutApplied = false;
 
         _recentQsoGrid.Focus();
+    }
+
+    /// <summary>
+    /// Measures each column's header text at runtime and ensures both MinWidth
+    /// and current Width are large enough to display the full header label at
+    /// any DPI, font, or theme configuration. Accounts for sort-indicator glyph
+    /// and cell padding overhead inside the DataGridColumnHeader.
+    /// </summary>
+    private void EnsureColumnHeadersFit()
+    {
+        if (_recentQsoGrid is null)
+        {
+            return;
+        }
+
+        // Sort glyph MinWidth (~32px from Fluent theme) + cell padding (2+2=4px)
+        const double headerOverhead = 36;
+
+        foreach (var column in _recentQsoGrid.Columns)
+        {
+            if (column.Header is not string headerText || string.IsNullOrEmpty(headerText))
+            {
+                continue;
+            }
+
+            var measure = new TextBlock
+            {
+                Text = headerText,
+                FontWeight = FontWeight.SemiBold,
+            };
+            measure.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            double requiredWidth = Math.Ceiling(measure.DesiredSize.Width + headerOverhead);
+
+            if (column.MinWidth < requiredWidth)
+            {
+                column.MinWidth = requiredWidth;
+            }
+
+            if (!column.Width.IsStar && column.Width.Value < requiredWidth)
+            {
+                column.Width = new DataGridLength(requiredWidth);
+            }
+        }
     }
 
     private static bool HandleZoomAction(Action handler, KeyEventArgs e)

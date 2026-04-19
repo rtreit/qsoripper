@@ -85,8 +85,11 @@
       <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
 
-    <!-- Consistent text styling for data grid content -->
+    <!-- Consistent text styling for data grid content.
+         Margin="0" overrides the Fluent theme's DataGridCellTextBlockTheme
+         which sets Margin="12,0,12,0" (24px hidden horizontal overhead). -->
     <Style Selector="DataGrid#RecentQsoGrid DataGridCell TextBlock">
+      <Setter Property="Margin" Value="0" />
       <Setter Property="VerticalAlignment" Value="Center" />
       <Setter Property="TextWrapping" Value="NoWrap" />
       <Setter Property="TextTrimming" Value="CharacterEllipsis" />
@@ -470,14 +473,14 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="S"
-                                      Width="58"
-                                      MinWidth="40"
+                                      Width="36"
+                                      MinWidth="28"
                                       Binding="{ReflectionBinding RstSent}"
                                       SortMemberPath="RstSent"
                                       IsReadOnly="True" />
                   <DataGridTextColumn Header="R"
-                                      Width="58"
-                                      MinWidth="40"
+                                      Width="36"
+                                      MinWidth="28"
                                       Binding="{ReflectionBinding RstReceived}"
                                       SortMemberPath="RstReceived"
                                       IsReadOnly="True" />
