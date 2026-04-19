@@ -440,9 +440,10 @@ internal sealed partial class MainWindow : Window
             return;
         }
 
-        // Defer focus so the current key event finishes processing first —
-        // synchronous Focus() during a KeyBinding handler doesn't reliably
-        // move focus away from the active TextBox.
+        // Defer focus at Background priority so the current key event and any
+        // visual-tree changes (e.g. inspector panel collapse) finish first.
+        // Input priority was too early — Avalonia's focus cleanup after removing
+        // the inspector content could re-steal focus after our call.
         Dispatcher.UIThread.Post(
             () =>
             {
@@ -452,7 +453,7 @@ internal sealed partial class MainWindow : Window
                     _recentQsoGrid.SelectedIndex = 0;
                 }
             },
-            DispatcherPriority.Input);
+            DispatcherPriority.Background);
     }
 
     private async void OnSettingsRequested(object? sender, EventArgs e)
