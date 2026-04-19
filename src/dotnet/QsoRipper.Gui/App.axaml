@@ -17,6 +17,12 @@
           <Color x:Key="SystemAccentColorLight1">#33AADD</Color>
           <Color x:Key="SystemAccentColorLight2">#66C0E8</Color>
           <Color x:Key="SystemAccentColorLight3">#99D6F2</Color>
+
+          <!-- Ensure accent-button text is always white against the cyan accent fill -->
+          <SolidColorBrush x:Key="AccentButtonForeground" Color="White" />
+          <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="White" />
+          <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="#CCFFFFFF" />
+          <SolidColorBrush x:Key="AccentButtonForegroundDisabled" Color="#80FFFFFF" />
         </ResourceDictionary>
       </ResourceDictionary.ThemeDictionaries>
     </ResourceDictionary>

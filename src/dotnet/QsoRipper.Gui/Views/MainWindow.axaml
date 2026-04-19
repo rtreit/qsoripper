@@ -956,9 +956,11 @@
                         HorizontalAlignment="Right">
               <Button Content="Cancel"
                       MinWidth="80"
+                      Foreground="{DynamicResource SystemControlForegroundBaseHighBrush}"
                       Command="{Binding RecentQsos.CancelDeleteCommand}" />
               <Button Content="Delete"
                       MinWidth="80"
+                      Foreground="White"
                       Classes="accent"
                       Command="{Binding RecentQsos.ConfirmDeleteCommand}" />
             </StackPanel>
