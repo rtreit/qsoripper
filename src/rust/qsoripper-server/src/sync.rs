@@ -516,7 +516,7 @@ async fn resolve_modified_conflict(
                 let mut updated = remote.clone();
                 updated.local_id.clone_from(&local.local_id);
                 updated.sync_status = SyncStatus::Synced as i32;
-                updated.qrz_logid.clone_from(&local.qrz_logid);
+                updated.qrz_logid = extract_qrz_logid(remote).or_else(|| local.qrz_logid.clone());
                 match store.update_qso(&updated).await {
                     Ok(_) => counters.downloaded += 1,
                     Err(err) => {
@@ -1244,6 +1244,66 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].sync_status, SyncStatus::Synced as i32);
         assert_eq!(all[0].notes.as_deref(), Some("remote edit"));
+    }
+
+    #[tokio::test]
+    async fn last_write_wins_remote_newer_sets_missing_local_qrz_logid() {
+        let store = MemoryStorage::new();
+
+        // Local QSO: MODIFIED, missing qrz_logid, updated_at = 1000.
+        let mut local = make_qso(
+            "W1AW",
+            "K7LWW-MISSING-LOGID",
+            Band::Band20m,
+            Mode::Ft8,
+            1_700_000_000,
+        );
+        local.sync_status = SyncStatus::Modified as i32;
+        local.qrz_logid = None;
+        local.updated_at = Some(Timestamp {
+            seconds: 1000,
+            nanos: 0,
+        });
+        local.notes = Some("local edit".into());
+        store.insert_qso(&local).await.unwrap();
+
+        // Remote QSO: same key, has qrz_logid, updated_at = 2000 (newer).
+        let remote = {
+            let mut q = make_qso(
+                "W1AW",
+                "K7LWW-MISSING-LOGID",
+                Band::Band20m,
+                Mode::Ft8,
+                1_700_000_000,
+            );
+            q.qrz_logid = Some("QRZ700-MISSING".into());
+            q.updated_at = Some(Timestamp {
+                seconds: 2000,
+                nanos: 0,
+            });
+            q.notes = Some("remote edit".into());
+            q
+        };
+
+        let api = MockQrzApi::new(Ok(vec![remote]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.downloaded_records, 1, "remote should overwrite");
+        assert_eq!(final_msg.conflict_records, 0);
+
+        let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].sync_status, SyncStatus::Synced as i32);
+        assert_eq!(
+            all[0].qrz_logid.as_deref(),
+            Some("QRZ700-MISSING"),
+            "remote newer overwrite should preserve/set remote qrz_logid when local is missing",
+        );
     }
 
     #[tokio::test]
