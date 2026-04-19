@@ -174,6 +174,14 @@ internal sealed partial class MainWindow : Window
                 e.Handled = true;
                 return;
             }
+
+            if (IsFocusWithinLogger())
+            {
+                _viewModel.Logger.ClearCommand.Execute(null);
+                _viewModel.Logger.FocusLogger();
+                e.Handled = true;
+                return;
+            }
         }
 
         base.OnKeyDown(e);
@@ -514,24 +522,31 @@ internal sealed partial class MainWindow : Window
                 return;
             }
 
-            var focused = FocusManager?.GetFocusedElement() as Control;
-            var loggerPanel = this.FindControl<Border>("LoggerPanel");
-            // Check if focus moved to another control within the logger panel
-            bool isStillInLogger = false;
-            var parent = focused;
-            while (parent is not null)
-            {
-                if (parent == loggerPanel)
-                {
-                    isStillInLogger = true;
-                    break;
-                }
+            _viewModel.IsLoggerFocused = IsFocusWithinLogger();
+        }, DispatcherPriority.Background);
+    }
 
-                parent = parent.Parent as Control;
+    private bool IsFocusWithinLogger()
+    {
+        var loggerPanel = this.FindControl<Border>("LoggerPanel");
+        return IsFocusWithin(loggerPanel);
+    }
+
+    private bool IsFocusWithin(Control? root)
+    {
+        var focused = FocusManager?.GetFocusedElement() as Control;
+        var parent = focused;
+        while (parent is not null)
+        {
+            if (parent == root)
+            {
+                return true;
             }
 
-            _viewModel.IsLoggerFocused = isStillInLogger;
-        }, DispatcherPriority.Background);
+            parent = parent.Parent as Control;
+        }
+
+        return false;
     }
 
     private void FocusRecentQsoSearchBox()
