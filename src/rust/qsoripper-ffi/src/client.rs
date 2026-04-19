@@ -435,15 +435,20 @@ fn parse_datetime(s: &str) -> Result<prost_types::Timestamp, String> {
         return Err("Empty datetime".to_string());
     }
 
-    // Try "YYYY-MM-DD HH:MM:SS" then "YYYY-MM-DD HH:MM"
-    let parts: Vec<&str> = s.splitn(2, ' ').collect();
-    if parts.len() < 2 {
+    let mut datetime_parts = s.split_whitespace();
+    let date_part = datetime_parts
+        .next()
+        .ok_or_else(|| format!("Invalid datetime format: {s}"))?;
+    let time_part = datetime_parts
+        .next()
+        .ok_or_else(|| format!("Invalid datetime format: {s}"))?;
+    if datetime_parts.next().is_some() {
         return Err(format!("Invalid datetime format: {s}"));
     }
 
-    let date_parts: Vec<&str> = parts[0].split('-').collect();
+    let date_parts: Vec<&str> = date_part.split('-').collect();
     if date_parts.len() != 3 {
-        return Err(format!("Invalid date: {}", parts[0]));
+        return Err(format!("Invalid date: {date_part}"));
     }
 
     let year: i32 = date_parts[0]
@@ -456,9 +461,17 @@ fn parse_datetime(s: &str) -> Result<prost_types::Timestamp, String> {
         .parse()
         .map_err(|_| format!("Invalid day: {}", date_parts[2]))?;
 
-    let time_parts: Vec<&str> = parts[1].split(':').collect();
-    if time_parts.len() < 2 {
-        return Err(format!("Invalid time: {}", parts[1]));
+    if !(1..=12).contains(&month) {
+        return Err(format!("Month out of range: {month}"));
+    }
+    let max_day = days_in_month(year, month);
+    if !(1..=max_day).contains(&day) {
+        return Err(format!("Day out of range: {day}"));
+    }
+
+    let time_parts: Vec<&str> = time_part.split(':').collect();
+    if !(time_parts.len() == 2 || time_parts.len() == 3) {
+        return Err(format!("Invalid time: {time_part}"));
     }
 
     let hour: u32 = time_parts[0]
@@ -468,10 +481,21 @@ fn parse_datetime(s: &str) -> Result<prost_types::Timestamp, String> {
         .parse()
         .map_err(|_| format!("Invalid minute: {}", time_parts[1]))?;
     let second: u32 = if time_parts.len() > 2 {
-        time_parts[2].parse().unwrap_or(0)
+        time_parts[2]
+            .parse()
+            .map_err(|_| format!("Invalid second: {}", time_parts[2]))?
     } else {
         0
     };
+    if hour > 23 {
+        return Err(format!("Hour out of range: {hour}"));
+    }
+    if minute > 59 {
+        return Err(format!("Minute out of range: {minute}"));
+    }
+    if second > 59 {
+        return Err(format!("Second out of range: {second}"));
+    }
 
     // Calculate Unix timestamp from components (UTC)
     #[allow(clippy::cast_possible_wrap)]
@@ -502,6 +526,25 @@ fn days_from_civil(year: i32, month: u32, day: u32) -> i32 {
     };
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146_097 + doe as i32 - 719_468
+}
+
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap_year(year) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
+    }
 }
 
 /// Convert a proto `QsoRecord` to a `QsrQsoSummary`.
@@ -840,7 +883,7 @@ fn populate_rig_status(
 
 #[cfg(test)]
 mod tests {
-    use super::{buf_to_str, qso_to_summary};
+    use super::{buf_to_str, parse_datetime, qso_to_summary};
     use qsoripper_core::proto::qsoripper::domain::{QsoRecord, StationSnapshot};
 
     #[test]
@@ -874,5 +917,27 @@ mod tests {
         let summary = qso_to_summary(&qso);
 
         assert_eq!("Japan", buf_to_str(&summary.country));
+    }
+
+    #[test]
+    fn rust_bug_1_parse_datetime_rejects_out_of_range_components() {
+        let invalid_inputs = [
+            "2025-13-01 12:00",
+            "2025-00-01 12:00",
+            "2025-01-32 12:00",
+            "2025-02-29 12:00",
+            "2024-02-30 12:00",
+            "2025-01-01 24:00",
+            "2025-01-01 12:60",
+            "2025-01-01 12:00:60",
+            "2025-01-01 12:00:AA",
+        ];
+
+        for input in invalid_inputs {
+            assert!(
+                parse_datetime(input).is_err(),
+                "Expected parse_datetime to reject invalid input: {input}"
+            );
+        }
     }
 }
