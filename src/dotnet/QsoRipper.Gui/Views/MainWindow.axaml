@@ -58,12 +58,12 @@
     </Style>
 
     <Style Selector="DataGrid#RecentQsoGrid DataGridColumnHeader">
-      <Setter Property="Padding" Value="4,0" />
+      <Setter Property="Padding" Value="2,0" />
       <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
 
     <Style Selector="DataGrid#RecentQsoGrid DataGridCell">
-      <Setter Property="Padding" Value="4,0" />
+      <Setter Property="Padding" Value="2,0" />
       <Setter Property="BorderThickness" Value="0" />
     </Style>
 
@@ -81,12 +81,15 @@
 
     <!-- Prevent text clipping when editing cells -->
     <Style Selector="DataGrid#RecentQsoGrid DataGridCell:editing TextBox">
-      <Setter Property="Padding" Value="4,1" />
+      <Setter Property="Padding" Value="2,1" />
       <Setter Property="VerticalContentAlignment" Value="Center" />
     </Style>
 
-    <!-- Consistent text styling for data grid content -->
+    <!-- Consistent text styling for data grid content.
+         Margin="0" overrides the Fluent theme's DataGridCellTextBlockTheme
+         which sets Margin="12,0,12,0" (24px hidden horizontal overhead). -->
     <Style Selector="DataGrid#RecentQsoGrid DataGridCell TextBlock">
+      <Setter Property="Margin" Value="0" />
       <Setter Property="VerticalAlignment" Value="Center" />
       <Setter Property="TextWrapping" Value="NoWrap" />
       <Setter Property="TextTrimming" Value="CharacterEllipsis" />
@@ -385,7 +388,7 @@
                          SelectedItem="{Binding RecentQsos.SelectedQso, Mode=TwoWay}">
                 <DataGrid.Columns>
                   <DataGridTextColumn Header="UTC"
-                                      Width="138"
+                                      Width="130"
                                       MinWidth="96"
                                       Binding="{ReflectionBinding UtcDisplay, Mode=TwoWay}"
                                       SortMemberPath="UtcSortKey" />
@@ -412,8 +415,8 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Band"
-                                          Width="72"
-                                          MinWidth="64"
+                                          Width="68"
+                                          MinWidth="56"
                                           SortMemberPath="Band">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -431,8 +434,8 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Mode"
-                                          Width="76"
-                                          MinWidth="64"
+                                          Width="74"
+                                          MinWidth="56"
                                           SortMemberPath="Mode">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -450,8 +453,8 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Freq"
-                                          Width="82"
-                                          MinWidth="80"
+                                          Width="76"
+                                          MinWidth="68"
                                           SortMemberPath="FrequencySortKey">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -470,25 +473,25 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="S"
-                                      Width="56"
-                                      MinWidth="48"
+                                      Width="36"
+                                      MinWidth="28"
                                       Binding="{ReflectionBinding RstSent}"
                                       SortMemberPath="RstSent"
                                       IsReadOnly="True" />
                   <DataGridTextColumn Header="R"
-                                      Width="56"
-                                      MinWidth="48"
+                                      Width="36"
+                                      MinWidth="28"
                                       Binding="{ReflectionBinding RstReceived}"
                                       SortMemberPath="RstReceived"
                                       IsReadOnly="True" />
                   <DataGridTextColumn Header="DXCC"
-                                      Width="76"
-                                      MinWidth="64"
+                                      Width="70"
+                                      MinWidth="48"
                                       Binding="{ReflectionBinding Dxcc, Mode=TwoWay}"
                                       SortMemberPath="DxccSortKey" />
                   <DataGridTemplateColumn Header="Country"
-                                          Width="108"
-                                          MinWidth="96"
+                                          Width="100"
+                                          MinWidth="80"
                                           SortMemberPath="Country">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -509,8 +512,8 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Name"
-                                          Width="108"
-                                          MinWidth="96"
+                                          Width="96"
+                                          MinWidth="80"
                                           SortMemberPath="OperatorName">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -531,18 +534,18 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="Grid"
-                                      Width="66"
-                                      MinWidth="60"
+                                      Width="62"
+                                      MinWidth="56"
                                       Binding="{ReflectionBinding Grid, Mode=TwoWay}"
                                       SortMemberPath="Grid" />
                   <DataGridTextColumn Header="Exch"
-                                      Width="70"
-                                      MinWidth="64"
+                                      Width="62"
+                                      MinWidth="52"
                                       Binding="{ReflectionBinding Exchange, Mode=TwoWay}"
                                       SortMemberPath="Exchange" />
                   <DataGridTemplateColumn Header="Contest"
-                                          Width="98"
-                                          MinWidth="80"
+                                          Width="84"
+                                          MinWidth="68"
                                           SortMemberPath="Contest">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
@@ -563,8 +566,8 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTextColumn Header="Station"
-                                      Width="82"
-                                      MinWidth="72"
+                                      Width="74"
+                                      MinWidth="64"
                                       Binding="{ReflectionBinding Station, Mode=TwoWay}"
                                       SortMemberPath="Station" />
                   <DataGridTemplateColumn Header="Note"
@@ -590,8 +593,8 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Comment"
-                                          Width="120"
-                                          MinWidth="80"
+                                          Width="110"
+                                          MinWidth="72"
                                           SortMemberPath="Comment">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
