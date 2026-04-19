@@ -101,7 +101,7 @@ pub(crate) async fn execute_sync(
 ) {
     let mut counters = SyncCounters::new();
 
-    let metadata = download_phase(
+    let Some(metadata) = download_phase(
         client,
         store,
         full_sync,
@@ -109,7 +109,10 @@ pub(crate) async fn execute_sync(
         progress_tx,
         &mut counters,
     )
-    .await;
+    .await
+    else {
+        return;
+    };
 
     upload_phase(client, store, progress_tx, &mut counters).await;
 
@@ -150,7 +153,7 @@ async fn download_phase(
     conflict_policy: ConflictPolicy,
     progress_tx: &mpsc::Sender<Result<SyncWithQrzResponse, Status>>,
     counters: &mut SyncCounters,
-) -> SyncMetadata {
+) -> Option<SyncMetadata> {
     send_progress(progress_tx, "Fetching QSOs from QRZ…", 0, 0, 0).await;
 
     let metadata = match store.get_sync_metadata().await {
@@ -173,7 +176,7 @@ async fn download_phase(
                 Some(format!("Failed to load local QSOs: {err}")),
             )
             .await;
-            return metadata;
+            return None;
         }
     };
 
@@ -201,7 +204,7 @@ async fn download_phase(
                 Some(format!("Failed to fetch QSOs from QRZ: {err}")),
             )
             .await;
-            return metadata;
+            return None;
         }
     };
 
@@ -264,7 +267,7 @@ async fn download_phase(
         }
     }
 
-    metadata
+    Some(metadata)
 }
 
 /// Insert a QSO downloaded from QRZ that has no local match.
@@ -964,6 +967,42 @@ mod tests {
         assert_eq!(
             metadata.qrz_qso_count, 2,
             "qrz_qso_count should reflect the two synced remote QSOs"
+        );
+    }
+
+    #[tokio::test]
+    async fn metadata_last_sync_not_advanced_when_download_fails() {
+        let store = MemoryStorage::new();
+
+        let previous = SyncMetadata {
+            qrz_qso_count: 42,
+            qrz_logbook_owner: Some("W1AW".into()),
+            last_sync: Some(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            }),
+        };
+        store.upsert_sync_metadata(&previous).await.unwrap();
+
+        let api = MockQrzApi::new(
+            Err(QrzLogbookError::ApiError("download failed".into())),
+            vec![],
+        );
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+        drop(collect_final(rx).await);
+
+        let after = store.get_sync_metadata().await.unwrap();
+        assert_eq!(
+            after.last_sync.as_ref().map(|ts| ts.seconds),
+            previous.last_sync.as_ref().map(|ts| ts.seconds),
+            "last_sync must not move forward when download fails"
+        );
+        assert_eq!(
+            after.qrz_qso_count, previous.qrz_qso_count,
+            "qrz_qso_count must remain unchanged when download fails"
         );
     }
 
