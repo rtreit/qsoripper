@@ -1,0 +1,34 @@
+{
+  "inspectSurface": "MainWindow",
+  "window": {
+    "title": "QsoRipper",
+    "x": 80,
+    "y": 80,
+    "width": 1024,
+    "height": 640
+  },
+  "actions": [
+    { "type": "wait", "milliseconds": 800 },
+    {
+      "type": "screenshot-element",
+      "automationId": "RecentQsoGrid",
+      "path": "grid-frozen-seam-before.png"
+    },
+    {
+      "type": "drag",
+      "name": "Position",
+      "controlType": "Thumb",
+      "relativeX": 0.5,
+      "relativeY": 0.5,
+      "deltaX": 120,
+      "deltaY": 0
+    },
+    { "type": "wait", "milliseconds": 250 },
+    {
+      "type": "screenshot-element",
+      "automationId": "RecentQsoGrid",
+      "path": "grid-frozen-seam-after.png"
+    },
+    { "type": "dump-tree", "path": "grid-frozen-seam-tree.json" }
+  ]
+}

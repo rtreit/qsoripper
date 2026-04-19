@@ -52,7 +52,6 @@
       <Setter Property="CanUserSortColumns" Value="True" />
       <Setter Property="HeadersVisibility" Value="Column" />
       <Setter Property="GridLinesVisibility" Value="Horizontal" />
-      <Setter Property="FrozenColumnCount" Value="5" />
       <Setter Property="BorderThickness" Value="0" />
       <Setter Property="SelectionMode" Value="Extended" />
       <Setter Property="IsReadOnly" Value="False" />
@@ -89,6 +88,9 @@
     <!-- Consistent text styling for data grid content -->
     <Style Selector="DataGrid#RecentQsoGrid DataGridCell TextBlock">
       <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="TextWrapping" Value="NoWrap" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+      <Setter Property="ClipToBounds" Value="True" />
     </Style>
 
   </Window.Styles>
@@ -915,6 +917,12 @@
             <TextBlock Text="{Binding ActiveProfileText}" FontSize="11.5" TextTrimming="CharacterEllipsis" MaxWidth="180" />
             <TextBlock Text="|" Opacity="0.45" />
             <TextBlock Text="{Binding ActiveEngineText}" FontSize="11.5" TextTrimming="CharacterEllipsis" MaxWidth="260" />
+            <TextBlock Text="|" Opacity="0.45" IsVisible="{Binding HasEngineSwitchStatus}" />
+            <TextBlock Text="{Binding EngineSwitchStatusText}"
+                       FontSize="11.5"
+                       TextTrimming="CharacterEllipsis"
+                       MaxWidth="240"
+                       IsVisible="{Binding HasEngineSwitchStatus}" />
           </StackPanel>
         </Border>
       </Grid>

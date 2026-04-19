@@ -439,6 +439,41 @@ function Capture-WindowScreenshot {
     return $resolvedPath
 }
 
+function Capture-ElementScreenshot {
+    param(
+        [System.Windows.Automation.AutomationElement]$Element,
+        [System.Windows.Automation.AutomationElement]$Window,
+        [string]$Path
+    )
+
+    $resolvedPath = Resolve-ArtifactPath -Path $Path
+    $directory = Split-Path -Parent $resolvedPath
+    if (-not [string]::IsNullOrWhiteSpace($directory)) {
+        New-Item -ItemType Directory -Force -Path $directory | Out-Null
+    }
+
+    Activate-Window -Window $Window
+
+    $rect = $Element.Current.BoundingRectangle
+    $left = [int][Math]::Floor($rect.Left)
+    $top = [int][Math]::Floor($rect.Top)
+    $width = [int][Math]::Ceiling($rect.Width)
+    $height = [int][Math]::Ceiling($rect.Height)
+
+    if ($width -le 0 -or $height -le 0) {
+        throw "Element has no visible bounds for screenshot capture."
+    }
+
+    $bitmap = New-Object System.Drawing.Bitmap($width, $height)
+    $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+    $graphics.CopyFromScreen($left, $top, 0, 0, (New-Object System.Drawing.Size($width, $height)))
+    $bitmap.Save($resolvedPath, [System.Drawing.Imaging.ImageFormat]::Png)
+    $graphics.Dispose()
+    $bitmap.Dispose()
+    $script:Artifacts.Add($resolvedPath)
+    return $resolvedPath
+}
+
 function Dump-WindowTree {
     param([System.Windows.Automation.AutomationElement]$Window, [string]$Path)
 
@@ -546,6 +581,13 @@ function Run-Actions {
                 $windowTitle = Get-ActionValue -Action $action -Name "windowTitle" -Default $script:MainWindowTitle
                 $window = Get-TopLevelWindow -ProcessId $Process.Id -WindowTitle $windowTitle -TimeoutMs 10000
                 $null = Capture-WindowScreenshot -Window $window -Path ([string](Get-ActionValue -Action $action -Name "path" -Default ($type + ".png")))
+            }
+
+            "screenshot-element" {
+                $windowTitle = Get-ActionValue -Action $action -Name "windowTitle" -Default $script:MainWindowTitle
+                $window = Get-TopLevelWindow -ProcessId $Process.Id -WindowTitle $windowTitle -TimeoutMs 10000
+                $element = Find-UiElement -ProcessId $Process.Id -Selector $action -TimeoutMs ([int](Get-ActionValue -Action $action -Name "timeoutMs" -Default 10000))
+                $null = Capture-ElementScreenshot -Element $element -Window $window -Path ([string](Get-ActionValue -Action $action -Name "path" -Default "element.png"))
             }
 
             "dump-tree" {

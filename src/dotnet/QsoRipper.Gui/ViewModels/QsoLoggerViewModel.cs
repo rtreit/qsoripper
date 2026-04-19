@@ -231,6 +231,8 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
         var band = SelectedBand;
         var mode = SelectedMode;
+        var utcEnd = DateTimeOffset.UtcNow;
+        var utcStart = _timerRunning ? _qsoStartTime : utcEnd;
 
         var qso = new QsoRecord
         {
@@ -239,7 +241,8 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
             Mode = mode.ProtoMode,
             RstSent = ParseRst(RstSent.Trim()),
             RstReceived = ParseRst(RstRcvd.Trim()),
-            UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            UtcTimestamp = Timestamp.FromDateTimeOffset(utcStart),
+            UtcEndTimestamp = Timestamp.FromDateTimeOffset(utcEnd),
         };
 
         if (!string.IsNullOrWhiteSpace(mode.Submode))
