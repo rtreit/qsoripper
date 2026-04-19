@@ -2200,7 +2200,7 @@ station_callsign = "K7RND"
         drop(runtime_config);
         drop(setup_state);
         let config_directory = config_path.parent().expect("config directory");
-        fs::remove_dir_all(config_directory).expect("remove temp config directory");
+        let _ = fs::remove_dir_all(config_directory);
     }
 
     #[allow(clippy::too_many_lines)]

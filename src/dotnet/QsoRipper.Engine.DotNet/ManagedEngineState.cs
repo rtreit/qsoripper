@@ -788,8 +788,8 @@ internal sealed class ManagedEngineState
                     };
                 }
 
-                var snapshot = BuildConfiguredRigSnapshotNoLock(_rigControl);
-                return BuildRigStatusResponse(snapshot, _rigControl);
+                var configuredSnapshot = BuildConfiguredRigSnapshotNoLock(_rigControl);
+                return BuildRigStatusResponse(configuredSnapshot, _rigControl);
             }
         }
 
@@ -897,7 +897,7 @@ internal sealed class ManagedEngineState
         return snapshot;
     }
 
-    private RigSnapshot BuildConfiguredRigSnapshotNoLock(RigControlSettings settings)
+    private static RigSnapshot BuildConfiguredRigSnapshotNoLock(RigControlSettings settings)
     {
         var host = settings.HasHost && !string.IsNullOrWhiteSpace(settings.Host)
             ? settings.Host

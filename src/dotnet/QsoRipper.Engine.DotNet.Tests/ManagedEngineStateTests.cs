@@ -349,22 +349,13 @@ public sealed class ManagedEngineStateTests : IDisposable
     [Fact]
     public void Build_rig_snapshot_connected_omits_error_message_without_monitor()
     {
-        var state = CreateState();
-        state.SaveSetup(new SaveSetupRequest
+        var state = CreateStateWithRigSnapshot(new RigSnapshot
         {
-            StationProfile = new StationProfile
-            {
-                ProfileName = "Home",
-                StationCallsign = "K7RND",
-                OperatorCallsign = "K7RND",
-                Grid = "CN87"
-            },
-            RigControl = new RigControlSettings
-            {
-                Enabled = true,
-                Host = "127.0.0.1",
-                Port = 4532
-            }
+            Status = RigConnectionStatus.Connected,
+            FrequencyHz = 14_074_000,
+            Band = Band._20M,
+            Mode = Mode.Ft8,
+            SampledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         });
 
         var snapshot = state.BuildRigSnapshot();
