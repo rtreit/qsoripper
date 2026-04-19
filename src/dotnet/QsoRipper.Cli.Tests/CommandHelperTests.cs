@@ -258,6 +258,7 @@ public sealed class CommandHelperTests
         {
             { ["--limit", "oops"], "Invalid value for --limit: oops" },
             { ["--after", "yesterdayish"], "Invalid --after value. Use relative (2.days, 3.hours) or absolute (2026-04-10)." },
+            { ["--after", "2147483647.months"], "Invalid --after value. Use relative (2.days, 3.hours) or absolute (2026-04-10)." },
             { ["--callsign"], "Missing value for --callsign." },
             { ["--unknown"], "Unknown option: --unknown" }
         };
@@ -391,6 +392,18 @@ public sealed class CommandHelperTests
         var enrich = false;
 
         var success = UpdateQsoCommand.TryApplyUpdates(["--at", "not-a-time"], qso, ref enrich, out var error);
+
+        Assert.False(success);
+        Assert.Contains("Invalid --at value", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryApplyUpdates_rejects_oversized_relative_at_value()
+    {
+        var qso = new QsoRecord { WorkedCallsign = "W1AW" };
+        var enrich = false;
+
+        var success = UpdateQsoCommand.TryApplyUpdates(["--at", "2147483647.months"], qso, ref enrich, out var error);
 
         Assert.False(success);
         Assert.Contains("Invalid --at value", error, StringComparison.Ordinal);

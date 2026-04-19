@@ -32,16 +32,27 @@ internal static class TimeParser
         var unit = parts[1].ToLowerInvariant();
         var now = DateTime.UtcNow;
 
-        result = unit switch
+        try
         {
-            "minutes" or "minute" or "min" => now.AddMinutes(-count),
-            "hours" or "hour" or "hr" => now.AddHours(-count),
-            "days" or "day" => now.AddDays(-count),
-            "weeks" or "week" => now.AddDays(-count * 7),
-            "months" or "month" => now.AddMonths(-count),
-            "years" or "year" => now.AddYears(-count),
-            _ => default,
-        };
+            result = unit switch
+            {
+                "minutes" or "minute" or "min" => now.AddMinutes(-count),
+                "hours" or "hour" or "hr" => now.AddHours(-count),
+                "days" or "day" => now.AddDays(-count),
+                "weeks" or "week" => now.AddDays(-7d * count),
+                "months" or "month" => now.AddMonths(-count),
+                "years" or "year" => now.AddYears(-count),
+                _ => default,
+            };
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
 
         return result != default;
     }
