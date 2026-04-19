@@ -529,10 +529,10 @@ static int TryCliCandidate(const WCHAR *base, const WCHAR *config, int versioned
 {
     if (versioned)
         _snwprintf(g_cli_path, MAX_PATH,
-                   L"%s\\QsoRipper.Cli\\%s\\net10.0\\QsoRipper.Cli.exe", base, config);
+                   L"%s\\qsoripper-cli\\%s\\net10.0\\QsoRipper.Cli.exe", base, config);
     else
         _snwprintf(g_cli_path, MAX_PATH,
-                   L"%s\\QsoRipper.Cli\\%s\\QsoRipper.Cli.exe", base, config);
+                   L"%s\\qsoripper-cli\\%s\\QsoRipper.Cli.exe", base, config);
     g_cli_path[MAX_PATH - 1] = L'\0';
     return GetFileAttributesW(g_cli_path) != INVALID_FILE_ATTRIBUTES;
 }
@@ -541,7 +541,7 @@ static void FindCliPath(void)
 {
     /* Try to find QsoRipper.Cli.exe relative to our own exe:
        We're at: .../artifacts/publish/qsoripper-win32/Release/qsoripper-win32.exe
-       CLI is at: .../artifacts/publish/QsoRipper.Cli/{Debug|Release}[/net10.0]/QsoRipper.Cli.exe */
+       CLI is at: .../artifacts/publish/qsoripper-cli/{Debug|Release}[/net10.0]/QsoRipper.Cli.exe */
     WCHAR module[MAX_PATH];
     GetModuleFileNameW(NULL, module, MAX_PATH);
 
