@@ -77,6 +77,7 @@ function Invoke-Build([string]$Step, [string]$Command, [string[]]$Arguments) {
 
 $Win32SourceDir = Join-Path $PSScriptRoot 'src' 'c' 'qsoripper-win32'
 $Win32Source = Join-Path $Win32SourceDir 'src' 'main.c'
+$Win32FfiGateSource = Join-Path $Win32SourceDir 'src' 'backend_ffi_gate.c'
 $Win32PublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-win32' | Join-Path -ChildPath $Configuration
 
 function Build-Rust {
@@ -243,7 +244,8 @@ function Build-Win32 {
                  --suppress=missingIncludeSystem `
                  --suppress=missingInclude `
                  --inline-suppr `
-                 $Win32Source
+                 $Win32Source `
+                 $Win32FfiGateSource
         if ($LASTEXITCODE -ne 0) {
             Write-Host 'FAILED: cppcheck found errors' -ForegroundColor Red
             exit $LASTEXITCODE
@@ -264,7 +266,7 @@ function Build-Win32 {
     @"
 @echo off
 call "$vcvars" $arch >nul 2>&1
-cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" "$Win32Source" /Fe:"$exe" /link user32.lib gdi32.lib shell32.lib comctl32.lib
+cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" "$Win32Source" "$Win32FfiGateSource" /Fe:"$exe" /link user32.lib gdi32.lib shell32.lib comctl32.lib
 "@ | Set-Content -LiteralPath $buildScript -Encoding ASCII
 
     Push-Location $Win32PublishDir

@@ -81,6 +81,7 @@ if(BUILD_TESTING)
     add_executable(qsoripper-win32-cli-exitcode-regression
         tests/cli_exit_code_regression.c
         src/main.c
+        src/backend_ffi_gate.c
     )
 
     target_include_directories(qsoripper-win32-cli-exitcode-regression PRIVATE ${FFI_INCLUDE})
