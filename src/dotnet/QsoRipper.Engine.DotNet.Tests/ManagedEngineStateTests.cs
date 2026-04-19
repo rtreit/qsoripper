@@ -462,6 +462,30 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
+    public void Import_adif_skips_invalid_time_on_length_with_warning()
+    {
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87"
+            }
+        });
+
+        var response = state.ImportAdif(
+            Utf8("<CALL:4>W1AW\n<QSO_DATE:8>20260115\n<TIME_ON:1>1\n<BAND:3>20M\n<MODE:4>RTTY\n<EOR>\n"),
+            refresh: false);
+
+        Assert.Equal(0u, response.RecordsImported);
+        Assert.Equal(1u, response.RecordsSkipped);
+        Assert.Contains(response.Warnings, warning => warning.Contains("invalid ADIF date/time '20260115/1'. Skipped.", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void Import_adif_skips_invalid_band_with_warning()
     {
         var state = CreateState();
