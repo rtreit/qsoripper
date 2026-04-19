@@ -105,7 +105,18 @@
   </Window.Styles>
 
   <DockPanel ClipToBounds="True">
-      <Menu DockPanel.Dock="Top">
+      <DockPanel DockPanel.Dock="Top">
+      <TextBlock DockPanel.Dock="Right"
+                 Text="{Binding CurrentUtcTime}"
+                 FontSize="16"
+                 FontWeight="SemiBold"
+                 FontFamily="Cascadia Mono, Consolas, monospace"
+                 Foreground="#00d4ff"
+                 Focusable="False"
+                 IsHitTestVisible="False"
+                 VerticalAlignment="Center"
+                 Margin="0,0,12,0" />
+      <Menu>
         <MenuItem x:Name="FileMenuItem"
                   AutomationProperties.AutomationId="FileMenuItem"
                   Header="_File">
@@ -153,6 +164,7 @@
                   Command="{Binding RefreshEngineAvailabilityCommand}" />
       </MenuItem>
     </Menu>
+      </DockPanel>
 
     <Panel>
       <Grid RowDefinitions="Auto,Auto,*,Auto"
