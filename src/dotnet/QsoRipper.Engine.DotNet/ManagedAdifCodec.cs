@@ -960,6 +960,8 @@ internal static class ManagedAdifCodec
                     }
 
                     break;
+                default:
+                    return false;
             }
         }
 
