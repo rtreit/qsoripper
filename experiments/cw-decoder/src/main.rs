@@ -559,6 +559,51 @@ enum Cmd {
         #[arg(long, alias = "multi", default_value_t = 0)]
         multi_pitch: usize,
     },
+    /// Region-based streaming decoder. Detects active morse bursts
+    /// (separated by background static), decodes each burst with the
+    /// ditdah baseline at its own auto-WPM, and emits append-only
+    /// transcript JSON events. Designed for real-world QSO audio with
+    /// pauses between transmissions and bursts at very different speeds.
+    ///
+    /// Currently file-only. Emits the same `transcript` event shape as
+    /// stream-live-v3 so the GUI's CwQsoTranscriptAggregator picks it up
+    /// transparently.
+    StreamRegion {
+        /// Decode an audio file (mp3/wav/m4a/...) at real-time pace.
+        #[arg(long)]
+        file: PathBuf,
+        /// Emit NDJSON events to stdout (one per line).
+        #[arg(long)]
+        json: bool,
+        /// Re-run region detection every N ms. Default 500 ms.
+        #[arg(long, default_value_t = 500)]
+        decode_every_ms: u64,
+        /// Trailing-static seconds required before a region is committed.
+        /// Higher values reduce mid-burst churn at the cost of latency.
+        #[arg(long, default_value_t = 0.6)]
+        stable_latency_s: f32,
+        /// Treat regions separated by less than this gap (seconds) as one
+        /// burst. Defaults are tuned for the common case where bursts are
+        /// separated by static of ~1 s or more.
+        #[arg(long, default_value_t = 0.5)]
+        merge_gap_s: f32,
+        /// Drop detected runs shorter than this many seconds (rejects
+        /// transient static spikes).
+        #[arg(long, default_value_t = 0.3)]
+        min_region_s: f32,
+        /// Threshold = noise_floor + factor * (signal_floor - noise_floor).
+        /// 0.30 works well across the test set; raise for noisier feeds.
+        #[arg(long, default_value_t = 0.30)]
+        threshold_factor: f32,
+        /// Symmetrical padding (seconds) added to each detected region
+        /// before decoding so leading/trailing dits aren't clipped.
+        #[arg(long, default_value_t = 0.15)]
+        pad_s: f32,
+        /// Replay the file as fast as possible instead of at real-time
+        /// pace. Useful for tests and one-shot batch decodes.
+        #[arg(long)]
+        no_realtime: bool,
+    },
     /// Diagnostic: scan candidate pitches across an audio file and print
     /// the trial-decode Fisher score per pitch. Use this to compare
     /// faint signals vs noise and tune lock thresholds.
@@ -1077,6 +1122,27 @@ fn run_cli() -> Result<()> {
             file.as_deref(),
             play,
             multi_pitch,
+        ),
+        Cmd::StreamRegion {
+            file,
+            json,
+            decode_every_ms,
+            stable_latency_s,
+            merge_gap_s,
+            min_region_s,
+            threshold_factor,
+            pad_s,
+            no_realtime,
+        } => run_stream_region_file(
+            &file,
+            json,
+            decode_every_ms,
+            stable_latency_s,
+            merge_gap_s,
+            min_region_s,
+            threshold_factor,
+            pad_s,
+            !no_realtime,
         ),
         Cmd::ProbeFisher {
             path,
@@ -4490,7 +4556,164 @@ fn run_stream_live_v3_file(
     Ok(())
 }
 
-/// Returns true when the per-cycle decoder snapshot is trustworthy
+/// Region-based streaming decoder (file mode).
+///
+/// Streams the file at real-time pace into a [`RegionStreamer`] that
+/// detects active morse bursts (separated by background static),
+/// decodes each burst at its own auto-WPM with the ditdah baseline,
+/// and emits append-only `transcript` JSON events to stdout.
+///
+/// Validated end-to-end on the `radio-20260502-105714.mp3` real-world
+/// sample (4 bursts at 13/8/39/29 WPM separated by ~1-7s of static)
+/// where it produces an exact match for the ground truth transcript.
+fn run_stream_region_file(
+    path: &std::path::Path,
+    json: bool,
+    decode_every_ms: u64,
+    stable_latency_s: f32,
+    merge_gap_s: f32,
+    min_region_s: f32,
+    threshold_factor: f32,
+    pad_s: f32,
+    realtime: bool,
+) -> Result<()> {
+    use cw_decoder_poc::region_stream::RegionStreamConfig;
+    use cw_decoder_poc::region_streamer::{RegionStreamer, RegionStreamerConfig};
+    use std::time::{Duration, Instant};
+
+    let decoded = audio::decode_file(path)?;
+    let sr = decoded.sample_rate;
+    let total_samples = decoded.samples.len();
+    let duration_s = total_samples as f32 / sr.max(1) as f32;
+
+    let region_cfg = RegionStreamConfig {
+        merge_gap_s,
+        min_region_s,
+        threshold_factor,
+        pad_s,
+        ..RegionStreamConfig::default()
+    };
+
+    let cfg = RegionStreamerConfig {
+        region: region_cfg,
+        stable_latency_s,
+    };
+    let mut streamer = RegionStreamer::with_config(sr, cfg);
+
+    let mut emitter = if json {
+        Some(json::JsonEmitter::new())
+    } else {
+        None
+    };
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            0.0,
+            serde_json::json!({
+                "type": "ready",
+                "source": "stream-region-file",
+                "device": format!("file:{}", path.display()),
+                "rate": sr,
+                "decode_every_ms": decode_every_ms,
+                "duration_s": duration_s,
+                "stable_latency_s": stable_latency_s,
+                "merge_gap_s": merge_gap_s,
+                "min_region_s": min_region_s,
+                "threshold_factor": threshold_factor,
+                "pad_s": pad_s,
+            }),
+        );
+    } else {
+        println!(
+            "Streaming file (region-based): {} @ {} Hz ({:.2}s); decode every {} ms; stable_latency={:.2}s",
+            path.display(),
+            sr,
+            duration_s,
+            decode_every_ms,
+            stable_latency_s,
+        );
+    }
+
+    let chunk_period = Duration::from_millis(50);
+    let chunk_samples = ((sr as u64 * 50) / 1000).max(1) as usize;
+    let started = Instant::now();
+    let mut last_decode_at = Instant::now() - Duration::from_millis(decode_every_ms);
+    let decode_period = Duration::from_millis(decode_every_ms);
+    let mut cursor = 0usize;
+
+    while cursor < total_samples {
+        let end = (cursor + chunk_samples).min(total_samples);
+        let chunk = &decoded.samples[cursor..end];
+        cursor = end;
+        streamer.ingest(chunk);
+
+        if last_decode_at.elapsed() >= decode_period {
+            last_decode_at = Instant::now();
+            let committed = streamer.try_commit();
+            let t = started.elapsed().as_secs_f32();
+            emit_region_transcript(emitter.as_mut(), t, streamer.transcript(), &committed);
+        }
+
+        if realtime {
+            std::thread::sleep(chunk_period);
+        }
+    }
+
+    // Final commit: force-flush any in-flight regions.
+    let final_committed = streamer.flush();
+    let t = started.elapsed().as_secs_f32();
+    emit_region_transcript(emitter.as_mut(), t, streamer.transcript(), &final_committed);
+
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            t,
+            serde_json::json!({
+                "type": "end",
+                "transcript": streamer.transcript(),
+                "committed": streamer.transcript(),
+            }),
+        );
+    } else {
+        println!();
+        println!("Final transcript (region-based):");
+        println!("{}", streamer.transcript());
+    }
+    Ok(())
+}
+
+fn emit_region_transcript(
+    emitter: Option<&mut json::JsonEmitter>,
+    t: f32,
+    transcript: &str,
+    just_committed: &[cw_decoder_poc::region_streamer::CommittedRegion],
+) {
+    if let Some(em) = emitter {
+        let appended: String = just_committed
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        em.emit(
+            t,
+            serde_json::json!({
+                "type": "transcript",
+                "text": transcript,
+                "appended": appended,
+                "transcript": transcript,
+                "committed": transcript,
+                "provisional": "",
+                "wpm": 0.0,
+            }),
+        );
+    } else if !just_committed.is_empty() {
+        for r in just_committed {
+            println!(
+                "[t={:>6.2}s region {:.2}-{:.2}] {}",
+                t, r.start_s, r.end_s, r.text
+            );
+        }
+    }
+}
+
 /// enough to be stitched into the persistent session transcript.
 ///
 /// The streamer enters `LOCKED` (i.e. `viz.locked_wpm = Some(_)`) only
