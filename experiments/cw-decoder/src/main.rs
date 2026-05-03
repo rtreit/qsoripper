@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cw_decoder_poc::{
     audio, bench_latency, decoder, ditdah_streaming, harvest, json, log_capture, preview,
-    streaming, streaming_v2, tui,
+    streaming, streaming_v2, synthetic_qso, tui,
 };
 
 #[derive(Parser, Debug)]
@@ -768,6 +768,35 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         seed: u64,
     },
+
+    /// Generate deterministic ragchew and contest QSO CW samples, then
+    /// validate them through the region-isolated decoder baseline.
+    GenQsoSuite {
+        /// Directory for generated WAV, truth sidecar, and manifest files.
+        /// If omitted, samples are generated and validated in memory only.
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Number of ragchew-style examples to generate.
+        #[arg(long, default_value_t = 6)]
+        ragchew: usize,
+        /// Number of contest-style examples to generate.
+        #[arg(long, default_value_t = 6)]
+        contest: usize,
+        /// Sample rate in Hz.
+        #[arg(long, default_value_t = 12000)]
+        sample_rate: u32,
+        /// RegionStreamer decode cadence used for validation.
+        /// Reserved for streaming parity; the current suite validates with
+        /// the same batch region core used by RegionStreamer commits.
+        #[arg(long, default_value_t = 500)]
+        decode_every_ms: u64,
+        /// Emit one NDJSON validation row per generated example.
+        #[arg(long)]
+        json: bool,
+        /// Exit non-zero if any generated example is not copied exactly.
+        #[arg(long)]
+        require_exact: bool,
+    },
 }
 
 const CLI_THREAD_STACK_BYTES: usize = 16 * 1024 * 1024;
@@ -1240,6 +1269,23 @@ fn run_cli() -> Result<()> {
             dit_weight,
             noise,
             seed,
+        ),
+        Cmd::GenQsoSuite {
+            output,
+            ragchew,
+            contest,
+            sample_rate,
+            decode_every_ms,
+            json,
+            require_exact,
+        } => run_gen_qso_suite(
+            output.as_deref(),
+            ragchew,
+            contest,
+            sample_rate,
+            decode_every_ms,
+            json,
+            require_exact,
         ),
     }
 }
@@ -3955,6 +4001,110 @@ fn run_gen_rough_fist(
     );
     println!("Truth: {}", truth_path.display());
     println!("Text:  {canonical_text}");
+    Ok(())
+}
+
+fn run_gen_qso_suite(
+    output: Option<&std::path::Path>,
+    ragchew_count: usize,
+    contest_count: usize,
+    sample_rate: u32,
+    decode_every_ms: u64,
+    json: bool,
+    require_exact: bool,
+) -> Result<()> {
+    let examples = synthetic_qso::generate_qso_suite(sample_rate, ragchew_count, contest_count);
+    let mut manifests = Vec::new();
+    let mut validations = Vec::with_capacity(examples.len());
+    for example in &examples {
+        let validation = synthetic_qso::validate_example(example, decode_every_ms);
+        let validation = if let Some(output) = output {
+            let manifest = synthetic_qso::write_example_files(example, &validation, output)?;
+            let written = manifest.validation.clone();
+            manifests.push(manifest);
+            written
+        } else {
+            validation
+        };
+        validations.push(validation);
+    }
+    let manifest_path = if let Some(output) = output {
+        Some(synthetic_qso::write_manifest(output, &manifests)?)
+    } else {
+        None
+    };
+
+    if json {
+        for validation in &validations {
+            println!(
+                "{}",
+                serde_json::to_string(validation).context("serializing validation")?
+            );
+        }
+        let failures = validations.iter().filter(|v| !v.exact_match).count();
+        if let Some(path) = manifest_path {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "type": "manifest",
+                    "path": path,
+                    "examples": validations.len(),
+                    "all_exact": validations.iter().all(|v| v.exact_match),
+                })
+            );
+        }
+        if require_exact && failures > 0 {
+            anyhow::bail!("{failures} synthetic QSO validation(s) failed exact-copy check");
+        }
+        return Ok(());
+    }
+
+    println!(
+        "Generated {} synthetic QSOs ({} ragchew, {} contest) @ {} Hz; decode_every={} ms",
+        validations.len(),
+        ragchew_count,
+        contest_count,
+        sample_rate,
+        decode_every_ms
+    );
+    if let Some(path) = manifest_path {
+        println!(
+            "Artifacts: {}",
+            path.parent().unwrap_or(path.as_path()).display()
+        );
+        println!("Manifest:  {}", path.display());
+    }
+    println!();
+    println!(
+        "{:<12} {:<8} {:>7} {:>7} {:<6} transcript",
+        "id", "kind", "sec", "regions", "match"
+    );
+    println!("{}", "-".repeat(96));
+    for validation in &validations {
+        println!(
+            "{:<12} {:<8} {:>7.2} {:>7} {:<6} {}",
+            validation.id,
+            validation.kind.as_str(),
+            validation.duration_s,
+            validation.region_count,
+            if validation.exact_match { "yes" } else { "NO" },
+            validation.transcript
+        );
+        if !validation.exact_match {
+            println!("  truth: {}", validation.truth);
+        }
+    }
+    let failures = validations.iter().filter(|v| !v.exact_match).count();
+    println!();
+    println!(
+        "Exact-copy summary: {}/{} passed, {} failed",
+        validations.len() - failures,
+        validations.len(),
+        failures
+    );
+    if require_exact && failures > 0 {
+        anyhow::bail!("{failures} synthetic QSO validation(s) failed exact-copy check");
+    }
     Ok(())
 }
 
