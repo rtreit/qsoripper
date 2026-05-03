@@ -9,6 +9,87 @@ The project has converged on two parallel goals:
 
 The current breakthrough is that the best live behavior did **not** come from rolling transcript windows, overlap stitching, or commit heuristics. It came from consuming the same stable dit/dah/gap event stream that paints the Visualizer bars and appending each matured event once in audio order. That path is now the "line in the sand": Decode, Labeling, Tuning, Bench, and Visualizer should all key off it first, while experimental decoders are compared against it rather than silently replacing it.
 
+> **Foundational baseline (May 2026): region-isolated streaming transcript.**
+>
+> A full QEX-style technical write-up of this baseline (architecture,
+> design rationale, results, and future directions) lives at
+> [`docs/cw-decoder-architecture.html`](docs/cw-decoder-architecture.html).
+> Open it in any browser for the rendered article; it is the canonical
+> reference for the architecture summarized here.
+>
+> The append-only event-stream foundation is excellent for *driving the
+> visualizer* (waveform, lock state, pitch, WPM, classified events). But
+> for the **transcript** itself, real-world QSO audio with multiple
+> bursts at very different WPMs separated by background static (operator
+> pauses, TX/RX cycles, ragchew vs contest mixes) needs a different
+> decoder shape: detect each burst as a region, decode each region
+> independently with its own pitch/WPM/k-means lock, and append the
+> region's text once it has been stable for a trailing-static window.
+>
+> The reference implementation lives in
+> `src\region_streamer.rs` (`RegionStreamer`) and
+> `src\region_stream.rs` (`decode_region_stream`). It is exposed three
+> ways:
+>
+> - **Batch mode** — `cw-decoder stream-region --file <path>` — runs
+>   region detection over the entire file and emits one transcript per
+>   region. This is the canonical reference output.
+> - **Live streaming** — `cw-decoder stream-live-v3 --region-transcript`
+>   — runs `RegionStreamer` *alongside* the V3 envelope streamer. The
+>   envelope path keeps driving viz events; only the cumulative
+>   `transcript` field on emitted `text` / `appended` / `end` events is
+>   sourced from region-isolated decode. `RegionStreamer::trim_committed`
+>   bounds memory growth in long live sessions and `RegionStreamer::reset`
+>   honors stdin-control `ResetLock` requests cleanly without restarting
+>   the process.
+> - **Both UI surfaces wire `--region-transcript`** by default:
+>   - Production logger GUI (F7 live mic) —
+>     `src\dotnet\QsoRipper.Gui\Services\CwDecoderProcessSampleSource.cs`
+>   - Experimental CW visualizer GUI (live mic + file replay) —
+>     `experiments\cw-decoder\gui\Services\CwDecoderProcess.cs`
+>
+> **Reference success metric.** This baseline produces a 100% exact-match
+> transcript for the multi-burst real-world sample
+> `cw-samples\training-set-b\radio-20260502-105714.mp3` (truth file
+> `radio-20260502-105714.truth.txt`):
+>
+> ```text
+> IHU NVCHU 7QP W7N 7QP W7N
+> ```
+>
+> Both `stream-region` (batch) and `stream-live-v3 --region-transcript`
+> (live streaming) produce that exact string with the default
+> `RegionStreamerConfig::default()` config (merge_gap=0.5s,
+> min_region=0.3s, threshold_factor=0.30, pad=0.15s,
+> stable_latency=0.6s) and `--decode-every-ms 250`.
+>
+> **Future experiments must not regress this baseline.** Before merging
+> any change that touches `region_streamer.rs`, `region_stream.rs`,
+> `stream-live-v3`, the GUI launchers, or the underlying decoder
+> primitives, re-run the cross-validation:
+>
+> ```powershell
+> cd C:\Users\randy\Git\qsoripper
+> $exe  = "experiments\cw-decoder\target\release\cw-decoder.exe"
+> $f    = "C:\Users\randy\OneDrive\Documents\Home\Hobbies\Ham Radio\QSORipper\QSO Audio Samples\cw-samples\training-set-b\radio-20260502-105714.mp3"
+> $truth = (Get-Content "C:\Users\randy\OneDrive\Documents\Home\Hobbies\Ham Radio\QSORipper\QSO Audio Samples\cw-samples\training-set-b\radio-20260502-105714.truth.txt" -Raw).Trim()
+> & $exe stream-region --file $f --json --no-realtime --decode-every-ms 250 |
+>     Select-String '"type":"end"' | Select-Object -Last 1
+> & $exe stream-live-v3 --file $f --json --region-transcript --decode-every-ms 250 |
+>     Select-String '"type":"end"' | Select-Object -Last 1
+> # Both `transcript` fields must equal $truth.
+> ```
+>
+> If you need to roll back to this baseline at any point, the reference
+> commits are PR #375 (region-based streaming decoder, batch path) and
+> PR #376 (live streaming + GUI wiring) on branch
+> `u/randy/region-based-streaming-cw`.
+>
+> The append-only event-stream foundation in `append_decode.rs` is
+> still the source of truth for the visualizer's bar painting and for
+> the `cw_decode_rx_wpm` aggregator that feeds the production logger;
+> region-isolated decode supplements it for transcript text only.
+
 > **Integration status (round 1, issue #321)**: the production GUI now hosts the
 > `cw-decoder` binary as a subprocess and auto-fills `QsoRecord.cw_decode_rx_wpm`
 > on logged CW QSOs (time-weighted mean over the QSO start/end window, ADIF
