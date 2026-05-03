@@ -61,7 +61,13 @@ The current breakthrough is that the best live behavior did **not** come from ro
 > (live streaming) produce that exact string with the default
 > `RegionStreamerConfig::default()` config (merge_gap=0.5s,
 > min_region=0.3s, threshold_factor=0.30, pad=0.15s,
-> stable_latency=0.6s) and `--decode-every-ms 250`.
+> min_tonal_prominence_ratio=8.0, stable_latency=0.6s) and
+> `--decode-every-ms 250`.
+>
+> The baseline now also includes deterministic synthetic impairment
+> coverage in `region_streamer.rs`: clean four-burst copy, quiet static
+> gaps, noise-only no-ghost-text, and a moderate white-noise + QSB +
+> offset-QRM exchange (`CQ TEST KC7AVA 73`).
 >
 > **Future experiments must not regress this baseline.** Before merging
 > any change that touches `region_streamer.rs`, `region_stream.rs`,
@@ -78,6 +84,7 @@ The current breakthrough is that the best live behavior did **not** come from ro
 > & $exe stream-live-v3 --file $f --json --region-transcript --decode-every-ms 250 |
 >     Select-String '"type":"end"' | Select-Object -Last 1
 > # Both `transcript` fields must equal $truth.
+> cargo test --manifest-path experiments\cw-decoder\Cargo.toml region_streamer::tests::synthetic
 > ```
 >
 > If you need to roll back to this baseline at any point, the reference

@@ -425,6 +425,18 @@ threshold    = noise_floor
     clipped.
   </p>
 
+  <p>
+    A later synthetic impairment sweep added one more guard that belongs
+    in the baseline: before a detected run is decoded, it must show
+    narrowband CW-like prominence. The implementation compares Goertzel
+    power at the selected pitch against the run&rsquo;s broadband frame
+    energy and rejects runs below
+    <code>min_tonal_prominence_ratio = 8.0</code>. This prevents pure
+    background static from being promoted into fake regions simply
+    because a percentile threshold can always split random noise into
+    &ldquo;above&rdquo; and &ldquo;below&rdquo; frames.
+  </p>
+
   <h3>3.2 Per-region decode</h3>
 
   <p>
@@ -602,12 +614,41 @@ for region in detected:
   </table>
 
   <p>
-    On two extreme noise-only clips that contain no real CW content, the
-    incremental streaming and the batch reference produce different
-    sequences of garbage characters. This is an inherent property of
-    incremental versus batch noise-floor estimation and does not affect
-    real-CW operation. It is discussed in <a href="#future">Section&nbsp;7</a>.
+    A synthetic impairment suite now exercises the baseline beyond the
+    reference MP3. It generates deterministic CW with quiet static gaps,
+    additive white noise, QSB amplitude fading, an offset continuous-tone
+    QRM carrier, and a combined noise/QSB/QRM exchange. The suite also
+    includes a noise-only stream that previously produced ghost text;
+    after the tonal-prominence guard, it remains empty.
   </p>
+
+  <table>
+    <thead>
+      <tr><th>Synthetic condition</th><th>Expected behavior</th><th>Result</th></tr>
+    </thead>
+    <tbody>
+      <tr class="match">
+        <td>clean four-burst reference shape</td>
+        <td><code>IHU NVCHU 7QP W7N 7QP W7N</code>, four regions</td>
+        <td>pass</td>
+      </tr>
+      <tr class="match">
+        <td>quiet static between bursts</td>
+        <td>same exact copy, no extra regions</td>
+        <td>pass</td>
+      </tr>
+      <tr class="match">
+        <td>noise-only static stream</td>
+        <td>empty transcript</td>
+        <td>pass</td>
+      </tr>
+      <tr class="match">
+        <td>moderate white noise + QSB + offset QRM</td>
+        <td><code>CQ TEST KC7AVA 73</code></td>
+        <td>pass</td>
+      </tr>
+    </tbody>
+  </table>
 
   <div class="callout">
     <p><span class="label">Validation gates.</span>
