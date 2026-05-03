@@ -45,6 +45,10 @@ pub struct RegionStreamConfig {
     pub pad_s: f32,
     /// Optional pinned WPM for the per-region decode. None = ditdah auto.
     pub pin_wpm: Option<f32>,
+    /// Minimum Goertzel-vs-broadband energy ratio required before a detected
+    /// active run is decoded. White noise can still produce percentile-threshold
+    /// runs; this guard requires those runs to contain a narrowband CW tone.
+    pub min_tonal_prominence_ratio: f32,
 }
 
 impl Default for RegionStreamConfig {
@@ -60,6 +64,7 @@ impl Default for RegionStreamConfig {
             min_region_s: 0.6,
             pad_s: 0.10,
             pin_wpm: None,
+            min_tonal_prominence_ratio: 8.0,
         }
     }
 }
@@ -96,6 +101,16 @@ pub fn decode_region_stream(
     let regions_raw = detect_active_regions(samples, sample_rate, pitch_hz, cfg);
     let mut decoded = Vec::with_capacity(regions_raw.len());
     for (start_s, end_s) in regions_raw {
+        let region_s = (start_s.max(0.0) * sample_rate as f32) as usize;
+        let region_e = ((end_s * sample_rate as f32) as usize).min(samples.len());
+        if region_e <= region_s {
+            continue;
+        }
+        let prominence =
+            tonal_prominence_ratio(&samples[region_s..region_e], sample_rate, pitch_hz, cfg);
+        if prominence < cfg.min_tonal_prominence_ratio.max(0.0) {
+            continue;
+        }
         let pad = cfg.pad_s.max(0.0);
         let s = ((start_s - pad).max(0.0) * sample_rate as f32) as usize;
         let e = (((end_s + pad) * sample_rate as f32) as usize).min(samples.len());
@@ -127,6 +142,38 @@ pub fn decode_region_stream(
         regions: decoded,
         text,
     }
+}
+
+fn tonal_prominence_ratio(
+    samples: &[f32],
+    sample_rate: u32,
+    pitch_hz: f32,
+    cfg: &RegionStreamConfig,
+) -> f32 {
+    let frame_len = ((cfg.frame_len_s * sample_rate as f32).round() as usize).max(64);
+    let frame_step = ((cfg.frame_step_s * sample_rate as f32).round() as usize).max(8);
+    if samples.len() < frame_len {
+        return 0.0;
+    }
+
+    let mut power_sum = 0.0_f64;
+    let mut energy_sum = 0.0_f64;
+    let mut count = 0u32;
+    let mut offset = 0usize;
+    while offset + frame_len <= samples.len() {
+        let frame = &samples[offset..offset + frame_len];
+        power_sum += goertzel_power(frame, sample_rate, pitch_hz) as f64;
+        energy_sum += frame
+            .iter()
+            .map(|sample| (*sample as f64) * (*sample as f64))
+            .sum::<f64>();
+        count += 1;
+        offset += frame_step;
+    }
+    if count == 0 || energy_sum <= f64::EPSILON {
+        return 0.0;
+    }
+    (power_sum / energy_sum) as f32
 }
 
 /// One spectral peak from the goertzel sweep used by the multi-pitch

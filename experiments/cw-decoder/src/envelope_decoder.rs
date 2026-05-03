@@ -2071,12 +2071,7 @@ mod tests {
         let timed = timed_from_pattern(dot, ".--. .- .-. .. ...");
         let est = estimate_dot_period(&timed).expect("intra-element pairs present");
         // Period method should recover 40 ms within 5%.
-        assert!(
-            (est - dot).abs() < 0.05 * dot,
-            "expected ~{}, got {}",
-            dot,
-            est
-        );
+        assert!((est - dot).abs() < 0.05 * dot, "expected ~{dot}, got {est}");
     }
 
     #[test]
