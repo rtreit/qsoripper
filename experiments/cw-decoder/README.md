@@ -69,6 +69,19 @@ The current breakthrough is that the best live behavior did **not** come from ro
 > gaps, noise-only no-ghost-text, and a moderate white-noise + QSB +
 > offset-QRM exchange (`CQ TEST KC7AVA 73`).
 >
+> For broader QSO-debug traffic, use the synthetic suite generator:
+>
+> ```powershell
+> cargo run --manifest-path experiments\cw-decoder\Cargo.toml --bin cw-decoder -- `
+>   gen-qso-suite --output .artifacts\cw-qso-suite --ragchew 6 --contest 6
+> ```
+>
+> The generator emits deterministic ragchew and contest WAVs, `.truth.txt`
+> sidecars, and `manifest.ndjson`, then validates each sample through the
+> region decoder. Use `--require-exact` when you want CI-style non-zero
+> exit on any transcript mismatch; leave it off for exploratory debugging
+> runs where failures are the point.
+>
 > **Future experiments must not regress this baseline.** Before merging
 > any change that touches `region_streamer.rs`, `region_stream.rs`,
 > `stream-live-v3`, the GUI launchers, or the underlying decoder

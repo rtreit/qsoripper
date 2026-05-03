@@ -17,4 +17,5 @@ pub mod region_stream;
 pub mod region_streamer;
 pub mod streaming;
 pub mod streaming_v2;
+pub mod synthetic_qso;
 pub mod tui;

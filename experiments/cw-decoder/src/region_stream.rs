@@ -97,9 +97,57 @@ pub fn decode_region_stream(
         };
     }
 
-    let pitch_hz = estimate_dominant_pitch(samples, sample_rate, cfg);
+    let dominant_pitch_hz = estimate_dominant_pitch(samples, sample_rate, cfg);
+    let mut pitches = find_top_pitch_peaks(
+        samples,
+        sample_rate,
+        &MultiPitchConfig {
+            k: 6,
+            min_separation_hz: 40.0,
+            min_relative_power: 0.08,
+            sweep: cfg.clone(),
+        },
+    )
+    .into_iter()
+    .map(|peak| peak.pitch_hz)
+    .collect::<Vec<_>>();
+    if pitches.is_empty() {
+        pitches.push(dominant_pitch_hz);
+    }
+
+    let mut candidates = Vec::new();
+    for pitch_hz in pitches {
+        collect_region_candidates(samples, sample_rate, cfg, pitch_hz, &mut candidates);
+    }
+    let decoded = dedupe_region_candidates(candidates);
+    let text = decoded
+        .iter()
+        .map(|r| r.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    RegionStreamResult {
+        pitch_hz: dominant_pitch_hz,
+        regions: decoded,
+        text,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct RegionCandidate {
+    start_s: f32,
+    end_s: f32,
+    text: String,
+    score: f32,
+}
+
+fn collect_region_candidates(
+    samples: &[f32],
+    sample_rate: u32,
+    cfg: &RegionStreamConfig,
+    pitch_hz: f32,
+    candidates: &mut Vec<RegionCandidate>,
+) {
     let regions_raw = detect_active_regions(samples, sample_rate, pitch_hz, cfg);
-    let mut decoded = Vec::with_capacity(regions_raw.len());
     for (start_s, end_s) in regions_raw {
         let region_s = (start_s.max(0.0) * sample_rate as f32) as usize;
         let region_e = ((end_s * sample_rate as f32) as usize).min(samples.len());
@@ -126,22 +174,50 @@ pub fn decode_region_stream(
         if text.is_empty() {
             continue;
         }
-        decoded.push(DecodedRegion {
+        let useful_chars = text.chars().filter(|ch| ch.is_ascii_alphanumeric()).count() as f32;
+        candidates.push(RegionCandidate {
             start_s,
             end_s,
             text,
+            score: prominence * (1.0 + useful_chars * 0.05),
         });
     }
-    let text = decoded
-        .iter()
-        .map(|r| r.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
-    RegionStreamResult {
-        pitch_hz,
-        regions: decoded,
-        text,
+}
+
+fn dedupe_region_candidates(mut candidates: Vec<RegionCandidate>) -> Vec<DecodedRegion> {
+    candidates.sort_by(|a, b| {
+        a.start_s
+            .partial_cmp(&b.start_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    let mut chosen: Vec<RegionCandidate> = Vec::new();
+    for candidate in candidates {
+        if let Some(last) = chosen.last_mut() {
+            let overlap =
+                (last.end_s.min(candidate.end_s) - last.start_s.max(candidate.start_s)).max(0.0);
+            let min_len = (last.end_s - last.start_s).min(candidate.end_s - candidate.start_s);
+            if min_len > 0.0 && overlap / min_len >= 0.45 {
+                if candidate.score > last.score {
+                    *last = candidate;
+                }
+                continue;
+            }
+        }
+        chosen.push(candidate);
     }
+    chosen
+        .into_iter()
+        .map(|candidate| DecodedRegion {
+            start_s: candidate.start_s,
+            end_s: candidate.end_s,
+            text: candidate.text,
+        })
+        .collect()
 }
 
 fn tonal_prominence_ratio(
