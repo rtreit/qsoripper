@@ -125,6 +125,44 @@ impl RegionStreamer {
         &self.committed_text
     }
 
+    /// Buffered audio length in seconds (relative to the current buffer
+    /// start, i.e. always >= 0 and bounded by the trim policy).
+    pub fn buffered_seconds(&self) -> f32 {
+        self.head_s
+    }
+
+    /// Reset all streaming state: drop the buffer, clear the committed
+    /// transcript, and reset the commit cursor. Used by the live mic
+    /// path's "ResetLock" stdin-control message so the operator can
+    /// start a new session without restarting the decoder process.
+    pub fn reset(&mut self) {
+        self.buffer.clear();
+        self.last_committed_end_s = 0.0;
+        self.head_s = 0.0;
+        self.committed_text.clear();
+    }
+
+    /// Drop everything in the buffer that ends more than `keep_back_s`
+    /// seconds before the last committed region. Bounds memory growth
+    /// during long-running live capture without losing any in-flight
+    /// (uncommitted) audio. Safe to call after `try_commit`. The
+    /// committed transcript is preserved.
+    pub fn trim_committed(&mut self, keep_back_s: f32) {
+        let cutoff = (self.last_committed_end_s - keep_back_s.max(0.0)).max(0.0);
+        if cutoff <= 0.0 {
+            return;
+        }
+        let sr = self.sample_rate.max(1) as f32;
+        let cut_samples = (cutoff * sr) as usize;
+        if cut_samples == 0 || cut_samples >= self.buffer.len() {
+            return;
+        }
+        self.buffer.drain(..cut_samples);
+        let shift = cut_samples as f32 / sr;
+        self.last_committed_end_s = (self.last_committed_end_s - shift).max(0.0);
+        self.head_s = self.buffer.len() as f32 / sr;
+    }
+
     fn commit_stable_regions(&mut self, force_all: bool) -> Vec<CommittedRegion> {
         if self.buffer.is_empty() {
             return Vec::new();
@@ -218,5 +256,28 @@ mod tests {
         let _ = s.flush();
         let _ = s.flush();
         assert_eq!(s.transcript(), "");
+    }
+
+    #[test]
+    fn streamer_reset_clears_all_state() {
+        let sr = 8_000;
+        let mut s = RegionStreamer::new(sr);
+        s.ingest(&synthesize_silence(sr, 0.5));
+        s.ingest(&morse_e(sr, 12.0));
+        assert!(s.buffered_seconds() > 0.0);
+        s.reset();
+        assert_eq!(s.transcript(), "");
+        assert_eq!(s.buffered_seconds(), 0.0);
+        assert!(s.try_commit().is_empty());
+    }
+
+    #[test]
+    fn streamer_trim_committed_is_no_op_when_nothing_committed() {
+        let sr = 8_000;
+        let mut s = RegionStreamer::new(sr);
+        s.ingest(&synthesize_silence(sr, 1.0));
+        let before = s.buffered_seconds();
+        s.trim_committed(0.5);
+        assert_eq!(s.buffered_seconds(), before);
     }
 }

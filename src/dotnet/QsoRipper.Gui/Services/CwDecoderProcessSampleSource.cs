@@ -128,11 +128,18 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(exe)!,
         };
-        psi.ArgumentList.Add("stream-live-v2");
+        psi.ArgumentList.Add("stream-live-v3");
         psi.ArgumentList.Add("--json");
         psi.ArgumentList.Add("--stdin-control");
+        // Region-isolated transcript: handles real-world QSO audio with
+        // pauses between bursts at very different WPMs (e.g. operator
+        // pauses, TX/RX cycles, ragchew vs contest mixes). The viz path
+        // still emits envelope/events so any future visualizer tab keeps
+        // working; only the cumulative transcript field is sourced from
+        // region-streamer.
+        psi.ArgumentList.Add("--region-transcript");
         psi.ArgumentList.Add("--decode-every-ms");
-        psi.ArgumentList.Add("5000");
+        psi.ArgumentList.Add("500");
         if (loopback)
         {
             // WASAPI loopback: capture from a system OUTPUT device so audio

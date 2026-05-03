@@ -558,6 +558,30 @@ enum Cmd {
         /// alongside the single-track `transcript` event.
         #[arg(long, alias = "multi", default_value_t = 0)]
         multi_pitch: usize,
+
+        /// Use the region-based decoder for the transcript field.
+        /// When set, a RegionStreamer is run alongside the envelope
+        /// pipeline; viz events still come from the envelope decoder
+        /// (so the visualizer keeps working) but the `transcript` event
+        /// `text`/`appended` fields and the final `end` transcript come
+        /// from region-isolated ditdah decode. This is the
+        /// "human-level" path that handles real-world QSO audio with
+        /// pauses between bursts at different WPMs. Recommended for all
+        /// production live capture.
+        #[arg(long)]
+        region_transcript: bool,
+
+        /// Trailing-static seconds required before a region is committed
+        /// when `--region-transcript` is set. Higher = less mid-burst
+        /// churn at the cost of latency. Default 0.6 s.
+        #[arg(long, default_value_t = 0.6)]
+        region_stable_latency_s: f32,
+
+        /// During live capture, drop buffered audio that ends more than
+        /// this many seconds before the last committed region. Bounds
+        /// memory growth across long QSO sessions. Default 5 s.
+        #[arg(long, default_value_t = 5.0)]
+        region_keep_back_s: f32,
     },
     /// Region-based streaming decoder. Detects active morse bursts
     /// (separated by background static), decodes each burst with the
@@ -1108,6 +1132,9 @@ fn run_cli() -> Result<()> {
             file,
             play,
             multi_pitch,
+            region_transcript,
+            region_stable_latency_s,
+            region_keep_back_s,
         } => run_stream_live_v3(
             device.as_deref(),
             seconds,
@@ -1122,6 +1149,9 @@ fn run_cli() -> Result<()> {
             file.as_deref(),
             play,
             multi_pitch,
+            region_transcript,
+            region_stable_latency_s,
+            region_keep_back_s,
         ),
         Cmd::StreamRegion {
             file,
@@ -3942,6 +3972,9 @@ fn run_stream_live_v3(
     file: Option<&std::path::Path>,
     play_file_audio: bool,
     multi_pitch: usize,
+    region_transcript: bool,
+    region_stable_latency_s: f32,
+    region_keep_back_s: f32,
 ) -> Result<()> {
     if let Some(path) = file {
         return run_stream_live_v3_file(
@@ -3954,11 +3987,14 @@ fn run_stream_live_v3(
             min_snr_db,
             play_file_audio,
             multi_pitch,
+            region_transcript,
+            region_stable_latency_s,
         );
     }
     use cw_decoder_poc::envelope_decoder::{
         LiveEnvelopeStreamer, LiveMultiPitchStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
     };
+    use cw_decoder_poc::region_streamer::{RegionStreamer, RegionStreamerConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -3988,6 +4024,29 @@ fn run_stream_live_v3(
         }
     };
     let mut multi_streamer = new_multi();
+
+    let new_region = || {
+        if !region_transcript {
+            None
+        } else {
+            // Start from the streamer's TUNED defaults (merge_gap=0.5,
+            // min_region=0.3, pad=0.15, threshold=0.30) — the raw
+            // RegionStreamConfig::default() uses merge_gap=3.0 which
+            // glues real-world bursts that are <3s apart into one
+            // region and silently drops the trailing burst.
+            let defaults = RegionStreamerConfig::default();
+            let mut region = defaults.region;
+            if let Some(w) = pin_wpm {
+                region.pin_wpm = Some(w);
+            }
+            let cfg = RegionStreamerConfig {
+                region,
+                stable_latency_s: region_stable_latency_s.max(0.0),
+            };
+            Some(RegionStreamer::with_config(capture.sample_rate, cfg))
+        }
+    };
+    let mut region_streamer = new_region();
 
     let stop = Arc::new(AtomicBool::new(false));
     {
@@ -4065,6 +4124,7 @@ fn run_stream_live_v3(
                 if matches!(msg, StdinControlMessage::ResetLock) {
                     streamer = new_streamer();
                     multi_streamer = new_multi();
+                    region_streamer = new_region();
                     last_drain_at = capture.buffer.lock().written;
                     commit_cursor.reset_all();
                     append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
@@ -4098,6 +4158,9 @@ fn run_stream_live_v3(
             if let Some(m) = multi_streamer.as_mut() {
                 let _ = m.feed(&chunk);
             }
+            if let Some(r) = region_streamer.as_mut() {
+                r.ingest(&chunk);
+            }
         }
 
         if last_decode_at.elapsed() < decode_period {
@@ -4108,6 +4171,27 @@ fn run_stream_live_v3(
         // Force a viz-producing decode now.
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
+        // When --region-transcript is set, drive the cumulative
+        // transcript field from the region-isolated decoder. This
+        // handles real-world QSO audio with pauses between bursts at
+        // very different WPMs (e.g. 8 vs 39 WPM) where a single-pass
+        // envelope decoder is structurally limited to one WPM lock.
+        let region_commits = region_streamer
+            .as_mut()
+            .map(|r| r.try_commit())
+            .unwrap_or_default();
+        let region_text_full = region_streamer
+            .as_ref()
+            .map(|r| r.transcript().to_string())
+            .unwrap_or_default();
+        let region_appended: String = region_commits
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if let Some(r) = region_streamer.as_mut() {
+            r.trim_committed(region_keep_back_s);
+        }
         // Approach A+: event-driven commit cursor (sample-indexed,
         // idempotent across re-decodes) replaces the old
         // string-stitching path that produced ghost-repeats like
@@ -4149,20 +4233,34 @@ fn run_stream_live_v3(
             );
         }
 
+        // Effective transcript-event payload. Region path overrides
+        // text/appended when active.
+        let use_region = region_streamer.is_some();
+        let eff_text = if use_region {
+            region_text_full.clone()
+        } else {
+            append.decoded_text.clone()
+        };
+        let eff_appended = if use_region {
+            region_appended.clone()
+        } else {
+            appended_session.clone()
+        };
         if let Some(em) = emitter.as_mut() {
             em.emit(
                 t,
                 serde_json::json!({
                     "type": "transcript",
-                    "text": append.decoded_text,
-                    "appended": appended_session,
-                    "transcript": append.decoded_text,
-                    "committed": commit.committed_text,
-                    "provisional": commit.provisional_tail,
+                    "text": eff_text,
+                    "appended": eff_appended,
+                    "transcript": eff_text,
+                    "committed": if use_region { region_text_full.clone() } else { commit.committed_text.clone() },
+                    "provisional": if use_region { String::new() } else { commit.provisional_tail.clone() },
                     "cursor_transcript": session_transcript.clone(),
                     "raw_morse": append.raw_stream,
                     "window_text": snap.transcript,
                     "wpm": snap.wpm,
+                    "region_mode": use_region,
                 }),
             );
             if let Some(viz) = snap.viz {
@@ -4259,20 +4357,36 @@ fn run_stream_live_v3(
     let recording_saved = capture
         .finalize_recording()
         .map(|p| p.display().to_string());
+    // Final flush for region streamer to commit any in-flight burst.
+    let final_region_text = if let Some(r) = region_streamer.as_mut() {
+        let _ = r.flush();
+        r.transcript().to_string()
+    } else {
+        String::new()
+    };
     if let Some(em) = emitter.as_mut() {
+        let final_text = if region_streamer.is_some() {
+            final_region_text
+        } else {
+            commit_cursor.committed_text().to_string()
+        };
         em.emit(
             started.elapsed().as_secs_f32(),
             serde_json::json!({
                 "type": "end",
-                "transcript": commit_cursor.committed_text(),
-                "committed": commit_cursor.committed_text(),
+                "transcript": final_text,
+                "committed": final_text,
                 "recording": recording_saved.or(recording_path),
             }),
         );
     } else {
         println!();
         println!("Final transcript (v3):");
-        println!("{}", commit_cursor.committed_text());
+        if region_streamer.is_some() {
+            println!("{final_region_text}");
+        } else {
+            println!("{}", commit_cursor.committed_text());
+        }
     }
     Ok(())
 }
@@ -4287,10 +4401,13 @@ fn run_stream_live_v3_file(
     min_snr_db: f32,
     play_file_audio: bool,
     multi_pitch: usize,
+    region_transcript: bool,
+    region_stable_latency_s: f32,
 ) -> Result<()> {
     use cw_decoder_poc::envelope_decoder::{
         LiveEnvelopeStreamer, LiveMultiPitchStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
     };
+    use cw_decoder_poc::region_streamer::{RegionStreamer, RegionStreamerConfig};
     use std::time::{Duration, Instant};
 
     let decoded = audio::decode_file(path)?;
@@ -4317,6 +4434,24 @@ fn run_stream_live_v3_file(
         s.set_pinned_wpm(pin_wpm);
         s.set_min_snr_db(min_snr_db);
         Some(s)
+    };
+
+    let mut region_streamer = if region_transcript {
+        // See run_stream_live_v3 for rationale on starting from the
+        // RegionStreamerConfig::default() tuned defaults rather than
+        // raw RegionStreamConfig::default().
+        let defaults = RegionStreamerConfig::default();
+        let mut region = defaults.region;
+        if let Some(w) = pin_wpm {
+            region.pin_wpm = Some(w);
+        }
+        let cfg = RegionStreamerConfig {
+            region,
+            stable_latency_s: region_stable_latency_s.max(0.0),
+        };
+        Some(RegionStreamer::with_config(sr, cfg))
+    } else {
+        None
     };
 
     let mut emitter = if json {
@@ -4382,6 +4517,9 @@ fn run_stream_live_v3_file(
             if let Some(m) = multi_streamer.as_mut() {
                 let _ = m.feed(&decoded.samples[cursor..end]);
             }
+            if let Some(r) = region_streamer.as_mut() {
+                r.ingest(&decoded.samples[cursor..end]);
+            }
             cursor = end;
         }
 
@@ -4392,6 +4530,16 @@ fn run_stream_live_v3_file(
 
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
+        // Region path runs alongside envelope to handle multi-burst
+        // real-world QSO audio with pauses + speed changes.
+        let _region_commits = region_streamer
+            .as_mut()
+            .map(|r| r.try_commit())
+            .unwrap_or_default();
+        let region_text_full = region_streamer
+            .as_ref()
+            .map(|r| r.transcript().to_string())
+            .unwrap_or_default();
         // Approach A+: drive the event-driven commit cursor instead of
         // string-stitching. The cursor is sample-indexed and idempotent
         // across re-decodes of the same audio region, so the
@@ -4434,20 +4582,27 @@ fn run_stream_live_v3_file(
             );
         }
 
+        let use_region = region_streamer.is_some();
+        let eff_text = if use_region {
+            region_text_full.clone()
+        } else {
+            append.decoded_text.clone()
+        };
         if let Some(em) = emitter.as_mut() {
             em.emit(
                 t,
                 serde_json::json!({
                     "type": "transcript",
-                    "text": append.decoded_text,
+                    "text": eff_text,
                     "appended": appended_session,
-                    "transcript": append.decoded_text,
-                    "committed": commit.committed_text,
-                    "provisional": commit.provisional_tail,
+                    "transcript": eff_text,
+                    "committed": if use_region { region_text_full.clone() } else { commit.committed_text.clone() },
+                    "provisional": if use_region { String::new() } else { commit.provisional_tail.clone() },
                     "cursor_transcript": session_transcript.clone(),
                     "raw_morse": append.raw_stream,
                     "window_text": snap.transcript,
                     "wpm": snap.wpm,
+                    "region_mode": use_region,
                 }),
             );
             if let Some(viz) = snap.viz {
@@ -4538,20 +4693,35 @@ fn run_stream_live_v3_file(
         }
     }
 
+    let final_region_text = if let Some(r) = region_streamer.as_mut() {
+        let _ = r.flush();
+        r.transcript().to_string()
+    } else {
+        String::new()
+    };
     if let Some(em) = emitter.as_mut() {
+        let final_text = if region_streamer.is_some() {
+            final_region_text
+        } else {
+            commit_cursor.committed_text().to_string()
+        };
         em.emit(
             started.elapsed().as_secs_f32(),
             serde_json::json!({
                 "type": "end",
-                "transcript": commit_cursor.committed_text(),
-                "committed": commit_cursor.committed_text(),
+                "transcript": final_text,
+                "committed": final_text,
                 "recording": serde_json::Value::Null,
             }),
         );
     } else {
         println!();
         println!("Final transcript (v3 file):");
-        println!("{}", commit_cursor.committed_text());
+        if region_streamer.is_some() {
+            println!("{final_region_text}");
+        } else {
+            println!("{}", commit_cursor.committed_text());
+        }
     }
     Ok(())
 }
