@@ -76,12 +76,62 @@ public sealed partial class MainWindowViewModel
     private readonly CwDecoderProcess _vizProcess = new();
     private readonly AudioPlaybackProcess _vizPlayback = new();
     private bool _vizWired;
+    private string? _vizCapturePath;
 
     private VizFrameVm _vizFrame = VizFrameVm.Empty;
     public VizFrameVm VizFrame { get => _vizFrame; set => Set(ref _vizFrame, value); }
 
     private string _vizTranscript = "";
-    public string VizTranscript { get => _vizTranscript; set => Set(ref _vizTranscript, value); }
+    public string VizTranscript
+    {
+        get => _vizTranscript;
+        set
+        {
+            if (Set(ref _vizTranscript, value))
+            {
+                OnPropertyChanged(nameof(VizCopyText));
+            }
+        }
+    }
+
+    private string _vizTruthText = "";
+    public string VizTruthText
+    {
+        get => _vizTruthText;
+        set
+        {
+            if (Set(ref _vizTruthText, (value ?? string.Empty).ToUpperInvariant()))
+            {
+                OnPropertyChanged(nameof(CanSaveVizTruth));
+                OnPropertyChanged(nameof(VizCopyText));
+            }
+        }
+    }
+
+    private bool _vizEditMode;
+    public bool VizEditMode
+    {
+        get => _vizEditMode;
+        set
+        {
+            if (Set(ref _vizEditMode, value))
+            {
+                if (value && string.IsNullOrWhiteSpace(VizTruthText))
+                {
+                    VizTruthText = VizTranscript;
+                }
+                OnPropertyChanged(nameof(VizEditModeLabel));
+                OnPropertyChanged(nameof(IsVizTranscriptReadOnly));
+            }
+        }
+    }
+
+    public string VizEditModeLabel => VizEditMode ? "LOCK TEXT" : "EDIT TRUTH";
+    public bool IsVizTranscriptReadOnly => !VizEditMode;
+    public bool HasVizCapture => !string.IsNullOrWhiteSpace(_vizCapturePath) && System.IO.File.Exists(_vizCapturePath);
+    public string VizCaptureDisplay => string.IsNullOrWhiteSpace(_vizCapturePath) ? "(none)" : System.IO.Path.GetFileName(_vizCapturePath);
+    public bool CanSaveVizTruth => HasVizCapture && !VizRunning && !string.IsNullOrWhiteSpace(VizTruthText);
+    public bool CanUseVizCaptureInLabeling => HasVizCapture && !VizRunning;
 
     private double _vizWindowSeconds = 10.0;
     public double VizWindowSeconds { get => _vizWindowSeconds; set => Set(ref _vizWindowSeconds, value); }
@@ -98,6 +148,8 @@ public sealed partial class MainWindowViewModel
             if (Set(ref _vizRunning, value))
             {
                 OnPropertyChanged(nameof(VizStartStopLabel));
+                OnPropertyChanged(nameof(CanSaveVizTruth));
+                OnPropertyChanged(nameof(CanUseVizCaptureInLabeling));
             }
         }
     }
@@ -158,6 +210,8 @@ public sealed partial class MainWindowViewModel
 
     public string VizStartStopLabel => VizRunning ? "STOP" : "START LIVE";
 
+    public string VizCopyText => string.IsNullOrWhiteSpace(VizTruthText) ? VizTranscript : VizTruthText;
+
     /// <summary>Resolves the persistent capture directory and ensures it exists.</summary>
     private static string ResolveVizCaptureDir()
     {
@@ -193,6 +247,8 @@ public sealed partial class MainWindowViewModel
         try
         {
             VizTranscript = "";
+            VizTruthText = "";
+            VizEditMode = false;
             VizFrame = VizFrameVm.Empty;
             VizCurrentWpm = 0;
             VizStatus = "starting…";
@@ -201,6 +257,7 @@ public sealed partial class MainWindowViewModel
             var stamp = DateTime.Now.ToString("yyyyMMdd-HHmmss-fff");
             var captureDir = ResolveVizCaptureDir();
             var recordPath = System.IO.Path.Combine(captureDir, $"viz-{stamp}.wav");
+            SetVizCapturePath(recordPath);
             _vizProcess.StartLiveV3(SelectedDevice, decodeEveryMs: 250,
                 recordPath: recordPath, loopback: VizUseLoopback,
                 pinWpm: VizPinWpm, pinHz: VizPinHz);
@@ -220,9 +277,15 @@ public sealed partial class MainWindowViewModel
         try { _vizProcess.Stop(); } catch { /* best effort */ }
         try { _vizPlayback.Stop(); } catch { /* best effort */ }
         VizRunning = false;
-        VizStatus = "stopped";
+        if (!VizEditMode)
+        {
+            VizTruthText = VizTranscript;
+        }
+        VizStatus = HasVizCapture
+            ? $"stopped → {VizCaptureDisplay}"
+            : "stopped";
         var flushed = VizBarMonitor.Flush();
-        if (flushed is not null) VizStatus = $"stopped → {System.IO.Path.GetFileName(flushed)}";
+        if (flushed is not null) VizStatus += $" / bars {System.IO.Path.GetFileName(flushed)}";
     }
 
     public void StartVizFile(string filePath)
@@ -231,6 +294,9 @@ public sealed partial class MainWindowViewModel
         try
         {
             VizTranscript = "";
+            VizTruthText = "";
+            VizEditMode = false;
+            SetVizCapturePath(null);
             VizFrame = VizFrameVm.Empty;
             VizCurrentWpm = 0;
             VizStatus = $"file: {System.IO.Path.GetFileName(filePath)}";
@@ -274,6 +340,10 @@ public sealed partial class MainWindowViewModel
             {
                 case "ready":
                     VizStatus = $"ready @ {ev.Rate ?? 0} Hz";
+                    if (!string.IsNullOrWhiteSpace(ev.Recording))
+                    {
+                        SetVizCapturePath(ev.Recording);
+                    }
                     break;
                 case "transcript":
                     // PR #370 (Approach A+): the Rust side now emits a
@@ -291,7 +361,14 @@ public sealed partial class MainWindowViewModel
                     // only — empty until the streamer locks is
                     // expected and accurate.
                     var sess = ev.Transcript;
-                    if (sess is not null) VizTranscript = sess;
+                    if (sess is not null)
+                    {
+                        VizTranscript = sess;
+                        if (!VizEditMode)
+                        {
+                            VizTruthText = sess;
+                        }
+                    }
                     if (ev.Wpm.HasValue) _lastVizWpmPeriod = ev.Wpm.Value;
                     if (ev.WpmKmeans.HasValue) _lastVizWpmKmeans = ev.WpmKmeans.Value;
                     if (ev.Wpm.HasValue || ev.WpmKmeans.HasValue)
@@ -314,13 +391,110 @@ public sealed partial class MainWindowViewModel
                     }
                     break;
                 case "end":
-                    if (ev.Transcript is not null) VizTranscript = ev.Transcript;
+                    if (ev.Transcript is not null)
+                    {
+                        VizTranscript = ev.Transcript;
+                        if (!VizEditMode)
+                        {
+                            VizTruthText = ev.Transcript;
+                        }
+                    }
+                    if (!string.IsNullOrWhiteSpace(ev.Recording))
+                    {
+                        SetVizCapturePath(ev.Recording);
+                    }
                     VizRunning = false;
-                    VizStatus = "ended";
+                    VizStatus = HasVizCapture
+                        ? $"ended → {VizCaptureDisplay}"
+                        : "ended";
                     var flushed = VizBarMonitor.Flush();
-                    if (flushed is not null) VizStatus = $"ended → {System.IO.Path.GetFileName(flushed)}";
+                    if (flushed is not null) VizStatus += $" / bars {System.IO.Path.GetFileName(flushed)}";
                     break;
             }
         });
+    }
+
+    public void ToggleVizEditMode()
+    {
+        VizEditMode = !VizEditMode;
+    }
+
+    public bool SendVizCaptureToLabeling()
+    {
+        if (!CanUseVizCaptureInLabeling || string.IsNullOrWhiteSpace(_vizCapturePath))
+        {
+            VizStatus = VizRunning
+                ? "stop the visualizer before loading the capture into Labeling"
+                : "no visualizer capture to label yet";
+            return false;
+        }
+
+        SetHarvestFile(_vizCapturePath);
+        CorrectCopy = VizTruthText;
+        AdvancedStatusText = $"Loaded visualizer capture {VizCaptureDisplay}. Harvest candidates or save labels from Labeling.";
+        VizStatus = $"loaded {VizCaptureDisplay} into Labeling";
+        return true;
+    }
+
+    public void SaveVizTruth()
+    {
+        if (!CanSaveVizTruth || string.IsNullOrWhiteSpace(_vizCapturePath))
+        {
+            VizStatus = "record live audio and enter corrected text before saving truth";
+            return;
+        }
+
+        try
+        {
+            var truth = VizTruthText.Trim();
+            var truthPath = System.IO.Path.ChangeExtension(_vizCapturePath, ".truth.txt");
+            System.IO.File.WriteAllText(truthPath, truth);
+
+            var duration = Math.Max(0, TryProbeFileDurationSeconds(_vizCapturePath));
+            var label = new CandidateLabel
+            {
+                Source = System.IO.Path.GetFileName(_vizCapturePath),
+                StartSeconds = 0,
+                EndSeconds = duration,
+                HarvestStartSeconds = 0,
+                HarvestEndSeconds = duration,
+                LabelScope = CandidateLabel.ExactWindowScope,
+                CorrectCopy = truth,
+                ClipStart = false,
+                ClipEnd = false,
+                Needles = Array.Empty<string>(),
+                OfflineText = VizTranscript,
+                StreamText = VizTranscript,
+                SavedAtUtc = DateTime.UtcNow.ToString("O"),
+            };
+
+            var labelPath = System.IO.Path.ChangeExtension(_vizCapturePath, ".labels.jsonl");
+            var lines = System.IO.File.Exists(labelPath)
+                ? System.IO.File.ReadAllLines(labelPath).Where(line => !MatchesSameWindow(line, label)).ToList()
+                : new List<string>();
+            lines.Add(System.Text.Json.JsonSerializer.Serialize(label));
+            System.IO.File.WriteAllLines(labelPath, lines);
+
+            VizEditMode = false;
+            VizStatus = $"saved {System.IO.Path.GetFileName(truthPath)} + {System.IO.Path.GetFileName(labelPath)}";
+        }
+        catch (Exception ex)
+        {
+            VizStatus = $"truth save failed: {ex.Message}";
+        }
+    }
+
+    private void SetVizCapturePath(string? path)
+    {
+        if (string.Equals(_vizCapturePath, path, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        _vizCapturePath = path;
+        OnPropertyChanged(nameof(HasVizCapture));
+        OnPropertyChanged(nameof(VizCaptureDisplay));
+        OnPropertyChanged(nameof(CanSaveVizTruth));
+        OnPropertyChanged(nameof(CanUseVizCaptureInLabeling));
     }
 }
