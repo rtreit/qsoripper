@@ -397,6 +397,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     public bool IsLabelPreviewActive => HasPlaybackSource
         && string.Equals(_playbackSourceLabel, "LABEL PREVIEW", StringComparison.Ordinal);
 
+    private double _labelPreviewPlaybackScale = 1.0;
+
     /// <summary>
     /// Maps the current playback position (which is in slowed-preview
     /// seconds) back to the original-file timeline shown by the
@@ -404,7 +406,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     /// label preview is not active so the playhead stays hidden.
     /// </summary>
     public double LabelPreviewPlayheadSeconds => IsLabelPreviewActive
-        ? AdjustedStartSeconds + PlaybackPositionSeconds / Math.Max(1.0, PreviewSlowdown)
+        ? AdjustedStartSeconds + PlaybackPositionSeconds / Math.Max(1.0, _labelPreviewPlaybackScale)
         : double.NaN;
 
     /// <summary>Rewind playback to the beginning. Triggers a seek if running.</summary>
@@ -918,7 +920,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     private double _harvestHopSeconds = 1.0;
     public double HarvestHopSeconds { get => _harvestHopSeconds; set => Set(ref _harvestHopSeconds, value); }
 
-    private double _previewSlowdown = 2.5;
+    private double _previewSlowdown = 1.0;
     public double PreviewSlowdown
     {
         get => _previewSlowdown;
@@ -2075,12 +2077,19 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         try
         {
             IsAdvancedBusy = true;
-            AdvancedStatusText = $"Rendering slowed preview for {AdjustedRangeLabel}…";
-            var previewPath = await _process.RenderPreviewAsync(
-                HarvestFilePath,
-                AdjustedStartSeconds,
-                AdjustedEndSeconds - AdjustedStartSeconds,
-                PreviewSlowdown).ConfigureAwait(true);
+            var sourceIsWav = string.Equals(Path.GetExtension(HarvestFilePath), ".wav", StringComparison.OrdinalIgnoreCase);
+            AdvancedStatusText = sourceIsWav
+                ? $"Rendering full-fidelity preview for {AdjustedRangeLabel}..."
+                : $"Rendering preview for {AdjustedRangeLabel}...";
+            var previewPath = sourceIsWav
+                ? RenderFullFidelityWavPreview(HarvestFilePath, AdjustedStartSeconds, AdjustedEndSeconds)
+                : await _process.RenderPreviewAsync(
+                    HarvestFilePath,
+                    AdjustedStartSeconds,
+                    AdjustedEndSeconds - AdjustedStartSeconds,
+                    PreviewSlowdown).ConfigureAwait(true);
+            _labelPreviewPlaybackScale = sourceIsWav ? 1.0 : Math.Max(1.0, PreviewSlowdown);
+            OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
             await PreparePlaybackSourceAsync(previewPath, "LABEL PREVIEW", autoPlay: true).ConfigureAwait(true);
             AdvancedStatusText = $"Playing preview: {Path.GetFileName(previewPath)}";
         }
@@ -2389,7 +2398,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         if (fs.Length < 44) throw new InvalidDataException("File too small to be a WAV.");
         var riff = new string(br.ReadChars(4));
         if (riff != "RIFF") throw new InvalidDataException("Not a RIFF file.");
-        br.ReadInt32();
+        var riffSize = br.ReadInt32();
         var wave = new string(br.ReadChars(4));
         if (wave != "WAVE") throw new InvalidDataException("Not a WAVE file.");
 
@@ -2410,12 +2419,24 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                 br.ReadInt32(); // byteRate
                 blockAlign = br.ReadInt16();
                 bitsPerSample = br.ReadInt16();
+                if (audioFormat == -2 && size >= 40)
+                {
+                    br.ReadInt16(); // extension size
+                    br.ReadInt16(); // valid bits per sample
+                    br.ReadInt32(); // channel mask
+                    var subFormat = br.ReadBytes(16);
+                    audioFormat = subFormat.Length >= 2
+                        ? BitConverter.ToInt16(subFormat, 0)
+                        : audioFormat;
+                }
                 fs.Position = fmtStart + size;
             }
             else if (id == "data")
             {
                 dataStart = fs.Position;
-                dataSize = size;
+                dataSize = size == 0 && riffSize == 0
+                    ? checked((int)(fs.Length - dataStart))
+                    : size;
                 break;
             }
             else
@@ -2444,6 +2465,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             throw new InvalidDataException($"Short read while slicing WAV: expected {payload.Length}, got {read}.");
 
         return (channels, sampleRate, bitsPerSample, audioFormat, payload);
+    }
+
+    private static string RenderFullFidelityWavPreview(string sourcePath, double startS, double endS)
+    {
+        var previewDir = Path.Combine(Path.GetTempPath(), "cw-decoder-preview");
+        Directory.CreateDirectory(previewDir);
+
+        var output = Path.Combine(
+            previewDir,
+            $"{Path.GetFileNameWithoutExtension(sourcePath)}_{startS:0000.000}_{DateTime.UtcNow:yyyyMMddHHmmssfff}_full-fidelity.wav");
+
+        var (channels, sampleRate, bitsPerSample, audioFormat, payloadBytes) = SliceWavWindow(sourcePath, startS, endS);
+        WriteWavFile(output, channels, sampleRate, bitsPerSample, audioFormat, payloadBytes);
+        return output;
     }
 
     /// <summary>

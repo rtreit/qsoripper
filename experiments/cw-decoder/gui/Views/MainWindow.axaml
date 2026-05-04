@@ -577,7 +577,7 @@
                 <NumericUpDown Minimum="0.25" Maximum="6" Increment="0.25" Value="{Binding HarvestHopSeconds, Mode=TwoWay}" />
               </StackPanel>
               <StackPanel Grid.Column="3" Spacing="2">
-                <TextBlock Text="SLOWDOWN ×" Classes="label" />
+                <TextBlock Text="SLOWDOWN × (1 = original)" Classes="label" />
                 <NumericUpDown Minimum="1" Maximum="6" Increment="0.25" Value="{Binding PreviewSlowdown, Mode=TwoWay}" />
               </StackPanel>
               <Button Grid.Column="4" Classes="primary" Content="PLAY PREVIEW" Click="OnPlayPreviewClick" Margin="0,16,0,0"

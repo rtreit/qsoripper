@@ -600,8 +600,10 @@ pub fn make_synth_scenario(
     Scenario {
         name: name.to_string(),
         audio: DecodedAudio {
+            interleaved_samples: samples.clone(),
             samples,
             sample_rate,
+            channels: 1,
         },
         cw_onset_ms,
         truth,
