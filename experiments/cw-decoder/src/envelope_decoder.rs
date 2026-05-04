@@ -2661,6 +2661,7 @@ mod tests {
                 pitch_step_hz: 10.0,
                 ..Default::default()
             },
+            peak_score: crate::region_stream::PeakScoreKind::Mean,
         };
         // Use the narrower bandpass for multi-pitch.
         let preprocess = PreprocessConfig {

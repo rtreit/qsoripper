@@ -85,6 +85,18 @@ The current breakthrough is that the best live behavior did **not** come from ro
 > exit on any transcript mismatch; leave it off for exploratory debugging
 > runs where failures are the point.
 >
+> **Multi-pitch burst discovery (June 2026).** The pitch-routing front
+> end of `decode_region_stream` was upgraded from a whole-buffer mean-
+> Goertzel sweep to a hybrid windowed/mean approach in
+> `region_stream::discover_burst_pitches`. The whole-buffer mean smears
+> long-form ragchew turns at distinct pitches into one artifact peak;
+> the windowed source (10 s window, 5 s hop, with a noise-floor
+> confidence gate) surfaces each turn's pitch independently. The mean
+> source still runs alongside to preserve dense-cluster contest cases.
+> The combined synthetic suite now scores 12/12 exact copy (was 6/12);
+> validated through both `decode_region_stream` (batch) and
+> `RegionStreamer` (live streaming) paths at 12/16/48 kHz sample rates.
+>
 > **Future experiments must not regress this baseline.** Before merging
 > any change that touches `region_streamer.rs`, `region_stream.rs`,
 > `stream-live-v3`, the GUI launchers, or the underlying decoder

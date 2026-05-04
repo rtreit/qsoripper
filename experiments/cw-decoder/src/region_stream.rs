@@ -98,19 +98,7 @@ pub fn decode_region_stream(
     }
 
     let dominant_pitch_hz = estimate_dominant_pitch(samples, sample_rate, cfg);
-    let mut pitches = find_top_pitch_peaks(
-        samples,
-        sample_rate,
-        &MultiPitchConfig {
-            k: 6,
-            min_separation_hz: 40.0,
-            min_relative_power: 0.08,
-            sweep: cfg.clone(),
-        },
-    )
-    .into_iter()
-    .map(|peak| peak.pitch_hz)
-    .collect::<Vec<_>>();
+    let mut pitches = discover_burst_pitches(samples, sample_rate, cfg);
     if pitches.is_empty() {
         pitches.push(dominant_pitch_hz);
     }
@@ -392,6 +380,30 @@ pub struct PitchPeak {
     pub power: f32,
 }
 
+/// Strategy used to score a candidate pitch from per-frame Goertzel powers.
+///
+/// `Mean` (the historical default) reports the average power across the
+/// whole buffer — this is fine for short analysis windows where every
+/// pitch of interest is present for the full window. On long buffers
+/// (e.g. an end-to-end ragchew with 4 distinct turn pitches across 90 s)
+/// `Mean` smears the bursts together and produces a single artifact peak
+/// somewhere between the actual pitches.
+///
+/// `Percentile(q)` instead reports the q-quantile of per-frame powers.
+/// Each burst pitch will have a strong tail (high frame powers during
+/// its turn) so a high-percentile score (e.g. p90) lights up every
+/// pitch that hosts a real burst, regardless of how much of the buffer
+/// it occupies. This is what the region pipeline wants for long
+/// multi-station QSOs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PeakScoreKind {
+    Mean,
+    /// Quantile of per-frame Goertzel power (0.0..=1.0). 0.90 is a good
+    /// default for region routing — robust to single-frame outliers but
+    /// still surfaces bursts that are present for ~10% of the buffer.
+    Percentile(f32),
+}
+
 /// Configuration for [`find_top_pitch_peaks`]. Wraps a
 /// [`RegionStreamConfig`] (which controls the underlying Goertzel
 /// sweep) and adds NMS / dynamic-range knobs.
@@ -410,6 +422,13 @@ pub struct MultiPitchConfig {
     pub min_relative_power: f32,
     /// Underlying sweep configuration (pitch range, frame size, step).
     pub sweep: RegionStreamConfig,
+    /// How to score a pitch from its per-frame Goertzel power vector.
+    /// Defaults to `Mean` for backwards compatibility with the short
+    /// analysis window used by the multi-pitch envelope decoder. The
+    /// region pipeline overrides this to a high percentile so that long
+    /// buffers with multiple distinct burst pitches do not smear into
+    /// a single artifact peak.
+    pub peak_score: PeakScoreKind,
 }
 
 impl Default for MultiPitchConfig {
@@ -419,6 +438,7 @@ impl Default for MultiPitchConfig {
             min_separation_hz: 40.0,
             min_relative_power: 0.10,
             sweep: RegionStreamConfig::default(),
+            peak_score: PeakScoreKind::Mean,
         }
     }
 }
@@ -460,20 +480,34 @@ pub fn find_top_pitch_peaks(
     let stride = frame_step.saturating_mul(10).max(frame_step);
 
     let mut candidates: Vec<PitchPeak> = Vec::new();
+    let mut frame_powers: Vec<f32> = Vec::new();
     let mut pitch = sweep.pitch_lo_hz;
     while pitch <= sweep.pitch_hi_hz {
-        let mut sum = 0.0_f64;
-        let mut count = 0u32;
+        frame_powers.clear();
         let mut offset = 0usize;
         while offset + frame_len <= samples.len() {
-            sum += goertzel_power(&samples[offset..offset + frame_len], sample_rate, pitch) as f64;
-            count += 1;
+            let p = goertzel_power(&samples[offset..offset + frame_len], sample_rate, pitch);
+            frame_powers.push(p);
             offset += stride;
         }
-        let score = if count > 0 { sum / count as f64 } else { 0.0 };
+        let score = if frame_powers.is_empty() {
+            0.0
+        } else {
+            match cfg.peak_score {
+                PeakScoreKind::Mean => {
+                    let sum: f64 = frame_powers.iter().map(|p| *p as f64).sum();
+                    (sum / frame_powers.len() as f64) as f32
+                }
+                PeakScoreKind::Percentile(q) => {
+                    let mut sorted = frame_powers.clone();
+                    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    percentile_sorted(&sorted, q)
+                }
+            }
+        };
         candidates.push(PitchPeak {
             pitch_hz: pitch,
-            power: score as f32,
+            power: score,
         });
         pitch += sweep.pitch_step_hz;
     }
@@ -536,6 +570,175 @@ pub fn find_top_pitch_peaks(
         }
     }
     chosen
+}
+
+/// Discover pitches likely to host CW bursts in a long buffer.
+///
+/// Two-source approach (union, then NMS):
+///
+/// 1. Per-window dominant pitches. Slide a window across the buffer and
+///    record the single dominant pitch in each window. Long-form
+///    ragchews — where each turn occupies a multi-second slice at a
+///    distinct pitch — produce a unique dominant pitch per turn.
+///
+/// 2. Whole-buffer mean-based top-K peaks. Dense clusters where bursts
+///    are short and similar in power (typical of contests) keep all of
+///    their pitches at the top of the mean-power ranking even when no
+///    single window is dominated by one of them.
+///
+/// The union is NMS-merged at a tight 25 Hz spacing — enough to
+/// suppress duplicates at the same sweep position but small enough that
+/// real adjacent stations spaced 30-50 Hz apart are kept separately.
+/// Final dedup of redundant decodes (when two close pitches generate
+/// overlapping regions) is left to `dedupe_region_candidates`, which
+/// scores by tonal prominence and useful character count.
+///
+/// Returns pitches sorted by descending power.
+pub fn discover_burst_pitches(
+    samples: &[f32],
+    sample_rate: u32,
+    cfg: &RegionStreamConfig,
+) -> Vec<f32> {
+    if samples.is_empty() || sample_rate == 0 {
+        return Vec::new();
+    }
+    // 25 Hz matches the sweep step. Tighter would just admit duplicate
+    // sweeps of the same sweep position; looser collapses real adjacent
+    // stations.
+    let nms_hz = (cfg.pitch_step_hz - 1.0).max(15.0);
+    let mut combined: Vec<PitchPeak> = Vec::new();
+
+    // Source 1: per-window dominants. Window is a balance — long enough
+    // for a single burst at a stable pitch to dominate (real ragchew
+    // turns are 15-30 s) and short enough that 4 turns produce 4
+    // distinct dominants. ~10 s with 5 s hop gives 2-3 windows per
+    // long-form turn.
+    let window_s = 10.0_f32;
+    let hop_s = 5.0_f32;
+    let total_s = samples.len() as f32 / sample_rate as f32;
+    // A window's dominant pitch is only contributed if the dominant
+    // sweep position has a clear advantage over the window's median
+    // sweep power. This keeps noise-only / QRM-only windows from
+    // polluting the candidate list with a noise-floor "dominant" that
+    // wastes downstream region-detection work.
+    let window_confidence_ratio = 2.5_f32;
+    let mut t0 = 0.0_f32;
+    while t0 < total_s {
+        let t1 = (t0 + window_s).min(total_s);
+        if t1 - t0 < 1.0 {
+            break;
+        }
+        let s = (t0 * sample_rate as f32) as usize;
+        let e = ((t1 * sample_rate as f32) as usize).min(samples.len());
+        if e > s {
+            let slice = &samples[s..e];
+            let dom = estimate_dominant_pitch(slice, sample_rate, cfg);
+            // Score the dominant by its absolute power within the window
+            // so the eventual ranking reflects burst strength.
+            let frame_len = ((cfg.frame_len_s * sample_rate as f32).round() as usize).max(64);
+            let frame_step = ((cfg.frame_step_s * sample_rate as f32).round() as usize).max(8);
+            let stride = frame_step.saturating_mul(10).max(frame_step);
+            let mut sum = 0.0_f64;
+            let mut count = 0u32;
+            let mut offset = 0usize;
+            while offset + frame_len <= slice.len() {
+                sum += goertzel_power(&slice[offset..offset + frame_len], sample_rate, dom) as f64;
+                count += 1;
+                offset += stride;
+            }
+            let power = if count > 0 {
+                (sum / count as f64) as f32
+            } else {
+                0.0
+            };
+            // Median sweep power across the same window — used to
+            // suppress noise-only windows whose "dominant" is just the
+            // luckiest noise bin.
+            let median_power = window_median_sweep_power(slice, sample_rate, cfg);
+            let confident = median_power > 0.0 && power >= median_power * window_confidence_ratio;
+            if confident {
+                combined.push(PitchPeak {
+                    pitch_hz: dom,
+                    power,
+                });
+            }
+        }
+        t0 += hop_s;
+    }
+
+    // Source 2: whole-buffer mean top-K. This preserves the historical
+    // multi-pitch behavior for short, dense clusters (contest bursts at
+    // closely-spaced pitches that none of which dominates a window).
+    // Use a tighter NMS here too so adjacent pitches aren't pre-merged.
+    let mean_peaks = find_top_pitch_peaks(
+        samples,
+        sample_rate,
+        &MultiPitchConfig {
+            k: 8,
+            min_separation_hz: nms_hz,
+            min_relative_power: 0.05,
+            sweep: cfg.clone(),
+            peak_score: PeakScoreKind::Mean,
+        },
+    );
+    combined.extend(mean_peaks);
+
+    if combined.is_empty() {
+        return Vec::new();
+    }
+
+    // Sort by power descending, then NMS-merge by pitch proximity.
+    combined.sort_by(|a, b| {
+        b.power
+            .partial_cmp(&a.power)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut chosen: Vec<f32> = Vec::new();
+    for cand in combined {
+        if chosen.iter().any(|&p| (p - cand.pitch_hz).abs() < nms_hz) {
+            continue;
+        }
+        chosen.push(cand.pitch_hz);
+    }
+    chosen
+}
+
+/// Median average-power across the Goertzel sweep used by region routing.
+/// Used as a noise-floor estimate to gate windowed dominant-pitch
+/// candidates: a real CW window has a dominant pitch many times above
+/// the median sweep power, while a noise-only window has a roughly flat
+/// sweep where the "dominant" is just the luckiest noise bin.
+fn window_median_sweep_power(samples: &[f32], sample_rate: u32, cfg: &RegionStreamConfig) -> f32 {
+    let frame_len = ((cfg.frame_len_s * sample_rate as f32).round() as usize).max(64);
+    let frame_step = ((cfg.frame_step_s * sample_rate as f32).round() as usize).max(8);
+    if samples.len() < frame_len || cfg.pitch_step_hz <= 0.0 {
+        return 0.0;
+    }
+    let stride = frame_step.saturating_mul(10).max(frame_step);
+    let mut scores: Vec<f32> = Vec::new();
+    let mut pitch = cfg.pitch_lo_hz;
+    while pitch <= cfg.pitch_hi_hz {
+        let mut sum = 0.0_f64;
+        let mut count = 0u32;
+        let mut offset = 0usize;
+        while offset + frame_len <= samples.len() {
+            sum += goertzel_power(&samples[offset..offset + frame_len], sample_rate, pitch) as f64;
+            count += 1;
+            offset += stride;
+        }
+        let s = if count > 0 {
+            (sum / count as f64) as f32
+        } else {
+            0.0
+        };
+        scores.push(s);
+        pitch += cfg.pitch_step_hz;
+    }
+    if scores.is_empty() {
+        return 0.0;
+    }
+    scores.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    percentile_sorted(&scores, 0.5)
 }
 
 pub fn estimate_dominant_pitch(samples: &[f32], sample_rate: u32, cfg: &RegionStreamConfig) -> f32 {
@@ -845,6 +1048,7 @@ mod tests {
                 pitch_step_hz: 10.0,
                 ..RegionStreamConfig::default()
             },
+            peak_score: PeakScoreKind::Mean,
         };
         let peaks = find_top_pitch_peaks(&buf, sr, &cfg);
         assert_eq!(peaks.len(), 2, "expected 2 peaks at 700/750, got {peaks:?}");
@@ -872,12 +1076,101 @@ mod tests {
                 pitch_step_hz: 10.0,
                 ..RegionStreamConfig::default()
             },
+            peak_score: PeakScoreKind::Mean,
         };
         let peaks = find_top_pitch_peaks(&buf, sr, &cfg);
         assert_eq!(
             peaks.len(),
             1,
             "60 Hz NMS should collapse 20-Hz-spaced peaks, got {peaks:?}"
+        );
+    }
+
+    #[test]
+    fn discover_burst_pitches_finds_long_form_turn_pitches() {
+        // Synthesize a 4-burst sequence at distinct pitches with silence
+        // between bursts. This mirrors the long-form ragchew failure
+        // pattern: each turn occupies ~5 s at a different pitch and the
+        // whole-buffer mean smears them into a single artifact peak.
+        let sr = 12_000u32;
+        let burst_s = 5.0_f32;
+        let gap_s = 1.0_f32;
+        let burst_pitches = [640.0_f32, 675.0, 710.0, 745.0];
+        let mut buf: Vec<f32> = Vec::new();
+        for (i, p) in burst_pitches.iter().enumerate() {
+            buf.extend(synth_tone(*p, burst_s, sr, 0.5));
+            if i + 1 < burst_pitches.len() {
+                buf.extend(vec![0.0_f32; (sr as f32 * gap_s) as usize]);
+            }
+        }
+        let cfg = RegionStreamConfig::default();
+        let pitches = discover_burst_pitches(&buf, sr, &cfg);
+        for &p in &burst_pitches {
+            let found = pitches.iter().any(|&q| (q - p).abs() <= cfg.pitch_step_hz);
+            assert!(
+                found,
+                "expected pitch ~{p} Hz to be discovered, got {pitches:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn discover_burst_pitches_handles_empty_buffer() {
+        let cfg = RegionStreamConfig::default();
+        let pitches = discover_burst_pitches(&[], 12_000, &cfg);
+        assert!(pitches.is_empty());
+    }
+
+    #[test]
+    fn decode_region_stream_returns_no_text_on_pure_noise() {
+        // Real-world dead-air should never yield ghost characters. The
+        // tonal_prominence_ratio guard plus the new windowed-confidence
+        // gate together must keep the pipeline silent.
+        let sr = 12_000u32;
+        let buf = noise_buf(sr, 30.0, 0xDEAD_BEEF, 0.05);
+        let cfg = RegionStreamConfig::default();
+        let result = decode_region_stream(&buf, sr, &cfg);
+        assert!(
+            result.text.trim().is_empty(),
+            "expected no text on pure noise, got: {:?}",
+            result.text
+        );
+    }
+
+    #[test]
+    fn discover_burst_pitches_ignores_continuous_carrier_when_cw_is_at_other_pitch() {
+        // Realistic failure mode: a strong continuous carrier at one
+        // pitch with intermittent CW bursts at a different pitch. The
+        // carrier dominates whole-buffer mean, but the windowed source
+        // should still surface the CW pitch where bursts occur.
+        let sr = 12_000u32;
+        let total_s = 30.0_f32;
+
+        // Continuous low-amplitude carrier at 900 Hz across the whole buffer
+        let mut buf = synth_tone(900.0, total_s, sr, 0.18);
+
+        // Intermittent CW-like bursts at 600 Hz: 4 bursts of ~3 s each
+        let burst_pitch = 600.0_f32;
+        let burst_amp = 0.50_f32;
+        let burst_pattern = [(2.0_f32, 3.0_f32), (8.0, 3.0), (16.0, 3.0), (24.0, 3.0)];
+        for (start, dur) in burst_pattern {
+            let s = (start * sr as f32) as usize;
+            let burst = synth_tone(burst_pitch, dur, sr, burst_amp);
+            for (i, sample) in burst.iter().enumerate() {
+                if s + i < buf.len() {
+                    buf[s + i] += *sample;
+                }
+            }
+        }
+
+        let cfg = RegionStreamConfig::default();
+        let pitches = discover_burst_pitches(&buf, sr, &cfg);
+        let cw_found = pitches
+            .iter()
+            .any(|&p| (p - burst_pitch).abs() <= cfg.pitch_step_hz);
+        assert!(
+            cw_found,
+            "expected CW pitch ~{burst_pitch} Hz to be discovered alongside the carrier, got {pitches:?}"
         );
     }
 }
