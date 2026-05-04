@@ -38,6 +38,7 @@ internal static class CwBenchRunner
         public bool DisableAutoThreshold { get; set; }
         public float? ForcePitchHz { get; set; }
         public bool Foundation { get; set; }
+        public bool Region { get; set; }
     }
 
     public sealed class RunResult
@@ -109,7 +110,11 @@ internal static class CwBenchRunner
             psi.ArgumentList.Add("--force-pitch-hz");
             psi.ArgumentList.Add(fp.ToString(CultureInfo.InvariantCulture));
         }
-        if (opts.Foundation)
+        if (opts.Region)
+        {
+            psi.ArgumentList.Add("--region");
+        }
+        else if (opts.Foundation)
         {
             psi.ArgumentList.Add("--foundation");
         }

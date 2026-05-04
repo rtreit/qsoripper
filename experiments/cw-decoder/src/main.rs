@@ -726,6 +726,11 @@ enum Cmd {
         /// quality against truth; latency-specific fields are left empty.
         #[arg(long, default_value_t = false)]
         foundation: bool,
+        /// Use the region-isolated streaming transcript path. This is the
+        /// production CW Scope architecture: detect active bursts, decode
+        /// each region independently, and commit only stable region text.
+        #[arg(long, default_value_t = false)]
+        region: bool,
         /// Emit one NDJSON record per scenario in addition to the table
         /// (handy for collecting comparison runs into a file).
         #[arg(long, default_value_t = false)]
@@ -1227,6 +1232,7 @@ fn run_cli() -> Result<()> {
             min_pulse_dot_fraction,
             cfar_keying,
             foundation,
+            region,
             json,
         } => run_bench_latency(
             from_file.as_deref(),
@@ -1245,6 +1251,7 @@ fn run_cli() -> Result<()> {
             min_pulse_dot_fraction,
             cfar_keying,
             foundation,
+            region,
             json,
         ),
         Cmd::GenRoughFist {
@@ -1343,6 +1350,7 @@ fn run_bench_latency(
     min_pulse_dot_fraction: f32,
     cfar_keying: bool,
     foundation: bool,
+    region: bool,
     json: bool,
 ) -> Result<()> {
     let mut cfg = streaming::DecoderConfig::defaults();
@@ -1408,7 +1416,9 @@ fn run_bench_latency(
 
     let mut results = Vec::with_capacity(scenarios.len());
     for scen in &scenarios {
-        let r = if foundation {
+        let r = if region {
+            run_region_bench_scenario(scen, chunk_ms, stable_n, label)
+        } else if foundation {
             // V3 foundation: envelope_decoder + append_decode, with
             // commit-time char timestamps and quality-gate timeline.
             // BENCH knob `force_pitch_hz` maps to V3 `pin_hz`; V2-only
@@ -1534,6 +1544,98 @@ fn run_bench_latency(
     let agg = bench_latency::aggregate(&results);
     bench_latency::print_aggregate(label, &agg);
     Ok(())
+}
+
+fn run_region_bench_scenario(
+    scen: &bench_latency::Scenario,
+    chunk_ms: u32,
+    stable_n: usize,
+    label: &str,
+) -> bench_latency::BenchResult {
+    let sr = scen.audio.sample_rate;
+    let chunk_samples = ((sr as u64 * chunk_ms as u64) / 1000).max(1) as usize;
+    let truth_upper = scen.truth.to_uppercase();
+    let mut streamer = cw_decoder_poc::region_streamer::RegionStreamer::new(sr);
+    let mut transcript = String::new();
+    let mut char_times = Vec::new();
+
+    let mut consumed = 0usize;
+    while consumed < scen.audio.samples.len() {
+        let end = (consumed + chunk_samples).min(scen.audio.samples.len());
+        streamer.ingest(&scen.audio.samples[consumed..end]);
+        let t_ms = ((end as u64 * 1000) / sr as u64) as u32;
+        append_region_commits(
+            streamer.try_commit(),
+            t_ms,
+            &mut transcript,
+            &mut char_times,
+        );
+        consumed = end;
+    }
+
+    let t_end = ((scen.audio.samples.len() as u64 * 1000) / sr as u64) as u32;
+    append_region_commits(streamer.flush(), t_end, &mut transcript, &mut char_times);
+
+    let mut result = bench_latency::BenchResult {
+        scenario: scen.name.clone(),
+        config_label: label.to_string(),
+        cw_onset_ms: scen.cw_onset_ms,
+        truth: truth_upper.clone(),
+        transcript: transcript.trim().to_string(),
+        stable_n,
+        decoder_path: "region".to_string(),
+        ..Default::default()
+    };
+
+    let trimmed = trim_char_times_to_transcript(&transcript, &char_times);
+    result.t_first_char_ms = result
+        .transcript
+        .chars()
+        .zip(trimmed.iter().copied())
+        .find_map(|(ch, t)| (!ch.is_whitespace()).then_some(t));
+    let transcript_owned = result.transcript.clone();
+    bench_latency::update_truth_metrics(
+        &transcript_owned,
+        &truth_upper,
+        &trimmed,
+        stable_n,
+        &mut result,
+    );
+    result.cer_vs_truth = bench_latency::character_error_rate(&result.transcript, &truth_upper);
+    result
+}
+
+fn append_region_commits(
+    commits: Vec<cw_decoder_poc::region_streamer::CommittedRegion>,
+    t_ms: u32,
+    transcript: &mut String,
+    char_times: &mut Vec<u32>,
+) {
+    for commit in commits {
+        let text = commit.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if !transcript.is_empty() {
+            transcript.push(' ');
+            char_times.push(t_ms);
+        }
+        transcript.push_str(text);
+        char_times.extend(std::iter::repeat_n(t_ms, text.chars().count()));
+    }
+}
+
+fn trim_char_times_to_transcript(raw: &str, raw_times: &[u32]) -> Vec<u32> {
+    let chars: Vec<char> = raw.chars().collect();
+    let leading_ws = chars.iter().take_while(|c| c.is_whitespace()).count();
+    let trailing_ws = chars.iter().rev().take_while(|c| c.is_whitespace()).count();
+    let trimmed_len = chars.len().saturating_sub(leading_ws + trailing_ws);
+    raw_times
+        .iter()
+        .copied()
+        .skip(leading_ws)
+        .take(trimmed_len)
+        .collect()
 }
 
 fn run_file(

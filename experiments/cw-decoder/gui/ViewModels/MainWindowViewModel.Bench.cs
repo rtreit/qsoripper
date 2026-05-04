@@ -170,10 +170,10 @@ public sealed partial class MainWindowViewModel
         }
     }
 
-    // V3 foundation = stable baseline (envelope_decoder + append_decode).
+    // Region = production transcript path (RegionStreamer + per-region ditdah).
     // V2 streaming = legacy ConfidenceState path, kept for A/B comparison.
-    // Foundation is the default; the legacy V2 knobs (purity / wide-bins
-    // / auto-threshold) are ignored when foundation is selected.
+    // Region is the default; the legacy V2 knobs (purity / wide-bins
+    // / auto-threshold) are ignored when region is selected.
     private bool _benchUseFoundation = true;
     public bool BenchUseFoundation
     {
@@ -322,7 +322,7 @@ public sealed partial class MainWindowViewModel
             WideBins = (int)Math.Max(0, _benchWideBins),
             DisableAutoThreshold = !_benchAutoThreshold,
             ForcePitchHz = _benchForcePitchHz > 0 ? (float)_benchForcePitchHz : (float?)null,
-            Foundation = _benchUseFoundation,
+            Region = _benchUseFoundation,
         };
 
         _benchCts?.Dispose();
