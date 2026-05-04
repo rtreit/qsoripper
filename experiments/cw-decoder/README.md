@@ -67,7 +67,35 @@ The current breakthrough is that the best live behavior did **not** come from ro
 > The baseline now also includes deterministic synthetic impairment
 > coverage in `region_streamer.rs`: clean four-burst copy, quiet static
 > gaps, noise-only no-ghost-text, and a moderate white-noise + QSB +
-> offset-QRM exchange (`CQ TEST KC7AVA 73`).
+> offset-QRM exchange (`CQ TEST KC7AVA 73`). `synthetic_qso.rs` also
+> carries regression coverage for the live-CQ failure mode where an
+> isolated final over marker `K` (`-.-`) was auto-calibrated as `S`
+> (`...`) when it was decoded as its own short region.
+>
+> For broader QSO-debug traffic, use the synthetic suite generator:
+>
+> ```powershell
+> cargo run --manifest-path experiments\cw-decoder\Cargo.toml --bin cw-decoder -- `
+>   gen-qso-suite --output .artifacts\cw-qso-suite --ragchew 6 --contest 6
+> ```
+>
+> The generator emits deterministic ragchew and contest WAVs, `.truth.txt`
+> sidecars, and `manifest.ndjson`, then validates each sample through the
+> region decoder. Use `--require-exact` when you want CI-style non-zero
+> exit on any transcript mismatch; leave it off for exploratory debugging
+> runs where failures are the point.
+>
+> **Multi-pitch burst discovery (June 2026).** The pitch-routing front
+> end of `decode_region_stream` was upgraded from a whole-buffer mean-
+> Goertzel sweep to a hybrid windowed/mean approach in
+> `region_stream::discover_burst_pitches`. The whole-buffer mean smears
+> long-form ragchew turns at distinct pitches into one artifact peak;
+> the windowed source (10 s window, 5 s hop, with a noise-floor
+> confidence gate) surfaces each turn's pitch independently. The mean
+> source still runs alongside to preserve dense-cluster contest cases.
+> The combined synthetic suite now scores 12/12 exact copy (was 6/12);
+> validated through both `decode_region_stream` (batch) and
+> `RegionStreamer` (live streaming) paths at 12/16/48 kHz sample rates.
 >
 > **Future experiments must not regress this baseline.** Before merging
 > any change that touches `region_streamer.rs`, `region_stream.rs`,
