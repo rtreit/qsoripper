@@ -1901,8 +1901,12 @@ fn run_play_file(path: &std::path::Path, json: bool, stdin_control: bool) -> Res
     let decoded =
         audio::decode_file(path).with_context(|| format!("decoding {}", path.display()))?;
     let input_rate = decoded.sample_rate;
-    let playback = audio::play_samples_with_control(decoded.samples, input_rate)
-        .context("starting audio playback")?;
+    let playback = audio::play_interleaved_samples_with_control(
+        decoded.interleaved_samples,
+        input_rate,
+        decoded.channels,
+    )
+    .context("starting audio playback")?;
     let stop_flag = Arc::new(AtomicBool::new(false));
     let control_rx = stdin_control.then(|| spawn_stdin_playback_control(Arc::clone(&stop_flag)));
 

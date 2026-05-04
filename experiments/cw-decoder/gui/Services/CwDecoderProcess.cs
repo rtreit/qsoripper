@@ -506,10 +506,11 @@ internal sealed class CwDecoderProcess : IDisposable
 
     public void Stop()
     {
+        var cts = _cts;
+        var proc = _proc;
         try
         {
-            _cts?.Cancel();
-            if (_proc is { HasExited: false } proc)
+            if (proc is { HasExited: false })
             {
                 // Signal the Rust child to shut down gracefully:
                 //   1) Write "stop\n" — the watcher thread's blocking read
@@ -519,9 +520,11 @@ internal sealed class CwDecoderProcess : IDisposable
                 //      hound finalizes the WAV header. Without this the
                 //      recording has RIFF size=0 / missing data chunk and
                 //      Replay & Score gets "(empty)".
-                // The Rust path finalizes the WAV BEFORE emitting the end
-                // event, so even if we fall through to Kill the header is
-                // already valid.
+                //
+                // Keep stdout/stderr pumps alive while waiting. stream-live-v3
+                // emits large viz JSON; canceling the pumps first can fill the
+                // redirected stdout pipe, block Rust before it observes stop,
+                // and force the Kill fallback before the WAV is finalized.
                 try
                 {
                     proc.StandardInput.WriteLine("stop");
@@ -534,8 +537,12 @@ internal sealed class CwDecoderProcess : IDisposable
                     try { proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 }
             }
+            cts?.Cancel();
         }
-        catch { /* ignored */ }
+        catch
+        {
+            cts?.Cancel();
+        }
         _proc = null;
         _cts = null;
     }
