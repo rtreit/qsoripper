@@ -156,7 +156,7 @@ fn collect_region_candidates(
         let slice = &samples[s..e];
         let text = decode_region_slice(slice, sample_rate, pitch_hz, cfg);
         let text = text.trim().to_string();
-        if text.is_empty() {
+        if text.is_empty() || is_low_confidence_region_text(&text) {
             continue;
         }
         let useful_chars = text.chars().filter(|ch| ch.is_ascii_alphanumeric()).count() as f32;
@@ -167,6 +167,10 @@ fn collect_region_candidates(
             score: prominence * (1.0 + useful_chars * 0.05),
         });
     }
+}
+
+fn is_low_confidence_region_text(text: &str) -> bool {
+    text.contains('?')
 }
 
 fn decode_region_slice(
@@ -938,6 +942,12 @@ mod tests {
         let r = decode_region_stream(&[], 12_000, &cfg);
         assert!(r.text.is_empty());
         assert!(r.regions.is_empty());
+    }
+
+    #[test]
+    fn unknown_region_text_is_low_confidence() {
+        assert!(is_low_confidence_region_text("E?R"));
+        assert!(!is_low_confidence_region_text("7QP W7N"));
     }
 
     fn noise_buf(rate: u32, seconds: f32, seed: u64, amplitude: f32) -> Vec<f32> {

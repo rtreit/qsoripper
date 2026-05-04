@@ -1096,8 +1096,8 @@
               <StackPanel Grid.Column="1" Spacing="2">
                 <TextBlock Text="DECODER" Classes="label" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                  <RadioButton GroupName="BenchDecoder" Content="FOUNDATION" IsChecked="{Binding BenchUseFoundation, Mode=TwoWay}"
-                               ToolTip.Tip="V3 envelope_decoder + append_decode (stable baseline used everywhere else in CW SCOPE)" />
+                  <RadioButton GroupName="BenchDecoder" Content="REGION" IsChecked="{Binding BenchUseFoundation, Mode=TwoWay}"
+                               ToolTip.Tip="Region-isolated stream transcript (production CW SCOPE path)" />
                   <RadioButton GroupName="BenchDecoder" Content="STREAMING (V2)" IsChecked="{Binding BenchUseStreamingV2, Mode=TwoWay}"
                                ToolTip.Tip="Legacy ConfidenceState path. Kept for A/B comparison only." />
                 </StackPanel>
