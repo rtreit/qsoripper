@@ -73,6 +73,30 @@ public partial class MainWindow : Window
             Vm.StartVizFile(path);
     }
 
+    private async void OnCopyVizTranscriptClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm is null || string.IsNullOrWhiteSpace(Vm.VizCopyText)) return;
+        if (Clipboard is { } clip)
+        {
+            await clip.SetTextAsync(Vm.VizCopyText);
+        }
+    }
+
+    private void OnToggleVizEditClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.ToggleVizEditMode();
+
+    private void OnSaveVizTruthClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.SaveVizTruth();
+
+    private void OnUseVizCaptureInLabelingClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm?.SendVizCaptureToLabeling() == true
+            && this.FindControl<TabControl>("MainTabs") is { } tabs)
+        {
+            tabs.SelectedIndex = 1;
+        }
+    }
+
     private void OnRefreshClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.RefreshDevices();
 

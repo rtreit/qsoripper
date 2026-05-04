@@ -130,7 +130,7 @@
     </Border>
 
 
-    <TabControl Grid.Row="2" Margin="14,12,14,4">
+    <TabControl x:Name="MainTabs" Grid.Row="2" Margin="14,12,14,4">
       <TabItem Header="DECODE">
         <Border Classes="panel">
           <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto">
@@ -1263,22 +1263,55 @@
                                   MinHeight="320" />
             </Border>
 
-            <!-- Live transcript -->
+            <!-- Live transcript / truth capture -->
             <Border Grid.Row="3" Background="{StaticResource BgDeep}" CornerRadius="4"
                     BorderBrush="{StaticResource EdgeGlow}" BorderThickness="1"
                     Padding="10,8" Margin="0,8,0,0">
-              <ScrollViewer Name="VizTranscriptScroll"
-                            HorizontalScrollBarVisibility="Disabled"
-                            VerticalScrollBarVisibility="Auto"
-                            MinHeight="120"
-                            MaxHeight="240">
-                <TextBlock Text="{Binding VizTranscript}"
+              <Grid RowDefinitions="Auto,*" RowSpacing="6">
+                <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="8">
+                  <TextBlock Text="DECODED / TRUTH"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             Foreground="{StaticResource TextDim}"
+                             VerticalAlignment="Center" />
+                  <Button Grid.Column="1" Content="COPY TEXT" Click="OnCopyVizTranscriptClick"
+                          FontSize="11" Padding="10,3"
+                          ToolTip.Tip="Copy the decoded/corrected text. Ctrl+C also works when the text box is focused." />
+                  <Button Grid.Column="2" Content="{Binding VizEditModeLabel}" Click="OnToggleVizEditClick"
+                          FontSize="11" Padding="10,3"
+                          ToolTip.Tip="Toggle edit mode so you can correct the decoded text before saving truth." />
+                  <Button Grid.Column="3" Content="SAVE TRUTH" Click="OnSaveVizTruthClick"
+                          IsEnabled="{Binding CanSaveVizTruth}"
+                          FontSize="11" Padding="10,3"
+                          ToolTip.Tip="Save .truth.txt and .labels.jsonl next to the captured visualizer WAV." />
+                  <Button Grid.Column="4" Content="USE IN LABELING" Click="OnUseVizCaptureInLabelingClick"
+                          IsEnabled="{Binding CanUseVizCaptureInLabeling}"
+                          FontSize="11" Padding="10,3"
+                          ToolTip.Tip="Load the captured WAV into the Labeling tab for harvest, preview, and corpus export." />
+                  <TextBlock Grid.Column="5" Text="{Binding VizCaptureDisplay}"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             Foreground="{StaticResource TextDim}"
+                             HorizontalAlignment="Right"
+                             VerticalAlignment="Center" />
+                </Grid>
+                <ScrollViewer Name="VizTranscriptScroll"
+                              Grid.Row="1"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto"
+                              MinHeight="120"
+                              MaxHeight="240">
+                  <TextBox Text="{Binding VizTruthText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                           IsReadOnly="{Binding IsVizTranscriptReadOnly}"
+                           AcceptsReturn="True"
+                           TextWrapping="Wrap"
+                           BorderThickness="0"
+                           Background="Transparent"
                            FontFamily="Consolas"
                            FontSize="16"
-                           LineHeight="22"
-                           TextWrapping="Wrap"
                            Foreground="{StaticResource TextHi}" />
-              </ScrollViewer>
+                </ScrollViewer>
+              </Grid>
             </Border>
           </Grid>
         </Border>
