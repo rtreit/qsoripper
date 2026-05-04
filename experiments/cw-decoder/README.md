@@ -67,7 +67,10 @@ The current breakthrough is that the best live behavior did **not** come from ro
 > The baseline now also includes deterministic synthetic impairment
 > coverage in `region_streamer.rs`: clean four-burst copy, quiet static
 > gaps, noise-only no-ghost-text, and a moderate white-noise + QSB +
-> offset-QRM exchange (`CQ TEST KC7AVA 73`).
+> offset-QRM exchange (`CQ TEST KC7AVA 73`). `synthetic_qso.rs` also
+> carries regression coverage for the live-CQ failure mode where an
+> isolated final over marker `K` (`-.-`) was auto-calibrated as `S`
+> (`...`) when it was decoded as its own short region.
 >
 > For broader QSO-debug traffic, use the synthetic suite generator:
 >

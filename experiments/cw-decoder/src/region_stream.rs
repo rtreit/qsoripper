@@ -166,10 +166,7 @@ fn collect_region_candidates(
             continue;
         }
         let slice = &samples[s..e];
-        let text = match cfg.pin_wpm {
-            Some(w) => decode_text_pinned(slice, sample_rate, w),
-            None => decode_text(slice, sample_rate),
-        };
+        let text = decode_region_slice(slice, sample_rate, pitch_hz, cfg);
         let text = text.trim().to_string();
         if text.is_empty() {
             continue;
@@ -182,6 +179,140 @@ fn collect_region_candidates(
             score: prominence * (1.0 + useful_chars * 0.05),
         });
     }
+}
+
+fn decode_region_slice(
+    samples: &[f32],
+    sample_rate: u32,
+    pitch_hz: f32,
+    cfg: &RegionStreamConfig,
+) -> String {
+    if let Some(w) = cfg.pin_wpm {
+        return decode_text_pinned(samples, sample_rate, w);
+    }
+
+    let auto = decode_text(samples, sample_rate);
+    let duration_s = samples.len() as f32 / sample_rate.max(1) as f32;
+    if duration_s > 1.5 {
+        return auto;
+    }
+
+    let Some(wpm) = estimate_short_region_wpm(samples, sample_rate, pitch_hz, cfg) else {
+        return auto;
+    };
+    let pinned = decode_text_pinned(samples, sample_rate, wpm);
+    if should_prefer_pinned_short_decode(&auto, &pinned) {
+        pinned
+    } else {
+        auto
+    }
+}
+
+fn should_prefer_pinned_short_decode(auto: &str, pinned: &str) -> bool {
+    let auto_norm = normalize_region_text(auto);
+    let pinned_norm = normalize_region_text(pinned);
+    if pinned_norm.is_empty() || auto_norm == pinned_norm {
+        return false;
+    }
+    let auto_chars = auto_norm
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .count();
+    let pinned_chars = pinned_norm
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .count();
+    auto_chars <= 2
+        && pinned_chars <= 2
+        && auto_norm
+            .chars()
+            .all(|ch| ch.is_whitespace() || matches!(ch, 'E' | 'I' | 'S' | 'H' | '5'))
+}
+
+fn normalize_region_text(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_uppercase()
+}
+
+fn estimate_short_region_wpm(
+    samples: &[f32],
+    sample_rate: u32,
+    pitch_hz: f32,
+    cfg: &RegionStreamConfig,
+) -> Option<f32> {
+    let frame_len = ((cfg.frame_len_s * sample_rate as f32).round() as usize).max(64);
+    let frame_step = ((cfg.frame_step_s * sample_rate as f32).round() as usize).max(8);
+    if samples.len() < frame_len {
+        return None;
+    }
+
+    let mut powers = Vec::new();
+    let mut offset = 0usize;
+    while offset + frame_len <= samples.len() {
+        powers.push(goertzel_power(
+            &samples[offset..offset + frame_len],
+            sample_rate,
+            pitch_hz,
+        ));
+        offset += frame_step;
+    }
+    if powers.len() < 4 {
+        return None;
+    }
+
+    let mut sorted = powers.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let noise_floor = percentile_sorted(&sorted, 0.35);
+    let signal_floor = percentile_sorted(&sorted, 0.85);
+    if !noise_floor.is_finite() || !signal_floor.is_finite() || signal_floor <= noise_floor {
+        return None;
+    }
+    let threshold = noise_floor + (signal_floor - noise_floor) * cfg.threshold_factor.max(0.0);
+
+    let step_s = frame_step as f32 / sample_rate as f32;
+    let frame_s = frame_len as f32 / sample_rate as f32;
+    let mut runs = Vec::new();
+    let mut cur_start: Option<usize> = None;
+    for (i, power) in powers.iter().enumerate() {
+        match (*power >= threshold, cur_start) {
+            (true, None) => cur_start = Some(i),
+            (false, Some(start)) => {
+                runs.push(active_run_duration_s(start, i - 1, step_s, frame_s));
+                cur_start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(start) = cur_start {
+        runs.push(active_run_duration_s(
+            start,
+            powers.len() - 1,
+            step_s,
+            frame_s,
+        ));
+    }
+    if runs.is_empty() {
+        return None;
+    }
+
+    runs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let shortest = runs[0];
+    let longest = runs[runs.len() - 1];
+    let dot_s = if runs.len() == 1 && longest > 0.12 {
+        longest / 3.0
+    } else if longest >= shortest * 2.2 {
+        shortest
+    } else {
+        runs[runs.len() / 2]
+    };
+    let wpm = 1.2 / dot_s.max(0.001);
+    (5.0..=60.0).contains(&wpm).then_some(wpm)
+}
+
+fn active_run_duration_s(start_frame: usize, end_frame: usize, step_s: f32, frame_s: f32) -> f32 {
+    end_frame.saturating_sub(start_frame) as f32 * step_s + frame_s
 }
 
 fn dedupe_region_candidates(mut candidates: Vec<RegionCandidate>) -> Vec<DecodedRegion> {
