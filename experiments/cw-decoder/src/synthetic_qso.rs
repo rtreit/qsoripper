@@ -598,4 +598,72 @@ mod tests {
             example.id, validation.truth, validation.transcript
         );
     }
+
+    #[test]
+    fn final_over_k_after_cq_is_not_read_as_s() {
+        let sample_rate = 12_000;
+        let example = build_example(
+            "final-k-cq".to_string(),
+            SyntheticQsoKind::Contest,
+            sample_rate,
+            vec![SyntheticQsoBurst {
+                text: "CQ CQ DE W7N W7N K".to_string(),
+                wpm: 22.0,
+                pitch_hz: 700.0,
+                amp: 0.54,
+            }],
+            SyntheticQsoImpairments {
+                static_amp: 0.018,
+                qsb_depth: 0.22,
+                qsb_rate_hz: 0.33,
+                qrm_hz: Some(830.0),
+                qrm_amp: 0.018,
+            },
+            0xF1A1_0ACE,
+        );
+        let validation = validate_example(&example, 500);
+        assert_eq!(
+            validation.transcript, validation.truth,
+            "final over marker must remain K, truth={:?}, transcript={:?}",
+            validation.truth, validation.transcript
+        );
+    }
+
+    #[test]
+    fn isolated_final_over_k_region_is_not_read_as_s() {
+        let sample_rate = 12_000;
+        let example = build_example(
+            "isolated-final-k".to_string(),
+            SyntheticQsoKind::Contest,
+            sample_rate,
+            vec![
+                SyntheticQsoBurst {
+                    text: "CQ CQ DE W7N W7N".to_string(),
+                    wpm: 22.0,
+                    pitch_hz: 700.0,
+                    amp: 0.54,
+                },
+                SyntheticQsoBurst {
+                    text: "K".to_string(),
+                    wpm: 22.0,
+                    pitch_hz: 700.0,
+                    amp: 0.54,
+                },
+            ],
+            SyntheticQsoImpairments {
+                static_amp: 0.018,
+                qsb_depth: 0.22,
+                qsb_rate_hz: 0.33,
+                qrm_hz: Some(830.0),
+                qrm_amp: 0.018,
+            },
+            0xF1A1_0ACF,
+        );
+        let validation = validate_example(&example, 500);
+        assert_eq!(
+            validation.transcript, validation.truth,
+            "isolated final over marker must remain K, truth={:?}, transcript={:?}",
+            validation.truth, validation.transcript
+        );
+    }
 }
