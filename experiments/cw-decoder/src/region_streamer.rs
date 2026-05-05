@@ -15,7 +15,7 @@
 //! during static, then transmits again at a different speed (e.g.
 //! `IHU NVCHU 7QP W7N 7QP W7N` with bursts at 13 / 8 / 39 / 29 WPM).
 
-use crate::region_stream::{decode_region_stream, RegionStreamConfig};
+use crate::region_stream::{decode_region_stream, normalize_region_transcript, RegionStreamConfig};
 
 /// Tunables for the region-based streamer.
 #[derive(Debug, Clone)]
@@ -196,6 +196,7 @@ impl RegionStreamer {
             }
             self.committed_text.push_str(&region.text);
         }
+        self.committed_text = normalize_region_transcript(&self.committed_text);
         newly
     }
 }

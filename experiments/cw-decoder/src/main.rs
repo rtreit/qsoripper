@@ -577,6 +577,13 @@ enum Cmd {
         #[arg(long, default_value_t = 0.6)]
         region_stable_latency_s: f32,
 
+        /// Region transcript commit cadence in milliseconds.
+        /// This is intentionally decoupled from `--decode-every-ms`
+        /// (visualizer refresh cadence) so transcript commits are not
+        /// over-eager under CPU load.
+        #[arg(long, default_value_t = 2000)]
+        region_decode_every_ms: u64,
+
         /// During live capture, drop buffered audio that ends more than
         /// this many seconds before the last committed region. Bounds
         /// memory growth across long QSO sessions. Default 5 s.
@@ -599,8 +606,8 @@ enum Cmd {
         /// Emit NDJSON events to stdout (one per line).
         #[arg(long)]
         json: bool,
-        /// Re-run region detection every N ms. Default 500 ms.
-        #[arg(long, default_value_t = 500)]
+        /// Re-run region detection every N ms. Default 2000 ms.
+        #[arg(long, default_value_t = 2000)]
         decode_every_ms: u64,
         /// Trailing-static seconds required before a region is committed.
         /// Higher values reduce mid-burst churn at the cost of latency.
@@ -1168,6 +1175,7 @@ fn run_cli() -> Result<()> {
             multi_pitch,
             region_transcript,
             region_stable_latency_s,
+            region_decode_every_ms,
             region_keep_back_s,
         } => run_stream_live_v3(
             device.as_deref(),
@@ -1185,6 +1193,7 @@ fn run_cli() -> Result<()> {
             multi_pitch,
             region_transcript,
             region_stable_latency_s,
+            region_decode_every_ms,
             region_keep_back_s,
         ),
         Cmd::StreamRegion {
@@ -4230,6 +4239,7 @@ fn run_stream_live_v3(
     multi_pitch: usize,
     region_transcript: bool,
     region_stable_latency_s: f32,
+    region_decode_every_ms: u64,
     region_keep_back_s: f32,
 ) -> Result<()> {
     if let Some(path) = file {
@@ -4245,6 +4255,7 @@ fn run_stream_live_v3(
             multi_pitch,
             region_transcript,
             region_stable_latency_s,
+            region_decode_every_ms,
         );
     }
     use cw_decoder_poc::envelope_decoder::{
@@ -4344,6 +4355,7 @@ fn run_stream_live_v3(
                 "device": capture.device_name,
                 "rate": capture.sample_rate,
                 "decode_every_ms": decode_every_ms,
+                "region_decode_every_ms": region_decode_every_ms,
                 "max_viz_envelope_samples": MAX_VIZ_ENVELOPE_SAMPLES,
                 "recording": capture.record_path().map(|p| p.display().to_string()),
                 "pin_wpm": pin_wpm,
@@ -4358,8 +4370,12 @@ fn run_stream_live_v3(
 
     let started = Instant::now();
     let mut last_drain_at: u64 = 0;
-    let mut last_decode_at = Instant::now();
-    let decode_period = Duration::from_millis(decode_every_ms);
+    let decode_every_samples =
+        ((capture.sample_rate as u64 * decode_every_ms.max(1)) / 1000).max(1);
+    let mut last_decode_written: u64 = 0;
+    let region_decode_every_samples =
+        ((capture.sample_rate as u64 * region_decode_every_ms.max(1)) / 1000).max(1);
+    let mut last_region_decode_written: u64 = 0;
     let decode_every_s = decode_every_ms as f32 / 1000.0;
     let mut commit_cursor =
         ditdah_streaming::LiveCommitCursor::new(MAX_V3_SESSION_TRANSCRIPT_CHARS);
@@ -4382,6 +4398,8 @@ fn run_stream_live_v3(
                     multi_streamer = new_multi();
                     region_streamer = new_region();
                     last_drain_at = capture.buffer.lock().written;
+                    last_decode_written = last_drain_at;
+                    last_region_decode_written = last_drain_at;
                     commit_cursor.reset_all();
                     append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
                     if let Some(em) = emitter.as_mut() {
@@ -4419,10 +4437,10 @@ fn run_stream_live_v3(
             }
         }
 
-        if last_decode_at.elapsed() < decode_period {
+        if last_drain_at.saturating_sub(last_decode_written) < decode_every_samples {
             continue;
         }
-        last_decode_at = Instant::now();
+        last_decode_written = last_drain_at;
 
         // Force a viz-producing decode now.
         let snap = streamer.flush_with_viz();
@@ -4432,22 +4450,23 @@ fn run_stream_live_v3(
         // handles real-world QSO audio with pauses between bursts at
         // very different WPMs (e.g. 8 vs 39 WPM) where a single-pass
         // envelope decoder is structurally limited to one WPM lock.
-        let region_commits = region_streamer
-            .as_mut()
-            .map(|r| r.try_commit())
-            .unwrap_or_default();
-        let region_text_full = region_streamer
-            .as_ref()
-            .map(|r| r.transcript().to_string())
-            .unwrap_or_default();
+        let mut region_commits = Vec::new();
+        let mut region_text_full = String::new();
+        if let Some(r) = region_streamer.as_mut() {
+            if last_drain_at.saturating_sub(last_region_decode_written)
+                >= region_decode_every_samples
+            {
+                last_region_decode_written = last_drain_at;
+                region_commits = r.try_commit();
+                r.trim_committed(region_keep_back_s);
+            }
+            region_text_full = r.transcript().to_string();
+        }
         let region_appended: String = region_commits
             .iter()
             .map(|r| r.text.as_str())
             .collect::<Vec<_>>()
             .join(" ");
-        if let Some(r) = region_streamer.as_mut() {
-            r.trim_committed(region_keep_back_s);
-        }
         // Approach A+: event-driven commit cursor (sample-indexed,
         // idempotent across re-decodes) replaces the old
         // string-stitching path that produced ghost-repeats like
@@ -4659,6 +4678,7 @@ fn run_stream_live_v3_file(
     multi_pitch: usize,
     region_transcript: bool,
     region_stable_latency_s: f32,
+    region_decode_every_ms: u64,
 ) -> Result<()> {
     use cw_decoder_poc::envelope_decoder::{
         LiveEnvelopeStreamer, LiveMultiPitchStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
@@ -4725,6 +4745,7 @@ fn run_stream_live_v3_file(
                 "rate": sr,
                 "playback_device": playback.as_ref().map(|p| p.device_name.as_str()),
                 "decode_every_ms": decode_every_ms,
+                "region_decode_every_ms": region_decode_every_ms,
                 "max_viz_envelope_samples": MAX_VIZ_ENVELOPE_SAMPLES,
                 "recording": serde_json::Value::Null,
                 "pin_wpm": pin_wpm,
@@ -4742,8 +4763,11 @@ fn run_stream_live_v3_file(
     }
 
     let started = Instant::now();
-    let mut last_decode_at = Instant::now();
-    let decode_period = Duration::from_millis(decode_every_ms);
+    let decode_every_samples = ((sr as u64 * decode_every_ms.max(1)) / 1000).max(1) as usize;
+    let mut last_decode_cursor = 0usize;
+    let region_decode_every_samples =
+        ((sr as u64 * region_decode_every_ms.max(1)) / 1000).max(1) as usize;
+    let mut last_region_decode_cursor = 0usize;
     let chunk_period = Duration::from_millis(50);
     let chunk_samples = ((sr as u64 * 50) / 1000) as usize;
     let pump_period = if playback.is_some() {
@@ -4779,23 +4803,23 @@ fn run_stream_live_v3_file(
             cursor = end;
         }
 
-        if last_decode_at.elapsed() < decode_period {
+        if cursor.saturating_sub(last_decode_cursor) < decode_every_samples {
             continue;
         }
-        last_decode_at = Instant::now();
+        last_decode_cursor = cursor;
 
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
         // Region path runs alongside envelope to handle multi-burst
         // real-world QSO audio with pauses + speed changes.
-        let _region_commits = region_streamer
-            .as_mut()
-            .map(|r| r.try_commit())
-            .unwrap_or_default();
-        let region_text_full = region_streamer
-            .as_ref()
-            .map(|r| r.transcript().to_string())
-            .unwrap_or_default();
+        let mut region_text_full = String::new();
+        if let Some(r) = region_streamer.as_mut() {
+            if cursor.saturating_sub(last_region_decode_cursor) >= region_decode_every_samples {
+                last_region_decode_cursor = cursor;
+                let _ = r.try_commit();
+            }
+            region_text_full = r.transcript().to_string();
+        }
         // Approach A+: drive the event-driven commit cursor instead of
         // string-stitching. The cursor is sample-indexed and idempotent
         // across re-decodes of the same audio region, so the
@@ -5061,9 +5085,9 @@ fn run_stream_region_file(
 
     let chunk_period = Duration::from_millis(50);
     let chunk_samples = ((sr as u64 * 50) / 1000).max(1) as usize;
+    let decode_every_samples = ((sr as u64 * decode_every_ms.max(1)) / 1000).max(1) as usize;
     let started = Instant::now();
-    let mut last_decode_at = Instant::now() - Duration::from_millis(decode_every_ms);
-    let decode_period = Duration::from_millis(decode_every_ms);
+    let mut last_decode_cursor = 0usize;
     let mut cursor = 0usize;
 
     while cursor < total_samples {
@@ -5072,8 +5096,8 @@ fn run_stream_region_file(
         cursor = end;
         streamer.ingest(chunk);
 
-        if last_decode_at.elapsed() >= decode_period {
-            last_decode_at = Instant::now();
+        if cursor.saturating_sub(last_decode_cursor) >= decode_every_samples {
+            last_decode_cursor = cursor;
             let committed = streamer.try_commit();
             let t = started.elapsed().as_secs_f32();
             emit_region_transcript(emitter.as_mut(), t, streamer.transcript(), &committed);

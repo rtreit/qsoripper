@@ -17,6 +17,10 @@
 
 use crate::decoder::{decode_text, decode_text_pinned};
 
+const DIT_DAH_BOUNDARY: f32 = 2.0;
+const LETTER_SPACE_BOUNDARY: f32 = 2.0;
+const WORD_SPACE_BOUNDARY: f32 = 5.0;
+
 /// Configurable knobs for region detection. All times in seconds.
 #[derive(Debug, Clone)]
 pub struct RegionStreamConfig {
@@ -113,6 +117,7 @@ pub fn decode_region_stream(
         .map(|r| r.text.as_str())
         .collect::<Vec<_>>()
         .join(" ");
+    let text = normalize_region_transcript(&text);
     RegionStreamResult {
         pitch_hz: dominant_pitch_hz,
         regions: decoded,
@@ -184,6 +189,11 @@ fn decode_region_slice(
     }
 
     let auto = decode_text(samples, sample_rate);
+    let interval = decode_region_slice_from_intervals(samples, sample_rate, pitch_hz, cfg);
+    if should_prefer_interval_decode(&auto, &interval) {
+        return interval;
+    }
+
     let duration_s = samples.len() as f32 / sample_rate.max(1) as f32;
     if duration_s > 1.5 {
         return auto;
@@ -197,6 +207,330 @@ fn decode_region_slice(
         pinned
     } else {
         auto
+    }
+}
+
+fn should_prefer_interval_decode(auto: &str, interval: &str) -> bool {
+    let auto_norm = normalize_region_text(auto);
+    let interval_norm = normalize_region_text(interval);
+    if interval_norm.is_empty() || auto_norm == interval_norm || interval_norm.contains('?') {
+        return false;
+    }
+
+    let interval_chars = useful_copy_chars(&interval_norm);
+    if interval_chars < 2 {
+        return false;
+    }
+
+    let auto_score = transcript_quality_score(&auto_norm);
+    let interval_score = transcript_quality_score(&interval_norm);
+    let auto_has_garbage_tail = auto_norm
+        .split_whitespace()
+        .any(|token| token.len() >= 3 && token.chars().all(|ch| matches!(ch, 'T' | 'E' | 'I')));
+    let interval_has_callsign_shape = interval_norm
+        .split_whitespace()
+        .any(|token| token.chars().any(|ch| ch.is_ascii_digit()))
+        || interval_norm.contains('/');
+
+    interval_score > auto_score + 2.0
+        || (auto_norm.contains('?') && interval_score >= auto_score)
+        || (auto_has_garbage_tail && interval_score >= auto_score - 6.0)
+        || (interval_has_callsign_shape && interval_score >= auto_score - 0.5)
+}
+
+fn useful_copy_chars(text: &str) -> usize {
+    text.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '+' | '=' | '.' | ','))
+        .count()
+}
+
+fn transcript_quality_score(text: &str) -> f32 {
+    if text.trim().is_empty() {
+        return 0.0;
+    }
+
+    let mut score = 0.0_f32;
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            score += 1.0;
+        } else if matches!(ch, '/' | '+' | '=' | '.' | ',') {
+            score += 0.6;
+        } else if ch == '?' {
+            score -= 3.0;
+        }
+    }
+
+    for token in text.split_whitespace() {
+        if token.len() >= 3 && token.chars().all(|ch| matches!(ch, 'T' | 'E' | 'I')) {
+            score -= token.len() as f32 * 1.5;
+        }
+        if token.len() >= 9 && token.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+            score -= (token.len() - 8) as f32;
+        }
+    }
+    score
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FrameRun {
+    active: bool,
+    start_frame: usize,
+    end_frame: usize,
+}
+
+impl FrameRun {
+    fn duration_s(self, step_s: f32, frame_s: f32) -> f32 {
+        active_run_duration_s(self.start_frame, self.end_frame, step_s, frame_s)
+    }
+}
+
+fn decode_region_slice_from_intervals(
+    samples: &[f32],
+    sample_rate: u32,
+    pitch_hz: f32,
+    cfg: &RegionStreamConfig,
+) -> String {
+    let frame_len = ((cfg.frame_len_s * sample_rate as f32).round() as usize).max(64);
+    let frame_step = ((cfg.frame_step_s * sample_rate as f32).round() as usize).max(8);
+    if samples.len() < frame_len {
+        return String::new();
+    }
+
+    let mut log_powers = Vec::new();
+    let mut offset = 0usize;
+    while offset + frame_len <= samples.len() {
+        let power = goertzel_power(&samples[offset..offset + frame_len], sample_rate, pitch_hz);
+        log_powers.push(power.max(1e-12).ln());
+        offset += frame_step;
+    }
+    if log_powers.len() < 4 {
+        return String::new();
+    }
+
+    let Some(threshold) = otsu_log_power_threshold(&log_powers) else {
+        return String::new();
+    };
+    let mut active: Vec<bool> = log_powers.iter().map(|power| *power >= threshold).collect();
+    clean_interval_mask(&mut active);
+
+    let runs = collect_frame_runs(&active);
+    let step_s = frame_step as f32 / sample_rate as f32;
+    let frame_s = frame_len as f32 / sample_rate as f32;
+    let Some(dot_s) = estimate_dot_from_runs(&runs, step_s, frame_s) else {
+        return String::new();
+    };
+
+    decode_runs_to_text(&runs, step_s, frame_s, dot_s)
+}
+
+fn otsu_log_power_threshold(log_powers: &[f32]) -> Option<f32> {
+    if log_powers.len() < 4 {
+        return None;
+    }
+    let mut sorted = log_powers.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut best_threshold = None;
+    let mut best_score = f32::NEG_INFINITY;
+    for i in 5..=95 {
+        let threshold = percentile_sorted(&sorted, i as f32 / 100.0);
+        let mut lo_sum = 0.0_f32;
+        let mut hi_sum = 0.0_f32;
+        let mut lo_n = 0usize;
+        let mut hi_n = 0usize;
+        for &power in log_powers {
+            if power < threshold {
+                lo_sum += power;
+                lo_n += 1;
+            } else {
+                hi_sum += power;
+                hi_n += 1;
+            }
+        }
+        if lo_n < 3 || hi_n < 3 {
+            continue;
+        }
+        let lo_mean = lo_sum / lo_n as f32;
+        let hi_mean = hi_sum / hi_n as f32;
+        let score = lo_n as f32 * hi_n as f32 * (hi_mean - lo_mean).powi(2);
+        if score > best_score {
+            best_score = score;
+            best_threshold = Some(threshold);
+        }
+    }
+    best_threshold
+}
+
+fn clean_interval_mask(active: &mut [bool]) {
+    for _ in 0..2 {
+        let runs = collect_frame_runs(active);
+        for run in runs {
+            let len = run.end_frame.saturating_sub(run.start_frame) + 1;
+            if len <= 2 {
+                for frame in active
+                    .iter_mut()
+                    .take(run.end_frame + 1)
+                    .skip(run.start_frame)
+                {
+                    *frame = !run.active;
+                }
+            }
+        }
+    }
+}
+
+fn collect_frame_runs(active: &[bool]) -> Vec<FrameRun> {
+    if active.is_empty() {
+        return Vec::new();
+    }
+    let mut runs = Vec::new();
+    let mut state = active[0];
+    let mut start = 0usize;
+    for (i, &on) in active.iter().enumerate().skip(1) {
+        if on != state {
+            runs.push(FrameRun {
+                active: state,
+                start_frame: start,
+                end_frame: i - 1,
+            });
+            state = on;
+            start = i;
+        }
+    }
+    runs.push(FrameRun {
+        active: state,
+        start_frame: start,
+        end_frame: active.len() - 1,
+    });
+    runs
+}
+
+fn estimate_dot_from_runs(runs: &[FrameRun], step_s: f32, frame_s: f32) -> Option<f32> {
+    let mut on: Vec<f32> = runs
+        .iter()
+        .filter(|run| run.active)
+        .map(|run| run.duration_s(step_s, frame_s))
+        .filter(|duration| (0.015..=0.450).contains(duration))
+        .collect();
+    if on.is_empty() {
+        return None;
+    }
+    on.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let shortest = on[0];
+    let longest = *on.last().unwrap();
+    let dot = if longest >= shortest * 2.2 {
+        let cluster_max = shortest * 1.8;
+        let short_cluster: Vec<f32> = on
+            .iter()
+            .copied()
+            .filter(|duration| *duration <= cluster_max)
+            .collect();
+        short_cluster[short_cluster.len() / 2]
+    } else {
+        let median = on[on.len() / 2];
+        if median > 0.180 {
+            median / 3.0
+        } else {
+            median
+        }
+    };
+    let wpm = 1.2 / dot.max(0.001);
+    (5.0..=60.0).contains(&wpm).then_some(dot)
+}
+
+fn decode_runs_to_text(runs: &[FrameRun], step_s: f32, frame_s: f32, dot_s: f32) -> String {
+    let mut out = String::new();
+    let mut current = String::new();
+
+    for run in runs {
+        let duration = run.duration_s(step_s, frame_s);
+        let units = duration / dot_s.max(0.001);
+        if run.active {
+            current.push(if units < DIT_DAH_BOUNDARY { '.' } else { '-' });
+            continue;
+        }
+
+        if units > LETTER_SPACE_BOUNDARY {
+            push_morse_letter(&mut out, &mut current);
+        }
+        if units > WORD_SPACE_BOUNDARY && !out.ends_with(' ') {
+            out.push(' ');
+        }
+    }
+    push_morse_letter(&mut out, &mut current);
+    normalize_region_text(&out)
+}
+
+fn push_morse_letter(out: &mut String, current: &mut String) {
+    if current.is_empty() {
+        return;
+    }
+    if let Some(ch) = morse_to_char(current) {
+        out.push(ch);
+    } else {
+        out.push('?');
+    }
+    current.clear();
+}
+
+fn morse_to_char(s: &str) -> Option<char> {
+    match s {
+        ".-" => Some('A'),
+        "-..." => Some('B'),
+        "-.-." => Some('C'),
+        "-.." => Some('D'),
+        "." => Some('E'),
+        "..-." => Some('F'),
+        "--." => Some('G'),
+        "...." => Some('H'),
+        ".." => Some('I'),
+        ".---" => Some('J'),
+        "-.-" => Some('K'),
+        ".-.." => Some('L'),
+        "--" => Some('M'),
+        "-." => Some('N'),
+        "---" => Some('O'),
+        ".--." => Some('P'),
+        "--.-" => Some('Q'),
+        ".-." => Some('R'),
+        "..." => Some('S'),
+        "-" => Some('T'),
+        "..-" => Some('U'),
+        "...-" => Some('V'),
+        ".--" => Some('W'),
+        "-..-" => Some('X'),
+        "-.--" => Some('Y'),
+        "--.." => Some('Z'),
+        ".----" => Some('1'),
+        "..---" => Some('2'),
+        "...--" => Some('3'),
+        "....-" => Some('4'),
+        "....." => Some('5'),
+        "-...." => Some('6'),
+        "--..." => Some('7'),
+        "---.." => Some('8'),
+        "----." => Some('9'),
+        "-----" => Some('0'),
+        "-...-" => Some('='),
+        "--..--" => Some(','),
+        ".-.-.-" => Some('.'),
+        "..--.." => Some('?'),
+        "-..-." => Some('/'),
+        ".-.-." => Some('+'),
+        "-....-" => Some('-'),
+        ".----." => Some('\''),
+        ".-..-." => Some('"'),
+        "---..." => Some(':'),
+        "-.-.-." => Some(';'),
+        "-.--." => Some('('),
+        "-.--.-" => Some(')'),
+        ".-..." => Some('&'),
+        ".--.-." => Some('@'),
+        "..--.-" => Some('_'),
+        "-.-.--" => Some('!'),
+        "...-..-" => Some('$'),
+        "...-.-" => Some('<'),
+        _ => None,
     }
 }
 
@@ -226,6 +560,83 @@ fn normalize_region_text(text: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_uppercase()
+}
+
+pub(crate) fn normalize_region_transcript(text: &str) -> String {
+    let normalized = normalize_region_text(text);
+    let repaired = repair_repeated_callsign_portable_suffix(&normalized);
+    replace_final_ar_prosign(&repaired)
+}
+
+fn replace_final_ar_prosign(text: &str) -> String {
+    let mut tokens: Vec<&str> = text.split_whitespace().collect();
+    if matches!(tokens.last(), Some(&"+")) {
+        let last = tokens.len() - 1;
+        tokens[last] = "AR";
+    }
+    tokens.join(" ")
+}
+
+fn repair_repeated_callsign_portable_suffix(text: &str) -> String {
+    let mut tokens: Vec<String> = text
+        .split_whitespace()
+        .map(std::string::ToString::to_string)
+        .collect();
+    if tokens.len() < 4 {
+        return text.to_string();
+    }
+
+    let mut i = 1usize;
+    while i < tokens.len() {
+        if !is_callsign_token(&tokens[i]) || tokens[i] != tokens[i - 1] {
+            i += 1;
+            continue;
+        }
+
+        let callsign = tokens[i].clone();
+        let mut j = i + 1;
+        while j < tokens.len() {
+            if is_callsign_prefix_fragment(&callsign, &tokens[j]) {
+                let slash_idx = (j + 1..=(j + 2).min(tokens.len() - 1))
+                    .find(|&idx| is_portable_suffix_token(&tokens[idx]));
+                if let Some(slash_idx) = slash_idx {
+                    let repaired = format!("{callsign}{}", tokens[slash_idx]);
+                    tokens.splice(j..=slash_idx, [repaired]);
+                    break;
+                }
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+
+    tokens.join(" ")
+}
+
+fn is_callsign_token(token: &str) -> bool {
+    let len = token.len();
+    (4..=10).contains(&len)
+        && token.chars().all(|ch| ch.is_ascii_alphanumeric())
+        && token.chars().any(|ch| ch.is_ascii_alphabetic())
+        && token.chars().any(|ch| ch.is_ascii_digit())
+}
+
+fn is_callsign_prefix_fragment(callsign: &str, token: &str) -> bool {
+    let len = token.len();
+    (2..callsign.len()).contains(&len)
+        && token.chars().all(|ch| ch.is_ascii_alphanumeric())
+        && callsign.starts_with(token)
+}
+
+fn is_portable_suffix_token(token: &str) -> bool {
+    let Some(rest) = token.strip_prefix('/') else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest.len() <= 3
+        && rest
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == 'P')
 }
 
 fn estimate_short_region_wpm(
@@ -1179,6 +1590,20 @@ mod tests {
     fn unknown_region_text_is_low_confidence() {
         assert!(is_low_confidence_region_text("E?R"));
         assert!(!is_low_confidence_region_text("7QP W7N"));
+    }
+
+    #[test]
+    fn interval_decode_is_preferred_for_repeated_t_garbage_tail() {
+        assert!(should_prefer_interval_decode("TT TTI TTTTT TTTD", "AD /1"));
+    }
+
+    #[test]
+    fn transcript_normalization_repairs_repeated_callsign_portable_tail() {
+        let raw = "IQ CQ CQ DE WA2IAC WA2IAC WA2 AD /1 +";
+        assert_eq!(
+            normalize_region_transcript(raw),
+            "IQ CQ CQ DE WA2IAC WA2IAC WA2IAC/1 AR"
+        );
     }
 
     fn noise_buf(rate: u32, seconds: f32, seed: u64, amplitude: f32) -> Vec<f32> {
