@@ -1129,20 +1129,27 @@ Every logged QSO must carry station identity data. The station context system wo
 
 ### 7.3 Sync Lifecycle
 
-The QRZ logbook sync is a three-phase operation:
+The QRZ logbook sync is a multi-phase operation:
+
+#### Phase 0.5: Push local corrections before download
+
+Before fetching remote QSOs, engines MUST resolve the QRZ logbook owner callsign (via `STATUS`, falling back to cached metadata on transient failure) and push local rows with `sync_status = MODIFIED` and a non-empty `qrz_logid` when the effective conflict policy is `CONFLICT_POLICY_FLAG_FOR_REVIEW` or `CONFLICT_POLICY_UNSPECIFIED`. This uses the documented replace form `ACTION=INSERT&OPTION=REPLACE,LOGID:<logid>`.
+
+This pre-download upload prevents a stale QRZ copy from being downloaded first and converting a normal local correction into `CONFLICT` before the upload phase can update QRZ. Engines MUST remember the `qrz_logid` values successfully uploaded during this phase and ignore matching remote rows returned by the same sync's subsequent `FETCH`, because QRZ may briefly return the stale pre-replace copy.
 
 #### Phase 1: Download
 
 1. Call QRZ logbook API `FETCH` with `OPTION=ALL` (full sync) or `OPTION=ALL,MODSINCE:YYYY-MM-DD` (incremental).
 2. Parse the ADIF response into QSO records. Engines MUST recognise QRZ-specific ADIF application fields and map them onto dedicated domain fields (see §7.5 Import).
 3. For each remote QSO:
-   a. Prefer a direct match on `qrz_logid` if one was returned for that record.
-   b. Otherwise, fuzzy-match against local records: callsign (case-insensitive) + UTC timestamp (within a tolerance window, typically ±60s) + band + mode.
-   c. If matched, apply the configured `ConflictPolicy`:
-      - `CONFLICT_POLICY_LAST_WRITE_WINS` — treat the remote record as authoritative and overwrite local fields; mark the merged row as `SYNCED`.
-      - `CONFLICT_POLICY_FLAG_FOR_REVIEW` — when the local row was locally edited (`sync_status = MODIFIED`), preserve the local fields, set `sync_status = CONFLICT`, and increment the sync result's conflict counter so operators can reconcile manually. When the local row is already `SYNCED`, remote wins (no conflict).
-      - `CONFLICT_POLICY_UNSPECIFIED` — engines MUST treat the zero value as `FLAG_FOR_REVIEW` (the safe, non-destructive default) per §6.3.
-   d. If unmatched, insert as a new local record with `sync_status = SYNCED` and populate `qrz_logid` from the remote record.
+    a. Prefer a direct match on `qrz_logid` if one was returned for that record.
+    b. Otherwise, fuzzy-match against local records: callsign (case-insensitive) + UTC timestamp (within a tolerance window, typically ±60s) + band + mode.
+    c. If the remote `qrz_logid` was successfully uploaded during Phase 0.5 of this same sync, skip it rather than overwriting the corrected local row with a stale remote response.
+    d. If matched, apply the configured `ConflictPolicy`:
+       - `CONFLICT_POLICY_LAST_WRITE_WINS` — treat the remote record as authoritative and overwrite local fields; mark the merged row as `SYNCED`.
+       - `CONFLICT_POLICY_FLAG_FOR_REVIEW` — when the local row was locally edited (`sync_status = MODIFIED`), preserve the local fields, set `sync_status = CONFLICT`, and increment the sync result's conflict counter so operators can reconcile manually. When the local row is already `SYNCED`, remote wins (no conflict).
+       - `CONFLICT_POLICY_UNSPECIFIED` — engines MUST treat the zero value as `FLAG_FOR_REVIEW` (the safe, non-destructive default) per §6.3.
+    e. If unmatched, insert as a new local record with `sync_status = SYNCED` and populate `qrz_logid` from the remote record.
 4. Filter ghost records: remote QSOs missing required fields (callsign, timestamp) are skipped without incrementing any counter.
 5. **Soft-delete suppression:** before matching, engines MUST load the full local record set including soft-deleted rows (see §7.8) and build the set of `qrz_logid` values associated with locally soft-deleted QSOs. Any remote QSO whose `qrz_logid` is in that set MUST be skipped (no insert, no merge), and the engine MUST increment the `deletes_skipped_remote` counter on the sync result. This prevents resurrection of QSOs the operator has trashed locally before the queued remote-delete (Phase 2.5) has propagated.
 

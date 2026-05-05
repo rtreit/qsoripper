@@ -184,17 +184,15 @@ pub(crate) async fn execute_sync(
 ) {
     let mut counters = SyncCounters::new();
 
-    let Some(metadata) = download_phase(
-        client,
-        store,
-        full_sync,
-        conflict_policy,
-        progress_tx,
-        &mut counters,
-    )
-    .await
-    else {
-        return;
+    let metadata = match store.get_sync_metadata().await {
+        Ok(m) => m,
+        Err(err) => {
+            eprintln!("[sync] Failed to read sync metadata: {err}");
+            counters
+                .errors
+                .push(format!("Failed to read sync metadata: {err}"));
+            SyncMetadata::default()
+        }
     };
 
     let status_result = client.fetch_status().await;
@@ -211,10 +209,40 @@ pub(crate) async fn execute_sync(
     .map(|s| s.trim().to_owned())
     .filter(|s| !s.is_empty());
 
+    let freshly_uploaded_logids = if conflict_policy == ConflictPolicy::LastWriteWins {
+        HashSet::new()
+    } else {
+        upload_phase(
+            client,
+            store,
+            book_owner.as_deref(),
+            UploadSelection::ModifiedWithLogid,
+            progress_tx,
+            &mut counters,
+        )
+        .await
+    };
+
+    let Some(metadata) = download_phase(
+        client,
+        store,
+        &metadata,
+        full_sync,
+        conflict_policy,
+        &freshly_uploaded_logids,
+        progress_tx,
+        &mut counters,
+    )
+    .await
+    else {
+        return;
+    };
+
     upload_phase(
         client,
         store,
         book_owner.as_deref(),
+        UploadSelection::Pending,
         progress_tx,
         &mut counters,
     )
@@ -251,20 +279,14 @@ pub(crate) async fn execute_sync(
 async fn download_phase(
     client: &dyn QrzLogbookApi,
     store: &dyn LogbookStore,
+    metadata: &SyncMetadata,
     full_sync: bool,
     conflict_policy: ConflictPolicy,
+    freshly_uploaded_logids: &HashSet<String>,
     progress_tx: &mpsc::Sender<Result<SyncWithQrzResponse, Status>>,
     counters: &mut SyncCounters,
 ) -> Option<SyncMetadata> {
     send_progress(progress_tx, "Fetching QSOs from QRZ…", 0, 0, 0).await;
-
-    let metadata = match store.get_sync_metadata().await {
-        Ok(m) => m,
-        Err(err) => {
-            eprintln!("[sync] Failed to read sync metadata: {err}");
-            SyncMetadata::default()
-        }
-    };
 
     // Load all local QSOs (including soft-deleted) so we can both match
     // against active rows AND honor user intent: any remote row whose
@@ -341,6 +363,7 @@ async fn download_phase(
     process_remote_qsos(
         &remote_qsos,
         &deleted_logids,
+        freshly_uploaded_logids,
         by_qrz_logid,
         by_key,
         store,
@@ -349,7 +372,7 @@ async fn download_phase(
     )
     .await;
 
-    Some(metadata)
+    Some(metadata.clone())
 }
 
 /// Iterate downloaded remote QSOs, applying the soft-delete skip set, then
@@ -358,6 +381,7 @@ async fn download_phase(
 async fn process_remote_qsos(
     remote_qsos: &[QsoRecord],
     deleted_logids: &HashSet<String>,
+    freshly_uploaded_logids: &HashSet<String>,
     mut by_qrz_logid: LogidIndex,
     mut by_key: FuzzyIndex,
     store: &dyn LogbookStore,
@@ -373,6 +397,17 @@ async fn process_remote_qsos(
         }
 
         let remote_logid = extract_qrz_logid(remote);
+
+        // If this sync just pushed the local correction to QRZ, ignore a
+        // stale remote copy returned by the same FETCH response. QRZ may lag
+        // briefly after REPLACE; local storage already reflects the operator's
+        // corrected record.
+        if remote_logid
+            .as_deref()
+            .is_some_and(|logid| freshly_uploaded_logids.contains(logid))
+        {
+            continue;
+        }
 
         // Skip remote rows that match a soft-deleted local row. The user
         // intentionally trashed it; download must not resurrect it.
@@ -463,13 +498,23 @@ async fn insert_new_remote_qso(
 // Phase 2 — Upload pending local QSOs to QRZ
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy)]
+enum UploadSelection {
+    /// Local edits with QRZ identity that must be pushed before remote download
+    /// can classify the stale QRZ row as a conflict.
+    ModifiedWithLogid,
+    /// Normal pending upload pass after download/linking.
+    Pending,
+}
+
 async fn upload_phase(
     client: &dyn QrzLogbookApi,
     store: &dyn LogbookStore,
     book_owner: Option<&str>,
+    selection: UploadSelection,
     progress_tx: &mpsc::Sender<Result<SyncWithQrzResponse, Status>>,
     counters: &mut SyncCounters,
-) {
+) -> HashSet<String> {
     send_progress(
         progress_tx,
         "Uploading local QSOs to QRZ…",
@@ -482,10 +527,7 @@ async fn upload_phase(
     let pending_qsos: Vec<QsoRecord> = match store.list_qsos(&QsoListQuery::default()).await {
         Ok(qsos) => qsos
             .into_iter()
-            .filter(|q| {
-                q.sync_status == SyncStatus::LocalOnly as i32
-                    || q.sync_status == SyncStatus::Modified as i32
-            })
+            .filter(|q| should_upload_qso(q, selection))
             .collect(),
         Err(err) => {
             eprintln!("[sync] Failed to list pending QSOs for upload: {err}");
@@ -501,9 +543,15 @@ async fn upload_phase(
         pending_qsos.len()
     );
 
+    let mut uploaded_logids = HashSet::new();
     for qso in &pending_qsos {
         match sync_single_qso(client, store, qso, book_owner).await {
             Ok(outcome) => {
+                if let Some(logid) = outcome.qso.qrz_logid.as_deref() {
+                    if !logid.is_empty() {
+                        uploaded_logids.insert(logid.to_string());
+                    }
+                }
                 counters.uploaded += 1;
                 if outcome.was_duplicate_replace {
                     counters.duplicate_replaces += 1;
@@ -518,6 +566,24 @@ async fn upload_phase(
                     .errors
                     .push(format!("Upload failed for {}: {err}", qso.worked_callsign));
             }
+        }
+    }
+
+    uploaded_logids
+}
+
+fn should_upload_qso(qso: &QsoRecord, selection: UploadSelection) -> bool {
+    match selection {
+        UploadSelection::ModifiedWithLogid => {
+            qso.sync_status == SyncStatus::Modified as i32
+                && qso
+                    .qrz_logid
+                    .as_deref()
+                    .is_some_and(|logid| !logid.is_empty())
+        }
+        UploadSelection::Pending => {
+            qso.sync_status == SyncStatus::LocalOnly as i32
+                || qso.sync_status == SyncStatus::Modified as i32
         }
     }
 }
@@ -1548,6 +1614,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn full_sync_pushes_modified_qrz_linked_local_correction_before_stale_remote_can_conflict(
+    ) {
+        let store = MemoryStorage::new();
+        let mut local = make_qso("K7TEST", "W1AW/0", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        local.sync_status = SyncStatus::Modified as i32;
+        local.qrz_logid = Some("stale-qrz-logid".to_string());
+        store.insert_qso(&local).await.expect("insert local qso");
+
+        let mut stale_remote =
+            make_qso("K7TEST", "W1AW/1", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        stale_remote.qrz_logid = Some("stale-qrz-logid".to_string());
+        let api = MockQrzApi::new(Ok(vec![stale_remote]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::FlagForReview, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.uploaded_records, 1);
+        assert_eq!(final_msg.conflict_records, 0);
+        assert_eq!(api.replace_calls.lock().unwrap().len(), 1);
+
+        let saved = store
+            .list_qsos(&QsoListQuery::default())
+            .await
+            .expect("list qsos");
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].worked_callsign, "W1AW/0");
+        assert_eq!(saved[0].sync_status, SyncStatus::Synced as i32);
+        assert_eq!(saved[0].qrz_logid.as_deref(), Some("stale-qrz-logid"));
+    }
+
+    #[tokio::test]
+    async fn full_sync_pushes_all_modified_qrz_linked_rows_so_stale_qrz_entries_are_resolved() {
+        let store = MemoryStorage::new();
+        let mut first = make_qso("K7TEST", "W1AW/0", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        first.sync_status = SyncStatus::Modified as i32;
+        first.qrz_logid = Some("qrz-1".to_string());
+        let mut second = make_qso("K7TEST", "K7ABC", Band::Band40m, Mode::Cw, 1_700_000_060);
+        second.sync_status = SyncStatus::Modified as i32;
+        second.qrz_logid = Some("qrz-2".to_string());
+        store.insert_qso(&first).await.expect("insert first qso");
+        store.insert_qso(&second).await.expect("insert second qso");
+
+        let mut stale_first = make_qso("K7TEST", "W1AW/1", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        stale_first.qrz_logid = Some("qrz-1".to_string());
+        let mut stale_second = make_qso("K7TEST", "K7OLD", Band::Band40m, Mode::Cw, 1_700_000_060);
+        stale_second.qrz_logid = Some("qrz-2".to_string());
+        let api = MockQrzApi::new(Ok(vec![stale_first, stale_second]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::FlagForReview, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.uploaded_records, 2);
+        assert_eq!(final_msg.conflict_records, 0);
+        assert_eq!(api.replace_calls.lock().unwrap().len(), 2);
+
+        let saved = store
+            .list_qsos(&QsoListQuery::default())
+            .await
+            .expect("list qsos");
+        assert_eq!(saved.len(), 2);
+        assert!(saved.iter().any(|qso| qso.worked_callsign == "W1AW/0"));
+        assert!(saved.iter().any(|qso| qso.worked_callsign == "K7ABC"));
+        assert!(saved
+            .iter()
+            .all(|qso| qso.sync_status == SyncStatus::Synced as i32));
+        assert!(!saved.iter().any(|qso| qso.worked_callsign == "W1AW/1"));
+        assert!(!saved.iter().any(|qso| qso.worked_callsign == "K7OLD"));
+    }
+
+    #[tokio::test]
     async fn execute_sync_falls_back_to_cached_owner_when_status_fails() {
         let store = MemoryStorage::new();
         store
@@ -1869,7 +2011,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn modified_local_marked_as_conflict_on_remote_match() {
+    async fn modified_local_with_qrz_logid_uploaded_before_remote_can_conflict() {
         let store = MemoryStorage::new();
 
         // Local QSO with MODIFIED status.
@@ -1893,12 +2035,12 @@ mod tests {
 
         let final_msg = collect_final(rx).await;
         assert!(final_msg.complete);
-        assert_eq!(final_msg.conflict_records, 1);
-        assert_eq!(final_msg.uploaded_records, 0);
+        assert_eq!(final_msg.conflict_records, 0);
+        assert_eq!(final_msg.uploaded_records, 1);
 
         let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
         assert_eq!(all.len(), 1);
-        assert_eq!(all[0].sync_status, SyncStatus::Conflict as i32);
+        assert_eq!(all[0].sync_status, SyncStatus::Synced as i32);
     }
 
     #[tokio::test]
@@ -2304,7 +2446,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn flag_for_review_does_not_overwrite_and_skips_upload() {
+    async fn flag_for_review_pushes_qrz_linked_local_edit_before_remote_can_conflict() {
         let store = MemoryStorage::new();
 
         // Local QSO: MODIFIED.
@@ -2330,7 +2472,6 @@ mod tests {
             q
         };
 
-        // No upload results — CONFLICT QSOs should not be uploaded.
         let api = MockQrzApi::new(Ok(vec![remote]), vec![]);
 
         let (tx, rx) = mpsc::channel(16);
@@ -2339,13 +2480,13 @@ mod tests {
 
         let final_msg = collect_final(rx).await;
         assert!(final_msg.complete);
-        assert_eq!(final_msg.conflict_records, 1);
+        assert_eq!(final_msg.conflict_records, 0);
         assert_eq!(final_msg.downloaded_records, 0);
-        assert_eq!(final_msg.uploaded_records, 0);
+        assert_eq!(final_msg.uploaded_records, 1);
 
         let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
         assert_eq!(all.len(), 1);
-        assert_eq!(all[0].sync_status, SyncStatus::Conflict as i32);
+        assert_eq!(all[0].sync_status, SyncStatus::Synced as i32);
         // Local data preserved, not overwritten by remote.
         assert_eq!(all[0].notes.as_deref(), Some("local version"));
     }
