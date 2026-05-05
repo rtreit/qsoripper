@@ -710,6 +710,7 @@ fn morse_to_char(s: &str) -> Option<char> {
         "..--.-" => Some('_'),  // underscore
         "-.-.--" => Some('!'),  // exclamation
         "...-..-" => Some('$'), // dollar sign
+        "...-.-" => Some('<'),  // SK / VA end-of-work prosign
         _ => None,
     }
 }
@@ -736,6 +737,7 @@ mod morse_to_char_tests {
         assert_eq!(morse_to_char(".-.-."), Some('+'));
         assert_eq!(morse_to_char("-....-"), Some('-'));
         assert_eq!(morse_to_char(".----."), Some('\''));
+        assert_eq!(morse_to_char("...-.-"), Some('<'));
     }
 
     #[test]
