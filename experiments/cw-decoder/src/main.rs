@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cw_decoder_poc::{
-    audio, bench_latency, decoder, ditdah_streaming, harvest, json, log_capture, preview,
-    streaming, streaming_v2, synthetic_qso, tui,
+    audio, bench_latency, corpus_validator, decoder, ditdah_streaming, harvest, json, log_capture,
+    preview, streaming, streaming_v2, synthetic_qso, tui,
 };
 
 #[derive(Parser, Debug)]
@@ -802,6 +802,33 @@ enum Cmd {
         #[arg(long)]
         require_exact: bool,
     },
+
+    /// Walk a corpus directory of `*.truth.txt` sidecars + matching audio
+    /// files, decode each through the region-isolated path, and report
+    /// per-file pass / character error rate / ghost-char counts.
+    ///
+    /// Pairs each `<basename>.truth.txt` with `<basename>.wav` (preferred),
+    /// `<basename>.mp3`, `<basename>.m4a`, or `<basename>.flac`. Entries
+    /// with no matching audio are reported as `SKIPPED` so the operator
+    /// can re-sync the corpus from OneDrive (or wherever the audio lives,
+    /// since `*.wav` and `*.mp3` are gitignored).
+    ValidateCorpus {
+        /// Corpus root directory. Walks for `*.truth.txt` sidecars.
+        #[arg(long)]
+        dir: PathBuf,
+        /// Limit the walk to the top-level directory only. By default
+        /// the walk recurses into every subdirectory.
+        #[arg(long)]
+        no_recursive: bool,
+        /// Emit one NDJSON validation row per entry plus a final summary
+        /// row (machine-readable). Default is the human-readable table.
+        #[arg(long)]
+        json: bool,
+        /// Exit non-zero if any entry fails exact-copy comparison
+        /// (skipped entries do not count as failures).
+        #[arg(long)]
+        require_exact: bool,
+    },
 }
 
 const CLI_THREAD_STACK_BYTES: usize = 16 * 1024 * 1024;
@@ -1294,6 +1321,12 @@ fn run_cli() -> Result<()> {
             json,
             require_exact,
         ),
+        Cmd::ValidateCorpus {
+            dir,
+            no_recursive,
+            json,
+            require_exact,
+        } => run_validate_corpus(&dir, !no_recursive, json, require_exact),
     }
 }
 
@@ -4212,6 +4245,129 @@ fn run_gen_qso_suite(
         anyhow::bail!("{failures} synthetic QSO validation(s) failed exact-copy check");
     }
     Ok(())
+}
+
+fn run_validate_corpus(
+    dir: &std::path::Path,
+    recursive: bool,
+    json: bool,
+    require_exact: bool,
+) -> Result<()> {
+    use cw_decoder_poc::region_stream::RegionStreamConfig;
+
+    let entries = corpus_validator::discover_corpus(dir, recursive)?;
+    let cfg = RegionStreamConfig::default();
+    let mut validations = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        validations.push(corpus_validator::validate_entry(entry, &cfg));
+    }
+    let summary = corpus_validator::summarize(&validations);
+
+    if json {
+        for v in &validations {
+            println!(
+                "{}",
+                serde_json::to_string(v).context("serializing corpus validation")?
+            );
+        }
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "type": "summary",
+                "dir": dir,
+                "recursive": recursive,
+                "summary": summary,
+            }))
+            .context("serializing summary")?
+        );
+        if require_exact && (summary.mismatches > 0 || summary.errored > 0) {
+            anyhow::bail!(
+                "{} corpus mismatch(es), {} error(s)",
+                summary.mismatches,
+                summary.errored
+            );
+        }
+        return Ok(());
+    }
+
+    println!(
+        "Corpus: {} ({} entr{} discovered)",
+        dir.display(),
+        entries.len(),
+        if entries.len() == 1 { "y" } else { "ies" }
+    );
+    println!();
+    println!(
+        "{:<48} {:<10} {:>5} {:>6} {:>6} {:>7}  result",
+        "id", "status", "sec", "regs", "ghost", "cer"
+    );
+    println!("{}", "-".repeat(108));
+    for v in &validations {
+        let id = truncate_for_table(&v.id, 48);
+        let (status, result) = match &v.status {
+            corpus_validator::CorpusValidationStatus::Validated => {
+                if v.exact_match {
+                    ("OK".to_string(), "exact match".to_string())
+                } else {
+                    ("MISMATCH".to_string(), v.transcript.clone())
+                }
+            }
+            corpus_validator::CorpusValidationStatus::Skipped(r) => {
+                ("SKIPPED".to_string(), format!("({r})"))
+            }
+            corpus_validator::CorpusValidationStatus::Errored(r) => {
+                ("ERROR".to_string(), format!("({r})"))
+            }
+        };
+        let cer_str = v
+            .char_error_rate
+            .map(|c| format!("{c:.3}"))
+            .unwrap_or_else(|| "—".to_string());
+        println!(
+            "{:<48} {:<10} {:>5.1} {:>6} {:>6} {:>7}  {}",
+            id, status, v.duration_s, v.region_count, v.ghost_chars, cer_str, result
+        );
+        if matches!(
+            v.status,
+            corpus_validator::CorpusValidationStatus::Validated
+        ) && !v.exact_match
+        {
+            println!("  truth: {}", v.truth);
+        }
+    }
+    println!();
+    println!(
+        "Summary: {}/{} exact, {} mismatch, {} skipped, {} errored",
+        summary.exact_matches,
+        summary.validated,
+        summary.mismatches,
+        summary.skipped,
+        summary.errored
+    );
+    if let Some(cer) = summary.mean_cer {
+        println!(
+            "         mean CER {:.3}, ghost {} chars, missing {} chars",
+            cer, summary.total_ghost_chars, summary.total_missing_chars
+        );
+    }
+    if require_exact && (summary.mismatches > 0 || summary.errored > 0) {
+        anyhow::bail!(
+            "{} corpus mismatch(es), {} error(s) (skipped entries do not count)",
+            summary.mismatches,
+            summary.errored
+        );
+    }
+    Ok(())
+}
+
+fn truncate_for_table(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
 }
 
 fn run_stream_live_v3(

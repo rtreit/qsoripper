@@ -1147,6 +1147,126 @@ mod tests {
         );
     }
 
+    /// Build a "colored hiss" buffer: white noise with a small sinusoidal
+    /// peak at `peak_hz`. Mirrors the synthetic colored-hiss cases used
+    /// in the eval suite that the legacy StreamingDecoder ghosts on; the
+    /// region path must reject these as confidently as silence.
+    fn colored_hiss(rate: u32, seconds: f32, seed: u64, peak_hz: f32) -> Vec<f32> {
+        let mut buf = noise_buf(rate, seconds, seed, 0.10);
+        let n = buf.len();
+        let two_pi = 2.0 * std::f32::consts::PI;
+        for (i, sample) in buf.iter_mut().enumerate().take(n) {
+            let t = i as f32 / rate as f32;
+            *sample += 0.05 * (two_pi * peak_hz * t).sin();
+        }
+        buf
+    }
+
+    #[test]
+    fn decode_region_stream_returns_no_text_on_colored_hiss_700hz() {
+        // Regression guard for the PR #378 -> PR #379 cycle: my windowed
+        // pitch discovery (PR #378) re-promoted noise-window pitches that
+        // produced low-quality region decodes. PR #379 patched the
+        // operator-visible symptom with `is_low_confidence_region_text`
+        // (any region text containing `?` is dropped at candidate
+        // collection time).
+        //
+        // Probing reveals the `?`-text filter is load-bearing here:
+        // `decode_region_slice` happily returns `"? EEN EKTTE T0N…"` for
+        // colored hiss at 700 Hz. The end-to-end empty result depends on
+        // that filter doing its job.
+        //
+        // We lock both layers in:
+        //   1. `decode_region_slice` produces text containing `?` — the
+        //      explicit precondition that `is_low_confidence_region_text`
+        //      relies on. If a future change scrubs `?` from raw region
+        //      text without strengthening the deeper rejection, this
+        //      assertion fires and forces a conscious update.
+        //   2. `decode_region_stream` returns empty text end-to-end — the
+        //      operator-facing contract: no ghost characters reach the UI.
+        let sr = 12_000u32;
+        let buf = colored_hiss(sr, 30.0, 0xC0_FF_EE_07, 700.0);
+        let cfg = RegionStreamConfig::default();
+        let slice_text = decode_region_slice(&buf, sr, 700.0, &cfg);
+        assert!(
+            slice_text.contains('?'),
+            "expected raw region slice on colored hiss to contain `?` (so the low-confidence filter has something to drop); got {slice_text:?}"
+        );
+        let result = decode_region_stream(&buf, sr, &cfg);
+        assert!(
+            result.text.trim().is_empty(),
+            "expected no text on colored hiss @ 700 Hz, got regions={} text={:?}",
+            result.regions.len(),
+            result.text
+        );
+    }
+
+    #[test]
+    fn decode_region_stream_returns_no_text_on_colored_hiss_500hz() {
+        let sr = 12_000u32;
+        let buf = colored_hiss(sr, 30.0, 0x5A_5A_05_00, 500.0);
+        let cfg = RegionStreamConfig::default();
+        let result = decode_region_stream(&buf, sr, &cfg);
+        assert!(
+            result.text.trim().is_empty(),
+            "expected no text on colored hiss @ 500 Hz, got regions={} text={:?}",
+            result.regions.len(),
+            result.text
+        );
+    }
+
+    #[test]
+    fn decode_region_stream_returns_no_text_on_bursty_noise() {
+        // Bursty noise: long-form silence with intermittent noise spikes
+        // at varying levels. Common during a real operator pause where a
+        // band noise pop or distant station whisp punches through. The
+        // decoder must not mint dits/dahs out of those.
+        let sr = 12_000u32;
+        let total_s = 30.0_f32;
+        let mut buf = vec![0.0_f32; (sr as f32 * total_s) as usize];
+        let bursts = [
+            (3.0_f32, 0.4_f32, 0xB0_07_00_01_u64, 0.12_f32),
+            (8.5, 0.2, 0xB0_07_00_02, 0.18),
+            (15.0, 0.6, 0xB0_07_00_03, 0.10),
+            (21.5, 0.3, 0xB0_07_00_04, 0.20),
+            (27.0, 0.5, 0xB0_07_00_05, 0.14),
+        ];
+        for (start, dur, seed, amp) in bursts {
+            let s = (start * sr as f32) as usize;
+            let burst = noise_buf(sr, dur, seed, amp);
+            for (i, sample) in burst.iter().enumerate() {
+                if s + i < buf.len() {
+                    buf[s + i] += *sample;
+                }
+            }
+        }
+        let cfg = RegionStreamConfig::default();
+        let result = decode_region_stream(&buf, sr, &cfg);
+        assert!(
+            result.text.trim().is_empty(),
+            "expected no text on bursty noise, got regions={} text={:?}",
+            result.regions.len(),
+            result.text
+        );
+    }
+
+    #[test]
+    fn decode_region_stream_returns_no_text_on_low_amplitude_carrier() {
+        // A weak continuous unmodulated carrier (no keying) is not CW.
+        // The region path should not invent characters out of a steady
+        // tone — it must only commit on actual on/off keying behavior.
+        let sr = 12_000u32;
+        let buf = synth_tone(650.0, 30.0, sr, 0.04);
+        let cfg = RegionStreamConfig::default();
+        let result = decode_region_stream(&buf, sr, &cfg);
+        assert!(
+            result.text.trim().is_empty(),
+            "expected no text on weak unkeyed carrier, got regions={} text={:?}",
+            result.regions.len(),
+            result.text
+        );
+    }
+
     #[test]
     fn discover_burst_pitches_ignores_continuous_carrier_when_cw_is_at_other_pitch() {
         // Realistic failure mode: a strong continuous carrier at one
