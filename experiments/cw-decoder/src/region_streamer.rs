@@ -320,6 +320,13 @@ mod tests {
             '7' => Some("--..."),
             '8' => Some("---.."),
             '9' => Some("----."),
+            '=' => Some("-...-"),
+            ',' => Some("--..--"),
+            '.' => Some(".-.-.-"),
+            '?' => Some("..--.."),
+            '/' => Some("-..-."),
+            '+' => Some(".-.-."),
+            '-' => Some("-....-"),
             _ => None,
         }
     }
@@ -530,6 +537,73 @@ mod tests {
             regions.len(),
             1,
             "single synthetic exchange should commit as one region: {regions:?}"
+        );
+    }
+
+    /// Regression for training-set-c: a strong burst followed by a much
+    /// weaker repeat copy (~6x lower amplitude) with quiet noise gaps.
+    /// The earlier global-percentile threshold was anchored by the strong
+    /// first copy and put the weak repeat below the activation level, so
+    /// it fragmented into shortest-symbol garbage like "WA2 A MS J ET TE".
+    /// The block-adaptive log-power threshold lets the weak repeat be
+    /// detected on its own local statistics so both copies decode cleanly.
+    #[test]
+    fn synthetic_qsb_repeat_copy_recovers_with_adaptive_threshold() {
+        let sr = 12_000;
+        let mut samples = synthesize_silence(sr, 0.6);
+        // Strong first copy
+        samples.extend(synth_morse(sr, 700.0, 22.0, "CQ DE W1AW", 0.55));
+        // Inter-copy noise gap (matches training-set-c shape)
+        let mut gap = synthesize_silence(sr, 1.6);
+        add_white_noise(&mut gap, 0.012, 0xCB5C0F);
+        samples.extend(gap);
+        // Weak repeat copy at ~1/6 amplitude — well below what a single
+        // global threshold tuned to the first copy would catch
+        samples.extend(synth_morse(sr, 700.0, 22.0, "CQ DE W1AW", 0.09));
+        samples.extend(synthesize_silence(sr, 0.8));
+        // Sprinkle gentle whole-buffer noise so the noise floor is not
+        // pure-zero everywhere
+        add_white_noise(&mut samples, 0.006, 0x9E37F1A1);
+
+        let (transcript, regions) = region_stream_transcript(sr, &samples);
+        assert_eq!(
+            transcript, "CQ DE W1AW CQ DE W1AW",
+            "both copies must decode cleanly under QSB-style amplitude swing: regions={regions:?}"
+        );
+        assert_eq!(
+            regions.len(),
+            2,
+            "expected exactly two committed regions (one per copy): {regions:?}"
+        );
+    }
+
+    /// Regression for ARRL Code Practice transcripts: long, high-quality CW
+    /// containing standard ITU punctuation (BT prosign `=`, comma) used as
+    /// section separators. Before ditdah grew a punctuation table these
+    /// chars decoded to `?`, which the region low-confidence filter then
+    /// rejected wholesale, producing an EMPTY transcript on what is
+    /// otherwise the cleanest possible long-form CW input.
+    #[test]
+    fn synthetic_arrl_style_text_with_bt_and_comma_decodes_exact() {
+        let sr = 12_000;
+        let mut samples = synthesize_silence(sr, 0.6);
+        samples.extend(synth_morse(
+            sr,
+            700.0,
+            20.0,
+            "= NOW 20 WPM = TEXT TWO, THREE, AND FOUR =",
+            0.55,
+        ));
+        samples.extend(synthesize_silence(sr, 0.8));
+
+        let (transcript, regions) = region_stream_transcript(sr, &samples);
+        assert_eq!(
+            transcript, "= NOW 20 WPM = TEXT TWO, THREE, AND FOUR =",
+            "BT prosign and commas must round-trip cleanly so regions are not dropped: regions={regions:?}"
+        );
+        assert!(
+            !regions.is_empty(),
+            "ARRL-style text must produce at least one committed region"
         );
     }
 }
