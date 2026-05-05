@@ -906,6 +906,7 @@ fn adaptive_active_mask(powers: &[f32], cfg: &RegionStreamConfig, step_s: f32) -
 
     // Pass 1: collect per-block log-power percentiles.
     let mut centers: Vec<usize> = Vec::new();
+    let mut block_p20: Vec<f32> = Vec::new();
     let mut block_p35: Vec<f32> = Vec::new();
     let mut block_p50: Vec<f32> = Vec::new();
     let mut block_p85: Vec<f32> = Vec::new();
@@ -918,6 +919,7 @@ fn adaptive_active_mask(powers: &[f32], cfg: &RegionStreamConfig, step_s: f32) -
         let mut local: Vec<f32> = log_powers[lo..hi].to_vec();
         local.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         centers.push(center);
+        block_p20.push(percentile_sorted(&local, 0.20));
         block_p35.push(percentile_sorted(&local, 0.35));
         block_p50.push(percentile_sorted(&local, 0.50));
         block_p85.push(percentile_sorted(&local, 0.85));
@@ -932,19 +934,26 @@ fn adaptive_active_mask(powers: &[f32], cfg: &RegionStreamConfig, step_s: f32) -
         return vec![false; n];
     }
 
-    // Robust global references derived from block-level stats. q20 of
-    // block medians anchors the noise floor (most blocks contain noise
-    // at least somewhere in their span; q20 picks the quietest 20% of
-    // block centers). q80 of block p85s anchors the signal level (the
-    // loudest 20% of blocks set the signal reference).
+    // Robust global references derived from block-level stats.
     //
-    // Frame-global p85 was tried first but is unstable: in a buffer
-    // where signal duty cycle is low, frame-global p85 falls into the
-    // noise upper-tail and "signal-present" tests false-positive on
-    // every noise spike.
-    let mut sorted_p50 = block_p50.clone();
-    sorted_p50.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let noise_ref = percentile_sorted(&sorted_p50, 0.20);
+    // **noise_ref**: q20 of block-level p20s. Block-p20 captures the
+    // quiet tail of each block — for active CW blocks this is the
+    // intra-element silence between dits/dahs (which always exists
+    // even in dense long-form CW); for silent/noise blocks it sits
+    // near the noise floor. Using block-p20 instead of block-p50
+    // is critical for long uninterrupted CW like ARRL Code Practice:
+    // when 100% of blocks are signal-dominant, q20(block_p50) sits
+    // ABOVE signal level and the noise floor reference collapses.
+    // Block-p20 still reaches down to the inter-element gaps so the
+    // reference stays anchored.
+    //
+    // **peak_ref**: q80 of block p85s. The loudest 20% of blocks set
+    // the signal reference. Stable as long as ANY blocks contain
+    // signal — frame-global p85 was tried first but is unstable in
+    // signal-light buffers.
+    let mut sorted_p20 = block_p20.clone();
+    sorted_p20.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let noise_ref = percentile_sorted(&sorted_p20, 0.20);
 
     let mut sorted_p85 = block_p85.clone();
     sorted_p85.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));

@@ -690,6 +690,58 @@ fn morse_to_char(s: &str) -> Option<char> {
         "---.." => Some('8'),
         "----." => Some('9'),
         "-----" => Some('0'),
+        // ITU punctuation and prosigns (commonly seen in real CW traffic
+        // including ARRL code practice transmissions and contest exchanges).
+        "-...-" => Some('='),   // BT prosign / equals (ARRL section separator)
+        "--..--" => Some(','),  // comma
+        ".-.-.-" => Some('.'),  // period
+        "..--.." => Some('?'),  // question mark
+        "-..-." => Some('/'),   // slash
+        ".-.-." => Some('+'),   // AR prosign / plus
+        "-....-" => Some('-'),  // hyphen / minus
+        ".----." => Some('\''), // apostrophe
+        ".-..-." => Some('"'),  // quotation mark
+        "---..." => Some(':'),  // colon
+        "-.-.-." => Some(';'),  // semicolon
+        "-.--." => Some('('),   // open parenthesis (also KN prosign)
+        "-.--.-" => Some(')'),  // close parenthesis
+        ".-..." => Some('&'),   // ampersand (also AS / wait prosign)
+        ".--.-." => Some('@'),  // at sign
+        "..--.-" => Some('_'),  // underscore
+        "-.-.--" => Some('!'),  // exclamation
+        "...-..-" => Some('$'), // dollar sign
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod morse_to_char_tests {
+    use super::morse_to_char;
+
+    #[test]
+    fn alphanumeric_round_trip() {
+        assert_eq!(morse_to_char(".-"), Some('A'));
+        assert_eq!(morse_to_char("-.-"), Some('K'));
+        assert_eq!(morse_to_char("-----"), Some('0'));
+        assert_eq!(morse_to_char("....."), Some('5'));
+    }
+
+    #[test]
+    fn itu_punctuation_decodes() {
+        assert_eq!(morse_to_char("-...-"), Some('='));
+        assert_eq!(morse_to_char("--..--"), Some(','));
+        assert_eq!(morse_to_char(".-.-.-"), Some('.'));
+        assert_eq!(morse_to_char("..--.."), Some('?'));
+        assert_eq!(morse_to_char("-..-."), Some('/'));
+        assert_eq!(morse_to_char(".-.-."), Some('+'));
+        assert_eq!(morse_to_char("-....-"), Some('-'));
+        assert_eq!(morse_to_char(".----."), Some('\''));
+    }
+
+    #[test]
+    fn unknown_morse_returns_none() {
+        assert_eq!(morse_to_char("........"), None);
+        assert_eq!(morse_to_char("-.-..-.-"), None);
+        assert_eq!(morse_to_char(""), None);
     }
 }

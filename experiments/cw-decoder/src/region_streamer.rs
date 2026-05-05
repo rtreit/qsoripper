@@ -320,6 +320,13 @@ mod tests {
             '7' => Some("--..."),
             '8' => Some("---.."),
             '9' => Some("----."),
+            '=' => Some("-...-"),
+            ',' => Some("--..--"),
+            '.' => Some(".-.-.-"),
+            '?' => Some("..--.."),
+            '/' => Some("-..-."),
+            '+' => Some(".-.-."),
+            '-' => Some("-....-"),
             _ => None,
         }
     }
@@ -567,6 +574,36 @@ mod tests {
             regions.len(),
             2,
             "expected exactly two committed regions (one per copy): {regions:?}"
+        );
+    }
+
+    /// Regression for ARRL Code Practice transcripts: long, high-quality CW
+    /// containing standard ITU punctuation (BT prosign `=`, comma) used as
+    /// section separators. Before ditdah grew a punctuation table these
+    /// chars decoded to `?`, which the region low-confidence filter then
+    /// rejected wholesale, producing an EMPTY transcript on what is
+    /// otherwise the cleanest possible long-form CW input.
+    #[test]
+    fn synthetic_arrl_style_text_with_bt_and_comma_decodes_exact() {
+        let sr = 12_000;
+        let mut samples = synthesize_silence(sr, 0.6);
+        samples.extend(synth_morse(
+            sr,
+            700.0,
+            20.0,
+            "= NOW 20 WPM = TEXT TWO, THREE, AND FOUR =",
+            0.55,
+        ));
+        samples.extend(synthesize_silence(sr, 0.8));
+
+        let (transcript, regions) = region_stream_transcript(sr, &samples);
+        assert_eq!(
+            transcript, "= NOW 20 WPM = TEXT TWO, THREE, AND FOUR =",
+            "BT prosign and commas must round-trip cleanly so regions are not dropped: regions={regions:?}"
+        );
+        assert!(
+            !regions.is_empty(),
+            "ARRL-style text must produce at least one committed region"
         );
     }
 }
