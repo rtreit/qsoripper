@@ -802,22 +802,18 @@ fn detect_active_regions(
         return vec![];
     }
 
-    let mut sorted = powers.clone();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let noise_floor = percentile_sorted(&sorted, 0.35);
-    let signal_floor = percentile_sorted(&sorted, 0.85);
-    if !noise_floor.is_finite() || !signal_floor.is_finite() || signal_floor <= noise_floor {
-        return vec![];
-    }
-    let threshold = noise_floor + (signal_floor - noise_floor) * cfg.threshold_factor.max(0.0);
+    let step_s = frame_step as f32 / sample_rate as f32;
+    let frame_s = frame_len as f32 / sample_rate as f32;
 
-    // Frame -> active mask
-    let active: Vec<bool> = powers.iter().map(|&p| p >= threshold).collect();
+    // Block-adaptive log-power threshold + hysteresis. This replaces the
+    // earlier global-percentile threshold so that QSB (signal fading
+    // mid-buffer) doesn't fragment weak-but-real bursts into noise-spike
+    // chatter that the deeper decoder confidently mis-classifies as
+    // shortest-symbol garbage (T/E/A/S/M).
+    let active = adaptive_active_mask(&powers, cfg, step_s);
 
     // Collect contiguous active runs as (start_s, end_s) using the frame-step
     // grid. The end time is the *end* of the last active frame, not its start.
-    let step_s = frame_step as f32 / sample_rate as f32;
-    let frame_s = frame_len as f32 / sample_rate as f32;
     let mut runs: Vec<(f32, f32)> = Vec::new();
     let mut cur_start: Option<usize> = None;
     for (i, &on) in active.iter().enumerate() {
@@ -855,6 +851,232 @@ fn detect_active_regions(
         .into_iter()
         .filter(|(s, e)| (e - s) >= cfg.min_region_s.max(0.0))
         .collect()
+}
+
+/// Block-adaptive log-power threshold with hysteresis.
+///
+/// Replaces a single global percentile threshold over the whole buffer.
+/// The whole-buffer approach silently fragmented signals affected by QSB
+/// (slow amplitude fading) because the global signal-floor was dominated
+/// by the strong portions, leaving weaker-but-still-real CW below the
+/// detection threshold.
+///
+/// The new approach computes per-block (sliding 2s window) statistics,
+/// derives robust **block-level** noise and peak references (q20 of
+/// block medians, q80 of block p85s), then classifies each block into
+/// one of three regimes:
+///
+/// * **SIGNAL-UNIFORM** — block median sits near the buffer's peak
+///   reference. Signal occupies most of the block (e.g. mid-burst,
+///   long uninterrupted CW). Threshold sits just below the signal
+///   cluster so all signal frames qualify even when contrast is small.
+/// * **MIXED** — block contains a mix of signal+noise with high
+///   contrast and an upper tail near the peak reference. Adaptive
+///   threshold tuned between the local p35 and p85, with hysteresis.
+/// * **NOISE-UNIFORM** — block has no evidence of signal. Threshold
+///   sits at local p95 to reject everything but extreme spikes.
+///
+/// A global "is signal even possible" gate using the dynamic range
+/// between the noise and peak references prevents pure-noise buffers
+/// from being mis-classified as signal-uniform.
+///
+/// Block-level references (instead of frame-level percentiles) are
+/// critical: a frame-global p85 drifts with the buffer's signal vs.
+/// silence ratio and can collapse into noise upper-tail in
+/// signal-light buffers, while the q80-of-block-p85 reference is
+/// stable as long as ANY blocks contain signal.
+fn adaptive_active_mask(powers: &[f32], cfg: &RegionStreamConfig, step_s: f32) -> Vec<bool> {
+    if powers.len() < 4 {
+        return vec![];
+    }
+
+    // Work in log-power so multiplicative QSB swings (5-30x) become
+    // additive. Add a tiny epsilon to avoid -inf at exact-zero frames.
+    let log_powers: Vec<f32> = powers.iter().map(|&p| (p.max(1e-12)).ln()).collect();
+
+    // 2-second blocks with 1-second hop (50% overlap). 2s is long enough
+    // to span any CW word at 8+ WPM but short enough to track slow QSB.
+    let block_s = 2.0_f32;
+    let hop_s = 1.0_f32;
+    let block_frames = ((block_s / step_s).round() as usize).max(40);
+    let hop_frames = ((hop_s / step_s).round() as usize).max(20);
+    let half = block_frames / 2;
+
+    let n = log_powers.len();
+
+    // Pass 1: collect per-block log-power percentiles.
+    let mut centers: Vec<usize> = Vec::new();
+    let mut block_p35: Vec<f32> = Vec::new();
+    let mut block_p50: Vec<f32> = Vec::new();
+    let mut block_p85: Vec<f32> = Vec::new();
+    let mut block_p95: Vec<f32> = Vec::new();
+
+    let mut center = 0usize;
+    while center < n {
+        let lo = center.saturating_sub(half);
+        let hi = (center + half).min(n);
+        let mut local: Vec<f32> = log_powers[lo..hi].to_vec();
+        local.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        centers.push(center);
+        block_p35.push(percentile_sorted(&local, 0.35));
+        block_p50.push(percentile_sorted(&local, 0.50));
+        block_p85.push(percentile_sorted(&local, 0.85));
+        block_p95.push(percentile_sorted(&local, 0.95));
+        if hop_frames == 0 {
+            break;
+        }
+        center = center.saturating_add(hop_frames);
+    }
+
+    if centers.is_empty() {
+        return vec![false; n];
+    }
+
+    // Robust global references derived from block-level stats. q20 of
+    // block medians anchors the noise floor (most blocks contain noise
+    // at least somewhere in their span; q20 picks the quietest 20% of
+    // block centers). q80 of block p85s anchors the signal level (the
+    // loudest 20% of blocks set the signal reference).
+    //
+    // Frame-global p85 was tried first but is unstable: in a buffer
+    // where signal duty cycle is low, frame-global p85 falls into the
+    // noise upper-tail and "signal-present" tests false-positive on
+    // every noise spike.
+    let mut sorted_p50 = block_p50.clone();
+    sorted_p50.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let noise_ref = percentile_sorted(&sorted_p50, 0.20);
+
+    let mut sorted_p85 = block_p85.clone();
+    sorted_p85.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let peak_ref = percentile_sorted(&sorted_p85, 0.80);
+
+    // Frame-global silence floor (5th percentile of frame log-powers)
+    // is still useful as an absolute lower clamp on thresholds so a
+    // pathological local window can't drop on_t below true silence.
+    let mut sorted_global = log_powers.clone();
+    sorted_global.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let global_p05 = percentile_sorted(&sorted_global, 0.05);
+
+    // Detectability gate: require at least 10x dynamic range between
+    // the noise and peak references for the buffer to plausibly
+    // contain signal at all. ln(10) ≈ 2.303.
+    let g_min = (10.0_f32).ln();
+    let global_signal_possible = (peak_ref - noise_ref) >= g_min;
+
+    // Per-block classification thresholds. d_min: how far above
+    // noise_ref the block median must be to claim signal-uniform.
+    // signal_match_margin: how close block median must be to
+    // peak_ref. n_min: minimum threshold headroom above noise_ref.
+    let d_min = (3.0_f32).ln();
+    let signal_match_margin = (3.0_f32).ln();
+    let n_min = (3.0_f32).ln();
+
+    // Contrast required for MIXED branch (10x linear). At 10x p85/p35
+    // ratio there's effectively no white-noise variance explanation —
+    // the block must contain real signal+noise (or two different
+    // signal levels). White noise Goertzel power has p85/p35 spread
+    // of only ~2-3x, so noise-only blocks can't fake this gate.
+    let min_contrast = (10.0_f32).ln();
+
+    let factor = cfg.threshold_factor.max(0.0);
+    // Hysteresis: weak tails must drop halfway back toward noise floor
+    // before being declared off. Only applied in MIXED branch since
+    // signal-uniform and noise-uniform have flat thresholds.
+    let off_factor_mul = 0.5_f32;
+
+    // Pass 2: derive on/off thresholds per block.
+    let mut on_thr: Vec<f32> = Vec::with_capacity(centers.len());
+    let mut off_thr: Vec<f32> = Vec::with_capacity(centers.len());
+    for i in 0..centers.len() {
+        let p35 = block_p35[i];
+        let p50 = block_p50[i];
+        let p85 = block_p85[i];
+        let p95 = block_p95[i];
+        let contrast = p85 - p35;
+
+        let dominant_signal = global_signal_possible
+            && p50 >= noise_ref + d_min
+            && p50 >= peak_ref - signal_match_margin;
+
+        let (on_t, off_t) = if dominant_signal {
+            // Signal occupies most of the block. Set threshold below
+            // the signal cluster so all signal frames qualify; clamp
+            // up to noise_ref + headroom so we never drop into noise.
+            let candidate = p50 - 0.5 * (p85 - p50);
+            let on_t = candidate.max(noise_ref + n_min);
+            (on_t, on_t)
+        } else if global_signal_possible && contrast >= min_contrast {
+            // Real signal+noise in this block (signal exists somewhere
+            // in the buffer AND this block has 10x+ dynamic range).
+            // Adaptive threshold anchored to local p35/p85 spread,
+            // with hysteresis to bridge brief mid-element fades during
+            // QSB. global_signal_possible gates this branch so an
+            // all-noise buffer can't admit MIXED branch via spurious
+            // noise-spike contrast.
+            let on_t = p35 + (p85 - p35) * factor;
+            let off_t = p35 + (p85 - p35) * (factor * off_factor_mul).max(0.0);
+            (on_t, off_t)
+        } else {
+            // No clear signal. Use local p95 to reject everything but
+            // extreme spikes; clamp up to noise_ref + headroom so a
+            // degenerate local window can't drop on_t into noise.
+            let on_t = p95.max(noise_ref + n_min);
+            (on_t, on_t)
+        };
+
+        // Final absolute floor at global silence + ~ln(4) so even
+        // pathological windows can't drop the threshold below true
+        // silence.
+        let silence_floor = global_p05 + (4.0_f32).ln();
+        on_thr.push(on_t.max(silence_floor));
+        off_thr.push(off_t.max(silence_floor));
+    }
+
+    // Hysteresis state machine over linearly-interpolated thresholds.
+    let mut active = vec![false; n];
+    let mut on = false;
+    for i in 0..n {
+        let (on_t, off_t) = interp_threshold(i, &centers, &on_thr, &off_thr);
+        if on {
+            if log_powers[i] < off_t {
+                on = false;
+            }
+        } else if log_powers[i] >= on_t {
+            on = true;
+        }
+        active[i] = on;
+    }
+    active
+}
+
+fn interp_threshold(i: usize, centers: &[usize], on_thr: &[f32], off_thr: &[f32]) -> (f32, f32) {
+    if centers.is_empty() {
+        return (f32::INFINITY, f32::INFINITY);
+    }
+    if i <= centers[0] {
+        return (on_thr[0], off_thr[0]);
+    }
+    if i >= *centers.last().unwrap() {
+        return (*on_thr.last().unwrap(), *off_thr.last().unwrap());
+    }
+    let mut lo = 0usize;
+    while lo + 1 < centers.len() && centers[lo + 1] <= i {
+        lo += 1;
+    }
+    let hi = (lo + 1).min(centers.len() - 1);
+    if lo == hi {
+        return (on_thr[lo], off_thr[lo]);
+    }
+    let span = (centers[hi] - centers[lo]) as f32;
+    let frac = if span > 0.0 {
+        (i - centers[lo]) as f32 / span
+    } else {
+        0.0
+    };
+    (
+        on_thr[lo] * (1.0 - frac) + on_thr[hi] * frac,
+        off_thr[lo] * (1.0 - frac) + off_thr[hi] * frac,
+    )
 }
 
 pub fn goertzel_power(samples: &[f32], sample_rate: u32, target_hz: f32) -> f32 {
