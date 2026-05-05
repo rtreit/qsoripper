@@ -224,13 +224,15 @@ pub(crate) async fn execute_sync(
     };
 
     let Some(metadata) = download_phase(
-        client,
-        store,
-        &metadata,
-        full_sync,
-        conflict_policy,
-        &freshly_uploaded_logids,
-        progress_tx,
+        DownloadPhaseInput {
+            client,
+            store,
+            metadata: &metadata,
+            full_sync,
+            conflict_policy,
+            freshly_uploaded_logids: &freshly_uploaded_logids,
+            progress_tx,
+        },
         &mut counters,
     )
     .await
@@ -276,16 +278,30 @@ pub(crate) async fn execute_sync(
 // Phase 1 — Download from QRZ
 // ---------------------------------------------------------------------------
 
-async fn download_phase(
-    client: &dyn QrzLogbookApi,
-    store: &dyn LogbookStore,
-    metadata: &SyncMetadata,
+struct DownloadPhaseInput<'a> {
+    client: &'a dyn QrzLogbookApi,
+    store: &'a dyn LogbookStore,
+    metadata: &'a SyncMetadata,
     full_sync: bool,
     conflict_policy: ConflictPolicy,
-    freshly_uploaded_logids: &HashSet<String>,
-    progress_tx: &mpsc::Sender<Result<SyncWithQrzResponse, Status>>,
+    freshly_uploaded_logids: &'a HashSet<String>,
+    progress_tx: &'a mpsc::Sender<Result<SyncWithQrzResponse, Status>>,
+}
+
+async fn download_phase(
+    input: DownloadPhaseInput<'_>,
     counters: &mut SyncCounters,
 ) -> Option<SyncMetadata> {
+    let DownloadPhaseInput {
+        client,
+        store,
+        metadata,
+        full_sync,
+        conflict_policy,
+        freshly_uploaded_logids,
+        progress_tx,
+    } = input;
+
     send_progress(progress_tx, "Fetching QSOs from QRZ…", 0, 0, 0).await;
 
     // Load all local QSOs (including soft-deleted) so we can both match
