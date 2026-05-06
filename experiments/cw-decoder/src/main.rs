@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cw_decoder_poc::{
-    audio, bench_latency, decoder, ditdah_streaming, harvest, json, log_capture, preview,
-    streaming, streaming_v2, synthetic_qso, tui,
+    audio, bench_latency, corpus_validator, decoder, ditdah_streaming, harvest, json, log_capture,
+    preview, streaming, streaming_v2, synthetic_qso, tui,
 };
 
 #[derive(Parser, Debug)]
@@ -577,6 +577,13 @@ enum Cmd {
         #[arg(long, default_value_t = 0.6)]
         region_stable_latency_s: f32,
 
+        /// Region transcript commit cadence in milliseconds.
+        /// This is intentionally decoupled from `--decode-every-ms`
+        /// (visualizer refresh cadence) so transcript commits are not
+        /// over-eager under CPU load.
+        #[arg(long, default_value_t = 2000)]
+        region_decode_every_ms: u64,
+
         /// During live capture, drop buffered audio that ends more than
         /// this many seconds before the last committed region. Bounds
         /// memory growth across long QSO sessions. Default 5 s.
@@ -599,8 +606,8 @@ enum Cmd {
         /// Emit NDJSON events to stdout (one per line).
         #[arg(long)]
         json: bool,
-        /// Re-run region detection every N ms. Default 500 ms.
-        #[arg(long, default_value_t = 500)]
+        /// Re-run region detection every N ms. Default 2000 ms.
+        #[arg(long, default_value_t = 2000)]
         decode_every_ms: u64,
         /// Trailing-static seconds required before a region is committed.
         /// Higher values reduce mid-burst churn at the cost of latency.
@@ -799,6 +806,33 @@ enum Cmd {
         #[arg(long)]
         json: bool,
         /// Exit non-zero if any generated example is not copied exactly.
+        #[arg(long)]
+        require_exact: bool,
+    },
+
+    /// Walk a corpus directory of `*.truth.txt` sidecars + matching audio
+    /// files, decode each through the region-isolated path, and report
+    /// per-file pass / character error rate / ghost-char counts.
+    ///
+    /// Pairs each `<basename>.truth.txt` with `<basename>.wav` (preferred),
+    /// `<basename>.mp3`, `<basename>.m4a`, or `<basename>.flac`. Entries
+    /// with no matching audio are reported as `SKIPPED` so the operator
+    /// can re-sync the corpus from OneDrive (or wherever the audio lives,
+    /// since `*.wav` and `*.mp3` are gitignored).
+    ValidateCorpus {
+        /// Corpus root directory. Walks for `*.truth.txt` sidecars.
+        #[arg(long)]
+        dir: PathBuf,
+        /// Limit the walk to the top-level directory only. By default
+        /// the walk recurses into every subdirectory.
+        #[arg(long)]
+        no_recursive: bool,
+        /// Emit one NDJSON validation row per entry plus a final summary
+        /// row (machine-readable). Default is the human-readable table.
+        #[arg(long)]
+        json: bool,
+        /// Exit non-zero if any entry fails exact-copy comparison
+        /// (skipped entries do not count as failures).
         #[arg(long)]
         require_exact: bool,
     },
@@ -1168,6 +1202,7 @@ fn run_cli() -> Result<()> {
             multi_pitch,
             region_transcript,
             region_stable_latency_s,
+            region_decode_every_ms,
             region_keep_back_s,
         } => run_stream_live_v3(
             device.as_deref(),
@@ -1185,6 +1220,7 @@ fn run_cli() -> Result<()> {
             multi_pitch,
             region_transcript,
             region_stable_latency_s,
+            region_decode_every_ms,
             region_keep_back_s,
         ),
         Cmd::StreamRegion {
@@ -1294,6 +1330,12 @@ fn run_cli() -> Result<()> {
             json,
             require_exact,
         ),
+        Cmd::ValidateCorpus {
+            dir,
+            no_recursive,
+            json,
+            require_exact,
+        } => run_validate_corpus(&dir, !no_recursive, json, require_exact),
     }
 }
 
@@ -4214,6 +4256,129 @@ fn run_gen_qso_suite(
     Ok(())
 }
 
+fn run_validate_corpus(
+    dir: &std::path::Path,
+    recursive: bool,
+    json: bool,
+    require_exact: bool,
+) -> Result<()> {
+    use cw_decoder_poc::region_stream::RegionStreamConfig;
+
+    let entries = corpus_validator::discover_corpus(dir, recursive)?;
+    let cfg = RegionStreamConfig::default();
+    let mut validations = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        validations.push(corpus_validator::validate_entry(entry, &cfg));
+    }
+    let summary = corpus_validator::summarize(&validations);
+
+    if json {
+        for v in &validations {
+            println!(
+                "{}",
+                serde_json::to_string(v).context("serializing corpus validation")?
+            );
+        }
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "type": "summary",
+                "dir": dir,
+                "recursive": recursive,
+                "summary": summary,
+            }))
+            .context("serializing summary")?
+        );
+        if require_exact && (summary.mismatches > 0 || summary.errored > 0) {
+            anyhow::bail!(
+                "{} corpus mismatch(es), {} error(s)",
+                summary.mismatches,
+                summary.errored
+            );
+        }
+        return Ok(());
+    }
+
+    println!(
+        "Corpus: {} ({} entr{} discovered)",
+        dir.display(),
+        entries.len(),
+        if entries.len() == 1 { "y" } else { "ies" }
+    );
+    println!();
+    println!(
+        "{:<48} {:<10} {:>5} {:>6} {:>6} {:>7}  result",
+        "id", "status", "sec", "regs", "ghost", "cer"
+    );
+    println!("{}", "-".repeat(108));
+    for v in &validations {
+        let id = truncate_for_table(&v.id, 48);
+        let (status, result) = match &v.status {
+            corpus_validator::CorpusValidationStatus::Validated => {
+                if v.exact_match {
+                    ("OK".to_string(), "exact match".to_string())
+                } else {
+                    ("MISMATCH".to_string(), v.transcript.clone())
+                }
+            }
+            corpus_validator::CorpusValidationStatus::Skipped(r) => {
+                ("SKIPPED".to_string(), format!("({r})"))
+            }
+            corpus_validator::CorpusValidationStatus::Errored(r) => {
+                ("ERROR".to_string(), format!("({r})"))
+            }
+        };
+        let cer_str = v
+            .char_error_rate
+            .map(|c| format!("{c:.3}"))
+            .unwrap_or_else(|| "—".to_string());
+        println!(
+            "{:<48} {:<10} {:>5.1} {:>6} {:>6} {:>7}  {}",
+            id, status, v.duration_s, v.region_count, v.ghost_chars, cer_str, result
+        );
+        if matches!(
+            v.status,
+            corpus_validator::CorpusValidationStatus::Validated
+        ) && !v.exact_match
+        {
+            println!("  truth: {}", v.truth);
+        }
+    }
+    println!();
+    println!(
+        "Summary: {}/{} exact, {} mismatch, {} skipped, {} errored",
+        summary.exact_matches,
+        summary.validated,
+        summary.mismatches,
+        summary.skipped,
+        summary.errored
+    );
+    if let Some(cer) = summary.mean_cer {
+        println!(
+            "         mean CER {:.3}, ghost {} chars, missing {} chars",
+            cer, summary.total_ghost_chars, summary.total_missing_chars
+        );
+    }
+    if require_exact && (summary.mismatches > 0 || summary.errored > 0) {
+        anyhow::bail!(
+            "{} corpus mismatch(es), {} error(s) (skipped entries do not count)",
+            summary.mismatches,
+            summary.errored
+        );
+    }
+    Ok(())
+}
+
+fn truncate_for_table(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
 fn run_stream_live_v3(
     device: Option<&str>,
     seconds: f32,
@@ -4230,6 +4395,7 @@ fn run_stream_live_v3(
     multi_pitch: usize,
     region_transcript: bool,
     region_stable_latency_s: f32,
+    region_decode_every_ms: u64,
     region_keep_back_s: f32,
 ) -> Result<()> {
     if let Some(path) = file {
@@ -4245,6 +4411,7 @@ fn run_stream_live_v3(
             multi_pitch,
             region_transcript,
             region_stable_latency_s,
+            region_decode_every_ms,
         );
     }
     use cw_decoder_poc::envelope_decoder::{
@@ -4344,6 +4511,7 @@ fn run_stream_live_v3(
                 "device": capture.device_name,
                 "rate": capture.sample_rate,
                 "decode_every_ms": decode_every_ms,
+                "region_decode_every_ms": region_decode_every_ms,
                 "max_viz_envelope_samples": MAX_VIZ_ENVELOPE_SAMPLES,
                 "recording": capture.record_path().map(|p| p.display().to_string()),
                 "pin_wpm": pin_wpm,
@@ -4358,8 +4526,12 @@ fn run_stream_live_v3(
 
     let started = Instant::now();
     let mut last_drain_at: u64 = 0;
-    let mut last_decode_at = Instant::now();
-    let decode_period = Duration::from_millis(decode_every_ms);
+    let decode_every_samples =
+        ((capture.sample_rate as u64 * decode_every_ms.max(1)) / 1000).max(1);
+    let mut last_decode_written: u64 = 0;
+    let region_decode_every_samples =
+        ((capture.sample_rate as u64 * region_decode_every_ms.max(1)) / 1000).max(1);
+    let mut last_region_decode_written: u64 = 0;
     let decode_every_s = decode_every_ms as f32 / 1000.0;
     let mut commit_cursor =
         ditdah_streaming::LiveCommitCursor::new(MAX_V3_SESSION_TRANSCRIPT_CHARS);
@@ -4382,6 +4554,8 @@ fn run_stream_live_v3(
                     multi_streamer = new_multi();
                     region_streamer = new_region();
                     last_drain_at = capture.buffer.lock().written;
+                    last_decode_written = last_drain_at;
+                    last_region_decode_written = last_drain_at;
                     commit_cursor.reset_all();
                     append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
                     if let Some(em) = emitter.as_mut() {
@@ -4419,10 +4593,10 @@ fn run_stream_live_v3(
             }
         }
 
-        if last_decode_at.elapsed() < decode_period {
+        if last_drain_at.saturating_sub(last_decode_written) < decode_every_samples {
             continue;
         }
-        last_decode_at = Instant::now();
+        last_decode_written = last_drain_at;
 
         // Force a viz-producing decode now.
         let snap = streamer.flush_with_viz();
@@ -4432,22 +4606,23 @@ fn run_stream_live_v3(
         // handles real-world QSO audio with pauses between bursts at
         // very different WPMs (e.g. 8 vs 39 WPM) where a single-pass
         // envelope decoder is structurally limited to one WPM lock.
-        let region_commits = region_streamer
-            .as_mut()
-            .map(|r| r.try_commit())
-            .unwrap_or_default();
-        let region_text_full = region_streamer
-            .as_ref()
-            .map(|r| r.transcript().to_string())
-            .unwrap_or_default();
+        let mut region_commits = Vec::new();
+        let mut region_text_full = String::new();
+        if let Some(r) = region_streamer.as_mut() {
+            if last_drain_at.saturating_sub(last_region_decode_written)
+                >= region_decode_every_samples
+            {
+                last_region_decode_written = last_drain_at;
+                region_commits = r.try_commit();
+                r.trim_committed(region_keep_back_s);
+            }
+            region_text_full = r.transcript().to_string();
+        }
         let region_appended: String = region_commits
             .iter()
             .map(|r| r.text.as_str())
             .collect::<Vec<_>>()
             .join(" ");
-        if let Some(r) = region_streamer.as_mut() {
-            r.trim_committed(region_keep_back_s);
-        }
         // Approach A+: event-driven commit cursor (sample-indexed,
         // idempotent across re-decodes) replaces the old
         // string-stitching path that produced ghost-repeats like
@@ -4659,6 +4834,7 @@ fn run_stream_live_v3_file(
     multi_pitch: usize,
     region_transcript: bool,
     region_stable_latency_s: f32,
+    region_decode_every_ms: u64,
 ) -> Result<()> {
     use cw_decoder_poc::envelope_decoder::{
         LiveEnvelopeStreamer, LiveMultiPitchStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
@@ -4725,6 +4901,7 @@ fn run_stream_live_v3_file(
                 "rate": sr,
                 "playback_device": playback.as_ref().map(|p| p.device_name.as_str()),
                 "decode_every_ms": decode_every_ms,
+                "region_decode_every_ms": region_decode_every_ms,
                 "max_viz_envelope_samples": MAX_VIZ_ENVELOPE_SAMPLES,
                 "recording": serde_json::Value::Null,
                 "pin_wpm": pin_wpm,
@@ -4742,8 +4919,11 @@ fn run_stream_live_v3_file(
     }
 
     let started = Instant::now();
-    let mut last_decode_at = Instant::now();
-    let decode_period = Duration::from_millis(decode_every_ms);
+    let decode_every_samples = ((sr as u64 * decode_every_ms.max(1)) / 1000).max(1) as usize;
+    let mut last_decode_cursor = 0usize;
+    let region_decode_every_samples =
+        ((sr as u64 * region_decode_every_ms.max(1)) / 1000).max(1) as usize;
+    let mut last_region_decode_cursor = 0usize;
     let chunk_period = Duration::from_millis(50);
     let chunk_samples = ((sr as u64 * 50) / 1000) as usize;
     let pump_period = if playback.is_some() {
@@ -4779,23 +4959,23 @@ fn run_stream_live_v3_file(
             cursor = end;
         }
 
-        if last_decode_at.elapsed() < decode_period {
+        if cursor.saturating_sub(last_decode_cursor) < decode_every_samples {
             continue;
         }
-        last_decode_at = Instant::now();
+        last_decode_cursor = cursor;
 
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
         // Region path runs alongside envelope to handle multi-burst
         // real-world QSO audio with pauses + speed changes.
-        let _region_commits = region_streamer
-            .as_mut()
-            .map(|r| r.try_commit())
-            .unwrap_or_default();
-        let region_text_full = region_streamer
-            .as_ref()
-            .map(|r| r.transcript().to_string())
-            .unwrap_or_default();
+        let mut region_text_full = String::new();
+        if let Some(r) = region_streamer.as_mut() {
+            if cursor.saturating_sub(last_region_decode_cursor) >= region_decode_every_samples {
+                last_region_decode_cursor = cursor;
+                let _ = r.try_commit();
+            }
+            region_text_full = r.transcript().to_string();
+        }
         // Approach A+: drive the event-driven commit cursor instead of
         // string-stitching. The cursor is sample-indexed and idempotent
         // across re-decodes of the same audio region, so the
@@ -5061,9 +5241,9 @@ fn run_stream_region_file(
 
     let chunk_period = Duration::from_millis(50);
     let chunk_samples = ((sr as u64 * 50) / 1000).max(1) as usize;
+    let decode_every_samples = ((sr as u64 * decode_every_ms.max(1)) / 1000).max(1) as usize;
     let started = Instant::now();
-    let mut last_decode_at = Instant::now() - Duration::from_millis(decode_every_ms);
-    let decode_period = Duration::from_millis(decode_every_ms);
+    let mut last_decode_cursor = 0usize;
     let mut cursor = 0usize;
 
     while cursor < total_samples {
@@ -5072,8 +5252,8 @@ fn run_stream_region_file(
         cursor = end;
         streamer.ingest(chunk);
 
-        if last_decode_at.elapsed() >= decode_period {
-            last_decode_at = Instant::now();
+        if cursor.saturating_sub(last_decode_cursor) >= decode_every_samples {
+            last_decode_cursor = cursor;
             let committed = streamer.try_commit();
             let t = started.elapsed().as_secs_f32();
             emit_region_transcript(emitter.as_mut(), t, streamer.transcript(), &committed);

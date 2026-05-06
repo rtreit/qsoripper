@@ -88,6 +88,8 @@ internal sealed class CwDecoderProcess : IDisposable
     /// Live capture using the in-house envelope decoder + visualizer
     /// emission (stream-live-v3). Drives the VISUALIZER tab.
     /// </summary>
+    private const int RegionTranscriptDecodeEveryMs = 2000;
+
     public void StartLiveV3(string? device, int decodeEveryMs = 250, string? recordPath = null, bool loopback = false, double pinWpm = 0, double pinHz = 0)
     {
         Stop();
@@ -97,7 +99,7 @@ internal sealed class CwDecoderProcess : IDisposable
         // the transcript field is sourced from region-isolated decode.
         // Handles real-world QSO audio with pauses between bursts at
         // very different WPMs.
-        var args = $"stream-live-v3 --json --stdin-control --region-transcript --decode-every-ms {decodeEveryMs.ToString(ic)}";
+        var args = $"stream-live-v3 --json --stdin-control --region-transcript --decode-every-ms {decodeEveryMs.ToString(ic)} --region-decode-every-ms {RegionTranscriptDecodeEveryMs.ToString(ic)}";
         if (pinWpm > 0) args += $" --pin-wpm {pinWpm.ToString(ic)}";
         if (pinHz > 0) args += $" --pin-hz {pinHz.ToString(ic)}";
         if (!string.IsNullOrWhiteSpace(device)) args += $" --device \"{device}\"";
@@ -111,7 +113,7 @@ internal sealed class CwDecoderProcess : IDisposable
         Stop();
         var ic = CultureInfo.InvariantCulture;
         // See StartLiveV3 for --region-transcript rationale.
-        var args = $"stream-live-v3 --json --region-transcript --decode-every-ms {decodeEveryMs.ToString(ic)} --file \"{filePath}\"";
+        var args = $"stream-live-v3 --json --region-transcript --decode-every-ms {decodeEveryMs.ToString(ic)} --region-decode-every-ms {RegionTranscriptDecodeEveryMs.ToString(ic)} --file \"{filePath}\"";
         if (playAudio) args += " --play";
         if (pinWpm > 0) args += $" --pin-wpm {pinWpm.ToString(ic)}";
         if (pinHz > 0) args += $" --pin-hz {pinHz.ToString(ic)}";

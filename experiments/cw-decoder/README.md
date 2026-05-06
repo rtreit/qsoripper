@@ -231,6 +231,43 @@ Current uses:
 - fast parameter sweeps for the causal `ditdah` baseline (`--sweep-ditdah`, optionally `--wide-sweep`)
 - a built-in synthetic regression suite (silence, white/bursty/colored noise, clean and noisy synthesized CW at multiple SNRs) when no label flags are supplied
 
+### `validate-corpus` (region path, end-to-end)
+
+Walks a directory of `*.truth.txt` sidecars, pairs each with its matching
+audio file (`.wav` preferred, then `.mp3`/`.m4a`/`.flac`), runs every
+entry through the production region-isolated decoder (`region_stream`),
+and prints a per-entry pass / character error rate / ghost-char table
+plus a summary line. Designed to close the loop between the operator-
+curated truth workflow (PR #381 Visualizer "Save Truth") and the same
+batch decode core that backs the `RegionStreamer` live commits.
+
+```powershell
+# Validate every operator-saved truth pair under your local corpus root.
+# Audio files are gitignored (.wav/.mp3), so this runs against a path
+# outside the repo (typically OneDrive). Entries with a missing audio
+# file are reported as SKIPPED rather than failing.
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml `
+    --bin cw-decoder -- validate-corpus `
+    --dir "C:\path\to\cw-samples"
+
+# CI-style exit code: non-zero if any entry mismatches or errors
+# (skipped entries do not count as failures).
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml `
+    --bin cw-decoder -- validate-corpus `
+    --dir "C:\path\to\cw-samples" --require-exact
+
+# Machine-readable NDJSON: one JSON object per entry plus a final
+# "summary" row. Pipes cleanly into `jq` / dashboards.
+cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml `
+    --bin cw-decoder -- validate-corpus `
+    --dir "C:\path\to\cw-samples" --json
+```
+
+Subdirectory entries are namespaced by their relative path (e.g.
+`training-set-a/cw_30wpm_abbrev`) so duplicate basenames across folders
+keep distinct ids in the output table and JSON stream. Pass
+`--no-recursive` to limit the walk to the top-level directory.
+
 ### Stress-test harness (`scripts\stress-gen.ps1` + `scripts\stress-eval.ps1`)
 
 Generates a deterministic matrix of "stressed" copies of a clean baseline WAV via `ffmpeg`, then runs the cw-decoder over every variant and emits a degradation summary + CSV. Useful for catching regressions when changing acquisition or decoding logic, and for honestly measuring how far down the SNR ladder the current implementation can still find and decode a known signal.

@@ -172,6 +172,27 @@ fn get_morse_map() -> HashMap<char, &'static str> {
         ('8', "---.."),
         ('9', "----."),
         ('0', "-----"),
+        // ITU punctuation and prosigns. Matches the decoder table; required so
+        // synthesizing real-world traffic (ARRL practice text, contest QSOs)
+        // produces audio the decoder can round-trip.
+        ('=', "-...-"),
+        (',', "--..--"),
+        ('.', ".-.-.-"),
+        ('?', "..--.."),
+        ('/', "-..-."),
+        ('+', ".-.-."),
+        ('-', "-....-"),
+        ('\'', ".----."),
+        ('"', ".-..-."),
+        (':', "---..."),
+        (';', "-.-.-."),
+        ('(', "-.--."),
+        (')', "-.--.-"),
+        ('&', ".-..."),
+        ('@', ".--.-."),
+        ('_', "..--.-"),
+        ('!', "-.-.--"),
+        ('$', "...-..-"),
     ]
     .iter()
     .cloned()

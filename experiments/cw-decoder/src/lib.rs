@@ -5,6 +5,7 @@
 pub mod append_decode;
 pub mod audio;
 pub mod bench_latency;
+pub mod corpus_validator;
 pub mod decoder;
 pub mod ditdah_streaming;
 pub mod envelope_decoder;

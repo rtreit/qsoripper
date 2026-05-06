@@ -369,7 +369,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
             var up = response.UploadedRecords;
             var down = response.DownloadedRecords;
-            SyncStatusText = $"Synced: \u2191{up} \u2193{down}";
+            var conflicts = response.ConflictRecords;
+            SyncStatusText = conflicts > 0
+                ? $"Sync needs review: {conflicts} conflict{(conflicts == 1 ? string.Empty : "s")} (\u2191{up} \u2193{down})"
+                : $"Synced: \u2191{up} \u2193{down}";
             await RecentQsos.RefreshAsync();
             MarkEngineReachable();
         }
