@@ -80,6 +80,28 @@ public sealed class MainWindowViewModelTests
     }
 
     [Fact]
+    public async Task CheckFirstRunAsyncDisplaysWindowsLogFileNameOnLinux()
+    {
+        var engine = new FakeEngineClient
+        {
+            SetupStatus = new GetSetupStatusResponse
+            {
+                Status = new SetupStatus
+                {
+                    SetupComplete = true,
+                    LogFilePath = "C:\\logs\\kc7ava-debug-log.db",
+                },
+            },
+        };
+
+        using var viewModel = new MainWindowViewModel(engine);
+
+        await viewModel.CheckFirstRunAsync();
+
+        Assert.Equal("Log: kc7ava-debug-log", viewModel.ActiveLogText);
+    }
+
+    [Fact]
     public async Task SyncNowShowsConflictCountWhenQrzDiffersFromLocal()
     {
         var engine = new FakeEngineClient
