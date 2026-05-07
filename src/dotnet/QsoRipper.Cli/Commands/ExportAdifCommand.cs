@@ -168,13 +168,24 @@ internal static class ExportAdifCommand
     {
         var fileName = string.IsNullOrWhiteSpace(configuredLogPath)
             ? null
-            : Path.GetFileNameWithoutExtension(configuredLogPath.Trim());
+            : GetFileNameWithoutExtensionPortable(configuredLogPath);
         return SanitizeFileName(string.IsNullOrWhiteSpace(fileName) ? FallbackLogbookName : fileName);
+    }
+
+    private static string? GetFileNameWithoutExtensionPortable(string path)
+    {
+        var trimmed = path.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, '\\', '/');
+        var fileName = trimmed
+            .Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries)
+            .LastOrDefault();
+        return string.IsNullOrWhiteSpace(fileName) ? null : Path.GetFileNameWithoutExtension(fileName);
     }
 
     private static string SanitizeFileName(string value)
     {
-        var invalid = Path.GetInvalidFileNameChars();
+        var invalid = Path.GetInvalidFileNameChars()
+            .Concat(['\\', '/', ':', '*', '?', '"', '<', '>', '|'])
+            .ToHashSet();
         var chars = value
             .Trim()
             .Select(ch => invalid.Contains(ch) ? '-' : ch)
