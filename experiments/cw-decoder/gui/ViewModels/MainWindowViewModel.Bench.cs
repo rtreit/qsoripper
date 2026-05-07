@@ -170,6 +170,32 @@ public sealed partial class MainWindowViewModel
         }
     }
 
+    // Region = production transcript path (RegionStreamer + per-region ditdah).
+    // V2 streaming = legacy ConfidenceState path, kept for A/B comparison.
+    // Region is the default; the legacy V2 knobs (purity / wide-bins
+    // / auto-threshold) are ignored when region is selected.
+    private bool _benchUseFoundation = true;
+    public bool BenchUseFoundation
+    {
+        get => _benchUseFoundation;
+        set
+        {
+            if (_benchUseFoundation == value) return;
+            _benchUseFoundation = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(BenchUseStreamingV2));
+            OnPropertyChanged(nameof(BenchV2KnobsEnabled));
+        }
+    }
+
+    public bool BenchUseStreamingV2
+    {
+        get => !_benchUseFoundation;
+        set => BenchUseFoundation = !value;
+    }
+
+    public bool BenchV2KnobsEnabled => !_benchUseFoundation;
+
     private bool _isBenchRunning;
     public bool IsBenchRunning
     {
@@ -296,6 +322,7 @@ public sealed partial class MainWindowViewModel
             WideBins = (int)Math.Max(0, _benchWideBins),
             DisableAutoThreshold = !_benchAutoThreshold,
             ForcePitchHz = _benchForcePitchHz > 0 ? (float)_benchForcePitchHz : (float?)null,
+            Region = _benchUseFoundation,
         };
 
         _benchCts?.Dispose();

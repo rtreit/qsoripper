@@ -15,8 +15,13 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
 pub struct DecodedAudio {
+    /// Mono mix used by the CW decoder.
     pub samples: Vec<f32>,
+    /// Original interleaved samples used by playback/preview paths that must
+    /// preserve what the operator recorded.
+    pub interleaved_samples: Vec<f32>,
     pub sample_rate: u32,
+    pub channels: usize,
 }
 
 pub struct FilePlayback {
@@ -46,6 +51,20 @@ impl FilePlayback {
 
 /// Decode an audio file (mp3/wav/aac/m4a/etc) into a mono f32 PCM buffer.
 pub fn decode_file(path: &Path) -> Result<DecodedAudio> {
+    match decode_file_with_symphonia(path) {
+        Ok(audio) => Ok(audio),
+        Err(primary_err) => {
+            if let Some(audio) = decode_unfinalized_qsoripper_wav(path)
+                .context("decoding unfinalized QsoRipper WAV fallback")?
+            {
+                return Ok(audio);
+            }
+            Err(primary_err)
+        }
+    }
+}
+
+fn decode_file_with_symphonia(path: &Path) -> Result<DecodedAudio> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -83,6 +102,7 @@ pub fn decode_file(path: &Path) -> Result<DecodedAudio> {
         .count();
 
     let mut samples: Vec<f32> = Vec::new();
+    let mut interleaved_samples: Vec<f32> = Vec::new();
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
 
     loop {
@@ -105,6 +125,7 @@ pub fn decode_file(path: &Path) -> Result<DecodedAudio> {
                 if let Some(buf) = sample_buf.as_mut() {
                     buf.copy_interleaved_ref(audio_buf);
                     let interleaved = buf.samples();
+                    interleaved_samples.extend_from_slice(interleaved);
                     if channels == 1 {
                         samples.extend_from_slice(interleaved);
                     } else {
@@ -123,8 +144,137 @@ pub fn decode_file(path: &Path) -> Result<DecodedAudio> {
 
     Ok(DecodedAudio {
         samples,
+        interleaved_samples,
         sample_rate,
+        channels,
     })
+}
+
+fn decode_unfinalized_qsoripper_wav(path: &Path) -> Result<Option<DecodedAudio>> {
+    if path.extension().and_then(|s| s.to_str()) != Some("wav") {
+        return Ok(None);
+    }
+
+    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    if bytes.len() <= 44 {
+        return Ok(None);
+    }
+
+    if &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Ok(None);
+    }
+
+    let riff_size = u32::from_le_bytes(bytes[4..8].try_into().expect("slice length checked"));
+    let mut audio_format = 0_u16;
+    let mut channels = 0_u16;
+    let mut sample_rate = 0_u32;
+    let mut block_align = 0_u16;
+    let mut bits_per_sample = 0_u16;
+    let mut fmt_size = 0_u32;
+    let mut data_start = 0_usize;
+    let mut data_size = 0_u32;
+
+    let mut cursor = 12_usize;
+    while cursor + 8 <= bytes.len() {
+        let id = &bytes[cursor..cursor + 4];
+        let size = u32::from_le_bytes(
+            bytes[cursor + 4..cursor + 8]
+                .try_into()
+                .expect("slice length checked"),
+        );
+        let chunk_start = cursor + 8;
+        let chunk_end = chunk_start.saturating_add(size as usize).min(bytes.len());
+        if id == b"fmt " {
+            if size < 16 || chunk_start + 16 > bytes.len() {
+                return Ok(None);
+            }
+            fmt_size = size;
+            audio_format = u16::from_le_bytes(
+                bytes[chunk_start..chunk_start + 2]
+                    .try_into()
+                    .expect("slice length checked"),
+            );
+            channels = u16::from_le_bytes(
+                bytes[chunk_start + 2..chunk_start + 4]
+                    .try_into()
+                    .expect("slice length checked"),
+            );
+            sample_rate = u32::from_le_bytes(
+                bytes[chunk_start + 4..chunk_start + 8]
+                    .try_into()
+                    .expect("slice length checked"),
+            );
+            block_align = u16::from_le_bytes(
+                bytes[chunk_start + 12..chunk_start + 14]
+                    .try_into()
+                    .expect("slice length checked"),
+            );
+            bits_per_sample = u16::from_le_bytes(
+                bytes[chunk_start + 14..chunk_start + 16]
+                    .try_into()
+                    .expect("slice length checked"),
+            );
+            if audio_format == 0xFFFE && size >= 40 && chunk_start + 40 <= bytes.len() {
+                audio_format = u16::from_le_bytes(
+                    bytes[chunk_start + 24..chunk_start + 26]
+                        .try_into()
+                        .expect("slice length checked"),
+                );
+            }
+        } else if id == b"data" {
+            data_start = chunk_start;
+            data_size = size;
+            break;
+        }
+
+        cursor = chunk_end + (size as usize & 1);
+    }
+
+    let looks_unfinalized = riff_size == 0 && data_size == 0;
+    if !looks_unfinalized {
+        return Ok(None);
+    }
+    if fmt_size < 16
+        || channels == 0
+        || block_align == 0
+        || data_start == 0
+        || !matches!((audio_format, bits_per_sample), (1, 16) | (3, 32))
+    {
+        return Err(anyhow!(
+            "unsupported unfinalized WAV format: fmt_size={fmt_size}, format={audio_format}, channels={channels}, bits={bits_per_sample}"
+        ));
+    }
+
+    let channels = channels as usize;
+    let data = &bytes[data_start..];
+    let mut samples = Vec::with_capacity(data.len() / block_align as usize);
+    let mut interleaved_samples = Vec::with_capacity(data.len() / (bits_per_sample as usize / 8));
+    for frame in data.chunks_exact(block_align as usize) {
+        let mut sum = 0.0_f32;
+        for sample in frame
+            .chunks_exact(bits_per_sample as usize / 8)
+            .take(channels)
+        {
+            let value = match (audio_format, bits_per_sample) {
+                (1, 16) => {
+                    let pcm = i16::from_le_bytes([sample[0], sample[1]]);
+                    f32::from(pcm) / f32::from(i16::MAX)
+                }
+                (3, 32) => f32::from_le_bytes([sample[0], sample[1], sample[2], sample[3]]),
+                _ => unreachable!("format checked above"),
+            };
+            interleaved_samples.push(value);
+            sum += value;
+        }
+        samples.push(sum / channels as f32);
+    }
+
+    Ok(Some(DecodedAudio {
+        samples,
+        interleaved_samples,
+        sample_rate,
+        channels,
+    }))
 }
 
 pub fn play_output_file(path: &Path) -> Result<FilePlayback> {
@@ -326,11 +476,25 @@ pub fn play_samples_with_control(
     samples: Vec<f32>,
     input_rate: u32,
 ) -> Result<ControllablePlayback> {
+    play_interleaved_samples_with_control(samples, input_rate, 1)
+}
+
+pub fn play_interleaved_samples_with_control(
+    samples: Vec<f32>,
+    input_rate: u32,
+    input_channels: usize,
+) -> Result<ControllablePlayback> {
     if samples.is_empty() {
         return Err(anyhow!("input sample buffer was empty"));
     }
     if input_rate == 0 {
         return Err(anyhow!("input sample rate must be non-zero"));
+    }
+    if input_channels == 0 || samples.len() % input_channels != 0 {
+        return Err(anyhow!(
+            "interleaved sample buffer length {} is not aligned to {input_channels} channel(s)",
+            samples.len()
+        ));
     }
 
     let host = cpal::default_host();
@@ -344,15 +508,15 @@ pub fn play_samples_with_control(
     let output_rate = stream_config.sample_rate.0;
     let channels = stream_config.channels as usize;
 
-    let mono_for_output: Vec<f32> = if input_rate == output_rate {
+    let samples_for_output: Vec<f32> = if input_rate == output_rate {
         samples
     } else {
-        resample_linear(&samples, input_rate, output_rate)
+        resample_linear_interleaved(&samples, input_channels, input_rate, output_rate)
     };
 
-    let total_output_frames = mono_for_output.len() as u64;
-    let duration_s = samples_duration(&mono_for_output, output_rate);
-    let buf = Arc::new(mono_for_output);
+    let total_output_frames = (samples_for_output.len() / input_channels) as u64;
+    let duration_s = total_output_frames as f32 / output_rate as f32;
+    let buf = Arc::new(samples_for_output);
     let output_position_frames = Arc::new(AtomicU64::new(0));
     let paused = Arc::new(AtomicBool::new(false));
     let finished = Arc::new(AtomicBool::new(false));
@@ -376,6 +540,7 @@ pub fn play_samples_with_control(
                         data,
                         channels,
                         &buf,
+                        input_channels,
                         &pos,
                         &paused,
                         &finished,
@@ -402,6 +567,7 @@ pub fn play_samples_with_control(
                         data,
                         channels,
                         &buf,
+                        input_channels,
                         &pos,
                         &paused,
                         &finished,
@@ -428,6 +594,7 @@ pub fn play_samples_with_control(
                         data,
                         channels,
                         &buf,
+                        input_channels,
                         &pos,
                         &paused,
                         &finished,
@@ -459,19 +626,12 @@ pub fn play_samples_with_control(
     })
 }
 
-fn samples_duration(buf: &[f32], rate: u32) -> f32 {
-    if rate == 0 {
-        0.0
-    } else {
-        buf.len() as f32 / rate as f32
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn fill_controlled<T, F>(
     data: &mut [T],
     channels: usize,
     samples: &Arc<Vec<f32>>,
+    input_channels: usize,
     position_frames: &Arc<AtomicU64>,
     paused: &Arc<AtomicBool>,
     finished: &Arc<AtomicBool>,
@@ -492,26 +652,30 @@ fn fill_controlled<T, F>(
         finished.store(false, Ordering::Relaxed);
     }
 
-    let total = samples.len();
+    let total = samples.len() / input_channels;
     let mut frame_index = position_frames.load(Ordering::Relaxed) as usize;
     let is_paused = paused.load(Ordering::Relaxed);
 
     for frame in data.chunks_mut(channels) {
-        let sample = if is_paused {
-            // Hold position; emit silence so the device keeps streaming
-            // (which keeps `position_frames` stable for the pump).
-            0.0
-        } else if frame_index < total {
-            let v = samples[frame_index];
-            frame_index += 1;
-            v
-        } else {
+        if !is_paused && frame_index >= total {
             finished.store(true, Ordering::Relaxed);
-            0.0
-        };
-
-        for out in frame {
+        }
+        for (out_channel, out) in frame.iter_mut().enumerate() {
+            let sample = if is_paused || frame_index >= total {
+                0.0
+            } else {
+                sample_for_output_channel(
+                    samples,
+                    frame_index,
+                    input_channels,
+                    out_channel,
+                    channels,
+                )
+            };
             *out = convert(sample);
+        }
+        if !is_paused && frame_index < total {
+            frame_index += 1;
         }
     }
 
@@ -520,6 +684,27 @@ fn fill_controlled<T, F>(
         if frame_index >= total {
             finished.store(true, Ordering::Relaxed);
         }
+    }
+}
+
+fn sample_for_output_channel(
+    samples: &[f32],
+    frame_index: usize,
+    input_channels: usize,
+    output_channel: usize,
+    output_channels: usize,
+) -> f32 {
+    let base = frame_index * input_channels;
+    if input_channels == output_channels || input_channels == 1 {
+        samples[base + output_channel.min(input_channels - 1)]
+    } else if output_channels == 1 {
+        samples[base..base + input_channels]
+            .iter()
+            .copied()
+            .sum::<f32>()
+            / input_channels as f32
+    } else {
+        samples[base + output_channel.min(input_channels - 1)]
     }
 }
 
@@ -576,6 +761,40 @@ fn resample_linear(samples: &[f32], input_rate: u32, output_rate: u32) -> Vec<f3
         let left_sample = samples[left];
         let right_sample = samples[right];
         out.push(left_sample + (right_sample - left_sample) * frac);
+    }
+
+    out
+}
+
+fn resample_linear_interleaved(
+    samples: &[f32],
+    channels: usize,
+    input_rate: u32,
+    output_rate: u32,
+) -> Vec<f32> {
+    if samples.is_empty() || input_rate == output_rate {
+        return samples.to_vec();
+    }
+
+    let input_frames = samples.len() / channels;
+    let out_frames = ((input_frames as f64) * output_rate as f64 / input_rate as f64)
+        .round()
+        .max(1.0) as usize;
+    let mut out = Vec::with_capacity(out_frames * channels);
+    let last_frame = input_frames - 1;
+
+    for frame_index in 0..out_frames {
+        let source_pos = frame_index as f64 * input_rate as f64 / output_rate as f64;
+        let left = (source_pos.floor() as usize).min(last_frame);
+        let right = (left + 1).min(last_frame);
+        let frac = (source_pos - left as f64) as f32;
+        let left_base = left * channels;
+        let right_base = right * channels;
+        for channel in 0..channels {
+            let left_sample = samples[left_base + channel];
+            let right_sample = samples[right_base + channel];
+            out.push(left_sample + (right_sample - left_sample) * frac);
+        }
     }
 
     out
@@ -677,10 +896,10 @@ pub fn open_input(query: Option<&str>, window_seconds: f32) -> Result<LiveCaptur
     open_input_with_recording(query, window_seconds, None)
 }
 
-/// Same as [`open_input`] but additionally writes mono PCM samples to a WAV
-/// file at the device's native sample rate. The file is written from inside
-/// the cpal callback, so allocations are kept minimal and the decoder gets
-/// the same samples it would have gotten without recording.
+/// Same as [`open_input`] but additionally writes the captured interleaved
+/// channels to a 32-bit float WAV file at the device's native sample rate.
+/// The decoder still receives a mono mix, but the recording preserves the
+/// source stream for labeling and preview.
 pub fn open_input_with_recording(
     query: Option<&str>,
     window_seconds: f32,
@@ -716,10 +935,10 @@ pub fn open_input_with_recording(
             }
         }
         let spec = hound::WavSpec {
-            channels: 1,
+            channels: channels as u16,
             sample_rate,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
         };
         let writer = hound::WavWriter::create(path, spec)
             .with_context(|| format!("creating WAV file {}", path.display()))?;
@@ -785,7 +1004,8 @@ fn push_mono(
     channels: usize,
     recorder: Option<&RecorderHandle>,
 ) {
-    // Compute the mono buffer once; share it with both the ring and the WAV.
+    // Compute the mono buffer once for the decoder while recording preserves
+    // the original interleaved channel samples.
     let mono: Vec<f32> = if channels == 1 {
         data.to_vec()
     } else {
@@ -803,9 +1023,8 @@ fn push_mono(
     if let Some(rec) = recorder {
         if let Ok(mut guard) = rec.lock() {
             if let Some(w) = guard.as_mut() {
-                for s in &mono {
-                    let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-                    let _ = w.write_sample(v);
+                for s in data {
+                    let _ = w.write_sample(s.clamp(-1.0, 1.0));
                 }
             }
         }
@@ -883,10 +1102,10 @@ pub fn open_loopback_with_recording(
             }
         }
         let spec = hound::WavSpec {
-            channels: 1,
+            channels: channels as u16,
             sample_rate,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
         };
         let writer = hound::WavWriter::create(path, spec)
             .with_context(|| format!("creating WAV file {}", path.display()))?;
@@ -944,4 +1163,91 @@ pub fn open_loopback_with_recording(
         recorder,
         record_path,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_wav_path(name: &str) -> PathBuf {
+        let unique = format!(
+            "{}-{}-{name}.wav",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be after unix epoch")
+                .as_nanos()
+        );
+        std::env::temp_dir().join(unique)
+    }
+
+    #[test]
+    fn decode_file_recovers_unfinalized_qsoripper_pcm_wav() {
+        let path = temp_wav_path("unfinalized");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&48_000u32.to_le_bytes());
+        bytes.extend_from_slice(&96_000u32.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0i16.to_le_bytes());
+        bytes.extend_from_slice(&i16::MAX.to_le_bytes());
+        bytes.extend_from_slice(&i16::MIN.to_le_bytes());
+        std::fs::write(&path, bytes).expect("write test wav");
+
+        let audio = decode_file(&path).expect("decode unfinalized wav");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(audio.sample_rate, 48_000);
+        assert_eq!(audio.samples.len(), 3);
+        assert_eq!(audio.samples[0], 0.0);
+        assert!((audio.samples[1] - 1.0).abs() < f32::EPSILON);
+        assert!((audio.samples[2] + 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn decode_file_recovers_unfinalized_extensible_float_stereo_wav() {
+        let path = temp_wav_path("unfinalized-float-stereo");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&40u32.to_le_bytes());
+        bytes.extend_from_slice(&0xFFFEu16.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&48_000u32.to_le_bytes());
+        bytes.extend_from_slice(&384_000u32.to_le_bytes());
+        bytes.extend_from_slice(&8u16.to_le_bytes());
+        bytes.extend_from_slice(&32u16.to_le_bytes());
+        bytes.extend_from_slice(&22u16.to_le_bytes());
+        bytes.extend_from_slice(&32u16.to_le_bytes());
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&[
+            0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38,
+            0x9B, 0x71,
+        ]);
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        for sample in [0.25_f32, -0.25, 0.5, -0.5] {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        std::fs::write(&path, bytes).expect("write test wav");
+
+        let audio = decode_file(&path).expect("decode unfinalized float wav");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(audio.sample_rate, 48_000);
+        assert_eq!(audio.channels, 2);
+        assert_eq!(audio.interleaved_samples, [0.25, -0.25, 0.5, -0.5]);
+        assert_eq!(audio.samples, [0.0, 0.0]);
+    }
 }

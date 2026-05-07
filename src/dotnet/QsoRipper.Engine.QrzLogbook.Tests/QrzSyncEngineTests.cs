@@ -110,7 +110,11 @@ public sealed class QrzSyncEngineTests
         var remote = MakeRemoteQso("W1AW", BaseTime, Band._20M, Mode.Ft8, "500");
         remote.Notes = "Updated from QRZ";
 
-        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [remote],
+            UpdateFunc = qso => qso.QrzLogid,
+        };
         var engine = new QrzSyncEngine(api);
 
         var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
@@ -135,7 +139,11 @@ public sealed class QrzSyncEngineTests
         // Remote has same callsign/band/mode, timestamp 30s off, but no logid.
         var remote = MakeRemoteQso("W1AW", BaseTime.AddSeconds(30), Band._20M, Mode.Ft8, null);
 
-        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [remote],
+            UpdateFunc = qso => qso.QrzLogid,
+        };
         var engine = new QrzSyncEngine(api);
 
         var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
@@ -156,7 +164,11 @@ public sealed class QrzSyncEngineTests
         // Remote has same callsign/band/mode, but timestamp 90s off — too far.
         var remote = MakeRemoteQso("W1AW", BaseTime.AddSeconds(90), Band._20M, Mode.Ft8, null);
 
-        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [remote],
+            UpdateFunc = qso => qso.QrzLogid,
+        };
         var engine = new QrzSyncEngine(api);
 
         var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
@@ -176,7 +188,11 @@ public sealed class QrzSyncEngineTests
         // Same callsign and timestamp, but different band.
         var remote = MakeRemoteQso("W1AW", BaseTime, Band._40M, Mode.Ft8, null);
 
-        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [remote],
+            UpdateFunc = qso => qso.QrzLogid,
+        };
         var engine = new QrzSyncEngine(api);
 
         await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
@@ -512,7 +528,11 @@ public sealed class QrzSyncEngineTests
         var remote = MakeRemoteQso("W1AW", BaseTime, Band._20M, Mode.Ft8, "700");
         remote.Notes = "Remote copy";
 
-        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [remote],
+            UpdateFunc = qso => qso.QrzLogid,
+        };
         var engine = new QrzSyncEngine(api);
 
         var result = await engine.ExecuteSyncAsync(
@@ -542,7 +562,11 @@ public sealed class QrzSyncEngineTests
         var remote = MakeRemoteQso("W1AW", BaseTime, Band._20M, Mode.Ft8, "LOG-REMOTE-NEW");
         remote.Notes = "remote authoritative";
 
-        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [remote],
+            UpdateFunc = qso => qso.QrzLogid,
+        };
         var engine = new QrzSyncEngine(api);
 
         var result = await engine.ExecuteSyncAsync(
@@ -557,7 +581,7 @@ public sealed class QrzSyncEngineTests
     }
 
     [Fact]
-    public async Task Merge_flag_for_review_preserves_local_and_marks_conflict()
+    public async Task Merge_flag_for_review_pushes_qrz_linked_local_edit_before_remote_can_conflict()
     {
         var store = CreateStore();
         var local = MakeLocalQso("W1AW", BaseTime, Band._20M, Mode.Ft8, SyncStatus.Modified);
@@ -568,7 +592,11 @@ public sealed class QrzSyncEngineTests
         var remote = MakeRemoteQso("W1AW", BaseTime, Band._20M, Mode.Ft8, "800");
         remote.Notes = "Remote that should NOT win";
 
-        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [remote],
+            UpdateFunc = qso => qso.QrzLogid,
+        };
         var engine = new QrzSyncEngine(api);
 
         var result = await engine.ExecuteSyncAsync(
@@ -576,16 +604,18 @@ public sealed class QrzSyncEngineTests
             fullSync: true,
             ConflictPolicy.FlagForReview);
 
-        Assert.Equal(1u, result.ConflictCount);
+        Assert.Equal(0u, result.ConflictCount);
+        Assert.Equal(1u, result.UploadedCount);
+        Assert.Single(api.UpdatedQsos);
         var all = await store.Logbook.ListQsosAsync(new QsoListQuery());
         Assert.Single(all);
         Assert.Equal("Local operator edit", all[0].Notes);
-        Assert.Equal(SyncStatus.Conflict, all[0].SyncStatus);
+        Assert.Equal(SyncStatus.Synced, all[0].SyncStatus);
         Assert.Equal("800", all[0].QrzLogid);
     }
 
     [Fact]
-    public async Task Merge_unspecified_policy_defaults_to_flag_for_review()
+    public async Task Merge_unspecified_policy_pushes_qrz_linked_local_edit_before_remote_can_conflict()
     {
         var store = CreateStore();
         var local = MakeLocalQso("W1AW", BaseTime, Band._20M, Mode.Ft8, SyncStatus.Modified);
@@ -596,7 +626,11 @@ public sealed class QrzSyncEngineTests
         var remote = MakeRemoteQso("W1AW", BaseTime, Band._20M, Mode.Ft8, "900");
         remote.Notes = "Remote copy";
 
-        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [remote],
+            UpdateFunc = qso => qso.QrzLogid,
+        };
         var engine = new QrzSyncEngine(api);
 
         // Unspecified must act like FlagForReview per engine spec §6.3.
@@ -605,10 +639,11 @@ public sealed class QrzSyncEngineTests
             fullSync: true,
             ConflictPolicy.Unspecified);
 
-        Assert.Equal(1u, result.ConflictCount);
+        Assert.Equal(0u, result.ConflictCount);
+        Assert.Equal(1u, result.UploadedCount);
         var all = await store.Logbook.ListQsosAsync(new QsoListQuery());
         Assert.Equal("Local edit", all[0].Notes);
-        Assert.Equal(SyncStatus.Conflict, all[0].SyncStatus);
+        Assert.Equal(SyncStatus.Synced, all[0].SyncStatus);
     }
 
     [Fact]
@@ -846,6 +881,132 @@ public sealed class QrzSyncEngineTests
 
     // -- Helpers ------------------------------------------------------------
 
+    // -- Duplicate retry tests -----------------------------------------------
+
+    [Fact]
+    public async Task Upload_duplicate_retries_with_replace_and_adopts_logid()
+    {
+        // A local QSO exists on QRZ but has no qrz_logid locally. The plain
+        // INSERT fails with "duplicate". Sync should retry with REPLACE, adopt
+        // the returned LOGID, and mark the QSO as Synced.
+        var store = CreateStore();
+        var local = MakeLocalQso("AK7S", BaseTime, Band._20M, Mode.Ft8, SyncStatus.LocalOnly);
+        await store.Logbook.InsertQsoAsync(local);
+
+        var api = new FakeQrzLogbookApi
+        {
+            UploadFunc = _ => throw new QrzLogbookException("QRZ Logbook API error: Unable to add QSO to database: duplicate"),
+            UploadReplaceLogid = "QRZ_ADOPTED_456",
+        };
+
+        var engine = new QrzSyncEngine(api);
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: false);
+
+        // No errors — duplicate was handled.
+        Assert.Null(result.ErrorSummary);
+        Assert.Equal(1u, result.UploadedCount);
+
+        // REPLACE retry was called.
+        Assert.Single(api.UploadReplacedQsos);
+        Assert.Equal("AK7S", api.UploadReplacedQsos[0].WorkedCallsign);
+
+        // Local QSO is now Synced with the adopted LOGID.
+        var qsos = await store.Logbook.ListQsosAsync(new QsoListQuery());
+        Assert.Single(qsos);
+        Assert.Equal(SyncStatus.Synced, qsos[0].SyncStatus);
+        Assert.Equal("QRZ_ADOPTED_456", qsos[0].QrzLogid);
+    }
+
+    [Fact]
+    public async Task Upload_non_duplicate_error_still_reported()
+    {
+        var store = CreateStore();
+        var local = MakeLocalQso("K3SEW", BaseTime, Band._40M, Mode.Ssb, SyncStatus.LocalOnly);
+        await store.Logbook.InsertQsoAsync(local);
+
+        var api = new FakeQrzLogbookApi
+        {
+            UploadFunc = _ => throw new QrzLogbookException("invalid ADIF record"),
+        };
+
+        var engine = new QrzSyncEngine(api);
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: false);
+
+        Assert.NotNull(result.ErrorSummary);
+        Assert.Contains("invalid ADIF record", result.ErrorSummary);
+        Assert.Equal(0u, result.UploadedCount);
+
+        // REPLACE retry must NOT have been called.
+        Assert.Empty(api.UploadReplacedQsos);
+    }
+
+    [Fact]
+    public async Task FullSync_pushes_modified_qrz_linked_local_correction_before_stale_remote_can_conflict()
+    {
+        var store = CreateStore();
+        var local = MakeLocalQso("W1AW/0", BaseTime, Band._20M, Mode.Ft8, SyncStatus.Modified);
+        local.QrzLogid = "stale-qrz-logid";
+        await store.Logbook.InsertQsoAsync(local);
+
+        var staleRemote = MakeRemoteQso("W1AW/1", BaseTime, Band._20M, Mode.Ft8, "stale-qrz-logid");
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [staleRemote],
+            UpdateLogid = "stale-qrz-logid",
+        };
+
+        var engine = new QrzSyncEngine(api);
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        Assert.Null(result.ErrorSummary);
+        Assert.Equal(1u, result.UploadedCount);
+        Assert.Equal(0u, result.ConflictCount);
+        Assert.Single(api.UpdatedQsos);
+        Assert.Equal("W1AW/0", api.UpdatedQsos[0].WorkedCallsign);
+
+        var all = await store.Logbook.ListQsosAsync(new QsoListQuery());
+        var saved = Assert.Single(all);
+        Assert.Equal("W1AW/0", saved.WorkedCallsign);
+        Assert.Equal(SyncStatus.Synced, saved.SyncStatus);
+        Assert.Equal("stale-qrz-logid", saved.QrzLogid);
+    }
+
+    [Fact]
+    public async Task FullSync_pushes_all_modified_qrz_linked_rows_so_stale_qrz_entries_are_resolved()
+    {
+        var store = CreateStore();
+        var first = MakeLocalQso("W1AW/0", BaseTime, Band._20M, Mode.Ft8, SyncStatus.Modified);
+        first.QrzLogid = "qrz-1";
+        var second = MakeLocalQso("K7ABC", BaseTime.AddMinutes(1), Band._40M, Mode.Cw, SyncStatus.Modified);
+        second.QrzLogid = "qrz-2";
+        await store.Logbook.InsertQsoAsync(first);
+        await store.Logbook.InsertQsoAsync(second);
+
+        var staleFirst = MakeRemoteQso("W1AW/1", BaseTime, Band._20M, Mode.Ft8, "qrz-1");
+        var staleSecond = MakeRemoteQso("K7OLD", BaseTime.AddMinutes(1), Band._40M, Mode.Cw, "qrz-2");
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [staleFirst, staleSecond],
+            UpdateFunc = qso => qso.QrzLogid,
+        };
+
+        var engine = new QrzSyncEngine(api);
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        Assert.Null(result.ErrorSummary);
+        Assert.Equal(2u, result.UploadedCount);
+        Assert.Equal(0u, result.ConflictCount);
+        Assert.Equal(2, api.UpdatedQsos.Count);
+        Assert.Contains(api.UpdatedQsos, qso => qso.WorkedCallsign == "W1AW/0");
+        Assert.Contains(api.UpdatedQsos, qso => qso.WorkedCallsign == "K7ABC");
+
+        var all = await store.Logbook.ListQsosAsync(new QsoListQuery());
+        Assert.All(all, qso => Assert.Equal(SyncStatus.Synced, qso.SyncStatus));
+        Assert.Contains(all, qso => qso.WorkedCallsign == "W1AW/0");
+        Assert.Contains(all, qso => qso.WorkedCallsign == "K7ABC");
+        Assert.DoesNotContain(all, qso => qso.WorkedCallsign is "W1AW/1" or "K7OLD");
+    }
+
     private static MemoryStorage CreateStore() => new();
 
     private static QsoRecord MakeRemoteQso(string callsign, DateTimeOffset timestamp, Band band, Mode mode, string? logid)
@@ -889,6 +1050,7 @@ public sealed class QrzSyncEngineTests
         public string UploadLogid { get; set; } = "12345";
         public string UpdateLogid { get; set; } = "12345";
         public Func<QsoRecord, Task<string>>? UploadFunc { get; set; }
+        public Func<QsoRecord, string>? UpdateFunc { get; set; }
         public List<QsoRecord> UploadedQsos { get; } = [];
         public List<QsoRecord> UpdatedQsos { get; } = [];
         public string? LastSinceDate { get; private set; }
@@ -915,11 +1077,20 @@ public sealed class QrzSyncEngineTests
             return Task.FromResult(UploadLogid);
         }
 
+        public string UploadReplaceLogid { get; set; } = "REPLACE-12345";
+        public List<QsoRecord> UploadReplacedQsos { get; } = [];
+
+        public Task<string> UploadQsoWithReplaceAsync(QsoRecord qso, string? bookOwner = null)
+        {
+            UploadReplacedQsos.Add(qso);
+            return Task.FromResult(UploadReplaceLogid);
+        }
+
         public Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null)
         {
             UpdatedQsos.Add(qso);
             LastUpdateBookOwner = bookOwner;
-            return Task.FromResult(UpdateLogid);
+            return Task.FromResult(UpdateFunc?.Invoke(qso) ?? UpdateLogid);
         }
 
         /// <summary>Configurable STATUS owner. Empty string mimics QRZ omitting the field.</summary>

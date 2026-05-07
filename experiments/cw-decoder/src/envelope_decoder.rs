@@ -19,6 +19,7 @@
 //! use of the streaming v1 path, and minimal tunable knobs so any
 //! regressions are localised.
 
+use crate::preprocess::{self, PreprocessConfig};
 use crate::region_stream::{self, estimate_dominant_pitch, goertzel_power, RegionStreamConfig};
 
 const FRAME_LEN_S: f32 = 0.010; // 10 ms — fine enough for 40 WPM dits.
@@ -26,6 +27,79 @@ const FRAME_STEP_S: f32 = 0.005; // 5 ms hop.
 const HYST_HIGH: f32 = 0.55; // Fraction of (signal - noise) to enter key-on.
 const HYST_LOW: f32 = 0.35; // Fraction of (signal - noise) to leave key-on.
 const MIN_ELEMENT_S: f32 = 0.012; // Reject sub-12ms blips as noise (~50 WPM dot).
+                                  // Cap auto-detected WPM. Above this the dot estimate is almost always
+                                  // noise-locked rather than real CW; blank the transcript instead of
+                                  // emitting dit-spam. Pinned WPM bypasses this gate.
+const MAX_AUTO_WPM: f32 = 45.0;
+/// Maximum cycle-to-cycle WPM delta (WPM) for the auto-lock to fire.
+/// Empirically clean/weak/qrn fixtures sit at p50 ~0.55 WPM and p90
+/// ~2.95 WPM; chaos sits at p90 ~7.7 WPM. ±2 WPM admits stable signals
+/// while rejecting noise-induced bounces.
+const LOCK_WPM_TOLERANCE: f32 = 2.0;
+
+/// Number of consecutive cycles whose centroid-derived WPM must
+/// disagree with the locked WPM by more than [`LOCK_RELOCK_DELTA_WPM`]
+/// before the auto-lock is released. Computed from the unbiased
+/// `centroid_dot` (which reflects the actual on-duration distribution
+/// regardless of the pinned dot length), so a wrong lock acquired on a
+/// noise transient or weak operator before a stronger station starts
+/// will surrender within a couple of seconds rather than producing
+/// garbage indefinitely. Decode cadence is ~250 ms (see
+/// `decode_every_samples`), so 5 cycles is ~1.25 s of disagreement —
+/// longer than any single CW dah even at 12 WPM (~300 ms).
+const LOCK_RELOCK_AFTER_MISMATCHES: usize = 5;
+/// WPM delta (current-cycle measured WPM vs locked WPM) above which the
+/// cycle is counted toward [`LOCK_RELOCK_AFTER_MISMATCHES`]. Chosen
+/// generously so transient timing jitter inside a stable QSO does not
+/// trigger a relock; only sustained, structural mismatch (wrong WPM
+/// lock or QSY to a different operator) fires.
+const LOCK_RELOCK_DELTA_WPM: f32 = 5.0;
+/// Number of consecutive SNR-suppressed cycles after which the
+/// auto-lock is released so the next live signal can re-acquire fresh.
+/// Decode cadence is ~250 ms (see `decode_every_samples`), so 10 cycles
+/// is ~2.5 s of dead air. Re-acquisition only needs ~2 agreeing cycles
+/// (~0.5 s) when the same operator returns at the same WPM, so this
+/// trades a small amount of between-overs slack for prompt release of
+/// stale locks when the QSO actually ends or moves to a new operator.
+const LOCK_RELEASE_AFTER_SUPPRESSED: usize = 10;
+
+/// Default SNR floor (dB) below which the decode is suppressed and the
+/// pipeline returns empty text. 20*log10(2.0) ≈ 6 dB; CW signals worth
+/// decoding sit comfortably above this. Tuned to filter out the
+/// noise-locked failure mode where the auto-pitch detector locks onto a
+/// harmonic peak and the envelope is essentially noise.
+pub const DEFAULT_MIN_SNR_DB: f32 = 6.0;
+/// Default fraction of `envelope_max` that the dynamic range
+/// (`signal_floor - noise_floor`) must exceed to pass the bimodality
+/// gate. Real CW with intentional silence between elements produces a
+/// dynamic range close to `envelope_max`. Random noise has random
+/// transient peaks that dominate `envelope_max` while the bulk of the
+/// envelope hovers near the mean, giving a much smaller fraction. The
+/// 0.55 default cleanly rejects pure white noise (~0.30 in tests) while
+/// passing weak but legitimate CW (>0.7).
+pub const DEFAULT_MIN_DYN_RANGE_RATIO: f32 = 0.55;
+
+/// Percentile used as the "robust peak" for the dynamic-range gate. We
+/// deliberately do NOT use the literal `env_max` because a single
+/// key-click transient or QRN spike can dwarf the rest of the envelope
+/// and collapse the bimodality ratio even when the underlying CW is
+/// obviously bimodal. The 99th percentile keeps the gate sensitive to
+/// real noise floors while ignoring isolated transients.
+pub(crate) const ROBUST_PEAK_PERCENTILE: f32 = 0.99;
+
+/// SNR (dB) above which the dynamic-range bimodality gate is bypassed.
+/// The dyn_range gate exists to catch noise-locked failures where the
+/// SNR happens to land above the floor by chance — but real CW with
+/// occasional tall key-click transients can fail dyn_range while having
+/// a clean SNR of 30+ dB. Above this threshold, treat SNR alone as
+/// sufficient evidence the signal is real and let the decoder run.
+///
+/// Tuned empirically: pure white noise (probed via the project's own
+/// percentile-based floors) routinely measures ~21 dB "SNR" because
+/// `p90 / p20` of a noise envelope is intrinsically non-trivial. Real
+/// CW from a radio reliably sits above 30 dB on the same metric. The
+/// threshold below comfortably separates the two.
+pub(crate) const DYN_RANGE_BYPASS_SNR_DB: f32 = 30.0;
 
 /// Configuration for [`decode_envelope`].
 #[derive(Debug, Clone)]
@@ -38,6 +112,35 @@ pub struct EnvelopeConfig {
     /// bypassed and the envelope is computed at the supplied frequency.
     /// Useful when the auto-detector locks onto a noise/harmonic peak.
     pub pin_hz: Option<f32>,
+    /// Minimum signal-to-noise ratio (dB) required to emit a transcript.
+    /// Computed as `20 * log10(signal_floor / noise_floor)` from the 90th
+    /// and 20th percentiles of the envelope. When the gate trips the
+    /// pipeline still populates the visualizer frame so an operator can
+    /// see *why* nothing decoded — only the text is suppressed.
+    pub min_snr_db: f32,
+    /// Minimum bimodality ratio: `(signal_floor - noise_floor) /
+    /// envelope_max`. Real CW with intentional silence has a value near
+    /// 1.0; pure noise is ~0.3 because random transient peaks dominate
+    /// `envelope_max` while the percentiles cluster near the mean. This
+    /// gate catches the noise-locked failure mode that high-variance
+    /// noise sneaks past the percentile-ratio SNR check.
+    pub min_dyn_range_ratio: f32,
+    /// Front-end audio preprocessing (bandpass + compander). Defaults
+    /// match the recipe that cut CER from 0.380 → 0.130 on real-radio
+    /// CW. Disable for synthetic test fixtures that already feed the
+    /// decoder a pristine tone.
+    pub preprocess: PreprocessConfig,
+    /// When `Some(s)`, only the most recent `s` seconds of the envelope
+    /// drive the quality gate, hysteresis thresholds, and decode. The
+    /// visualizer envelope still reflects the full input buffer. This
+    /// makes the live decoder robust to QSO turn-taking: when a strong
+    /// station finishes and a weaker one starts, the strong station's
+    /// peaks no longer anchor `env_max` and collapse the dynamic-range
+    /// gate. It also lets a sparse burst at the end of a long buffer
+    /// pass the gate as if the buffer were short. `None` keeps the
+    /// legacy behavior (gate over the entire buffer); preferred for
+    /// offline whole-file decode and synthetic test fixtures.
+    pub analysis_window_seconds: Option<f32>,
 }
 
 impl Default for EnvelopeConfig {
@@ -45,8 +148,72 @@ impl Default for EnvelopeConfig {
         Self {
             pin_wpm: None,
             pin_hz: None,
+            min_snr_db: DEFAULT_MIN_SNR_DB,
+            min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
+            preprocess: PreprocessConfig::default(),
+            analysis_window_seconds: None,
         }
     }
+}
+
+/// Compute SNR (dB) from envelope noise and signal floor estimates.
+/// - `signal <= 0` → 0 dB (no signal at all).
+/// - `noise <= 0` and `signal > 0` → +∞ dB (a literal-zero noise floor
+///   means the signal is infinitely above the noise; happens with
+///   synthetic test inputs and very clean recordings).
+#[inline]
+pub(crate) fn snr_db(noise: f32, signal: f32) -> f32 {
+    if signal <= 0.0 {
+        return 0.0;
+    }
+    if noise <= 0.0 {
+        return f32::INFINITY;
+    }
+    20.0 * (signal / noise).log10()
+}
+
+/// Bimodality ratio: dynamic range relative to envelope peak.
+/// `(signal_floor - noise_floor) / envelope_max`. 1.0 means the
+/// percentiles span the full peak range (clean bimodal CW). Low values
+/// mean the percentiles cluster near the mean while a few random
+/// transient peaks dominate `envelope_max` (white noise).
+#[inline]
+pub(crate) fn dyn_range_ratio(noise: f32, signal: f32, env_max: f32) -> f32 {
+    if env_max <= 0.0 {
+        return 0.0;
+    }
+    ((signal - noise).max(0.0) / env_max).min(1.0)
+}
+
+/// True when the envelope passes the quality gates and a transcript
+/// should be emitted.
+///
+/// The gate is two-tier:
+/// 1. SNR floor (`min_snr_db`) is mandatory.
+/// 2. Dynamic-range bimodality (`min_dyn_range_ratio`) is required only
+///    when SNR sits in the marginal band (`min_snr_db ..
+///    DYN_RANGE_BYPASS_SNR_DB`). Above the bypass threshold, SNR alone
+///    is enough — the dyn_range check exists to backstop noise-locked
+///    false-passes, which can't happen at high SNR.
+///
+/// This avoids a known failure mode where real CW with occasional tall
+/// key-click transients (envelope_max anchored by a few isolated peaks)
+/// has clean SNR but fails dyn_range and gets falsely suppressed.
+#[inline]
+pub(crate) fn passes_quality_gate(
+    cfg: &EnvelopeConfig,
+    noise: f32,
+    signal: f32,
+    env_max: f32,
+) -> bool {
+    let snr = snr_db(noise, signal);
+    if snr < cfg.min_snr_db {
+        return false;
+    }
+    if snr >= DYN_RANGE_BYPASS_SNR_DB {
+        return true;
+    }
+    dyn_range_ratio(noise, signal, env_max) >= cfg.min_dyn_range_ratio
 }
 
 /// Decode `samples` to text using the envelope+hysteresis pipeline.
@@ -66,18 +233,30 @@ pub fn decode_envelope(samples: &[f32], sample_rate: u32, cfg: &EnvelopeConfig) 
         .pin_hz
         .unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
+    // 0) Front-end preprocessing. Bandpass narrows to the detected
+    //    pitch (rejects QRM/hum) and the compander pulls element
+    //    amplitudes together so a single hysteresis threshold cleanly
+    //    separates key-on from key-off on real-radio audio.
+    let preprocessed: Vec<f32>;
+    let work: &[f32] = if cfg.preprocess.enabled {
+        preprocessed = preprocess::apply(samples, sample_rate, pitch, &cfg.preprocess);
+        &preprocessed
+    } else {
+        samples
+    };
+
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
-    if samples.len() < frame_len {
+    if work.len() < frame_len {
         return String::new();
     }
 
     // 1) Per-frame Goertzel power envelope.
-    let mut env: Vec<f32> = Vec::with_capacity(samples.len() / frame_step + 1);
+    let mut env: Vec<f32> = Vec::with_capacity(work.len() / frame_step + 1);
     let mut offset = 0usize;
-    while offset + frame_len <= samples.len() {
+    while offset + frame_len <= work.len() {
         env.push(goertzel_power(
-            &samples[offset..offset + frame_len],
+            &work[offset..offset + frame_len],
             sample_rate,
             pitch,
         ));
@@ -88,14 +267,29 @@ pub fn decode_envelope(samples: &[f32], sample_rate: u32, cfg: &EnvelopeConfig) 
     }
 
     // 2) Estimate noise / signal floor as 20th / 90th percentiles.
-    let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
+    //    Use a robust 99th-percentile peak instead of the literal max
+    //    so a single key-click transient or QRN spike does not collapse
+    //    the dynamic-range bimodality ratio. When `analysis_window_seconds`
+    //    is set, only the most recent slice drives the gate so older
+    //    transmissions cannot anchor `env_max`.
+    let frame_dt = frame_step as f32 / sample_rate as f32;
+    let (analysis_env, _) = analysis_slice(&env, frame_dt, cfg);
+    let env_max = robust_peak(analysis_env, ROBUST_PEAK_PERCENTILE);
+    let (noise, signal) = percentile_pair(analysis_env, 0.20, 0.90);
+    // 2a) Quality gate: combine an SNR floor with a dynamic-range
+    //     bimodality check. The latter is what kills the noise-locked
+    //     failure mode (random envelope variance can clear the SNR ratio
+    //     gate by itself but does not produce a clean bimodal envelope).
+    if !passes_quality_gate(cfg, noise, signal, env_max) {
+        return String::new();
+    }
     let span = (signal - noise).max(1e-9);
     let high = noise + HYST_HIGH * span;
     let low = noise + HYST_LOW * span;
 
-    // 3) Hysteresis state machine -> events.
-    let frame_dt = frame_step as f32 / sample_rate as f32;
-    let (ons, offs) = events_from_envelope(&env, high, low, frame_dt);
+    // 3) Hysteresis state machine -> events. Run on the analysis slice so
+    //    the thresholds derived from its stats apply to the same data.
+    let (ons, offs) = events_from_envelope(analysis_env, high, low, frame_dt);
     if ons.is_empty() {
         return String::new();
     }
@@ -147,9 +341,17 @@ pub fn decode_envelope_with_stats(
         .pin_hz
         .unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
+    let preprocessed: Vec<f32>;
+    let work: &[f32] = if cfg.preprocess.enabled {
+        preprocessed = preprocess::apply(samples, sample_rate, pitch, &cfg.preprocess);
+        &preprocessed
+    } else {
+        samples
+    };
+
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
-    if samples.len() < frame_len {
+    if work.len() < frame_len {
         return EnvelopeDecode {
             text: String::new(),
             dot_seconds: 0.0,
@@ -158,11 +360,11 @@ pub fn decode_envelope_with_stats(
         };
     }
 
-    let mut env: Vec<f32> = Vec::with_capacity(samples.len() / frame_step + 1);
+    let mut env: Vec<f32> = Vec::with_capacity(work.len() / frame_step + 1);
     let mut offset = 0usize;
-    while offset + frame_len <= samples.len() {
+    while offset + frame_len <= work.len() {
         env.push(goertzel_power(
-            &samples[offset..offset + frame_len],
+            &work[offset..offset + frame_len],
             sample_rate,
             pitch,
         ));
@@ -177,13 +379,23 @@ pub fn decode_envelope_with_stats(
         };
     }
 
-    let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
+    let frame_dt = frame_step as f32 / sample_rate as f32;
+    let (analysis_env, _) = analysis_slice(&env, frame_dt, cfg);
+    let env_max = robust_peak(analysis_env, ROBUST_PEAK_PERCENTILE);
+    let (noise, signal) = percentile_pair(analysis_env, 0.20, 0.90);
+    if !passes_quality_gate(cfg, noise, signal, env_max) {
+        return EnvelopeDecode {
+            text: String::new(),
+            dot_seconds: 0.0,
+            wpm: 0.0,
+            elements: 0,
+        };
+    }
     let span = (signal - noise).max(1e-9);
     let high = noise + HYST_HIGH * span;
     let low = noise + HYST_LOW * span;
 
-    let frame_dt = frame_step as f32 / sample_rate as f32;
-    let (ons, offs) = events_from_envelope(&env, high, low, frame_dt);
+    let (ons, offs) = events_from_envelope(analysis_env, high, low, frame_dt);
     if ons.is_empty() {
         return EnvelopeDecode {
             text: String::new(),
@@ -200,7 +412,25 @@ pub fn decode_envelope_with_stats(
     };
 
     let text = decode_events(&ons, &offs, dot_s);
-    let wpm = if dot_s > 0.0 { 1.2 / dot_s } else { 0.0 };
+    // Classification (`dot_seconds`) keeps the k-means estimate so downstream
+    // consumers (bar monitor, append decoder, ditdah streaming) classify
+    // dits/dahs/gaps from the SAME dot the decoder used.
+    //
+    // The reported WPM uses the period-based estimator (rising-edge
+    // intervals) which is invariant to threshold/compander bias. Falls back
+    // to the k-means dot when the fix can't be applied (too few onsets, or
+    // no intra-element pairs).
+    let wpm_dot_s = if cfg.pin_wpm.is_some() {
+        dot_s
+    } else {
+        let timed = events_with_times(analysis_env, high, low, frame_dt);
+        estimate_dot_period(&timed).unwrap_or(dot_s)
+    };
+    let wpm = if wpm_dot_s > 0.0 {
+        1.2 / wpm_dot_s
+    } else {
+        0.0
+    };
     EnvelopeDecode {
         text,
         dot_seconds: dot_s,
@@ -219,7 +449,7 @@ fn estimate_dot_kmeans(durations: &[f32]) -> f32 {
     if durations.len() < 4 {
         return median_lower_half(durations);
     }
-    let mut sorted: Vec<f32> = durations.iter().copied().collect();
+    let mut sorted: Vec<f32> = durations.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let lo_seed = sorted[sorted.len() / 4];
     let hi_seed = sorted[(3 * sorted.len()) / 4];
@@ -281,9 +511,35 @@ pub struct LiveEnvelopeStreamer {
     locked_wpm: Option<f32>,
     pinned_wpm: Option<f32>,
     lock_after_elements: usize,
+    /// WPM observed on the prior decode cycle. The auto-lock requires
+    /// the current cycle's WPM to be within `LOCK_WPM_TOLERANCE` of this
+    /// value so noise-induced WPM bounces (e.g., chaos QRM) cannot
+    /// promote a single noisy cycle to a sticky lock.
+    prev_decode_wpm: Option<f32>,
+    /// Count of consecutive cycles whose unbiased centroid-derived WPM
+    /// disagreed with `locked_wpm` by more than
+    /// [`LOCK_RELOCK_DELTA_WPM`]. Resets to zero on any agreeing cycle.
+    /// When it reaches [`LOCK_RELOCK_AFTER_MISMATCHES`], the lock is
+    /// released so the next cycle can re-acquire on the actual signal.
+    locked_mismatch_count: usize,
+    /// Count of consecutive SNR-suppressed cycles since the lock was
+    /// acquired. Released after [`LOCK_RELEASE_AFTER_SUPPRESSED`] so a
+    /// stale lock from a finished QSO does not persist into a fresh
+    /// signal at a different WPM/pitch.
+    locked_suppressed_count: usize,
     last_text: String,
     last_wpm: f32,
     pinned_hz: Option<f32>,
+    min_snr_db: f32,
+    min_dyn_range_ratio: f32,
+    preprocess: PreprocessConfig,
+    analysis_window_seconds: Option<f32>,
+    /// Total samples ever pushed into [`push_samples`], counted across
+    /// the entire streaming session (NOT capped to the rolling
+    /// `buffer.len()`). Drives the absolute sample anchors on
+    /// [`VizFrame`] so downstream commit cursors can identify the same
+    /// audio region across overlapping rolling-window re-decodes.
+    samples_fed_total: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -331,15 +587,41 @@ pub struct VizFrame {
     pub envelope_max: f32,
     pub noise_floor: f32,
     pub signal_floor: f32,
+    /// 20*log10(signal_floor / noise_floor). 0 when either is non-positive.
+    pub snr_db: f32,
+    /// True when the SNR gate suppressed text emission for this frame.
+    /// The visualizer should still render the envelope so the operator
+    /// can see *why* nothing was decoded.
+    pub snr_suppressed: bool,
     pub hyst_high: f32,
     pub hyst_low: f32,
     pub events: Vec<VizEvent>,
     pub on_durations: Vec<f32>,
     pub dot_seconds: f32,
     pub wpm: f32,
+    /// Legacy k-means-derived WPM kept alongside `wpm` so consumers can
+    /// compare the period-based fix to the original biased estimate. Equals
+    /// `wpm` when the period estimator falls back (no intra-element pairs).
+    pub wpm_kmeans: f32,
     pub centroid_dot: f32,
     pub centroid_dah: f32,
     pub locked_wpm: Option<f32>,
+    /// Absolute sample index of the FIRST sample in the analysis slice
+    /// that produced this frame, counted from the start of the streaming
+    /// session (i.e., total samples ever fed into the streamer minus
+    /// the slice length). Stable across re-decodes of the same audio
+    /// region: an event whose `start_s` is `t` lives at absolute sample
+    /// `window_start_sample + round(t * sample_rate)`.
+    ///
+    /// Both `window_start_sample` and `window_end_sample` are populated
+    /// by `LiveEnvelopeStreamer`; standalone callers of
+    /// `decode_envelope_with_viz` get `0`/`buffer_len` because they do
+    /// not maintain a persistent session.
+    pub window_start_sample: u64,
+    /// Absolute sample index of the ONE-PAST-END sample of the analysis
+    /// slice. `window_end_sample - window_start_sample` equals the
+    /// number of samples in the analysed region.
+    pub window_end_sample: u64,
 }
 
 pub const MAX_VIZ_ENVELOPE_SAMPLES: usize = 1500;
@@ -354,11 +636,51 @@ impl LiveEnvelopeStreamer {
             since_last_decode: 0,
             locked_wpm: None,
             pinned_wpm: None,
-            lock_after_elements: 30,
+            // Lowered from 30 because the 3-second rolling analysis
+            // window structurally caps `on_durations` at ~20 at 30 WPM,
+            // making a 30-element threshold unreachable on healthy
+            // signals. Empirical sweep across clean/weak/qrn fixtures
+            // showed >95% of cycles satisfy >=10. False locks on chaos
+            // are gated by the WPM-consistency check below combined
+            // with the existing `wpm <= MAX_AUTO_WPM` filter.
+            lock_after_elements: 10,
+            prev_decode_wpm: None,
+            locked_mismatch_count: 0,
+            locked_suppressed_count: 0,
             last_text: String::new(),
             last_wpm: 0.0,
             pinned_hz: None,
+            min_snr_db: DEFAULT_MIN_SNR_DB,
+            min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
+            preprocess: PreprocessConfig::default(),
+            // Live decode: only the most recent 3s drive the gate, hysteresis,
+            // and decode. Insulates the gate from QSO turn-taking — when a
+            // strong station finishes and a weaker one starts, the strong
+            // station's peaks no longer anchor `env_max` and falsely trip
+            // the dynamic-range gate. Visualizer envelope still spans the
+            // full buffer.
+            analysis_window_seconds: Some(3.0),
+            samples_fed_total: 0,
         }
+    }
+
+    /// Absolute number of samples ever pushed into this streamer since
+    /// construction. Monotonically increasing; not affected by the
+    /// internal rolling-buffer cap.
+    pub fn samples_fed_total(&self) -> u64 {
+        self.samples_fed_total
+    }
+
+    /// Override the rolling analysis-window length used for gate +
+    /// decode (see [`EnvelopeConfig::analysis_window_seconds`]). Pass
+    /// `None` to gate over the entire buffer (legacy behavior).
+    pub fn set_analysis_window_seconds(&mut self, seconds: Option<f32>) {
+        self.analysis_window_seconds = seconds.filter(|s| *s > 0.0);
+    }
+
+    /// Override the front-end audio preprocessing (bandpass + compander).
+    pub fn set_preprocess(&mut self, preprocess: PreprocessConfig) {
+        self.preprocess = preprocess;
     }
 
     /// Pin the pitch detector to a specific frequency (Hz). When `None`,
@@ -372,6 +694,23 @@ impl LiveEnvelopeStreamer {
     pub fn set_pinned_wpm(&mut self, pinned_wpm: Option<f32>) {
         self.pinned_wpm = pinned_wpm.filter(|w| *w > 0.0);
         self.locked_wpm = self.pinned_wpm;
+        self.locked_mismatch_count = 0;
+        self.locked_suppressed_count = 0;
+        self.prev_decode_wpm = None;
+    }
+
+    /// Set the minimum signal-to-noise ratio (dB) required to emit text.
+    /// Below this floor the streamer still produces visualizer frames but
+    /// returns an empty transcript so the noise-locked failure mode does
+    /// not pollute the output.
+    pub fn set_min_snr_db(&mut self, min_snr_db: f32) {
+        self.min_snr_db = min_snr_db;
+    }
+
+    /// Set the minimum dynamic-range bimodality ratio. See
+    /// [`EnvelopeConfig::min_dyn_range_ratio`].
+    pub fn set_min_dyn_range_ratio(&mut self, ratio: f32) {
+        self.min_dyn_range_ratio = ratio;
     }
 
     /// Feed a chunk of audio. Returns one snapshot per decode cycle (may be
@@ -416,8 +755,29 @@ impl LiveEnvelopeStreamer {
         &self.last_text
     }
 
+    /// Test-only accessor for the current auto-lock state. Returns
+    /// the locked WPM (set by either auto-lock or `set_pinned_wpm`).
+    /// Used by relock unit tests.
+    #[cfg(test)]
+    pub(crate) fn locked_wpm(&self) -> Option<f32> {
+        self.locked_wpm
+    }
+
+    /// Test-only injection of a wrong lock so the relock-on-mismatch
+    /// path can be exercised without first having to drive a real
+    /// auto-lock at the wrong WPM. Bypasses the public `set_pinned_wpm`
+    /// API (which would set `pinned_wpm` and disable auto-release).
+    #[cfg(test)]
+    pub(crate) fn force_locked_wpm_for_test(&mut self, wpm: f32) {
+        self.locked_wpm = Some(wpm);
+        self.locked_mismatch_count = 0;
+        self.locked_suppressed_count = 0;
+        self.prev_decode_wpm = None;
+    }
+
     fn push_samples(&mut self, samples: &[f32]) {
         self.buffer.extend_from_slice(samples);
+        self.samples_fed_total = self.samples_fed_total.saturating_add(samples.len() as u64);
         let max_samples = (self.sample_rate as usize * MAX_LIVE_ENVELOPE_BUFFER_SECONDS)
             .max(self.decode_every_samples * 2);
         if self.buffer.len() > max_samples {
@@ -430,11 +790,25 @@ impl LiveEnvelopeStreamer {
         let cfg = EnvelopeConfig {
             pin_wpm: self.pinned_wpm.or(self.locked_wpm),
             pin_hz: self.pinned_hz,
+            min_snr_db: self.min_snr_db,
+            min_dyn_range_ratio: self.min_dyn_range_ratio,
+            preprocess: self.preprocess,
+            analysis_window_seconds: self.analysis_window_seconds,
         };
         let (text, wpm, elements, viz) = if with_viz {
             let (text, frame) = decode_envelope_with_viz(&self.buffer, self.sample_rate, &cfg);
             let mut frame = frame;
             frame.locked_wpm = self.pinned_wpm.or(self.locked_wpm);
+            // Anchor the rolling buffer in absolute session time so a
+            // downstream commit cursor can identify the same audio
+            // region across overlapping re-decodes. Events on the frame
+            // already carry buffer-relative `start_s`/`end_s`; absolute
+            // sample = `window_start_sample + round(start_s * sr)`.
+            let buffer_start_abs = self
+                .samples_fed_total
+                .saturating_sub(self.buffer.len() as u64);
+            frame.window_start_sample = buffer_start_abs;
+            frame.window_end_sample = self.samples_fed_total;
             let elem_count = frame.on_durations.len();
             let wpm = frame.wpm;
             (text, wpm, elem_count, Some(frame))
@@ -443,14 +817,84 @@ impl LiveEnvelopeStreamer {
             (result.text, result.wpm, result.elements, None)
         };
 
+        // Auto-lock acquisition: requires not already pinned/locked,
+        // enough elements in this cycle, sane WPM range, and consensus
+        // with the prior cycle (LOCK_WPM_TOLERANCE).
         if self.pinned_wpm.is_none()
             && self.locked_wpm.is_none()
             && elements >= self.lock_after_elements
             && wpm > 5.0
-            && wpm < 60.0
+            && wpm <= MAX_AUTO_WPM
+            && self
+                .prev_decode_wpm
+                .is_some_and(|prev| (wpm - prev).abs() <= LOCK_WPM_TOLERANCE)
         {
             self.locked_wpm = Some(wpm);
+            self.locked_mismatch_count = 0;
+            self.locked_suppressed_count = 0;
         }
+
+        // Auto-lock release. Once locked, `frame.wpm` simply echoes the
+        // pinned dot length, so we have to look at the unbiased
+        // `centroid_dot` (computed from the actual on_durations
+        // distribution, k-means with k=2) to detect whether the signal
+        // really matches the lock. Two release paths:
+        //   1) Sustained measurement mismatch (wrong lock vs real
+        //      signal, or QSY to a different operator).
+        //   2) Sustained SNR suppression (signal went away, stale lock
+        //      should not bleed into the next operator).
+        // Manual pin always overrides; we only auto-release when there
+        // is no explicit pin.
+        let mut released = false;
+        if let (Some(locked), None, Some(viz_ref)) =
+            (self.locked_wpm, self.pinned_wpm, viz.as_ref())
+        {
+            if viz_ref.snr_suppressed {
+                self.locked_suppressed_count += 1;
+            } else {
+                self.locked_suppressed_count = 0;
+            }
+            let measured_wpm = if viz_ref.centroid_dot > 0.0 {
+                1.2 / viz_ref.centroid_dot
+            } else {
+                0.0
+            };
+            let enough_evidence = viz_ref.on_durations.len() >= self.lock_after_elements
+                && !viz_ref.snr_suppressed
+                && measured_wpm > 5.0;
+            if enough_evidence && (measured_wpm - locked).abs() > LOCK_RELOCK_DELTA_WPM {
+                self.locked_mismatch_count += 1;
+            } else if enough_evidence {
+                self.locked_mismatch_count = 0;
+            }
+            if self.locked_mismatch_count >= LOCK_RELOCK_AFTER_MISMATCHES
+                || self.locked_suppressed_count >= LOCK_RELEASE_AFTER_SUPPRESSED
+            {
+                self.locked_wpm = None;
+                self.locked_mismatch_count = 0;
+                self.locked_suppressed_count = 0;
+                self.prev_decode_wpm = None;
+                released = true;
+            }
+        }
+
+        if wpm > 5.0 && wpm <= MAX_AUTO_WPM {
+            self.prev_decode_wpm = Some(wpm);
+        } else {
+            self.prev_decode_wpm = None;
+        }
+
+        // If we just released the lock, reflect the unlocked state in
+        // the viz frame so should_stitch_to_session() and the GUI see
+        // it in the same cycle.
+        let viz = if released {
+            viz.map(|mut v| {
+                v.locked_wpm = None;
+                v
+            })
+        } else {
+            viz
+        };
 
         let appended = if text.starts_with(&self.last_text) {
             text[self.last_text.len()..].to_string()
@@ -465,6 +909,35 @@ impl LiveEnvelopeStreamer {
             wpm,
             viz,
         }
+    }
+}
+
+/// Returns the suffix of the envelope that should drive the quality
+/// gate, hysteresis thresholds, and decode, plus the frame offset of
+/// that suffix from the start of the full envelope.
+///
+/// When `cfg.analysis_window_seconds` is `None` (default), the full
+/// envelope is used (legacy behavior). When `Some(s)`, only the most
+/// recent `s` seconds drive decoding while the visualizer still
+/// displays the entire buffer. This insulates the gate from older
+/// stations whose peaks would otherwise anchor `env_max` and falsely
+/// suppress a quieter station now on the air.
+fn analysis_slice<'a>(
+    full_env: &'a [f32],
+    frame_dt: f32,
+    cfg: &EnvelopeConfig,
+) -> (&'a [f32], usize) {
+    match cfg.analysis_window_seconds {
+        Some(s) if s > 0.0 && frame_dt > 0.0 => {
+            let target_frames = ((s / frame_dt).ceil() as usize).max(1);
+            if full_env.len() > target_frames {
+                let offset = full_env.len() - target_frames;
+                (&full_env[offset..], offset)
+            } else {
+                (full_env, 0)
+            }
+        }
+        _ => (full_env, 0),
     }
 }
 
@@ -486,15 +959,20 @@ pub fn decode_envelope_with_viz(
         envelope_max: 0.0,
         noise_floor: 0.0,
         signal_floor: 0.0,
+        snr_db: 0.0,
+        snr_suppressed: false,
         hyst_high: 0.0,
         hyst_low: 0.0,
         events: Vec::new(),
         on_durations: Vec::new(),
         dot_seconds: 0.0,
         wpm: 0.0,
+        wpm_kmeans: 0.0,
         centroid_dot: 0.0,
         centroid_dah: 0.0,
         locked_wpm: None,
+        window_start_sample: 0,
+        window_end_sample: samples.len() as u64,
     };
 
     if samples.is_empty() {
@@ -510,19 +988,27 @@ pub fn decode_envelope_with_viz(
         .pin_hz
         .unwrap_or_else(|| estimate_dominant_pitch(samples, sample_rate, &pitch_cfg));
 
+    let preprocessed: Vec<f32>;
+    let work: &[f32] = if cfg.preprocess.enabled {
+        preprocessed = preprocess::apply(samples, sample_rate, pitch, &cfg.preprocess);
+        &preprocessed
+    } else {
+        samples
+    };
+
     let frame_len = ((FRAME_LEN_S * sample_rate as f32).round() as usize).max(32);
     let frame_step = ((FRAME_STEP_S * sample_rate as f32).round() as usize).max(8);
-    if samples.len() < frame_len {
+    if work.len() < frame_len {
         let mut v = empty_viz();
         v.pitch_hz = pitch;
         return (String::new(), v);
     }
 
-    let mut env: Vec<f32> = Vec::with_capacity(samples.len() / frame_step + 1);
+    let mut env: Vec<f32> = Vec::with_capacity(work.len() / frame_step + 1);
     let mut offset = 0usize;
-    while offset + frame_len <= samples.len() {
+    while offset + frame_len <= work.len() {
         env.push(goertzel_power(
-            &samples[offset..offset + frame_len],
+            &work[offset..offset + frame_len],
             sample_rate,
             pitch,
         ));
@@ -535,14 +1021,37 @@ pub fn decode_envelope_with_viz(
         return (String::new(), v);
     }
 
-    let env_max = env.iter().copied().fold(0.0_f32, f32::max);
-    let (noise, signal) = percentile_pair(&env, 0.20, 0.90);
+    let frame_dt = frame_step as f32 / sample_rate as f32;
+    let (analysis_env, analysis_offset_frames) = analysis_slice(&env, frame_dt, cfg);
+    let analysis_offset_s = analysis_offset_frames as f32 * frame_dt;
+
+    let env_max = robust_peak(analysis_env, ROBUST_PEAK_PERCENTILE);
+    let (noise, signal) = percentile_pair(analysis_env, 0.20, 0.90);
+    let snr = snr_db(noise, signal);
+    if !passes_quality_gate(cfg, noise, signal, env_max) {
+        // Quality gate: envelope is essentially noise. Return empty
+        // text but a populated viz frame so the operator can SEE why
+        // the decoder refused to emit text (the visualizer dashed
+        // lines should sit close together, and the noise/signal
+        // floors hover near the mean of the envelope).
+        let mut v = empty_viz();
+        v.pitch_hz = pitch;
+        v.envelope = downsample_envelope(&env);
+        v.envelope_max = env_max;
+        v.noise_floor = noise;
+        v.signal_floor = signal;
+        v.snr_db = snr;
+        v.snr_suppressed = true;
+        let span = (signal - noise).max(1e-9);
+        v.hyst_high = noise + HYST_HIGH * span;
+        v.hyst_low = noise + HYST_LOW * span;
+        return (String::new(), v);
+    }
     let span = (signal - noise).max(1e-9);
     let high = noise + HYST_HIGH * span;
     let low = noise + HYST_LOW * span;
 
-    let frame_dt = frame_step as f32 / sample_rate as f32;
-    let timed = events_with_times(&env, high, low, frame_dt);
+    let timed = events_with_times(analysis_env, high, low, frame_dt);
 
     let on_durations: Vec<f32> = timed
         .iter()
@@ -562,6 +1071,7 @@ pub fn decode_envelope_with_viz(
         v.envelope_max = env_max;
         v.noise_floor = noise;
         v.signal_floor = signal;
+        v.snr_db = snr;
         v.hyst_high = high;
         v.hyst_low = low;
         return (String::new(), v);
@@ -575,7 +1085,27 @@ pub fn decode_envelope_with_viz(
     let (centroid_dot, centroid_dah) = kmeans_centroids(&on_durations);
 
     let text = decode_events(&on_durations, &off_durations, dot_s);
-    let wpm = if dot_s > 0.0 { 1.2 / dot_s } else { 0.0 };
+    // Reported WPM uses the period-based dot estimator (rising-edge
+    // intervals) which is invariant to threshold/hysteresis bias and to
+    // compander attack/decay asymmetry. The classification dot_s above
+    // still feeds the dot/dah split because keeping it consistent with
+    // the off-gap thresholds preserves decode quality. See
+    // `estimate_dot_period` docs and the bench in
+    // `tools/wpm-measure` for the verification corpus.
+    //
+    // `wpm_kmeans` is kept alongside the period-based `wpm` so the GUI
+    // (and any A/B comparison code) can show the legacy biased number.
+    let wpm_kmeans = if dot_s > 0.0 { 1.2 / dot_s } else { 0.0 };
+    let wpm_dot_s = if cfg.pin_wpm.is_some() {
+        dot_s
+    } else {
+        estimate_dot_period(&timed).unwrap_or(dot_s)
+    };
+    let wpm = if wpm_dot_s > 0.0 {
+        1.2 / wpm_dot_s
+    } else {
+        0.0
+    };
 
     let elem_split = 2.0 * dot_s;
     let char_gap = 2.0 * dot_s;
@@ -598,8 +1128,8 @@ pub fn decode_envelope_with_viz(
                 VizEventKind::OffIntra
             };
             VizEvent {
-                start_s: e.start_s,
-                end_s: e.end_s,
+                start_s: e.start_s + analysis_offset_s,
+                end_s: e.end_s + analysis_offset_s,
                 duration_s: e.duration_s,
                 kind,
             }
@@ -615,15 +1145,20 @@ pub fn decode_envelope_with_viz(
         envelope_max: env_max,
         noise_floor: noise,
         signal_floor: signal,
+        snr_db: snr,
+        snr_suppressed: false,
         hyst_high: high,
         hyst_low: low,
         events,
         on_durations,
         dot_seconds: dot_s,
         wpm,
+        wpm_kmeans,
         centroid_dot,
         centroid_dah,
         locked_wpm: None,
+        window_start_sample: 0,
+        window_end_sample: samples.len() as u64,
     };
     (text, frame)
 }
@@ -713,7 +1248,7 @@ fn downsample_envelope(env: &[f32]) -> Vec<f32> {
     if env.len() <= MAX_VIZ_ENVELOPE_SAMPLES {
         return env.to_vec();
     }
-    let bucket = (env.len() + MAX_VIZ_ENVELOPE_SAMPLES - 1) / MAX_VIZ_ENVELOPE_SAMPLES;
+    let bucket = env.len().div_ceil(MAX_VIZ_ENVELOPE_SAMPLES);
     let mut out = Vec::with_capacity(env.len() / bucket + 1);
     let mut i = 0;
     while i < env.len() {
@@ -737,7 +1272,7 @@ fn kmeans_centroids(durations: &[f32]) -> (f32, f32) {
         let v = durations.first().copied().unwrap_or(0.0);
         return (v, v);
     }
-    let mut sorted: Vec<f32> = durations.iter().copied().collect();
+    let mut sorted: Vec<f32> = durations.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mut c_lo = sorted[sorted.len() / 4];
     let mut c_hi = sorted[(3 * sorted.len()) / 4];
@@ -782,6 +1317,77 @@ fn kmeans_centroids(durations: &[f32]) -> (f32, f32) {
 fn dot_seconds_from_wpm(wpm: f32) -> f32 {
     // PARIS standard: 1 word = 50 dot units => dot = 1.2 / wpm seconds.
     (1.2_f32 / wpm.max(1.0)).max(MIN_ELEMENT_S)
+}
+
+/// Period-based dot estimator using inter-onset intervals between
+/// consecutive ON events. Decoupled from threshold/hysteresis bias and
+/// from envelope-decay asymmetry (compander attack 1ms / decay 10ms),
+/// because any per-edge stretch cancels out across the period from one
+/// rising edge to the next. The shortest cluster of inter-onset
+/// intervals corresponds to dot-followed-by-element pairs, where the
+/// period equals exactly two dot-units in PARIS timing.
+///
+/// Returns `None` when:
+///   - fewer than four onsets are available, or
+///   - no intra-element pairs are present (the shortest period is much
+///     larger than 2 × shortest ON duration, indicating that every gap
+///     is at least a character gap).
+///
+/// Callers should fall back to k-means on on-durations in that case.
+///
+/// Verified against `tools/wpm-measure`: this estimator returns 40.0 ms
+/// (= 30.00 WPM) on every 3-second window across all four SNR variants
+/// of `cw_30wpm_abbrev_*.wav`, while the k-means dot estimator on the
+/// same windows returns 36.1 ms (~33 WPM, fast bias) before compander
+/// and ~49 ms (~24 WPM, slow bias) after compander in the live path.
+fn estimate_dot_period(timed: &[TimedEvent]) -> Option<f32> {
+    let onsets: Vec<f32> = timed
+        .iter()
+        .filter(|e| e.is_on)
+        .map(|e| e.start_s)
+        .collect();
+    if onsets.len() < 4 {
+        return None;
+    }
+
+    let mut on_durations: Vec<f32> = timed
+        .iter()
+        .filter(|e| e.is_on)
+        .map(|e| e.duration_s)
+        .collect();
+    on_durations.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // Rough p20 of ON durations as a dot upper bound (compander stretches
+    // ONs by ~10 ms at the threshold-cross level, so this overestimates
+    // dot, but it bounds the right order of magnitude).
+    let shortest_on = on_durations[(on_durations.len() / 5).max(1) - 1];
+
+    let mut intervals: Vec<f32> = onsets.windows(2).map(|w| w[1] - w[0]).collect();
+    intervals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = intervals.len();
+    let third = (n / 3).max(1);
+    let lo_slice = &intervals[..third];
+    let med_idx = lo_slice.len() / 2;
+    let shortest_period = lo_slice[med_idx];
+
+    // For period / 2 to give the true dot, the shortest period must be
+    // ~2 × shortest_on (one element + one intra-element gap of equal
+    // length). If shortest_period > 3 × shortest_on, the shortest gap
+    // bridges a CHARACTER gap (≥3 dot units) or larger, and dividing by
+    // 2 would severely overestimate the dot. Likewise reject ratios
+    // below ~1.5 (which would indicate envelope fragmentation).
+    if shortest_period > 3.0 * shortest_on {
+        return None;
+    }
+    if shortest_period < 1.5 * shortest_on {
+        return None;
+    }
+
+    let dot = shortest_period * 0.5;
+    if dot.is_finite() && dot >= MIN_ELEMENT_S * 0.5 {
+        Some(dot.max(MIN_ELEMENT_S))
+    } else {
+        None
+    }
 }
 
 /// Returns `(on_durations_s, off_durations_s)` aligned so that
@@ -872,7 +1478,7 @@ fn decode_events(ons: &[f32], offs: &[f32], dot_s: f32) -> String {
 }
 
 fn percentile_pair(values: &[f32], p_lo: f32, p_hi: f32) -> (f32, f32) {
-    let mut sorted: Vec<f32> = values.iter().copied().collect();
+    let mut sorted: Vec<f32> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     (
         region_stream::percentile_sorted(&sorted, p_lo),
@@ -880,17 +1486,30 @@ fn percentile_pair(values: &[f32], p_lo: f32, p_hi: f32) -> (f32, f32) {
     )
 }
 
+/// Robust peak: high percentile of the envelope rather than the literal
+/// max. Insulates the dynamic-range gate from single-sample QRN spikes
+/// or key-click transients that would otherwise dwarf the true CW
+/// peaks and falsely collapse the bimodality ratio.
+pub(crate) fn robust_peak(values: &[f32], percentile: f32) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted: Vec<f32> = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    region_stream::percentile_sorted(&sorted, percentile)
+}
+
 fn median_lower_half(values: &[f32]) -> f32 {
     if values.is_empty() {
         return 0.0;
     }
-    let mut sorted: Vec<f32> = values.iter().copied().collect();
+    let mut sorted: Vec<f32> = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let cutoff = (sorted.len() / 2).max(1);
     sorted[cutoff / 2]
 }
 
-fn morse_to_char(s: &str) -> Option<char> {
+pub(crate) fn morse_to_char(s: &str) -> Option<char> {
     match s {
         ".-" => Some('A'),
         "-..." => Some('B'),
@@ -950,10 +1569,533 @@ fn morse_to_char(s: &str) -> Option<char> {
     }
 }
 
+/// Per-track decode result from [`decode_envelope_multi`].
+#[derive(Debug, Clone)]
+pub struct MultiPitchTrack {
+    /// Pitch (Hz) the track was decoded at.
+    pub pitch_hz: f32,
+    /// Average per-frame Goertzel power at this pitch (sweep units).
+    pub power: f32,
+    /// Decoded text for this pitch.
+    pub transcript: String,
+    /// Estimated WPM for this pitch.
+    pub wpm: f32,
+    /// Visualizer payload from the underlying envelope decode.
+    pub viz: VizFrame,
+}
+
+/// Default narrow bandpass width for multi-pitch decode (Hz).
+///
+/// The single-pitch default in [`PreprocessConfig`] is 300 Hz, which is
+/// too wide when we are deliberately separating stations 50–200 Hz
+/// apart in audio pitch — at 300 Hz, two adjacent stations land in the
+/// same passband. 100 Hz is narrow enough to isolate stations spaced
+/// ≥ 60 Hz apart while still preserving CW key-click risetime.
+pub const DEFAULT_MULTI_PITCH_BANDPASS_WIDTH_HZ: f32 = 100.0;
+
+/// Decode the same buffer at each of the top-`cfg.k` spectral peaks
+/// and return one [`MultiPitchTrack`] per peak. Each track runs the
+/// existing single-pitch envelope pipeline pinned to its detected
+/// pitch.
+///
+/// `env_cfg` is cloned per track and mutated to set
+/// `pin_hz = Some(peak.pitch_hz)`. The caller is responsible for
+/// configuring `env_cfg.preprocess.bandpass_width_hz` to a narrow
+/// value (suggested
+/// [`DEFAULT_MULTI_PITCH_BANDPASS_WIDTH_HZ`]) so each pinned pitch
+/// gets its own filtered audio rather than a shared 300-Hz passband.
+///
+/// Peak detection runs on the recent analysis window (the last
+/// `env_cfg.analysis_window_seconds`) so old transients in the
+/// rolling buffer can't dominate the goertzel sweep.
+pub fn decode_envelope_multi(
+    samples: &[f32],
+    sample_rate: u32,
+    multi_cfg: &crate::region_stream::MultiPitchConfig,
+    env_cfg: &EnvelopeConfig,
+) -> Vec<MultiPitchTrack> {
+    if samples.is_empty() || sample_rate == 0 || multi_cfg.k == 0 {
+        return Vec::new();
+    }
+    // Slice the buffer down to the analysis window before the sweep so
+    // peaks reflect what the per-track decoder will actually see.
+    let window_samples = match env_cfg.analysis_window_seconds {
+        Some(s) if s > 0.0 => {
+            let n = (s * sample_rate as f32) as usize;
+            if samples.len() > n {
+                &samples[samples.len() - n..]
+            } else {
+                samples
+            }
+        }
+        _ => samples,
+    };
+    let peaks = crate::region_stream::find_top_pitch_peaks(window_samples, sample_rate, multi_cfg);
+    let mut tracks = Vec::with_capacity(peaks.len());
+    for peak in peaks {
+        let mut cfg = env_cfg.clone();
+        cfg.pin_hz = Some(peak.pitch_hz);
+        let (text, viz) = decode_envelope_with_viz(samples, sample_rate, &cfg);
+        tracks.push(MultiPitchTrack {
+            pitch_hz: peak.pitch_hz,
+            power: peak.power,
+            transcript: text,
+            wpm: viz.wpm,
+            viz,
+        });
+    }
+    tracks
+}
+
+/// Per-track snapshot from [`LiveMultiPitchStreamer`].
+#[derive(Debug, Clone)]
+pub struct TrackSnapshot {
+    /// Stable track id assigned by the streamer. The id persists
+    /// across cycles when the same pitch keeps being detected (within
+    /// the matching tolerance).
+    pub track_id: u32,
+    /// Pitch (Hz) the track was decoded at this cycle.
+    pub pitch_hz: f32,
+    pub wpm: f32,
+    pub transcript: String,
+    /// Difference from this track's prior transcript. When the
+    /// current transcript starts with the prior one, this is the
+    /// suffix; otherwise it's the full new transcript.
+    pub appended: String,
+    pub viz: Option<VizFrame>,
+}
+
+/// Internal per-track state kept by [`LiveMultiPitchStreamer`].
+struct TrackState {
+    track_id: u32,
+    pitch_hz: f32,
+    last_transcript: String,
+    /// Cycles since this track was last matched. Tracks that go
+    /// unmatched for more than `expiry_cycles` are dropped.
+    cycles_unmatched: u32,
+}
+
+/// Live cousin of [`LiveEnvelopeStreamer`] that maintains one
+/// transcript per detected pitch with stable track ids across cycles.
+///
+/// Audio buffering is reused via an internal [`LiveEnvelopeStreamer`]
+/// so the existing single-pitch decode keeps running unchanged. On
+/// each cycle the streamer also runs [`decode_envelope_multi`] and
+/// matches the resulting peaks to existing tracks via a globally-
+/// optimal assignment (brute-force over `k!` permutations), keeping
+/// track ids stable when stations cross over in pitch.
+pub struct LiveMultiPitchStreamer {
+    sample_rate: u32,
+    buffer: Vec<f32>,
+    decode_every_samples: usize,
+    since_last_decode: usize,
+    multi_cfg: crate::region_stream::MultiPitchConfig,
+    preprocess: PreprocessConfig,
+    pinned_wpm: Option<f32>,
+    min_snr_db: f32,
+    min_dyn_range_ratio: f32,
+    analysis_window_seconds: Option<f32>,
+    /// Maximum pitch difference (Hz) tolerated when matching a peak
+    /// to an existing track.
+    match_tolerance_hz: f32,
+    /// Cycles a track survives without a matching peak before it is
+    /// removed. Three cycles ≈ 750 ms at the default cadence — long
+    /// enough to ride out a single short dropout but short enough to
+    /// reclaim the id when a station goes silent for good.
+    expiry_cycles: u32,
+    next_track_id: u32,
+    tracks: Vec<TrackState>,
+}
+
+impl LiveMultiPitchStreamer {
+    pub fn new(sample_rate: u32, k: usize) -> Self {
+        let preprocess = PreprocessConfig {
+            bandpass_width_hz: DEFAULT_MULTI_PITCH_BANDPASS_WIDTH_HZ,
+            ..PreprocessConfig::default()
+        };
+        Self {
+            sample_rate,
+            buffer: Vec::new(),
+            decode_every_samples: ((0.25 * sample_rate as f32) as usize).max(1024),
+            since_last_decode: 0,
+            multi_cfg: crate::region_stream::MultiPitchConfig {
+                k,
+                ..crate::region_stream::MultiPitchConfig::default()
+            },
+            preprocess,
+            pinned_wpm: None,
+            min_snr_db: DEFAULT_MIN_SNR_DB,
+            min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
+            analysis_window_seconds: Some(3.0),
+            match_tolerance_hz: 40.0,
+            expiry_cycles: 3,
+            next_track_id: 0,
+            tracks: Vec::new(),
+        }
+    }
+
+    pub fn set_k(&mut self, k: usize) {
+        self.multi_cfg.k = k;
+    }
+
+    pub fn set_match_tolerance_hz(&mut self, tol: f32) {
+        self.match_tolerance_hz = tol.max(0.0);
+    }
+
+    pub fn set_expiry_cycles(&mut self, cycles: u32) {
+        self.expiry_cycles = cycles;
+    }
+
+    pub fn set_min_snr_db(&mut self, db: f32) {
+        self.min_snr_db = db;
+    }
+
+    pub fn set_min_dyn_range_ratio(&mut self, r: f32) {
+        self.min_dyn_range_ratio = r;
+    }
+
+    pub fn set_pinned_wpm(&mut self, wpm: Option<f32>) {
+        self.pinned_wpm = wpm.filter(|w| *w > 0.0);
+    }
+
+    pub fn set_preprocess(&mut self, preprocess: PreprocessConfig) {
+        self.preprocess = preprocess;
+    }
+
+    pub fn set_analysis_window_seconds(&mut self, seconds: Option<f32>) {
+        self.analysis_window_seconds = seconds.filter(|s| *s > 0.0);
+    }
+
+    /// Feed audio. Returns `Some(snapshots)` once a decode cycle
+    /// fires; `None` while the buffer is still filling.
+    pub fn feed(&mut self, samples: &[f32]) -> Option<Vec<TrackSnapshot>> {
+        self.push_samples(samples);
+        self.since_last_decode += samples.len();
+        if self.since_last_decode >= self.decode_every_samples {
+            self.since_last_decode = 0;
+            Some(self.decode_now(false))
+        } else {
+            None
+        }
+    }
+
+    /// Like [`feed`] but viz frames are populated.
+    pub fn feed_with_viz(&mut self, samples: &[f32]) -> Option<Vec<TrackSnapshot>> {
+        self.push_samples(samples);
+        self.since_last_decode += samples.len();
+        if self.since_last_decode >= self.decode_every_samples {
+            self.since_last_decode = 0;
+            Some(self.decode_now(true))
+        } else {
+            None
+        }
+    }
+
+    pub fn flush(&mut self) -> Vec<TrackSnapshot> {
+        self.decode_now(false)
+    }
+
+    pub fn flush_with_viz(&mut self) -> Vec<TrackSnapshot> {
+        self.decode_now(true)
+    }
+
+    fn push_samples(&mut self, samples: &[f32]) {
+        self.buffer.extend_from_slice(samples);
+        let max_samples = (self.sample_rate as usize * MAX_LIVE_ENVELOPE_BUFFER_SECONDS)
+            .max(self.decode_every_samples * 2);
+        if self.buffer.len() > max_samples {
+            let excess = self.buffer.len() - max_samples;
+            self.buffer.drain(0..excess);
+        }
+    }
+
+    fn decode_now(&mut self, with_viz: bool) -> Vec<TrackSnapshot> {
+        let env_cfg = EnvelopeConfig {
+            pin_wpm: self.pinned_wpm,
+            pin_hz: None,
+            min_snr_db: self.min_snr_db,
+            min_dyn_range_ratio: self.min_dyn_range_ratio,
+            preprocess: self.preprocess,
+            analysis_window_seconds: self.analysis_window_seconds,
+        };
+        let tracks =
+            decode_envelope_multi(&self.buffer, self.sample_rate, &self.multi_cfg, &env_cfg);
+
+        // Build assignment of new tracks (peaks) to existing track ids.
+        let assignment = assign_tracks(&self.tracks, &tracks, self.match_tolerance_hz);
+
+        // Apply assignment: matched tracks reuse ids, unmatched peaks
+        // mint new ids, unmatched existing tracks tick toward expiry.
+        let mut new_states: Vec<TrackState> = Vec::with_capacity(tracks.len());
+        let mut snapshots: Vec<TrackSnapshot> = Vec::with_capacity(tracks.len());
+        let mut existing_matched = vec![false; self.tracks.len()];
+
+        for (new_idx, decoded) in tracks.iter().enumerate() {
+            let matched_existing = assignment[new_idx];
+            let (track_id, prior_transcript) = match matched_existing {
+                Some(old_idx) => {
+                    existing_matched[old_idx] = true;
+                    (
+                        self.tracks[old_idx].track_id,
+                        self.tracks[old_idx].last_transcript.clone(),
+                    )
+                }
+                None => {
+                    let id = self.next_track_id;
+                    self.next_track_id = self.next_track_id.wrapping_add(1);
+                    (id, String::new())
+                }
+            };
+            let appended = if decoded.transcript.starts_with(&prior_transcript) {
+                decoded.transcript[prior_transcript.len()..].to_string()
+            } else {
+                decoded.transcript.clone()
+            };
+            snapshots.push(TrackSnapshot {
+                track_id,
+                pitch_hz: decoded.pitch_hz,
+                wpm: decoded.wpm,
+                transcript: decoded.transcript.clone(),
+                appended,
+                viz: if with_viz {
+                    Some(decoded.viz.clone())
+                } else {
+                    None
+                },
+            });
+            new_states.push(TrackState {
+                track_id,
+                pitch_hz: decoded.pitch_hz,
+                last_transcript: decoded.transcript.clone(),
+                cycles_unmatched: 0,
+            });
+        }
+
+        // Carry forward unmatched existing tracks until they expire.
+        for (i, state) in self.tracks.iter().enumerate() {
+            if existing_matched[i] {
+                continue;
+            }
+            let aged = state.cycles_unmatched + 1;
+            if aged < self.expiry_cycles {
+                new_states.push(TrackState {
+                    track_id: state.track_id,
+                    pitch_hz: state.pitch_hz,
+                    last_transcript: state.last_transcript.clone(),
+                    cycles_unmatched: aged,
+                });
+            }
+        }
+
+        self.tracks = new_states;
+        snapshots
+    }
+}
+
+/// Returns `assignment[new_idx] = Some(old_idx)` when the new peak
+/// matches an existing track, otherwise `None`. Brute-force over all
+/// permutations subject to `tolerance_hz`. K is bounded by the
+/// `MultiPitchConfig::k` (≤4 in practice), so the K!*K cost is
+/// negligible.
+fn assign_tracks(
+    existing: &[TrackState],
+    new_peaks: &[MultiPitchTrack],
+    tolerance_hz: f32,
+) -> Vec<Option<usize>> {
+    let n_new = new_peaks.len();
+    let n_old = existing.len();
+    let mut assignment = vec![None; n_new];
+    if n_new == 0 || n_old == 0 || tolerance_hz <= 0.0 {
+        return assignment;
+    }
+
+    // Build cost matrix; INF where the diff exceeds tolerance.
+    let mut cost = vec![vec![f32::INFINITY; n_old]; n_new];
+    for (i, peak) in new_peaks.iter().enumerate() {
+        for (j, state) in existing.iter().enumerate() {
+            let d = (peak.pitch_hz - state.pitch_hz).abs();
+            if d <= tolerance_hz {
+                cost[i][j] = d;
+            }
+        }
+    }
+
+    // Enumerate assignments. We pick a subset of new peaks (up to
+    // n_old) to match against existing tracks via permutation.
+    // Equivalent: pick a permutation `perm` of length n_new whose
+    // entries are either an old index (each used at most once) or
+    // None (unmatched). Try every such mapping.
+    let n_choices = n_old + 1; // n_old slots + "unmatched"
+    let total: u64 = (n_choices as u64).saturating_pow(n_new as u32);
+    let mut best_cost = f32::INFINITY;
+    let mut best: Vec<Option<usize>> = vec![None; n_new];
+
+    // Hard cap to keep this bounded; K should never be > 6 in practice.
+    if total > 100_000 {
+        // Fall back to greedy nearest-pairing.
+        return greedy_assignment(&cost);
+    }
+
+    for mut code in 0..total {
+        let mut used = vec![false; n_old];
+        let mut try_assign = vec![None; n_new];
+        let mut total_cost = 0.0_f32;
+        let mut valid = true;
+        for slot in try_assign.iter_mut().take(n_new) {
+            let pick = (code % n_choices as u64) as usize;
+            code /= n_choices as u64;
+            if pick == n_old {
+                *slot = None;
+            } else {
+                if used[pick] {
+                    valid = false;
+                    break;
+                }
+                used[pick] = true;
+                *slot = Some(pick);
+            }
+        }
+        if !valid {
+            continue;
+        }
+        for (i, slot) in try_assign.iter().enumerate() {
+            if let Some(j) = slot {
+                let c = cost[i][*j];
+                if !c.is_finite() {
+                    valid = false;
+                    break;
+                }
+                total_cost += c;
+            } else {
+                // Unmatched — soft penalty so we prefer matching when
+                // possible. Use tolerance as the constant penalty so a
+                // legit match (cost ≤ tolerance) always beats leaving
+                // a track unmatched if a match is available.
+                total_cost += tolerance_hz;
+            }
+        }
+        if !valid {
+            continue;
+        }
+        if total_cost < best_cost {
+            best_cost = total_cost;
+            best = try_assign;
+        }
+    }
+    if best_cost.is_finite() {
+        assignment = best;
+    }
+    assignment
+}
+
+fn greedy_assignment(cost: &[Vec<f32>]) -> Vec<Option<usize>> {
+    let n_new = cost.len();
+    let n_old = cost.first().map(|r| r.len()).unwrap_or(0);
+    let mut assignment = vec![None; n_new];
+    let mut used = vec![false; n_old];
+    // Sort all (i, j, cost) ascending and greedily pick.
+    let mut pairs: Vec<(usize, usize, f32)> = Vec::new();
+    for (i, row) in cost.iter().enumerate() {
+        for (j, &c) in row.iter().enumerate() {
+            if c.is_finite() {
+                pairs.push((i, j, c));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+    for (i, j, _) in pairs {
+        if assignment[i].is_none() && !used[j] {
+            assignment[i] = Some(j);
+            used[j] = true;
+        }
+    }
+    assignment
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::f32::consts::TAU;
+
+    fn timed_from_pattern(dot_s: f32, pattern: &str) -> Vec<TimedEvent> {
+        // pattern: '.' = dit (1T on, 1T off), '-' = dah (3T on, 1T off),
+        // ' ' adds two extra T (so 3T total = char gap), '/' adds six T
+        // (so 7T total = word gap). Trailing inter-element gap of pattern
+        // is dropped after the last symbol.
+        let mut out: Vec<TimedEvent> = Vec::new();
+        let mut t = 0.0_f32;
+        let chars: Vec<char> = pattern.chars().collect();
+        for (i, ch) in chars.iter().enumerate() {
+            let on_dur = match ch {
+                '.' => dot_s,
+                '-' => 3.0 * dot_s,
+                ' ' | '/' => {
+                    // pure gap symbol: extend trailing off
+                    if let Some(last) = out.last_mut() {
+                        if !last.is_on {
+                            let extra = if *ch == ' ' { 2.0 * dot_s } else { 6.0 * dot_s };
+                            last.duration_s += extra;
+                            last.end_s += extra;
+                            t += extra;
+                        }
+                    }
+                    continue;
+                }
+                _ => continue,
+            };
+            out.push(TimedEvent {
+                start_s: t,
+                end_s: t + on_dur,
+                duration_s: on_dur,
+                is_on: true,
+            });
+            t += on_dur;
+            // inter-element gap (1T) after every symbol except the last
+            if i + 1 < chars.len() {
+                out.push(TimedEvent {
+                    start_s: t,
+                    end_s: t + dot_s,
+                    duration_s: dot_s,
+                    is_on: false,
+                });
+                t += dot_s;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn estimate_dot_period_recovers_true_dot_on_paris() {
+        // dot=40ms (30 WPM); pattern PARIS = .--. .- .-. .. ...
+        let dot = 0.040;
+        let timed = timed_from_pattern(dot, ".--. .- .-. .. ...");
+        let est = estimate_dot_period(&timed).expect("intra-element pairs present");
+        // Period method should recover 40 ms within 5%.
+        assert!((est - dot).abs() < 0.05 * dot, "expected ~{dot}, got {est}");
+    }
+
+    #[test]
+    fn estimate_dot_period_returns_none_when_no_intra_element_pairs() {
+        // ". ".repeat(N): every gap is a char gap; shortest period >> 2T.
+        let dot = 0.060;
+        let timed = timed_from_pattern(dot, ". . . . . . . . . . . . . . . . . . . .");
+        assert!(
+            estimate_dot_period(&timed).is_none(),
+            "guard should reject single-element-only patterns"
+        );
+    }
+
+    #[test]
+    fn estimate_dot_period_returns_none_for_trivial_input() {
+        assert!(estimate_dot_period(&[]).is_none());
+        assert!(estimate_dot_period(&[TimedEvent {
+            start_s: 0.0,
+            end_s: 0.04,
+            duration_s: 0.04,
+            is_on: true,
+        }])
+        .is_none());
+    }
 
     fn synth(samples: &mut Vec<f32>, rate: u32, secs: f32, on: bool, pitch: f32) {
         let n = (secs * rate as f32) as usize;
@@ -999,7 +2141,7 @@ mod tests {
                              // PARIS = .--. .- .-. .. ...
         let s = synth_morse(rate, dot, 700.0, ".--. .- .-. .. ...");
         let txt = decode_envelope(&s, rate, &EnvelopeConfig::default());
-        assert_eq!(txt, "PARIS", "got {:?}", txt);
+        assert_eq!(txt, "PARIS", "got {txt:?}");
     }
 
     #[test]
@@ -1013,9 +2155,13 @@ mod tests {
             &EnvelopeConfig {
                 pin_wpm: Some(20.0),
                 pin_hz: None,
+                min_snr_db: DEFAULT_MIN_SNR_DB,
+                min_dyn_range_ratio: DEFAULT_MIN_DYN_RANGE_RATIO,
+                preprocess: PreprocessConfig::default(),
+                analysis_window_seconds: None,
             },
         );
-        assert_eq!(txt, "K", "got {:?}", txt);
+        assert_eq!(txt, "K", "got {txt:?}");
     }
 
     #[test]
@@ -1063,6 +2209,159 @@ mod tests {
     }
 
     #[test]
+    fn live_streamer_auto_locks_after_consistent_wpm_window() {
+        let rate = 8000u32;
+        let dot = 0.060_f32;
+        // 30 dits provides plenty of on-durations and a stable WPM
+        // across multiple decode cycles; the lock should fire once
+        // the rolling analysis window observes >= 10 elements with
+        // a WPM consistent (within +/- LOCK_WPM_TOLERANCE) across
+        // two consecutive decode cycles.
+        let s = synth_morse(rate, dot, 700.0, &". ".repeat(30));
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        let chunk = (rate as usize) / 20; // 50 ms
+        let mut i = 0;
+        while i < s.len() {
+            let end = (i + chunk).min(s.len());
+            streamer.feed(&s[i..end]);
+            i = end;
+        }
+        let final_snap = streamer.flush_with_viz();
+        let locked = final_snap
+            .viz
+            .as_ref()
+            .and_then(|viz| viz.locked_wpm)
+            .expect("lock should fire on a long stable PARIS-like dit train");
+        assert!(
+            (15.0..=30.0).contains(&locked),
+            "locked_wpm out of expected range: {locked}"
+        );
+    }
+
+    #[test]
+    fn live_streamer_does_not_auto_lock_above_max_auto_wpm() {
+        let rate = 8000u32;
+        // Synthesize an extremely fast tone train (well above
+        // MAX_AUTO_WPM == 45). Even though many elements appear,
+        // the auto-lock must not promote a noisy/runaway WPM.
+        let dot = 0.015_f32; // ~80 wpm-ish
+        let s = synth_morse(rate, dot, 700.0, &". ".repeat(40));
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        let chunk = (rate as usize) / 20;
+        let mut i = 0;
+        while i < s.len() {
+            let end = (i + chunk).min(s.len());
+            streamer.feed(&s[i..end]);
+            i = end;
+        }
+        let final_snap = streamer.flush_with_viz();
+        assert!(
+            final_snap
+                .viz
+                .as_ref()
+                .and_then(|viz| viz.locked_wpm)
+                .is_none(),
+            "lock unexpectedly fired above MAX_AUTO_WPM"
+        );
+    }
+
+    #[test]
+    fn live_streamer_releases_wrong_lock_on_sustained_mismatch() {
+        // Regression: a stale wrong-WPM lock used to persist forever
+        // because once the streamer was locked, `frame.wpm` simply
+        // echoed the pinned dot length and there was no signal-derived
+        // measurement to detect mismatch. Now the unbiased
+        // `centroid_dot` (k-means on raw on_durations) is used to
+        // count consecutive cycles of disagreement and the lock is
+        // released after LOCK_RELOCK_AFTER_MISMATCHES.
+        let rate = 8000u32;
+        // Real signal at 30 WPM (dot = 40 ms). Inject a wrong lock at
+        // 14 WPM (dot = 85 ms), feed plenty of audio, and verify the
+        // lock surrenders.
+        let dot = 0.040_f32;
+        let s = synth_morse(
+            rate,
+            dot,
+            700.0,
+            &". - . - . - . - . - . - . - . - . - . - . - . - . - . - . - ".repeat(8),
+        );
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        streamer.force_locked_wpm_for_test(14.0);
+        assert_eq!(streamer.locked_wpm(), Some(14.0));
+        let chunk = (rate as usize) / 20; // 50 ms
+        let mut i = 0;
+        let mut released = false;
+        while i < s.len() {
+            let end = (i + chunk).min(s.len());
+            for snap in streamer.feed_with_viz(&s[i..end]) {
+                if snap.viz.and_then(|v| v.locked_wpm).is_none() {
+                    released = true;
+                    break;
+                }
+            }
+            if released {
+                break;
+            }
+            i = end;
+        }
+        assert!(
+            released,
+            "wrong lock should have been released within the audio span"
+        );
+        assert_eq!(streamer.locked_wpm(), None);
+    }
+
+    #[test]
+    fn live_streamer_keeps_correct_lock_when_signal_matches() {
+        // Verify the relock logic does NOT thrash on a healthy locked
+        // signal where centroid_dot agrees with the locked WPM.
+        let rate = 8000u32;
+        let dot = 0.060_f32; // 20 WPM
+        let s = synth_morse(rate, dot, 700.0, &". - ".repeat(80));
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        let chunk = (rate as usize) / 20;
+        let mut i = 0;
+        while i < s.len() {
+            let end = (i + chunk).min(s.len());
+            streamer.feed_with_viz(&s[i..end]);
+            i = end;
+        }
+        let lock = streamer.locked_wpm().expect("auto-lock should fire");
+        assert!(
+            (15.0..=25.0).contains(&lock),
+            "lock at unexpected WPM: {lock}"
+        );
+    }
+
+    #[test]
+    fn live_streamer_releases_lock_after_sustained_silence() {
+        // Once a stale lock has been carried through enough
+        // SNR-suppressed cycles (LOCK_RELEASE_AFTER_SUPPRESSED), it
+        // must release so a new operator on a different WPM/pitch
+        // can re-acquire fresh.
+        let rate = 8000u32;
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        streamer.force_locked_wpm_for_test(20.0);
+        // Decode cadence is 0.25 sec; LOCK_RELEASE_AFTER_SUPPRESSED is
+        // 10 cycles, so feed 4 seconds of silence (16 cycles) to be
+        // safe. Silence is below the SNR floor and dyn-range gate, so
+        // every cycle should be suppressed.
+        let silence = vec![0.0_f32; (rate as f32 * 4.0) as usize];
+        let chunk = (rate as usize) / 20;
+        let mut i = 0;
+        while i < silence.len() {
+            let end = (i + chunk).min(silence.len());
+            streamer.feed_with_viz(&silence[i..end]);
+            i = end;
+        }
+        assert_eq!(
+            streamer.locked_wpm(),
+            None,
+            "lock should release after sustained silence"
+        );
+    }
+
+    #[test]
     fn live_streamer_bounds_retained_audio() {
         let rate = 1000u32;
         let mut streamer = LiveEnvelopeStreamer::new(rate);
@@ -1078,13 +2377,8 @@ mod tests {
 
     #[test]
     fn kmeans_dot_estimate_separates_dits_and_dahs() {
-        let mut durs = Vec::new();
-        for _ in 0..6 {
-            durs.push(0.060);
-        }
-        for _ in 0..6 {
-            durs.push(0.180);
-        }
+        let mut durs = vec![0.060; 6];
+        durs.extend([0.180; 6]);
         let dot = estimate_dot_kmeans(&durs);
         assert!((dot - 0.060).abs() < 0.005, "expected ~0.060, got {dot}");
     }
@@ -1119,5 +2413,401 @@ mod tests {
             "wpm out of range: {}",
             viz.wpm
         );
+        assert!(
+            viz.snr_db > DEFAULT_MIN_SNR_DB,
+            "clean signal SNR should clear the gate, got {} dB",
+            viz.snr_db
+        );
+        assert!(
+            !viz.snr_suppressed,
+            "clean signal should not trigger SNR gate"
+        );
+    }
+
+    /// Deterministic pseudo-random noise so tests don't depend on
+    /// `rand`. Uses a tiny LCG for reproducibility.
+    fn noise_buf(rate: u32, seconds: f32, seed: u64, amplitude: f32) -> Vec<f32> {
+        let n = (rate as f32 * seconds) as usize;
+        let mut state = seed;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let v = ((state >> 33) as u32) as f32 / u32::MAX as f32;
+            out.push((v * 2.0 - 1.0) * amplitude);
+        }
+        out
+    }
+
+    #[test]
+    fn noise_only_signal_is_suppressed_by_snr_gate() {
+        let rate = 8000u32;
+        let s = noise_buf(rate, 5.0, 0x5EED, 0.05);
+        // Probe the actual SNR of pure noise to validate the default
+        // threshold discriminates noise from real CW.
+        let probe_cfg = EnvelopeConfig {
+            min_snr_db: 0.0,
+            min_dyn_range_ratio: 0.0,
+            ..Default::default()
+        };
+        let (_, probe_viz) = decode_envelope_with_viz(&s, rate, &probe_cfg);
+        eprintln!(
+            "noise probe: snr_db = {:.2}, dyn_range = {:.3}, noise_floor = {:.6}, signal_floor = {:.6}, env_max = {:.6}",
+            probe_viz.snr_db,
+            dyn_range_ratio(probe_viz.noise_floor, probe_viz.signal_floor, probe_viz.envelope_max),
+            probe_viz.noise_floor,
+            probe_viz.signal_floor,
+            probe_viz.envelope_max,
+        );
+
+        let cfg = EnvelopeConfig::default();
+        let (text, viz) = decode_envelope_with_viz(&s, rate, &cfg);
+        assert_eq!(
+            text, "",
+            "noise-only signal must not emit text (got {text:?})"
+        );
+        assert!(
+            viz.snr_suppressed,
+            "expected snr_suppressed = true; snr_db = {}, threshold = {}",
+            viz.snr_db, cfg.min_snr_db
+        );
+        // Visualizer payload must still be populated so the operator
+        // can see *why* nothing decoded.
+        assert!(
+            !viz.envelope.is_empty(),
+            "envelope should remain populated when SNR gate fires"
+        );
+        assert!(
+            viz.signal_floor > 0.0 && viz.noise_floor > 0.0,
+            "noise/signal floors should be measured even when gated"
+        );
+        // Stats-path mirrors the gate.
+        let stats = decode_envelope_with_stats(&s, rate, &cfg);
+        assert_eq!(stats.text, "");
+        assert_eq!(stats.elements, 0);
+    }
+
+    #[test]
+    fn snr_gate_can_be_disabled() {
+        let rate = 8000u32;
+        let s = noise_buf(rate, 2.0, 0x5EED, 0.05);
+        let cfg = EnvelopeConfig {
+            pin_wpm: None,
+            pin_hz: None,
+            min_snr_db: 0.0,
+            min_dyn_range_ratio: 0.0,
+            preprocess: PreprocessConfig::default(),
+            analysis_window_seconds: None,
+        };
+        let (_text, viz) = decode_envelope_with_viz(&s, rate, &cfg);
+        // With the gate disabled the viz frame is the full happy-path
+        // shape (snr_suppressed = false), even on noise.
+        assert!(!viz.snr_suppressed);
+    }
+
+    #[test]
+    fn live_streamer_set_min_snr_db_propagates() {
+        let rate = 8000u32;
+        let mut streamer = LiveEnvelopeStreamer::new(rate);
+        streamer.set_min_snr_db(0.0);
+        streamer.set_min_dyn_range_ratio(0.0);
+        // Feed pure noise; with both gates disabled the streamer reaches
+        // the classifier (which may emit garbage chars). Important: it
+        // must not return immediately due to SNR.
+        streamer.feed(&noise_buf(rate, 1.5, 0xC0FFEE, 0.05));
+        let snap = streamer.flush_with_viz();
+        let viz = snap.viz.expect("viz frame requested");
+        assert!(!viz.snr_suppressed, "gate should be disabled");
+    }
+
+    #[test]
+    fn passes_quality_gate_bypasses_dyn_range_when_snr_is_high() {
+        // SNR comfortably above the bypass threshold (18 dB). Even with
+        // dyn_range_ratio that would normally fail (0.10 < 0.55 default),
+        // the gate must pass because high SNR is sufficient evidence the
+        // signal is real.
+        let cfg = EnvelopeConfig::default();
+        // noise=0.01, signal=1.0 → snr ≈ 40 dB (>> 18 dB bypass)
+        // env_max=10.0 → dyn_range = (1.0-0.01)/10.0 ≈ 0.099 (< 0.55)
+        assert!(
+            passes_quality_gate(&cfg, 0.01, 1.0, 10.0),
+            "high-SNR signal must bypass dyn_range check; \
+             snr={:.1} dB, dyn_range={:.3}",
+            snr_db(0.01, 1.0),
+            dyn_range_ratio(0.01, 1.0, 10.0)
+        );
+    }
+
+    #[test]
+    fn passes_quality_gate_enforces_dyn_range_in_marginal_snr_band() {
+        // SNR above the floor (6 dB) but below the bypass (18 dB) is
+        // the marginal band where dyn_range must hold. With dyn_range
+        // failing in this band, the gate must reject.
+        let cfg = EnvelopeConfig::default();
+        // noise=0.5, signal=1.0 → snr ≈ 6 dB (just above floor, below bypass)
+        // env_max=10.0 → dyn_range = 0.05 (well below 0.55)
+        let snr = snr_db(0.5, 1.0);
+        assert!(
+            snr >= cfg.min_snr_db && snr < DYN_RANGE_BYPASS_SNR_DB,
+            "test setup: snr {snr} should be in marginal band"
+        );
+        assert!(
+            !passes_quality_gate(&cfg, 0.5, 1.0, 10.0),
+            "marginal SNR with poor dyn_range must be rejected"
+        );
+    }
+
+    #[test]
+    fn passes_quality_gate_rejects_below_snr_floor() {
+        // Below the SNR floor, the gate must reject regardless of
+        // dyn_range — the SNR floor is mandatory.
+        let cfg = EnvelopeConfig::default();
+        // noise=0.5, signal=0.6 → snr ≈ 1.6 dB (below 6 dB floor)
+        // env_max=0.6 → dyn_range = 0.17 (also poor, but not what's
+        // being tested)
+        assert!(
+            !passes_quality_gate(&cfg, 0.5, 0.6, 0.6),
+            "below-SNR-floor must reject"
+        );
+    }
+
+    #[test]
+    fn analysis_window_isolates_recent_station_from_louder_earlier_one() {
+        // Regression for the QSO turn-taking false-trip: when a strong
+        // station finishes and a quieter station now on the air would
+        // otherwise pass on its own, the loud earlier transients anchor
+        // env_max for the whole buffer and collapse the dyn-range gate.
+        // The 3s analysis window confines gate stats to the recent
+        // station's footprint.
+        //
+        // NOTE: At high SNR (>= DYN_RANGE_BYPASS_SNR_DB) the gate now
+        // bypasses dyn_range entirely, so the legacy whole-buffer path
+        // also succeeds in this scenario. The analysis window still
+        // provides value in the marginal-SNR band where bypass does
+        // not kick in, and in the visualizer where stats should reflect
+        // recent activity. We only assert here that the windowed config
+        // decodes the trailing K cleanly.
+        let rate = 8000u32;
+        let dot = 0.060_f32;
+
+        // Loud burst first (amp ~3x the K below).
+        let loud_pitch = 700.0_f32;
+        let mut buf: Vec<f32> = synth_morse(rate, dot, loud_pitch, "-.- -.-");
+        for s in &mut buf {
+            *s *= 3.0;
+        }
+        // ~6 s of low background noise simulates inter-transmission silence.
+        buf.extend_from_slice(&noise_buf(rate, 6.0, 0xCAFE_BABE, 0.01));
+        // Quieter later transmission ("K") that we *want* decoded.
+        let mut later = synth_morse(rate, dot, 700.0, "-.-");
+        for s in &mut later {
+            *s *= 0.4;
+        }
+        buf.extend_from_slice(&later);
+
+        // Disable preprocessing so the test isolates gate behavior from
+        // compander gain (compander would equalize the two amplitudes).
+        let no_pp = PreprocessConfig {
+            enabled: false,
+            ..PreprocessConfig::default()
+        };
+
+        let windowed_cfg = EnvelopeConfig {
+            preprocess: no_pp,
+            analysis_window_seconds: Some(3.0),
+            ..Default::default()
+        };
+        let (windowed_text, windowed_viz) = decode_envelope_with_viz(&buf, rate, &windowed_cfg);
+        assert!(
+            !windowed_viz.snr_suppressed,
+            "windowed gate should pass the recent K, got snr_db={}",
+            windowed_viz.snr_db
+        );
+        assert!(
+            windowed_text.contains('K'),
+            "expected decoded text to contain 'K', got {windowed_text:?}"
+        );
+    }
+
+    // ---- Multi-pitch tests --------------------------------------------------
+
+    fn synth_continuous_tone(rate: u32, secs: f32, pitch: f32, amp: f32) -> Vec<f32> {
+        let n = (rate as f32 * secs) as usize;
+        (0..n)
+            .map(|i| (TAU * pitch * i as f32 / rate as f32).sin() * amp)
+            .collect()
+    }
+
+    fn mix(a: &[f32], b: &[f32]) -> Vec<f32> {
+        let n = a.len().max(b.len());
+        (0..n)
+            .map(|i| a.get(i).copied().unwrap_or(0.0) + b.get(i).copied().unwrap_or(0.0))
+            .collect()
+    }
+
+    #[test]
+    fn decode_envelope_multi_decodes_two_simultaneous_morse() {
+        let rate = 8000u32;
+        let dot = 0.060_f32;
+        let a = synth_morse(rate, dot, 600.0, "-.- -.- -.-"); // K K K
+        let b = synth_morse(rate, dot, 850.0, "- . ... -"); // T E S T
+        let buf = mix(&a, &b);
+        let multi_cfg = crate::region_stream::MultiPitchConfig {
+            k: 4,
+            min_separation_hz: 40.0,
+            min_relative_power: 0.10,
+            sweep: crate::region_stream::RegionStreamConfig {
+                pitch_step_hz: 10.0,
+                ..Default::default()
+            },
+            peak_score: crate::region_stream::PeakScoreKind::Mean,
+        };
+        // Use the narrower bandpass for multi-pitch.
+        let preprocess = PreprocessConfig {
+            bandpass_width_hz: DEFAULT_MULTI_PITCH_BANDPASS_WIDTH_HZ,
+            ..PreprocessConfig::default()
+        };
+        let env_cfg = EnvelopeConfig {
+            preprocess,
+            analysis_window_seconds: None,
+            ..Default::default()
+        };
+        let tracks = decode_envelope_multi(&buf, rate, &multi_cfg, &env_cfg);
+        assert_eq!(tracks.len(), 2, "expected 2 tracks, got {tracks:?}");
+
+        // Identify which track corresponds to which pitch.
+        let mut by_pitch = tracks.clone();
+        by_pitch.sort_by(|a, b| a.pitch_hz.partial_cmp(&b.pitch_hz).unwrap());
+        let lo = &by_pitch[0];
+        let hi = &by_pitch[1];
+        assert!(
+            (lo.pitch_hz - 600.0).abs() < 25.0,
+            "lo pitch {}",
+            lo.pitch_hz
+        );
+        assert!(
+            (hi.pitch_hz - 850.0).abs() < 25.0,
+            "hi pitch {}",
+            hi.pitch_hz
+        );
+        // Each track should contain at least one of its expected
+        // characters. Decoding mixed tones is fragile so we keep the
+        // assertion weak — the goal is to prove the two tracks
+        // produce distinct, non-empty transcripts.
+        assert!(
+            !lo.transcript.is_empty(),
+            "low-pitch transcript empty: {:?}",
+            lo.transcript
+        );
+        assert!(
+            !hi.transcript.is_empty(),
+            "high-pitch transcript empty: {:?}",
+            hi.transcript
+        );
+    }
+
+    #[test]
+    fn live_multi_pitch_streamer_track_ids_persist_across_cycles() {
+        let rate = 8000u32;
+        let mut streamer = LiveMultiPitchStreamer::new(rate, 2);
+        // First cycle: feed continuous 700 Hz tone (long enough that
+        // the 250 ms cadence fires once).
+        let chunk = synth_continuous_tone(rate, 0.6, 700.0, 0.5);
+        let snaps1 = streamer.feed(&chunk).expect("cycle 1 should fire");
+        assert!(!snaps1.is_empty(), "cycle 1 produced no tracks");
+        let id1 = snaps1[0].track_id;
+        // Second cycle: same pitch — id should stick.
+        let snaps2 = streamer
+            .feed(&synth_continuous_tone(rate, 0.6, 700.0, 0.5))
+            .expect("cycle 2 should fire");
+        assert!(!snaps2.is_empty());
+        assert_eq!(snaps2[0].track_id, id1, "track id changed across cycles");
+    }
+
+    #[test]
+    fn live_multi_pitch_streamer_new_pitch_gets_new_track_id() {
+        let rate = 8000u32;
+        let mut streamer = LiveMultiPitchStreamer::new(rate, 4);
+        let _ = streamer.feed(&synth_continuous_tone(rate, 0.6, 700.0, 0.5));
+        let mix2 = mix(
+            &synth_continuous_tone(rate, 0.6, 700.0, 0.5),
+            &synth_continuous_tone(rate, 0.6, 900.0, 0.5),
+        );
+        let snaps = streamer.feed(&mix2).expect("cycle should fire");
+        let pitches: Vec<f32> = snaps.iter().map(|s| s.pitch_hz).collect();
+        assert!(
+            pitches.iter().any(|p| (p - 900.0).abs() < 30.0),
+            "new pitch missing: {pitches:?}"
+        );
+        // Distinct ids for each track.
+        let ids: std::collections::HashSet<u32> = snaps.iter().map(|s| s.track_id).collect();
+        assert_eq!(ids.len(), snaps.len(), "track ids not unique: {snaps:?}");
+    }
+
+    #[test]
+    fn live_multi_pitch_streamer_track_id_persists_through_dropout_and_reappearance() {
+        let rate = 8000u32;
+        let mut streamer = LiveMultiPitchStreamer::new(rate, 2);
+        streamer.set_expiry_cycles(5);
+        let snaps1 = streamer
+            .feed(&synth_continuous_tone(rate, 0.6, 700.0, 0.5))
+            .expect("cycle 1");
+        let id1 = snaps1[0].track_id;
+        // One cycle of silence (still within expiry window).
+        let _ = streamer.feed(&vec![0.0_f32; (rate as f32 * 0.6) as usize]);
+        // Pitch reappears.
+        let snaps3 = streamer
+            .feed(&synth_continuous_tone(rate, 0.6, 700.0, 0.5))
+            .expect("cycle 3");
+        assert!(!snaps3.is_empty());
+        assert_eq!(
+            snaps3[0].track_id, id1,
+            "track id should be reused across short dropout"
+        );
+    }
+
+    #[test]
+    fn live_multi_pitch_streamer_handles_track_crossing() {
+        // Two tracks whose pitches cross over time: A drifts up while
+        // B drifts down, ending swapped. With global assignment the
+        // ids should still follow the *closest* match each cycle —
+        // this test verifies the assignment is at least not arbitrary
+        // by checking that both starting ids survive through a small
+        // separation cycle.
+        let rate = 8000u32;
+        let mut streamer = LiveMultiPitchStreamer::new(rate, 2);
+        let cycle = mix(
+            &synth_continuous_tone(rate, 0.6, 700.0, 0.5),
+            &synth_continuous_tone(rate, 0.6, 900.0, 0.5),
+        );
+        let snaps1 = streamer.feed(&cycle).expect("cycle 1");
+        assert_eq!(snaps1.len(), 2, "expected 2 starting tracks");
+        let mut starting: std::collections::HashMap<u32, f32> = std::collections::HashMap::new();
+        for s in &snaps1 {
+            starting.insert(s.track_id, s.pitch_hz);
+        }
+        // Slightly drifted pitches — 700→720, 900→880. Minimum-cost
+        // assignment should keep ids tied to the closer pitch (still
+        // 700-ish vs 900-ish), not flip them.
+        let cycle2 = mix(
+            &synth_continuous_tone(rate, 0.6, 720.0, 0.5),
+            &synth_continuous_tone(rate, 0.6, 880.0, 0.5),
+        );
+        let snaps2 = streamer.feed(&cycle2).expect("cycle 2");
+        assert_eq!(snaps2.len(), 2);
+        for s in &snaps2 {
+            let prior_pitch = starting
+                .get(&s.track_id)
+                .copied()
+                .expect("id should match a starting track");
+            assert!(
+                (s.pitch_hz - prior_pitch).abs() <= 60.0,
+                "track {} jumped from {} to {} — assignment should pick nearest",
+                s.track_id,
+                prior_pitch,
+                s.pitch_hz
+            );
+        }
     }
 }

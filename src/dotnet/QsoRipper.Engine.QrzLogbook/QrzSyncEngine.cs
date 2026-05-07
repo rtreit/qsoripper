@@ -66,10 +66,7 @@ public sealed class QrzSyncEngine
         uint conflicts = 0;
         uint remoteDeletesPushed = 0;
         uint deletesSkippedRemote = 0;
-
-        // ---------------------------------------------------------------
-        // Phase 1 — Download from QRZ
-        // ---------------------------------------------------------------
+        uint duplicateReplaces = 0;
 
         SyncMetadata metadata;
         try
@@ -81,6 +78,54 @@ public sealed class QrzSyncEngine
             metadata = new SyncMetadata();
             errors.Add($"Failed to read sync metadata: {ex.Message}");
         }
+
+        // ---------------------------------------------------------------
+        // Phase 0.5 — Resolve owner and push local corrections first
+        // ---------------------------------------------------------------
+        // Under the default safe conflict policy, a stale QRZ copy of a locally
+        // modified row would otherwise be downloaded first and mark the row
+        // Conflict before Phase 2 can upload it. Push QRZ-linked local edits
+        // before download so F6 sync updates the existing QRZ row.
+
+        QrzLogbookStatus? statusResult = null;
+        Exception? statusException = null;
+        try
+        {
+            statusResult = await _client.GetStatusAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            statusException = ex;
+        }
+
+        string? bookOwner = null;
+        if (statusResult is { } sr && !string.IsNullOrWhiteSpace(sr.Owner))
+        {
+            bookOwner = sr.Owner.Trim();
+        }
+        else if (!string.IsNullOrWhiteSpace(metadata.QrzLogbookOwner))
+        {
+            // STATUS failed or returned no owner — fall back to the cached
+            // owner so QSOs can still upload after a transient API hiccup.
+            bookOwner = metadata.QrzLogbookOwner;
+        }
+
+        var freshlyUploadedLogids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (effectivePolicy != ConflictPolicy.LastWriteWins)
+        {
+            var preUpload = await UploadPendingQsosAsync(
+                store,
+                bookOwner,
+                q => q.SyncStatus == SyncStatus.Modified && !string.IsNullOrWhiteSpace(q.QrzLogid),
+                errors).ConfigureAwait(false);
+            uploaded += preUpload.Uploaded;
+            duplicateReplaces += preUpload.DuplicateReplaces;
+            freshlyUploadedLogids.UnionWith(preUpload.UploadedLogids);
+        }
+
+        // ---------------------------------------------------------------
+        // Phase 1 — Download from QRZ
+        // ---------------------------------------------------------------
 
         IReadOnlyList<QsoRecord> localQsosAll;
         try
@@ -149,6 +194,15 @@ public sealed class QrzSyncEngine
             }
 
             var remoteLogid = ExtractQrzLogid(remote);
+
+            // If this sync just pushed the local correction to QRZ, ignore a
+            // stale remote copy returned by the same FETCH response. QRZ may
+            // lag briefly after REPLACE; local storage already reflects the
+            // operator's corrected record.
+            if (remoteLogid is not null && freshlyUploadedLogids.Contains(remoteLogid))
+            {
+                continue;
+            }
 
             // Phase 1 skip: don't resurrect soft-deleted local rows.
             if (remoteLogid is not null && deletedLogids.Contains(remoteLogid))
@@ -227,80 +281,16 @@ public sealed class QrzSyncEngine
         }
 
         // ---------------------------------------------------------------
-        // Phase 1.5 — Resolve the QRZ logbook owner callsign
-        // ---------------------------------------------------------------
-        // Fetch STATUS once, before upload, so we can rewrite the
-        // STATION_CALLSIGN of QSOs logged under a previous callsign
-        // (issue #337). The same result is reused in Phase 3 for metadata
-        // refresh, avoiding a second STATUS round-trip per sync.
-
-        QrzLogbookStatus? statusResult = null;
-        Exception? statusException = null;
-        try
-        {
-            statusResult = await _client.GetStatusAsync().ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            statusException = ex;
-        }
-
-        string? bookOwner = null;
-        if (statusResult is { } sr && !string.IsNullOrWhiteSpace(sr.Owner))
-        {
-            bookOwner = sr.Owner.Trim();
-        }
-        else if (!string.IsNullOrWhiteSpace(metadata.QrzLogbookOwner))
-        {
-            // STATUS failed or returned no owner — fall back to the cached
-            // owner so QSOs can still upload after a transient API hiccup.
-            bookOwner = metadata.QrzLogbookOwner;
-        }
-
-        // ---------------------------------------------------------------
         // Phase 2 — Upload pending local QSOs
         // ---------------------------------------------------------------
 
-        IReadOnlyList<QsoRecord> pendingQsos;
-        try
-        {
-            var allQsos = await store.ListQsosAsync(new QsoListQuery { Sort = QsoSortOrder.OldestFirst }).ConfigureAwait(false);
-            pendingQsos = allQsos
-                .Where(q => q.SyncStatus is SyncStatus.LocalOnly or SyncStatus.Modified)
-                .ToList();
-        }
-        catch (Exception ex)
-        {
-            errors.Add($"Failed to list pending QSOs for upload: {ex.Message}");
-            pendingQsos = [];
-        }
-
-        foreach (var qso in pendingQsos)
-        {
-            try
-            {
-                var logid = qso.SyncStatus == SyncStatus.Modified && !string.IsNullOrWhiteSpace(qso.QrzLogid)
-                    ? await _client.UpdateQsoAsync(qso, bookOwner).ConfigureAwait(false)
-                    : await _client.UploadQsoAsync(qso, bookOwner).ConfigureAwait(false);
-                var synced = qso.Clone();
-                synced.QrzLogid = logid;
-                synced.SyncStatus = SyncStatus.Synced;
-                try
-                {
-                    await store.UpdateQsoAsync(synced).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    errors.Add($"Upload succeeded for {qso.WorkedCallsign} but local update failed: {ex.Message}");
-                }
-
-                uploaded++;
-            }
-            catch (Exception ex)
-            {
-                errors.Add($"Upload failed for {qso.WorkedCallsign}: {ex.Message}");
-            }
-        }
+        var pendingUpload = await UploadPendingQsosAsync(
+            store,
+            bookOwner,
+            q => q.SyncStatus is SyncStatus.LocalOnly or SyncStatus.Modified,
+            errors).ConfigureAwait(false);
+        uploaded += pendingUpload.Uploaded;
+        duplicateReplaces += pendingUpload.DuplicateReplaces;
 
         // ---------------------------------------------------------------
         // Phase 2.5 — Push queued remote deletes to QRZ
@@ -419,7 +409,86 @@ public sealed class QrzSyncEngine
             ErrorSummary = errors.Count > 0 ? string.Join("; ", errors) : null,
             RemoteDeletesPushed = remoteDeletesPushed,
             DeletesSkippedRemote = deletesSkippedRemote,
+            DuplicateReplaceCount = duplicateReplaces,
         };
+    }
+
+    private sealed record UploadPassResult(
+        uint Uploaded,
+        uint DuplicateReplaces,
+        HashSet<string> UploadedLogids);
+
+    private async Task<UploadPassResult> UploadPendingQsosAsync(
+        ILogbookStore store,
+        string? bookOwner,
+        Func<QsoRecord, bool> shouldUpload,
+        List<string> errors)
+    {
+        IReadOnlyList<QsoRecord> pendingQsos;
+        try
+        {
+            var allQsos = await store.ListQsosAsync(new QsoListQuery { Sort = QsoSortOrder.OldestFirst }).ConfigureAwait(false);
+            pendingQsos = allQsos.Where(shouldUpload).ToList();
+        }
+        catch (Exception ex)
+        {
+            errors.Add($"Failed to list pending QSOs for upload: {ex.Message}");
+            pendingQsos = [];
+        }
+
+        uint uploaded = 0;
+        uint duplicateReplaces = 0;
+        var uploadedLogids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var qso in pendingQsos)
+        {
+            try
+            {
+                string logid;
+                var hasExistingLogid = !string.IsNullOrWhiteSpace(qso.QrzLogid);
+
+                if (qso.SyncStatus == SyncStatus.Modified && hasExistingLogid)
+                {
+                    logid = await _client.UpdateQsoAsync(qso, bookOwner).ConfigureAwait(false);
+                }
+                else
+                {
+                    try
+                    {
+                        logid = await _client.UploadQsoAsync(qso, bookOwner).ConfigureAwait(false);
+                    }
+                    catch (QrzLogbookException ex) when (!hasExistingLogid && IsDuplicateError(ex.Message))
+                    {
+                        // QSO already exists on QRZ (e.g. uploaded via web UI) but we
+                        // don't have the logid locally. Retry with OPTION=REPLACE to
+                        // auto-match and adopt the remote logid.
+                        logid = await _client.UploadQsoWithReplaceAsync(qso, bookOwner).ConfigureAwait(false);
+                        duplicateReplaces++;
+                    }
+                }
+
+                var synced = qso.Clone();
+                synced.QrzLogid = logid;
+                synced.SyncStatus = SyncStatus.Synced;
+                try
+                {
+                    await store.UpdateQsoAsync(synced).ConfigureAwait(false);
+                    uploadedLogids.Add(logid);
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"Upload succeeded for {qso.WorkedCallsign} but local update failed: {ex.Message}");
+                }
+
+                uploaded++;
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"Upload failed for {qso.WorkedCallsign}: {ex.Message}");
+            }
+        }
+
+        return new UploadPassResult(uploaded, duplicateReplaces, uploadedLogids);
     }
 
     // -- Matching helpers ---------------------------------------------------
@@ -558,4 +627,10 @@ public sealed class QrzSyncEngine
 
         return lastSync.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     }
+
+    /// <summary>
+    /// Check whether a QRZ API error message indicates a duplicate QSO.
+    /// </summary>
+    private static bool IsDuplicateError(string message) =>
+        message.Contains("duplicate", StringComparison.OrdinalIgnoreCase);
 }

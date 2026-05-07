@@ -79,6 +79,47 @@ public sealed class MainWindowViewModelTests
         Assert.Contains("Last sync", viewModel.SyncStatusText, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task SyncNowShowsConflictCountWhenQrzDiffersFromLocal()
+    {
+        var engine = new FakeEngineClient
+        {
+            SyncResponse = new SyncWithQrzResponse
+            {
+                Complete = true,
+                UploadedRecords = 0,
+                DownloadedRecords = 0,
+                ConflictRecords = 1,
+            },
+        };
+        using var viewModel = new MainWindowViewModel(engine);
+
+        await viewModel.SyncNowCommand.ExecuteAsync(null);
+
+        Assert.Contains("conflict", viewModel.SyncStatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("1", viewModel.SyncStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SyncNowShowsResolvedMismatchCountWhenQrzWasUpdated()
+    {
+        var engine = new FakeEngineClient
+        {
+            SyncResponse = new SyncWithQrzResponse
+            {
+                Complete = true,
+                UploadedRecords = 2,
+                DownloadedRecords = 0,
+                ConflictRecords = 0,
+            },
+        };
+        using var viewModel = new MainWindowViewModel(engine);
+
+        await viewModel.SyncNowCommand.ExecuteAsync(null);
+
+        Assert.Contains("↑2", viewModel.SyncStatusText, StringComparison.Ordinal);
+    }
+
     private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -125,6 +166,8 @@ public sealed class MainWindowViewModelTests
 
         public Task<GetSyncStatusResponse> SyncStatusTask { get; init; } = Task.FromResult(new GetSyncStatusResponse());
 
+        public SyncWithQrzResponse SyncResponse { get; init; } = new();
+
         public Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default) =>
             Task.FromResult(new GetSetupWizardStateResponse { Status = SetupStatus.Status ?? new SetupStatus() });
 
@@ -150,7 +193,7 @@ public sealed class MainWindowViewModelTests
             throw new NotImplementedException();
 
         public Task<SyncWithQrzResponse> SyncWithQrzAsync(CancellationToken ct = default) =>
-            Task.FromResult(new SyncWithQrzResponse());
+            Task.FromResult(SyncResponse);
 
         public Task<GetSyncStatusResponse> GetSyncStatusAsync(CancellationToken ct = default) =>
             SyncStatusTask;

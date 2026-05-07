@@ -70,6 +70,14 @@ pub(crate) trait QrzLogbookApi: Send + Sync {
         book_owner: Option<&str>,
     ) -> Result<QrzUploadResult, QrzLogbookError>;
 
+    /// Upload a single QSO with `OPTION=REPLACE`, auto-matching any existing
+    /// duplicate on QRZ without requiring a known logid.
+    async fn upload_qso_with_replace(
+        &self,
+        qso: &QsoRecord,
+        book_owner: Option<&str>,
+    ) -> Result<QrzUploadResult, QrzLogbookError>;
+
     /// Replace an existing QSO on the remote logbook (preserves logid).
     ///
     /// `book_owner` has the same semantics as in [`Self::upload_qso`].
@@ -102,6 +110,14 @@ impl QrzLogbookApi for QrzLogbookClient {
         QrzLogbookClient::upload_qso(self, qso, book_owner).await
     }
 
+    async fn upload_qso_with_replace(
+        &self,
+        qso: &QsoRecord,
+        book_owner: Option<&str>,
+    ) -> Result<QrzUploadResult, QrzLogbookError> {
+        QrzLogbookClient::upload_qso_with_replace(self, qso, book_owner).await
+    }
+
     async fn replace_qso(
         &self,
         logid: &str,
@@ -132,6 +148,8 @@ struct SyncCounters {
     deletes_skipped_remote: u32,
     /// Number of queued remote deletes that were pushed to QRZ in Phase 2.
     remote_deletes_pushed: u32,
+    /// Number of uploads retried with OPTION=REPLACE due to duplicate detection.
+    duplicate_replaces: u32,
     errors: Vec<String>,
 }
 
@@ -143,6 +161,7 @@ impl SyncCounters {
             conflicts: 0,
             deletes_skipped_remote: 0,
             remote_deletes_pushed: 0,
+            duplicate_replaces: 0,
             errors: Vec::new(),
         }
     }
@@ -165,17 +184,15 @@ pub(crate) async fn execute_sync(
 ) {
     let mut counters = SyncCounters::new();
 
-    let Some(metadata) = download_phase(
-        client,
-        store,
-        full_sync,
-        conflict_policy,
-        progress_tx,
-        &mut counters,
-    )
-    .await
-    else {
-        return;
+    let metadata = match store.get_sync_metadata().await {
+        Ok(m) => m,
+        Err(err) => {
+            eprintln!("[sync] Failed to read sync metadata: {err}");
+            counters
+                .errors
+                .push(format!("Failed to read sync metadata: {err}"));
+            SyncMetadata::default()
+        }
     };
 
     let status_result = client.fetch_status().await;
@@ -192,10 +209,42 @@ pub(crate) async fn execute_sync(
     .map(|s| s.trim().to_owned())
     .filter(|s| !s.is_empty());
 
+    let freshly_uploaded_logids = if conflict_policy == ConflictPolicy::LastWriteWins {
+        HashSet::new()
+    } else {
+        upload_phase(
+            client,
+            store,
+            book_owner.as_deref(),
+            UploadSelection::ModifiedWithLogid,
+            progress_tx,
+            &mut counters,
+        )
+        .await
+    };
+
+    let Some(metadata) = download_phase(
+        DownloadPhaseInput {
+            client,
+            store,
+            metadata: &metadata,
+            full_sync,
+            conflict_policy,
+            freshly_uploaded_logids: &freshly_uploaded_logids,
+            progress_tx,
+        },
+        &mut counters,
+    )
+    .await
+    else {
+        return;
+    };
+
     upload_phase(
         client,
         store,
         book_owner.as_deref(),
+        UploadSelection::Pending,
         progress_tx,
         &mut counters,
     )
@@ -212,48 +261,48 @@ pub(crate) async fn execute_sync(
     };
 
     eprintln!(
-        "[sync] Sync completed: downloaded={} uploaded={} conflicts={} remote_deletes_pushed={} deletes_skipped_remote={} errors={}",
+        "[sync] Sync completed: downloaded={} uploaded={} duplicate_replaces={} conflicts={} remote_deletes_pushed={} deletes_skipped_remote={} errors={}",
         counters.downloaded,
         counters.uploaded,
+        counters.duplicate_replaces,
         counters.conflicts,
         counters.remote_deletes_pushed,
         counters.deletes_skipped_remote,
         counters.errors.len(),
     );
 
-    send_complete(
-        progress_tx,
-        counters.downloaded,
-        counters.uploaded,
-        counters.conflicts,
-        counters.remote_deletes_pushed,
-        counters.deletes_skipped_remote,
-        error_summary,
-    )
-    .await;
+    send_complete(progress_tx, &counters, error_summary).await;
 }
 
 // ---------------------------------------------------------------------------
 // Phase 1 — Download from QRZ
 // ---------------------------------------------------------------------------
 
-async fn download_phase(
-    client: &dyn QrzLogbookApi,
-    store: &dyn LogbookStore,
+struct DownloadPhaseInput<'a> {
+    client: &'a dyn QrzLogbookApi,
+    store: &'a dyn LogbookStore,
+    metadata: &'a SyncMetadata,
     full_sync: bool,
     conflict_policy: ConflictPolicy,
-    progress_tx: &mpsc::Sender<Result<SyncWithQrzResponse, Status>>,
+    freshly_uploaded_logids: &'a HashSet<String>,
+    progress_tx: &'a mpsc::Sender<Result<SyncWithQrzResponse, Status>>,
+}
+
+async fn download_phase(
+    input: DownloadPhaseInput<'_>,
     counters: &mut SyncCounters,
 ) -> Option<SyncMetadata> {
-    send_progress(progress_tx, "Fetching QSOs from QRZ…", 0, 0, 0).await;
+    let DownloadPhaseInput {
+        client,
+        store,
+        metadata,
+        full_sync,
+        conflict_policy,
+        freshly_uploaded_logids,
+        progress_tx,
+    } = input;
 
-    let metadata = match store.get_sync_metadata().await {
-        Ok(m) => m,
-        Err(err) => {
-            eprintln!("[sync] Failed to read sync metadata: {err}");
-            SyncMetadata::default()
-        }
-    };
+    send_progress(progress_tx, "Fetching QSOs from QRZ…", 0, 0, 0).await;
 
     // Load all local QSOs (including soft-deleted) so we can both match
     // against active rows AND honor user intent: any remote row whose
@@ -270,11 +319,7 @@ async fn download_phase(
         Err(err) => {
             send_complete(
                 progress_tx,
-                0,
-                0,
-                0,
-                0,
-                0,
+                &SyncCounters::new(),
                 Some(format!("Failed to load local QSOs: {err}")),
             )
             .await;
@@ -306,11 +351,7 @@ async fn download_phase(
         Err(err) => {
             send_complete(
                 progress_tx,
-                0,
-                0,
-                0,
-                0,
-                0,
+                &SyncCounters::new(),
                 Some(format!("Failed to fetch QSOs from QRZ: {err}")),
             )
             .await;
@@ -338,6 +379,7 @@ async fn download_phase(
     process_remote_qsos(
         &remote_qsos,
         &deleted_logids,
+        freshly_uploaded_logids,
         by_qrz_logid,
         by_key,
         store,
@@ -346,7 +388,7 @@ async fn download_phase(
     )
     .await;
 
-    Some(metadata)
+    Some(metadata.clone())
 }
 
 /// Iterate downloaded remote QSOs, applying the soft-delete skip set, then
@@ -355,6 +397,7 @@ async fn download_phase(
 async fn process_remote_qsos(
     remote_qsos: &[QsoRecord],
     deleted_logids: &HashSet<String>,
+    freshly_uploaded_logids: &HashSet<String>,
     mut by_qrz_logid: LogidIndex,
     mut by_key: FuzzyIndex,
     store: &dyn LogbookStore,
@@ -370,6 +413,17 @@ async fn process_remote_qsos(
         }
 
         let remote_logid = extract_qrz_logid(remote);
+
+        // If this sync just pushed the local correction to QRZ, ignore a
+        // stale remote copy returned by the same FETCH response. QRZ may lag
+        // briefly after REPLACE; local storage already reflects the operator's
+        // corrected record.
+        if remote_logid
+            .as_deref()
+            .is_some_and(|logid| freshly_uploaded_logids.contains(logid))
+        {
+            continue;
+        }
 
         // Skip remote rows that match a soft-deleted local row. The user
         // intentionally trashed it; download must not resurrect it.
@@ -460,13 +514,23 @@ async fn insert_new_remote_qso(
 // Phase 2 — Upload pending local QSOs to QRZ
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy)]
+enum UploadSelection {
+    /// Local edits with QRZ identity that must be pushed before remote download
+    /// can classify the stale QRZ row as a conflict.
+    ModifiedWithLogid,
+    /// Normal pending upload pass after download/linking.
+    Pending,
+}
+
 async fn upload_phase(
     client: &dyn QrzLogbookApi,
     store: &dyn LogbookStore,
     book_owner: Option<&str>,
+    selection: UploadSelection,
     progress_tx: &mpsc::Sender<Result<SyncWithQrzResponse, Status>>,
     counters: &mut SyncCounters,
-) {
+) -> HashSet<String> {
     send_progress(
         progress_tx,
         "Uploading local QSOs to QRZ…",
@@ -479,10 +543,7 @@ async fn upload_phase(
     let pending_qsos: Vec<QsoRecord> = match store.list_qsos(&QsoListQuery::default()).await {
         Ok(qsos) => qsos
             .into_iter()
-            .filter(|q| {
-                q.sync_status == SyncStatus::LocalOnly as i32
-                    || q.sync_status == SyncStatus::Modified as i32
-            })
+            .filter(|q| should_upload_qso(q, selection))
             .collect(),
         Err(err) => {
             eprintln!("[sync] Failed to list pending QSOs for upload: {err}");
@@ -498,9 +559,20 @@ async fn upload_phase(
         pending_qsos.len()
     );
 
+    let mut uploaded_logids = HashSet::new();
     for qso in &pending_qsos {
         match sync_single_qso(client, store, qso, book_owner).await {
-            Ok(_) => counters.uploaded += 1,
+            Ok(outcome) => {
+                if let Some(logid) = outcome.qso.qrz_logid.as_deref() {
+                    if !logid.is_empty() {
+                        uploaded_logids.insert(logid.to_string());
+                    }
+                }
+                counters.uploaded += 1;
+                if outcome.was_duplicate_replace {
+                    counters.duplicate_replaces += 1;
+                }
+            }
             Err(err) => {
                 eprintln!(
                     "[sync] Failed to push QSO {} ({}): {err}",
@@ -510,6 +582,24 @@ async fn upload_phase(
                     .errors
                     .push(format!("Upload failed for {}: {err}", qso.worked_callsign));
             }
+        }
+    }
+
+    uploaded_logids
+}
+
+fn should_upload_qso(qso: &QsoRecord, selection: UploadSelection) -> bool {
+    match selection {
+        UploadSelection::ModifiedWithLogid => {
+            qso.sync_status == SyncStatus::Modified as i32
+                && qso
+                    .qrz_logid
+                    .as_deref()
+                    .is_some_and(|logid| !logid.is_empty())
+        }
+        UploadSelection::Pending => {
+            qso.sync_status == SyncStatus::LocalOnly as i32
+                || qso.sync_status == SyncStatus::Modified as i32
         }
     }
 }
@@ -548,6 +638,15 @@ pub(crate) async fn resolve_book_owner_for_upload(
     .filter(|s| !s.is_empty())
 }
 
+/// Outcome of a successful `sync_single_qso` call.
+#[derive(Debug)]
+pub(crate) struct SyncOutcome {
+    /// The locally-persisted QSO with refreshed logid and `sync_status`.
+    pub qso: QsoRecord,
+    /// `true` when the upload succeeded only after a duplicate-retry with REPLACE.
+    pub was_duplicate_replace: bool,
+}
+
 /// Push a single QSO to QRZ, then mirror the QRZ-assigned logid + Synced
 /// state back into local storage. Used by both bulk sync Phase 2 and the
 /// per-operation `sync_to_qrz=true` paths on `LogQso` / `UpdateQso`.
@@ -557,9 +656,11 @@ pub(crate) async fn resolve_book_owner_for_upload(
 ///   so QRZ keeps the same row (no duplicate). This applies regardless of
 ///   whether `sync_status` is Modified or Synced.
 /// * Otherwise INSERT a new remote row and adopt the returned logid.
+/// * If INSERT fails with a "duplicate" error (the QSO already exists on
+///   QRZ but we don't have its logid), retry with `OPTION=REPLACE` to
+///   auto-match the existing record and adopt its logid.
 ///
-/// Returns the locally-persisted `QsoRecord` on success (with refreshed
-/// `qrz_logid` and `sync_status = Synced`). Returns a human-readable error
+/// Returns a [`SyncOutcome`] on success. Returns a human-readable error
 /// string on either upload failure or local-store write failure; callers
 /// surface it as the gRPC `sync_error` field.
 pub(crate) async fn sync_single_qso(
@@ -567,7 +668,7 @@ pub(crate) async fn sync_single_qso(
     store: &dyn LogbookStore,
     qso: &QsoRecord,
     book_owner: Option<&str>,
-) -> Result<QsoRecord, String> {
+) -> Result<SyncOutcome, String> {
     let existing_logid = qso.qrz_logid.clone().filter(|s| !s.is_empty());
 
     let result = match existing_logid.as_deref() {
@@ -575,10 +676,32 @@ pub(crate) async fn sync_single_qso(
         None => client.upload_qso(qso, book_owner).await,
     };
 
-    let upload = result.map_err(|err| format!("QRZ upload failed: {err}"))?;
+    // When a plain INSERT fails because QRZ already has a matching QSO
+    // (e.g. uploaded via the QRZ web UI), retry with OPTION=REPLACE so we
+    // can adopt the remote logid and stop re-attempting on every sync.
+    let (result, was_duplicate_replace) = match result {
+        Err(QrzLogbookError::ApiError(ref reason))
+            if existing_logid.is_none() && is_duplicate_error(reason) =>
+        {
+            eprintln!(
+                "[sync] INSERT for {} got duplicate; retrying with OPTION=REPLACE",
+                qso.worked_callsign
+            );
+            let r = client
+                .upload_qso_with_replace(qso, book_owner)
+                .await
+                .map_err(|err| format!("QRZ upload failed (REPLACE retry): {err}"));
+            (r, true)
+        }
+        other => (
+            other.map_err(|err| format!("QRZ upload failed: {err}")),
+            false,
+        ),
+    };
+    let result = result?;
 
     let mut synced = qso.clone();
-    synced.qrz_logid = Some(upload.logid);
+    synced.qrz_logid = Some(result.logid);
     synced.sync_status = SyncStatus::Synced as i32;
 
     store
@@ -586,7 +709,16 @@ pub(crate) async fn sync_single_qso(
         .await
         .map_err(|err| format!("QRZ upload succeeded but local update failed: {err}"))?;
 
-    Ok(synced)
+    Ok(SyncOutcome {
+        qso: synced,
+        was_duplicate_replace,
+    })
+}
+
+/// Check whether a QRZ API error reason indicates a duplicate QSO.
+fn is_duplicate_error(reason: &str) -> bool {
+    let lower = reason.to_ascii_lowercase();
+    lower.contains("duplicate")
 }
 
 // ---------------------------------------------------------------------------
@@ -974,6 +1106,7 @@ async fn send_progress(
             error: None,
             remote_deletes_pushed: 0,
             deletes_skipped_remote: 0,
+            duplicate_replaces: 0,
         }))
         .await,
     );
@@ -981,25 +1114,22 @@ async fn send_progress(
 
 async fn send_complete(
     tx: &mpsc::Sender<Result<SyncWithQrzResponse, Status>>,
-    downloaded: u32,
-    uploaded: u32,
-    conflicts: u32,
-    remote_deletes_pushed: u32,
-    deletes_skipped_remote: u32,
+    counters: &SyncCounters,
     error: Option<String>,
 ) {
     drop(
         tx.send(Ok(SyncWithQrzResponse {
-            total_records: downloaded + uploaded,
-            processed_records: downloaded + uploaded,
-            uploaded_records: uploaded,
-            downloaded_records: downloaded,
-            conflict_records: conflicts,
+            total_records: counters.downloaded + counters.uploaded,
+            processed_records: counters.downloaded + counters.uploaded,
+            uploaded_records: counters.uploaded,
+            downloaded_records: counters.downloaded,
+            conflict_records: counters.conflicts,
             current_action: Some("Sync complete".to_string()),
             complete: true,
             error,
-            remote_deletes_pushed,
-            deletes_skipped_remote,
+            remote_deletes_pushed: counters.remote_deletes_pushed,
+            deletes_skipped_remote: counters.deletes_skipped_remote,
+            duplicate_replaces: counters.duplicate_replaces,
         }))
         .await,
     );
@@ -1037,6 +1167,8 @@ mod tests {
         fetch_result: Mutex<Option<Result<Vec<QsoRecord>, QrzLogbookError>>>,
         upload_results: Mutex<Vec<Result<QrzUploadResult, QrzLogbookError>>>,
         upload_calls: Mutex<Vec<(QsoRecord, Option<String>)>>,
+        upload_replace_results: Mutex<Vec<Result<QrzUploadResult, QrzLogbookError>>>,
+        upload_replace_calls: Mutex<Vec<(QsoRecord, Option<String>)>>,
         replace_calls: Mutex<Vec<(String, String)>>, // (logid, local_id)
         replace_results: Mutex<Vec<Result<QrzUploadResult, QrzLogbookError>>>,
         status_result: Mutex<Option<Result<QrzLogbookStatus, QrzLogbookError>>>,
@@ -1053,6 +1185,8 @@ mod tests {
                 fetch_result: Mutex::new(Some(fetch)),
                 upload_results: Mutex::new(uploads),
                 upload_calls: Mutex::new(Vec::new()),
+                upload_replace_results: Mutex::new(Vec::new()),
+                upload_replace_calls: Mutex::new(Vec::new()),
                 replace_calls: Mutex::new(Vec::new()),
                 replace_results: Mutex::new(Vec::new()),
                 status_result: Mutex::new(Some(Ok(QrzLogbookStatus {
@@ -1097,6 +1231,26 @@ mod tests {
                 Err(QrzLogbookError::ApiError(
                     "no more mock upload results".into(),
                 ))
+            } else {
+                results.remove(0)
+            }
+        }
+
+        async fn upload_qso_with_replace(
+            &self,
+            qso: &QsoRecord,
+            book_owner: Option<&str>,
+        ) -> Result<QrzUploadResult, QrzLogbookError> {
+            self.upload_replace_calls
+                .lock()
+                .unwrap()
+                .push((qso.clone(), book_owner.map(str::to_owned)));
+            let mut results = self.upload_replace_results.lock().unwrap();
+            if results.is_empty() {
+                // Default: succeed with a synthetic logid.
+                Ok(QrzUploadResult {
+                    logid: "REPLACE_LOGID".into(),
+                })
             } else {
                 results.remove(0)
             }
@@ -1160,6 +1314,16 @@ mod tests {
         }
 
         async fn upload_qso(
+            &self,
+            _qso: &QsoRecord,
+            _book_owner: Option<&str>,
+        ) -> Result<QrzUploadResult, QrzLogbookError> {
+            Ok(QrzUploadResult {
+                logid: "ignored".into(),
+            })
+        }
+
+        async fn upload_qso_with_replace(
             &self,
             _qso: &QsoRecord,
             _book_owner: Option<&str>,
@@ -1356,9 +1520,10 @@ mod tests {
             })],
         );
 
-        let synced = sync_single_qso(&api, &store, &q, None).await.expect("ok");
-        assert_eq!(synced.qrz_logid.as_deref(), Some("QRZ-NEW"));
-        assert_eq!(synced.sync_status, SyncStatus::Synced as i32);
+        let outcome = sync_single_qso(&api, &store, &q, None).await.expect("ok");
+        assert!(!outcome.was_duplicate_replace);
+        assert_eq!(outcome.qso.qrz_logid.as_deref(), Some("QRZ-NEW"));
+        assert_eq!(outcome.qso.sync_status, SyncStatus::Synced as i32);
 
         let saved = store.get_qso(&q.local_id).await.unwrap().unwrap();
         assert_eq!(saved.qrz_logid.as_deref(), Some("QRZ-NEW"));
@@ -1380,9 +1545,10 @@ mod tests {
         // defaults to echoing the logid back.
         let api = MockQrzApi::new(Ok(vec![]), vec![]);
 
-        let synced = sync_single_qso(&api, &store, &q, None).await.expect("ok");
-        assert_eq!(synced.qrz_logid.as_deref(), Some("QRZ-EXISTING"));
-        assert_eq!(synced.sync_status, SyncStatus::Synced as i32);
+        let outcome = sync_single_qso(&api, &store, &q, None).await.expect("ok");
+        assert!(!outcome.was_duplicate_replace);
+        assert_eq!(outcome.qso.qrz_logid.as_deref(), Some("QRZ-EXISTING"));
+        assert_eq!(outcome.qso.sync_status, SyncStatus::Synced as i32);
 
         let replace_calls = api.replace_calls.lock().unwrap().clone();
         assert_eq!(replace_calls.len(), 1, "must REPLACE not INSERT");
@@ -1461,6 +1627,82 @@ mod tests {
         let saved = store.get_qso(&q.local_id).await.unwrap().unwrap();
         assert_eq!(saved.station_callsign, "KB7QOP");
         assert_eq!(saved.sync_status, SyncStatus::Synced as i32);
+    }
+
+    #[tokio::test]
+    async fn full_sync_pushes_modified_qrz_linked_local_correction_before_stale_remote_can_conflict(
+    ) {
+        let store = MemoryStorage::new();
+        let mut local = make_qso("K7TEST", "W1AW/0", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        local.sync_status = SyncStatus::Modified as i32;
+        local.qrz_logid = Some("stale-qrz-logid".to_string());
+        store.insert_qso(&local).await.expect("insert local qso");
+
+        let mut stale_remote =
+            make_qso("K7TEST", "W1AW/1", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        stale_remote.qrz_logid = Some("stale-qrz-logid".to_string());
+        let api = MockQrzApi::new(Ok(vec![stale_remote]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::FlagForReview, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.uploaded_records, 1);
+        assert_eq!(final_msg.conflict_records, 0);
+        assert_eq!(api.replace_calls.lock().unwrap().len(), 1);
+
+        let saved = store
+            .list_qsos(&QsoListQuery::default())
+            .await
+            .expect("list qsos");
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].worked_callsign, "W1AW/0");
+        assert_eq!(saved[0].sync_status, SyncStatus::Synced as i32);
+        assert_eq!(saved[0].qrz_logid.as_deref(), Some("stale-qrz-logid"));
+    }
+
+    #[tokio::test]
+    async fn full_sync_pushes_all_modified_qrz_linked_rows_so_stale_qrz_entries_are_resolved() {
+        let store = MemoryStorage::new();
+        let mut first = make_qso("K7TEST", "W1AW/0", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        first.sync_status = SyncStatus::Modified as i32;
+        first.qrz_logid = Some("qrz-1".to_string());
+        let mut second = make_qso("K7TEST", "K7ABC", Band::Band40m, Mode::Cw, 1_700_000_060);
+        second.sync_status = SyncStatus::Modified as i32;
+        second.qrz_logid = Some("qrz-2".to_string());
+        store.insert_qso(&first).await.expect("insert first qso");
+        store.insert_qso(&second).await.expect("insert second qso");
+
+        let mut stale_first = make_qso("K7TEST", "W1AW/1", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        stale_first.qrz_logid = Some("qrz-1".to_string());
+        let mut stale_second = make_qso("K7TEST", "K7OLD", Band::Band40m, Mode::Cw, 1_700_000_060);
+        stale_second.qrz_logid = Some("qrz-2".to_string());
+        let api = MockQrzApi::new(Ok(vec![stale_first, stale_second]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::FlagForReview, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.uploaded_records, 2);
+        assert_eq!(final_msg.conflict_records, 0);
+        assert_eq!(api.replace_calls.lock().unwrap().len(), 2);
+
+        let saved = store
+            .list_qsos(&QsoListQuery::default())
+            .await
+            .expect("list qsos");
+        assert_eq!(saved.len(), 2);
+        assert!(saved.iter().any(|qso| qso.worked_callsign == "W1AW/0"));
+        assert!(saved.iter().any(|qso| qso.worked_callsign == "K7ABC"));
+        assert!(saved
+            .iter()
+            .all(|qso| qso.sync_status == SyncStatus::Synced as i32));
+        assert!(!saved.iter().any(|qso| qso.worked_callsign == "W1AW/1"));
+        assert!(!saved.iter().any(|qso| qso.worked_callsign == "K7OLD"));
     }
 
     #[tokio::test]
@@ -1785,7 +2027,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn modified_local_marked_as_conflict_on_remote_match() {
+    async fn modified_local_with_qrz_logid_uploaded_before_remote_can_conflict() {
         let store = MemoryStorage::new();
 
         // Local QSO with MODIFIED status.
@@ -1809,12 +2051,12 @@ mod tests {
 
         let final_msg = collect_final(rx).await;
         assert!(final_msg.complete);
-        assert_eq!(final_msg.conflict_records, 1);
-        assert_eq!(final_msg.uploaded_records, 0);
+        assert_eq!(final_msg.conflict_records, 0);
+        assert_eq!(final_msg.uploaded_records, 1);
 
         let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
         assert_eq!(all.len(), 1);
-        assert_eq!(all[0].sync_status, SyncStatus::Conflict as i32);
+        assert_eq!(all[0].sync_status, SyncStatus::Synced as i32);
     }
 
     #[tokio::test]
@@ -2220,7 +2462,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn flag_for_review_does_not_overwrite_and_skips_upload() {
+    async fn flag_for_review_pushes_qrz_linked_local_edit_before_remote_can_conflict() {
         let store = MemoryStorage::new();
 
         // Local QSO: MODIFIED.
@@ -2246,7 +2488,6 @@ mod tests {
             q
         };
 
-        // No upload results — CONFLICT QSOs should not be uploaded.
         let api = MockQrzApi::new(Ok(vec![remote]), vec![]);
 
         let (tx, rx) = mpsc::channel(16);
@@ -2255,13 +2496,13 @@ mod tests {
 
         let final_msg = collect_final(rx).await;
         assert!(final_msg.complete);
-        assert_eq!(final_msg.conflict_records, 1);
+        assert_eq!(final_msg.conflict_records, 0);
         assert_eq!(final_msg.downloaded_records, 0);
-        assert_eq!(final_msg.uploaded_records, 0);
+        assert_eq!(final_msg.uploaded_records, 1);
 
         let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
         assert_eq!(all.len(), 1);
-        assert_eq!(all[0].sync_status, SyncStatus::Conflict as i32);
+        assert_eq!(all[0].sync_status, SyncStatus::Synced as i32);
         // Local data preserved, not overwritten by remote.
         assert_eq!(all[0].notes.as_deref(), Some("local version"));
     }
@@ -2527,5 +2768,104 @@ mod tests {
             "pending flag must remain set so the next sync retries"
         );
         assert_eq!(after[0].qrz_logid.as_deref(), Some("LOG-FAIL"));
+    }
+
+    #[tokio::test]
+    async fn duplicate_insert_retries_with_replace_and_syncs() {
+        // Scenario: a local QSO has sync_status = LocalOnly and no qrz_logid,
+        // but the same QSO already exists on QRZ (uploaded via web UI). The
+        // plain INSERT fails with "duplicate". The sync should automatically
+        // retry with OPTION=REPLACE, adopt the returned LOGID, and mark the
+        // QSO as Synced.
+        let store = MemoryStorage::new();
+
+        let local = make_qso("W1AW", "AK7S", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        assert!(local.qrz_logid.is_none());
+        assert_eq!(local.sync_status, SyncStatus::LocalOnly as i32);
+        store.insert_qso(&local).await.unwrap();
+
+        // INSERT returns duplicate error, then REPLACE retry should succeed.
+        let api = MockQrzApi::new(
+            Ok(vec![]),
+            vec![Err(QrzLogbookError::ApiError(
+                "Unable to add QSO to database: duplicate".into(),
+            ))],
+        );
+        // Pre-load the upload_replace_results with a success.
+        api.upload_replace_results
+            .lock()
+            .unwrap()
+            .push(Ok(QrzUploadResult {
+                logid: "QRZ_ADOPTED_123".into(),
+            }));
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, false, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+        let final_msg = collect_final(rx).await;
+
+        // Should have no errors — the duplicate was handled gracefully.
+        assert!(
+            final_msg.error.is_none(),
+            "expected no sync error but got: {:?}",
+            final_msg.error
+        );
+        assert_eq!(final_msg.uploaded_records, 1);
+        assert_eq!(final_msg.duplicate_replaces, 1);
+
+        // Verify upload_qso_with_replace was called.
+        {
+            let replace_calls = api.upload_replace_calls.lock().unwrap();
+            assert_eq!(replace_calls.len(), 1, "expected one REPLACE retry call");
+            assert_eq!(replace_calls[0].0.worked_callsign, "AK7S");
+        }
+
+        // Verify the local QSO is now Synced with the adopted LOGID.
+        let qsos = store.list_qsos(&QsoListQuery::default()).await.unwrap();
+        assert_eq!(qsos.len(), 1);
+        assert_eq!(qsos[0].sync_status, SyncStatus::Synced as i32);
+        assert_eq!(qsos[0].qrz_logid.as_deref(), Some("QRZ_ADOPTED_123"));
+    }
+
+    #[tokio::test]
+    async fn non_duplicate_upload_error_still_reported() {
+        // A non-duplicate API error should still be reported as a sync error
+        // and must NOT trigger the REPLACE retry path.
+        let store = MemoryStorage::new();
+
+        let local = make_qso("W1AW", "K3SEW", Band::Band40m, Mode::Ssb, 1_700_000_000);
+        store.insert_qso(&local).await.unwrap();
+
+        let api = MockQrzApi::new(
+            Ok(vec![]),
+            vec![Err(QrzLogbookError::ApiError("invalid ADIF record".into()))],
+        );
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, false, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+        let final_msg = collect_final(rx).await;
+
+        assert!(
+            final_msg.error.is_some(),
+            "expected a sync error for non-duplicate API failure"
+        );
+        assert!(
+            final_msg
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("invalid ADIF record"),
+            "error should mention the original reason"
+        );
+        assert_eq!(final_msg.uploaded_records, 0);
+        assert_eq!(final_msg.duplicate_replaces, 0);
+
+        // REPLACE retry must NOT have been called.
+        let replace_calls = api.upload_replace_calls.lock().unwrap();
+        assert!(
+            replace_calls.is_empty(),
+            "REPLACE retry should not fire for non-duplicate errors"
+        );
     }
 }

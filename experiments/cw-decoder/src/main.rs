@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cw_decoder_poc::{
-    audio, bench_latency, decoder, ditdah_streaming, harvest, json, log_capture, preview,
-    streaming, streaming_v2, tui,
+    audio, bench_latency, corpus_validator, decoder, ditdah_streaming, harvest, json, log_capture,
+    preview, streaming, streaming_v2, synthetic_qso, tui,
 };
 
 #[derive(Parser, Debug)]
@@ -336,6 +336,10 @@ enum Cmd {
         /// Emit newline-delimited JSON progress events for the GUI bridge.
         #[arg(long)]
         json: bool,
+        /// Accept NDJSON control commands on stdin: `pause`, `resume`,
+        /// `stop`, and `seek` (with `position` in seconds).
+        #[arg(long)]
+        stdin_control: bool,
     },
 
     /// Play an audio file through the default output device AND stream
@@ -526,11 +530,110 @@ enum Cmd {
         /// detector locks onto a noise/harmonic peak instead of the CW tone.
         #[arg(long, default_value_t = 0.0)]
         pin_hz: f32,
+        /// Minimum signal-to-noise ratio (dB) required to emit text.
+        /// Computed as 20*log10(signal_floor / noise_floor) from envelope
+        /// percentiles. Frames below this threshold still produce
+        /// visualizer data but no transcript, suppressing the
+        /// noise-locked dit-spam failure mode. Default 6.0 dB. Set 0 to
+        /// disable.
+        #[arg(long, default_value_t = cw_decoder_poc::envelope_decoder::DEFAULT_MIN_SNR_DB)]
+        min_snr_db: f32,
         /// Decode an audio file (mp3/wav/m4a/...) instead of live capture.
         /// Samples are streamed at real-time pace into the same envelope
         /// pipeline so the visualizer behaves identically to live audio.
         #[arg(long)]
         file: Option<PathBuf>,
+        /// When used with --file, play the file through the default output
+        /// device and use the playback stream position as the decoder clock.
+        /// This keeps visualizer bars/transcript aligned with audible audio
+        /// instead of a separate wall-clock replay loop.
+        #[arg(long)]
+        play: bool,
+
+        /// Multi-pitch (CW Skimmer-style) decode: also run K parallel
+        /// per-pitch decoders alongside the existing single-pitch
+        /// pipeline. K=0 disables multi-pitch (default; preserves the
+        /// legacy single-track behavior). When K > 0, an additional
+        /// `multi_track_transcript` JSON event is emitted per cycle
+        /// alongside the single-track `transcript` event.
+        #[arg(long, alias = "multi", default_value_t = 0)]
+        multi_pitch: usize,
+
+        /// Use the region-based decoder for the transcript field.
+        /// When set, a RegionStreamer is run alongside the envelope
+        /// pipeline; viz events still come from the envelope decoder
+        /// (so the visualizer keeps working) but the `transcript` event
+        /// `text`/`appended` fields and the final `end` transcript come
+        /// from region-isolated ditdah decode. This is the
+        /// "human-level" path that handles real-world QSO audio with
+        /// pauses between bursts at different WPMs. Recommended for all
+        /// production live capture.
+        #[arg(long)]
+        region_transcript: bool,
+
+        /// Trailing-static seconds required before a region is committed
+        /// when `--region-transcript` is set. Higher = less mid-burst
+        /// churn at the cost of latency. Default 0.6 s.
+        #[arg(long, default_value_t = 0.6)]
+        region_stable_latency_s: f32,
+
+        /// Region transcript commit cadence in milliseconds.
+        /// This is intentionally decoupled from `--decode-every-ms`
+        /// (visualizer refresh cadence) so transcript commits are not
+        /// over-eager under CPU load.
+        #[arg(long, default_value_t = 2000)]
+        region_decode_every_ms: u64,
+
+        /// During live capture, drop buffered audio that ends more than
+        /// this many seconds before the last committed region. Bounds
+        /// memory growth across long QSO sessions. Default 5 s.
+        #[arg(long, default_value_t = 5.0)]
+        region_keep_back_s: f32,
+    },
+    /// Region-based streaming decoder. Detects active morse bursts
+    /// (separated by background static), decodes each burst with the
+    /// ditdah baseline at its own auto-WPM, and emits append-only
+    /// transcript JSON events. Designed for real-world QSO audio with
+    /// pauses between transmissions and bursts at very different speeds.
+    ///
+    /// Currently file-only. Emits the same `transcript` event shape as
+    /// stream-live-v3 so the GUI's CwQsoTranscriptAggregator picks it up
+    /// transparently.
+    StreamRegion {
+        /// Decode an audio file (mp3/wav/m4a/...) at real-time pace.
+        #[arg(long)]
+        file: PathBuf,
+        /// Emit NDJSON events to stdout (one per line).
+        #[arg(long)]
+        json: bool,
+        /// Re-run region detection every N ms. Default 2000 ms.
+        #[arg(long, default_value_t = 2000)]
+        decode_every_ms: u64,
+        /// Trailing-static seconds required before a region is committed.
+        /// Higher values reduce mid-burst churn at the cost of latency.
+        #[arg(long, default_value_t = 0.6)]
+        stable_latency_s: f32,
+        /// Treat regions separated by less than this gap (seconds) as one
+        /// burst. Defaults are tuned for the common case where bursts are
+        /// separated by static of ~1 s or more.
+        #[arg(long, default_value_t = 0.5)]
+        merge_gap_s: f32,
+        /// Drop detected runs shorter than this many seconds (rejects
+        /// transient static spikes).
+        #[arg(long, default_value_t = 0.3)]
+        min_region_s: f32,
+        /// Threshold = noise_floor + factor * (signal_floor - noise_floor).
+        /// 0.30 works well across the test set; raise for noisier feeds.
+        #[arg(long, default_value_t = 0.30)]
+        threshold_factor: f32,
+        /// Symmetrical padding (seconds) added to each detected region
+        /// before decoding so leading/trailing dits aren't clipped.
+        #[arg(long, default_value_t = 0.15)]
+        pad_s: f32,
+        /// Replay the file as fast as possible instead of at real-time
+        /// pace. Useful for tests and one-shot batch decodes.
+        #[arg(long)]
+        no_realtime: bool,
     },
     /// Diagnostic: scan candidate pitches across an audio file and print
     /// the trial-decode Fisher score per pitch. Use this to compare
@@ -625,6 +728,16 @@ enum Cmd {
         /// inside the noise itself. Issue #322.
         #[arg(long, default_value_t = false)]
         cfar_keying: bool,
+        /// Use the append-only V3 event-stream foundation instead of the
+        /// legacy streaming decoder. For --from-file this reports transcript
+        /// quality against truth; latency-specific fields are left empty.
+        #[arg(long, default_value_t = false)]
+        foundation: bool,
+        /// Use the region-isolated streaming transcript path. This is the
+        /// production CW Scope architecture: detect active bursts, decode
+        /// each region independently, and commit only stable region text.
+        #[arg(long, default_value_t = false)]
+        region: bool,
         /// Emit one NDJSON record per scenario in addition to the table
         /// (handy for collecting comparison runs into a file).
         #[arg(long, default_value_t = false)]
@@ -667,9 +780,83 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         seed: u64,
     },
+
+    /// Generate deterministic ragchew and contest QSO CW samples, then
+    /// validate them through the region-isolated decoder baseline.
+    GenQsoSuite {
+        /// Directory for generated WAV, truth sidecar, and manifest files.
+        /// If omitted, samples are generated and validated in memory only.
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Number of ragchew-style examples to generate.
+        #[arg(long, default_value_t = 6)]
+        ragchew: usize,
+        /// Number of contest-style examples to generate.
+        #[arg(long, default_value_t = 6)]
+        contest: usize,
+        /// Sample rate in Hz.
+        #[arg(long, default_value_t = 12000)]
+        sample_rate: u32,
+        /// RegionStreamer decode cadence used for validation.
+        /// Reserved for streaming parity; the current suite validates with
+        /// the same batch region core used by RegionStreamer commits.
+        #[arg(long, default_value_t = 500)]
+        decode_every_ms: u64,
+        /// Emit one NDJSON validation row per generated example.
+        #[arg(long)]
+        json: bool,
+        /// Exit non-zero if any generated example is not copied exactly.
+        #[arg(long)]
+        require_exact: bool,
+    },
+
+    /// Walk a corpus directory of `*.truth.txt` sidecars + matching audio
+    /// files, decode each through the region-isolated path, and report
+    /// per-file pass / character error rate / ghost-char counts.
+    ///
+    /// Pairs each `<basename>.truth.txt` with `<basename>.wav` (preferred),
+    /// `<basename>.mp3`, `<basename>.m4a`, or `<basename>.flac`. Entries
+    /// with no matching audio are reported as `SKIPPED` so the operator
+    /// can re-sync the corpus from OneDrive (or wherever the audio lives,
+    /// since `*.wav` and `*.mp3` are gitignored).
+    ValidateCorpus {
+        /// Corpus root directory. Walks for `*.truth.txt` sidecars.
+        #[arg(long)]
+        dir: PathBuf,
+        /// Limit the walk to the top-level directory only. By default
+        /// the walk recurses into every subdirectory.
+        #[arg(long)]
+        no_recursive: bool,
+        /// Emit one NDJSON validation row per entry plus a final summary
+        /// row (machine-readable). Default is the human-readable table.
+        #[arg(long)]
+        json: bool,
+        /// Exit non-zero if any entry fails exact-copy comparison
+        /// (skipped entries do not count as failures).
+        #[arg(long)]
+        require_exact: bool,
+    },
 }
 
+const CLI_THREAD_STACK_BYTES: usize = 16 * 1024 * 1024;
+
 fn main() -> Result<()> {
+    std::thread::Builder::new()
+        .name("cw-decoder-cli".to_string())
+        .stack_size(CLI_THREAD_STACK_BYTES)
+        .spawn(run_cli)?
+        .join()
+        .map_err(|panic| {
+            let message = panic
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("cw-decoder CLI thread panicked");
+            anyhow::anyhow!(message.to_string())
+        })?
+}
+
+fn run_cli() -> Result<()> {
     let cli = Cli::parse();
 
     // Always install the log capture so we can read ditdah's WPM/pitch lines.
@@ -888,7 +1075,11 @@ fn main() -> Result<()> {
             pitch_hz,
             wpm,
         } => run_profile_window(&path, start, end, pitch_hz, wpm),
-        Cmd::PlayFile { path, json } => run_play_file(&path, json),
+        Cmd::PlayFile {
+            path,
+            json,
+            stdin_control,
+        } => run_play_file(&path, json, stdin_control),
         Cmd::DecodeAndPlay {
             path,
             start,
@@ -1005,7 +1196,14 @@ fn main() -> Result<()> {
             loopback,
             pin_wpm,
             pin_hz,
+            min_snr_db,
             file,
+            play,
+            multi_pitch,
+            region_transcript,
+            region_stable_latency_s,
+            region_decode_every_ms,
+            region_keep_back_s,
         } => run_stream_live_v3(
             device.as_deref(),
             seconds,
@@ -1016,7 +1214,35 @@ fn main() -> Result<()> {
             loopback,
             (pin_wpm > 0.0).then_some(pin_wpm),
             (pin_hz > 0.0).then_some(pin_hz),
+            min_snr_db,
             file.as_deref(),
+            play,
+            multi_pitch,
+            region_transcript,
+            region_stable_latency_s,
+            region_decode_every_ms,
+            region_keep_back_s,
+        ),
+        Cmd::StreamRegion {
+            file,
+            json,
+            decode_every_ms,
+            stable_latency_s,
+            merge_gap_s,
+            min_region_s,
+            threshold_factor,
+            pad_s,
+            no_realtime,
+        } => run_stream_region_file(
+            &file,
+            json,
+            decode_every_ms,
+            stable_latency_s,
+            merge_gap_s,
+            min_region_s,
+            threshold_factor,
+            pad_s,
+            !no_realtime,
         ),
         Cmd::ProbeFisher {
             path,
@@ -1041,6 +1267,8 @@ fn main() -> Result<()> {
             min_gap_dot_fraction,
             min_pulse_dot_fraction,
             cfar_keying,
+            foundation,
+            region,
             json,
         } => run_bench_latency(
             from_file.as_deref(),
@@ -1058,6 +1286,8 @@ fn main() -> Result<()> {
             min_gap_dot_fraction,
             min_pulse_dot_fraction,
             cfar_keying,
+            foundation,
+            region,
             json,
         ),
         Cmd::GenRoughFist {
@@ -1083,6 +1313,29 @@ fn main() -> Result<()> {
             noise,
             seed,
         ),
+        Cmd::GenQsoSuite {
+            output,
+            ragchew,
+            contest,
+            sample_rate,
+            decode_every_ms,
+            json,
+            require_exact,
+        } => run_gen_qso_suite(
+            output.as_deref(),
+            ragchew,
+            contest,
+            sample_rate,
+            decode_every_ms,
+            json,
+            require_exact,
+        ),
+        Cmd::ValidateCorpus {
+            dir,
+            no_recursive,
+            json,
+            require_exact,
+        } => run_validate_corpus(&dir, !no_recursive, json, require_exact),
     }
 }
 
@@ -1138,6 +1391,8 @@ fn run_bench_latency(
     min_gap_dot_fraction: f32,
     min_pulse_dot_fraction: f32,
     cfar_keying: bool,
+    foundation: bool,
+    region: bool,
     json: bool,
 ) -> Result<()> {
     let mut cfg = streaming::DecoderConfig::defaults();
@@ -1203,17 +1458,106 @@ fn run_bench_latency(
 
     let mut results = Vec::with_capacity(scenarios.len());
     for scen in &scenarios {
-        let r = bench_latency::run_scenario(scen, cfg, chunk_ms, stable_n, label)?;
+        let r = if region {
+            run_region_bench_scenario(scen, chunk_ms, stable_n, label)
+        } else if foundation {
+            // V3 foundation: envelope_decoder + append_decode, with
+            // commit-time char timestamps and quality-gate timeline.
+            // BENCH knob `force_pitch_hz` maps to V3 `pin_hz`; V2-only
+            // knobs (purity, wide_bins, auto_threshold, etc.) are
+            // ignored here and the GUI greys them out when foundation
+            // is selected.
+            let pin_hz = if force_pitch_hz > 0.0 {
+                Some(force_pitch_hz)
+            } else {
+                None
+            };
+            let bench = cw_decoder_poc::append_decode::decode_samples_append_bench(
+                &scen.audio.samples,
+                scen.audio.sample_rate,
+                None,
+                pin_hz,
+                cw_decoder_poc::envelope_decoder::DEFAULT_MIN_SNR_DB,
+            );
+            let truth_upper = scen.truth.to_uppercase();
+            let mut r = bench_latency::BenchResult {
+                scenario: scen.name.clone(),
+                config_label: label.to_string(),
+                cw_onset_ms: scen.cw_onset_ms,
+                truth: truth_upper.clone(),
+                transcript: bench.decoded_text.trim().to_string(),
+                stable_n,
+                final_pitch_hz: bench.final_pitch_hz,
+                t_first_locked_ms: bench.t_first_lock_ms,
+                t_first_pitch_update_ms: bench.t_first_event_ms,
+                decoder_path: "foundation".to_string(),
+                final_locked_wpm: bench.final_locked_wpm,
+                t_first_foundation_lock_ms: bench.t_first_lock_ms,
+                quality_gate_drops: bench.quality_gate_drops,
+                quality_gate_recoveries: bench.quality_gate_recoveries,
+                longest_quality_gate_closed_ms: bench.longest_gate_closed_ms,
+                ..Default::default()
+            };
+            // Compute quality-gate uptime ratio over CW segment after
+            // first lock (foundation analogue of `lock_uptime_ratio`).
+            let total = bench
+                .gate_open_ms_after_lock
+                .saturating_add(bench.gate_closed_ms_after_lock);
+            if total > 0 {
+                r.quality_gate_uptime_ratio =
+                    Some(bench.gate_open_ms_after_lock as f32 / total as f32);
+            }
+            // char_times length must match decoded chars after the
+            // .trim() above. Recompute char_times to match the trimmed
+            // transcript: drop leading/trailing entries that
+            // correspond to whitespace we just stripped.
+            let raw = bench.decoded_text;
+            let raw_chars: Vec<char> = raw.chars().collect();
+            let leading_ws = raw_chars.iter().take_while(|c| c.is_whitespace()).count();
+            let trailing_ws = raw_chars
+                .iter()
+                .rev()
+                .take_while(|c| c.is_whitespace())
+                .count();
+            let trimmed_len = raw_chars.len().saturating_sub(leading_ws + trailing_ws);
+            let trimmed_times: Vec<u32> = bench
+                .char_times_ms
+                .iter()
+                .copied()
+                .skip(leading_ws)
+                .take(trimmed_len)
+                .collect();
+            let transcript_owned = r.transcript.clone();
+            bench_latency::update_truth_metrics(
+                &transcript_owned,
+                &truth_upper,
+                &trimmed_times,
+                stable_n,
+                &mut r,
+            );
+            r.cer_vs_truth = bench_latency::character_error_rate(&r.transcript, &truth_upper);
+            r
+        } else {
+            let mut r = bench_latency::run_scenario(scen, cfg, chunk_ms, stable_n, label)?;
+            // run_scenario already sets decoder_path and CER but be
+            // defensive in case future refactors miss it.
+            if r.decoder_path.is_empty() {
+                r.decoder_path = "streaming-v2".to_string();
+            }
+            r
+        };
         if json {
             // Compact NDJSON record for off-line comparison/aggregation.
             let rec = serde_json::json!({
                 "type": "bench_result",
                 "label": r.config_label,
                 "scenario": r.scenario,
+                "decoder_path": r.decoder_path,
                 "cw_onset_ms": r.cw_onset_ms,
                 "stable_n": r.stable_n,
                 "t_first_pitch_update_ms": r.t_first_pitch_update_ms,
                 "t_first_locked_ms": r.t_first_locked_ms,
+                "t_first_foundation_lock_ms": r.t_first_foundation_lock_ms,
                 "t_first_char_ms": r.t_first_char_ms,
                 "t_first_correct_char_ms": r.t_first_correct_char_ms,
                 "t_stable_n_correct_ms": r.t_stable_n_correct_ms,
@@ -1223,8 +1567,14 @@ fn run_bench_latency(
                 "n_relock_cycles": r.n_relock_cycles,
                 "lock_uptime_ratio": r.lock_uptime_ratio,
                 "longest_unlocked_gap_ms": r.longest_unlocked_gap_ms,
-                "total_unlocked_ms_after_lock": r.total_unlocked_ms_after_lock,
+                "quality_gate_drops": r.quality_gate_drops,
+                "quality_gate_recoveries": r.quality_gate_recoveries,
+                "quality_gate_uptime_ratio": r.quality_gate_uptime_ratio,
+                "longest_quality_gate_closed_ms": r.longest_quality_gate_closed_ms,
                 "locked_pitch_hz": r.locked_pitch_hz,
+                "final_pitch_hz": r.final_pitch_hz,
+                "final_locked_wpm": r.final_locked_wpm,
+                "cer_vs_truth": r.cer_vs_truth,
                 "transcript": r.transcript,
                 "decoder_counters": r.decoder_counters.clone().unwrap_or(serde_json::Value::Null),
             });
@@ -1236,6 +1586,98 @@ fn run_bench_latency(
     let agg = bench_latency::aggregate(&results);
     bench_latency::print_aggregate(label, &agg);
     Ok(())
+}
+
+fn run_region_bench_scenario(
+    scen: &bench_latency::Scenario,
+    chunk_ms: u32,
+    stable_n: usize,
+    label: &str,
+) -> bench_latency::BenchResult {
+    let sr = scen.audio.sample_rate;
+    let chunk_samples = ((sr as u64 * chunk_ms as u64) / 1000).max(1) as usize;
+    let truth_upper = scen.truth.to_uppercase();
+    let mut streamer = cw_decoder_poc::region_streamer::RegionStreamer::new(sr);
+    let mut transcript = String::new();
+    let mut char_times = Vec::new();
+
+    let mut consumed = 0usize;
+    while consumed < scen.audio.samples.len() {
+        let end = (consumed + chunk_samples).min(scen.audio.samples.len());
+        streamer.ingest(&scen.audio.samples[consumed..end]);
+        let t_ms = ((end as u64 * 1000) / sr as u64) as u32;
+        append_region_commits(
+            streamer.try_commit(),
+            t_ms,
+            &mut transcript,
+            &mut char_times,
+        );
+        consumed = end;
+    }
+
+    let t_end = ((scen.audio.samples.len() as u64 * 1000) / sr as u64) as u32;
+    append_region_commits(streamer.flush(), t_end, &mut transcript, &mut char_times);
+
+    let mut result = bench_latency::BenchResult {
+        scenario: scen.name.clone(),
+        config_label: label.to_string(),
+        cw_onset_ms: scen.cw_onset_ms,
+        truth: truth_upper.clone(),
+        transcript: transcript.trim().to_string(),
+        stable_n,
+        decoder_path: "region".to_string(),
+        ..Default::default()
+    };
+
+    let trimmed = trim_char_times_to_transcript(&transcript, &char_times);
+    result.t_first_char_ms = result
+        .transcript
+        .chars()
+        .zip(trimmed.iter().copied())
+        .find_map(|(ch, t)| (!ch.is_whitespace()).then_some(t));
+    let transcript_owned = result.transcript.clone();
+    bench_latency::update_truth_metrics(
+        &transcript_owned,
+        &truth_upper,
+        &trimmed,
+        stable_n,
+        &mut result,
+    );
+    result.cer_vs_truth = bench_latency::character_error_rate(&result.transcript, &truth_upper);
+    result
+}
+
+fn append_region_commits(
+    commits: Vec<cw_decoder_poc::region_streamer::CommittedRegion>,
+    t_ms: u32,
+    transcript: &mut String,
+    char_times: &mut Vec<u32>,
+) {
+    for commit in commits {
+        let text = commit.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        if !transcript.is_empty() {
+            transcript.push(' ');
+            char_times.push(t_ms);
+        }
+        transcript.push_str(text);
+        char_times.extend(std::iter::repeat_n(t_ms, text.chars().count()));
+    }
+}
+
+fn trim_char_times_to_transcript(raw: &str, raw_times: &[u32]) -> Vec<u32> {
+    let chars: Vec<char> = raw.chars().collect();
+    let leading_ws = chars.iter().take_while(|c| c.is_whitespace()).count();
+    let trailing_ws = chars.iter().rev().take_while(|c| c.is_whitespace()).count();
+    let trimmed_len = chars.len().saturating_sub(leading_ws + trailing_ws);
+    raw_times
+        .iter()
+        .copied()
+        .skip(leading_ws)
+        .take(trimmed_len)
+        .collect()
 }
 
 fn run_file(
@@ -1493,10 +1935,23 @@ fn run_profile_window(
     Ok(())
 }
 
-fn run_play_file(path: &std::path::Path, json: bool) -> Result<()> {
+fn run_play_file(path: &std::path::Path, json: bool, stdin_control: bool) -> Result<()> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
-    let playback = audio::play_output_file(path).context("starting audio playback")?;
+    let decoded =
+        audio::decode_file(path).with_context(|| format!("decoding {}", path.display()))?;
+    let input_rate = decoded.sample_rate;
+    let playback = audio::play_interleaved_samples_with_control(
+        decoded.interleaved_samples,
+        input_rate,
+        decoded.channels,
+    )
+    .context("starting audio playback")?;
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let control_rx = stdin_control.then(|| spawn_stdin_playback_control(Arc::clone(&stop_flag)));
+
     let mut emitter = json.then(json::JsonEmitter::new);
     if let Some(em) = emitter.as_mut() {
         em.emit(
@@ -1506,7 +1961,7 @@ fn run_play_file(path: &std::path::Path, json: bool) -> Result<()> {
                 "source": "playback",
                 "path": path.display().to_string(),
                 "device": playback.device_name,
-                "rate": playback.sample_rate,
+                "rate": playback.input_rate,
                 "duration": playback.duration_s,
             }),
         );
@@ -1520,9 +1975,44 @@ fn run_play_file(path: &std::path::Path, json: bool) -> Result<()> {
     }
 
     let mut last_position = -1.0_f32;
-    while !playback.is_finished() {
+    let mut last_paused = false;
+    while !playback.is_finished() && !stop_flag.load(Ordering::Relaxed) {
+        // Drain any pending control commands without blocking. Audio
+        // keeps playing on the cpal callback thread; we just react to
+        // the operator here.
+        if let Some(rx) = control_rx.as_ref() {
+            while let Ok(cmd) = rx.try_recv() {
+                match cmd {
+                    PlaybackControl::Pause => playback.pause(),
+                    PlaybackControl::Resume => playback.resume(),
+                    PlaybackControl::Seek(seconds) => {
+                        let _ = playback.seek_to_seconds(seconds);
+                    }
+                    PlaybackControl::Stop => stop_flag.store(true, Ordering::Relaxed),
+                    PlaybackControl::Config(_) => {
+                        // play-file has no decoder; ignore decoder config tweaks.
+                    }
+                }
+            }
+        }
+
         std::thread::sleep(Duration::from_millis(50));
-        let position = playback.position_s().min(playback.duration_s);
+
+        let paused_now = playback.is_paused();
+        if paused_now != last_paused {
+            last_paused = paused_now;
+            if let Some(em) = emitter.as_mut() {
+                em.emit(
+                    playback.position_seconds(),
+                    serde_json::json!({
+                        "type": "playback_state",
+                        "paused": paused_now,
+                    }),
+                );
+            }
+        }
+
+        let position = playback.position_seconds().min(playback.duration_s);
         if (position - last_position).abs() < 0.04 {
             continue;
         }
@@ -1540,7 +2030,7 @@ fn run_play_file(path: &std::path::Path, json: bool) -> Result<()> {
         }
     }
 
-    let end_position = playback.position_s().min(playback.duration_s);
+    let end_position = playback.position_seconds().min(playback.duration_s);
     if let Some(em) = emitter.as_mut() {
         em.emit(
             end_position,
@@ -1993,7 +2483,7 @@ fn apply_input_gain(
         });
         let p99 = abs[idx].max(1e-6);
         // Allow target up to 4.0 so the tanh deliberately saturates.
-        let target = auto_gain_target.max(0.05).min(4.0);
+        let target = auto_gain_target.clamp(0.05, 4.0);
         let scale = target / p99;
         for s in samples.iter_mut() {
             *s = (*s * scale).tanh();
@@ -2063,7 +2553,7 @@ fn run_stream_file(
             audio.samples.len()
         );
         if let Some(g) = applied_gain_db {
-            println!("Input gain applied: {:+.1} dB", g);
+            println!("Input gain applied: {g:+.1} dB");
         }
     }
 
@@ -3300,6 +3790,117 @@ pub enum StdinControlMessage {
     ResetLock,
 }
 
+/// Outcome of parsing one stdin control line. Pulled out as its own
+/// function so the parser can be regression-tested without spawning a
+/// real reader thread or wiring stdin redirection.
+#[derive(Debug)]
+pub(crate) enum StdinParseOutcome {
+    /// Line should be ignored (empty / unrecognized JSON / malformed).
+    Skip,
+    /// Operator requested graceful shutdown via a literal `stop` line.
+    /// The reader loop must set the stop atomic and break.
+    Stop,
+    /// A control message that the decoder loop should observe.
+    Message(StdinControlMessage),
+}
+
+#[cfg(test)]
+impl StdinParseOutcome {
+    fn is_stop(&self) -> bool {
+        matches!(self, StdinParseOutcome::Stop)
+    }
+    fn is_skip(&self) -> bool {
+        matches!(self, StdinParseOutcome::Skip)
+    }
+    fn is_reset_lock(&self) -> bool {
+        matches!(
+            self,
+            StdinParseOutcome::Message(StdinControlMessage::ResetLock)
+        )
+    }
+}
+
+/// Parse a single line received on the V3/streaming control stdin.
+///
+/// `state` is the current cumulative [`streaming::DecoderConfig`]; we
+/// mutate it in place so omitted fields keep their previous value.
+///
+/// Critical invariant: a literal `stop` line MUST yield
+/// [`StdinParseOutcome::Stop`] so the reader loop can finalize the WAV
+/// recording. Without that, the GUI's graceful Stop signal is silently
+/// dropped here, the GUI eventually falls back to `Process.Kill`,
+/// `LiveCapture::drop` never runs, and every saved capture lands on
+/// disk with `riffSize=0/dataSize=0` — making it unusable for offline
+/// replay or regression scoring (see
+/// `parser_treats_literal_stop_line_as_stop` test).
+pub(crate) fn parse_stdin_control_line(
+    state: &mut streaming::DecoderConfig,
+    line: &str,
+) -> StdinParseOutcome {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return StdinParseOutcome::Skip;
+    }
+    if trimmed.eq_ignore_ascii_case("stop") {
+        return StdinParseOutcome::Stop;
+    }
+    let v: serde_json::Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(_) => return StdinParseOutcome::Skip,
+    };
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("reset_lock") => return StdinParseOutcome::Message(StdinControlMessage::ResetLock),
+        Some("config") => {}
+        _ => return StdinParseOutcome::Skip,
+    }
+    if let Some(x) = v.get("min_snr_db").and_then(|x| x.as_f64()) {
+        state.min_snr_db = x as f32;
+    }
+    if let Some(x) = v.get("pitch_min_snr_db").and_then(|x| x.as_f64()) {
+        state.pitch_min_snr_db = x as f32;
+    }
+    if let Some(x) = v.get("threshold_scale").and_then(|x| x.as_f64()) {
+        state.threshold_scale = x as f32;
+    }
+    if let Some(b) = v.get("auto_threshold").and_then(|x| x.as_bool()) {
+        state.auto_threshold = b;
+    }
+    if let Some(b) = v.get("experimental_range_lock").and_then(|x| x.as_bool()) {
+        state.experimental_range_lock = b;
+    }
+    if let Some(x) = v.get("range_lock_min_hz").and_then(|x| x.as_f64()) {
+        state.range_lock_min_hz = x as f32;
+    }
+    if let Some(x) = v.get("range_lock_max_hz").and_then(|x| x.as_f64()) {
+        state.range_lock_max_hz = x as f32;
+    }
+    if let Some(x) = v.get("min_tone_purity").and_then(|x| x.as_f64()) {
+        state.min_tone_purity = x as f32;
+    }
+    if let Some(x) = v.get("force_pitch_hz").and_then(|x| x.as_f64()) {
+        state.force_pitch_hz = if x > 0.0 { Some(x as f32) } else { None };
+    } else if v
+        .get("force_pitch_hz")
+        .map(|x| x.is_null())
+        .unwrap_or(false)
+    {
+        state.force_pitch_hz = None;
+    }
+    if let Some(x) = v.get("wide_bin_count").and_then(|x| x.as_i64()) {
+        state.wide_bin_count = x.clamp(0, 16) as u8;
+    }
+    if let Some(x) = v.get("min_pulse_dot_fraction").and_then(|x| x.as_f64()) {
+        state.min_pulse_dot_fraction = x.max(0.0) as f32;
+    }
+    if let Some(x) = v.get("min_gap_dot_fraction").and_then(|x| x.as_f64()) {
+        state.min_gap_dot_fraction = x.max(0.0) as f32;
+    }
+    if let Some(x) = v.get("hysteresis_fraction").and_then(|x| x.as_f64()) {
+        state.hysteresis_fraction = x.max(0.0) as f32;
+    }
+    StdinParseOutcome::Message(StdinControlMessage::Config(*state))
+}
+
 /// Spawn a background thread that reads NDJSON control lines from stdin
 /// and forwards parsed [`StdinControlMessage`] values to the returned
 /// receiver. Lines that don't parse as a recognized command are
@@ -3308,6 +3909,7 @@ pub enum StdinControlMessage {
 /// Wire format (one JSON object per line):
 ///   {"type":"config","min_snr_db":6.0,"pitch_min_snr_db":8.0,"threshold_scale":1.0}
 ///   {"type":"reset_lock"}
+///   stop
 ///
 /// For `config`, any field may be omitted; omitted fields keep their
 /// previous value.
@@ -3320,72 +3922,19 @@ fn spawn_stdin_config_channel(
         let stdin = std::io::stdin();
         let mut state = streaming::DecoderConfig::defaults();
         for line in stdin.lock().lines().map_while(Result::ok) {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let v: serde_json::Value = match serde_json::from_str(trimmed) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            match v.get("type").and_then(|t| t.as_str()) {
-                Some("reset_lock") => {
-                    if tx.send(StdinControlMessage::ResetLock).is_err() {
+            match parse_stdin_control_line(&mut state, &line) {
+                StdinParseOutcome::Skip => continue,
+                StdinParseOutcome::Stop => {
+                    if let Some(stop) = stop_on_eof.as_ref() {
+                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    break;
+                }
+                StdinParseOutcome::Message(msg) => {
+                    if tx.send(msg).is_err() {
                         break;
                     }
-                    continue;
                 }
-                Some("config") => {}
-                _ => continue,
-            }
-            if let Some(x) = v.get("min_snr_db").and_then(|x| x.as_f64()) {
-                state.min_snr_db = x as f32;
-            }
-            if let Some(x) = v.get("pitch_min_snr_db").and_then(|x| x.as_f64()) {
-                state.pitch_min_snr_db = x as f32;
-            }
-            if let Some(x) = v.get("threshold_scale").and_then(|x| x.as_f64()) {
-                state.threshold_scale = x as f32;
-            }
-            if let Some(b) = v.get("auto_threshold").and_then(|x| x.as_bool()) {
-                state.auto_threshold = b;
-            }
-            if let Some(b) = v.get("experimental_range_lock").and_then(|x| x.as_bool()) {
-                state.experimental_range_lock = b;
-            }
-            if let Some(x) = v.get("range_lock_min_hz").and_then(|x| x.as_f64()) {
-                state.range_lock_min_hz = x as f32;
-            }
-            if let Some(x) = v.get("range_lock_max_hz").and_then(|x| x.as_f64()) {
-                state.range_lock_max_hz = x as f32;
-            }
-            if let Some(x) = v.get("min_tone_purity").and_then(|x| x.as_f64()) {
-                state.min_tone_purity = x as f32;
-            }
-            // force_pitch_hz: <number> sets a forced lock; 0/null clears it.
-            if let Some(x) = v.get("force_pitch_hz").and_then(|x| x.as_f64()) {
-                state.force_pitch_hz = if x > 0.0 { Some(x as f32) } else { None };
-            } else if v
-                .get("force_pitch_hz")
-                .map(|x| x.is_null())
-                .unwrap_or(false)
-            {
-                state.force_pitch_hz = None;
-            }
-            if let Some(x) = v.get("wide_bin_count").and_then(|x| x.as_i64()) {
-                state.wide_bin_count = x.clamp(0, 16) as u8;
-            }
-            if let Some(x) = v.get("min_pulse_dot_fraction").and_then(|x| x.as_f64()) {
-                state.min_pulse_dot_fraction = x.max(0.0) as f32;
-            }
-            if let Some(x) = v.get("min_gap_dot_fraction").and_then(|x| x.as_f64()) {
-                state.min_gap_dot_fraction = x.max(0.0) as f32;
-            }
-            if let Some(x) = v.get("hysteresis_fraction").and_then(|x| x.as_f64()) {
-                state.hysteresis_fraction = x.max(0.0) as f32;
-            }
-            if tx.send(StdinControlMessage::Config(state)).is_err() {
-                break;
             }
         }
         // Stdin EOF — propagate as graceful stop so Drop runs and the WAV
@@ -3599,8 +4148,235 @@ fn run_gen_rough_fist(
         noise,
     );
     println!("Truth: {}", truth_path.display());
-    println!("Text:  {}", canonical_text);
+    println!("Text:  {canonical_text}");
     Ok(())
+}
+
+fn run_gen_qso_suite(
+    output: Option<&std::path::Path>,
+    ragchew_count: usize,
+    contest_count: usize,
+    sample_rate: u32,
+    decode_every_ms: u64,
+    json: bool,
+    require_exact: bool,
+) -> Result<()> {
+    let examples = synthetic_qso::generate_qso_suite(sample_rate, ragchew_count, contest_count);
+    let mut manifests = Vec::new();
+    let mut validations = Vec::with_capacity(examples.len());
+    for example in &examples {
+        let validation = synthetic_qso::validate_example(example, decode_every_ms);
+        let validation = if let Some(output) = output {
+            let manifest = synthetic_qso::write_example_files(example, &validation, output)?;
+            let written = manifest.validation.clone();
+            manifests.push(manifest);
+            written
+        } else {
+            validation
+        };
+        validations.push(validation);
+    }
+    let manifest_path = if let Some(output) = output {
+        Some(synthetic_qso::write_manifest(output, &manifests)?)
+    } else {
+        None
+    };
+
+    if json {
+        for validation in &validations {
+            println!(
+                "{}",
+                serde_json::to_string(validation).context("serializing validation")?
+            );
+        }
+        let failures = validations.iter().filter(|v| !v.exact_match).count();
+        if let Some(path) = manifest_path {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "type": "manifest",
+                    "path": path,
+                    "examples": validations.len(),
+                    "all_exact": validations.iter().all(|v| v.exact_match),
+                })
+            );
+        }
+        if require_exact && failures > 0 {
+            anyhow::bail!("{failures} synthetic QSO validation(s) failed exact-copy check");
+        }
+        return Ok(());
+    }
+
+    println!(
+        "Generated {} synthetic QSOs ({} ragchew, {} contest) @ {} Hz; decode_every={} ms",
+        validations.len(),
+        ragchew_count,
+        contest_count,
+        sample_rate,
+        decode_every_ms
+    );
+    if let Some(path) = manifest_path {
+        println!(
+            "Artifacts: {}",
+            path.parent().unwrap_or(path.as_path()).display()
+        );
+        println!("Manifest:  {}", path.display());
+    }
+    println!();
+    println!(
+        "{:<12} {:<8} {:>7} {:>7} {:<6} transcript",
+        "id", "kind", "sec", "regions", "match"
+    );
+    println!("{}", "-".repeat(96));
+    for validation in &validations {
+        println!(
+            "{:<12} {:<8} {:>7.2} {:>7} {:<6} {}",
+            validation.id,
+            validation.kind.as_str(),
+            validation.duration_s,
+            validation.region_count,
+            if validation.exact_match { "yes" } else { "NO" },
+            validation.transcript
+        );
+        if !validation.exact_match {
+            println!("  truth: {}", validation.truth);
+        }
+    }
+    let failures = validations.iter().filter(|v| !v.exact_match).count();
+    println!();
+    println!(
+        "Exact-copy summary: {}/{} passed, {} failed",
+        validations.len() - failures,
+        validations.len(),
+        failures
+    );
+    if require_exact && failures > 0 {
+        anyhow::bail!("{failures} synthetic QSO validation(s) failed exact-copy check");
+    }
+    Ok(())
+}
+
+fn run_validate_corpus(
+    dir: &std::path::Path,
+    recursive: bool,
+    json: bool,
+    require_exact: bool,
+) -> Result<()> {
+    use cw_decoder_poc::region_stream::RegionStreamConfig;
+
+    let entries = corpus_validator::discover_corpus(dir, recursive)?;
+    let cfg = RegionStreamConfig::default();
+    let mut validations = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        validations.push(corpus_validator::validate_entry(entry, &cfg));
+    }
+    let summary = corpus_validator::summarize(&validations);
+
+    if json {
+        for v in &validations {
+            println!(
+                "{}",
+                serde_json::to_string(v).context("serializing corpus validation")?
+            );
+        }
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "type": "summary",
+                "dir": dir,
+                "recursive": recursive,
+                "summary": summary,
+            }))
+            .context("serializing summary")?
+        );
+        if require_exact && (summary.mismatches > 0 || summary.errored > 0) {
+            anyhow::bail!(
+                "{} corpus mismatch(es), {} error(s)",
+                summary.mismatches,
+                summary.errored
+            );
+        }
+        return Ok(());
+    }
+
+    println!(
+        "Corpus: {} ({} entr{} discovered)",
+        dir.display(),
+        entries.len(),
+        if entries.len() == 1 { "y" } else { "ies" }
+    );
+    println!();
+    println!(
+        "{:<48} {:<10} {:>5} {:>6} {:>6} {:>7}  result",
+        "id", "status", "sec", "regs", "ghost", "cer"
+    );
+    println!("{}", "-".repeat(108));
+    for v in &validations {
+        let id = truncate_for_table(&v.id, 48);
+        let (status, result) = match &v.status {
+            corpus_validator::CorpusValidationStatus::Validated => {
+                if v.exact_match {
+                    ("OK".to_string(), "exact match".to_string())
+                } else {
+                    ("MISMATCH".to_string(), v.transcript.clone())
+                }
+            }
+            corpus_validator::CorpusValidationStatus::Skipped(r) => {
+                ("SKIPPED".to_string(), format!("({r})"))
+            }
+            corpus_validator::CorpusValidationStatus::Errored(r) => {
+                ("ERROR".to_string(), format!("({r})"))
+            }
+        };
+        let cer_str = v
+            .char_error_rate
+            .map(|c| format!("{c:.3}"))
+            .unwrap_or_else(|| "—".to_string());
+        println!(
+            "{:<48} {:<10} {:>5.1} {:>6} {:>6} {:>7}  {}",
+            id, status, v.duration_s, v.region_count, v.ghost_chars, cer_str, result
+        );
+        if matches!(
+            v.status,
+            corpus_validator::CorpusValidationStatus::Validated
+        ) && !v.exact_match
+        {
+            println!("  truth: {}", v.truth);
+        }
+    }
+    println!();
+    println!(
+        "Summary: {}/{} exact, {} mismatch, {} skipped, {} errored",
+        summary.exact_matches,
+        summary.validated,
+        summary.mismatches,
+        summary.skipped,
+        summary.errored
+    );
+    if let Some(cer) = summary.mean_cer {
+        println!(
+            "         mean CER {:.3}, ghost {} chars, missing {} chars",
+            cer, summary.total_ghost_chars, summary.total_missing_chars
+        );
+    }
+    if require_exact && (summary.mismatches > 0 || summary.errored > 0) {
+        anyhow::bail!(
+            "{} corpus mismatch(es), {} error(s) (skipped entries do not count)",
+            summary.mismatches,
+            summary.errored
+        );
+    }
+    Ok(())
+}
+
+fn truncate_for_table(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
 }
 
 fn run_stream_live_v3(
@@ -3613,14 +4389,35 @@ fn run_stream_live_v3(
     loopback: bool,
     pin_wpm: Option<f32>,
     pin_hz: Option<f32>,
+    min_snr_db: f32,
     file: Option<&std::path::Path>,
+    play_file_audio: bool,
+    multi_pitch: usize,
+    region_transcript: bool,
+    region_stable_latency_s: f32,
+    region_decode_every_ms: u64,
+    region_keep_back_s: f32,
 ) -> Result<()> {
     if let Some(path) = file {
-        return run_stream_live_v3_file(path, seconds, json, decode_every_ms, pin_wpm, pin_hz);
+        return run_stream_live_v3_file(
+            path,
+            seconds,
+            json,
+            decode_every_ms,
+            pin_wpm,
+            pin_hz,
+            min_snr_db,
+            play_file_audio,
+            multi_pitch,
+            region_transcript,
+            region_stable_latency_s,
+            region_decode_every_ms,
+        );
     }
     use cw_decoder_poc::envelope_decoder::{
-        LiveEnvelopeStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
+        LiveEnvelopeStreamer, LiveMultiPitchStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
     };
+    use cw_decoder_poc::region_streamer::{RegionStreamer, RegionStreamerConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -3634,9 +4431,45 @@ fn run_stream_live_v3(
         let mut streamer = LiveEnvelopeStreamer::new(capture.sample_rate);
         streamer.set_pinned_hz(pin_hz);
         streamer.set_pinned_wpm(pin_wpm);
+        streamer.set_min_snr_db(min_snr_db);
         streamer
     };
     let mut streamer = new_streamer();
+
+    let new_multi = || {
+        if multi_pitch == 0 {
+            None
+        } else {
+            let mut s = LiveMultiPitchStreamer::new(capture.sample_rate, multi_pitch);
+            s.set_pinned_wpm(pin_wpm);
+            s.set_min_snr_db(min_snr_db);
+            Some(s)
+        }
+    };
+    let mut multi_streamer = new_multi();
+
+    let new_region = || {
+        if !region_transcript {
+            None
+        } else {
+            // Start from the streamer's TUNED defaults (merge_gap=0.5,
+            // min_region=0.3, pad=0.15, threshold=0.30) — the raw
+            // RegionStreamConfig::default() uses merge_gap=3.0 which
+            // glues real-world bursts that are <3s apart into one
+            // region and silently drops the trailing burst.
+            let defaults = RegionStreamerConfig::default();
+            let mut region = defaults.region;
+            if let Some(w) = pin_wpm {
+                region.pin_wpm = Some(w);
+            }
+            let cfg = RegionStreamerConfig {
+                region,
+                stable_latency_s: region_stable_latency_s.max(0.0),
+            };
+            Some(RegionStreamer::with_config(capture.sample_rate, cfg))
+        }
+    };
+    let mut region_streamer = new_region();
 
     let stop = Arc::new(AtomicBool::new(false));
     {
@@ -3678,6 +4511,7 @@ fn run_stream_live_v3(
                 "device": capture.device_name,
                 "rate": capture.sample_rate,
                 "decode_every_ms": decode_every_ms,
+                "region_decode_every_ms": region_decode_every_ms,
                 "max_viz_envelope_samples": MAX_VIZ_ENVELOPE_SAMPLES,
                 "recording": capture.record_path().map(|p| p.display().to_string()),
                 "pin_wpm": pin_wpm,
@@ -3692,9 +4526,17 @@ fn run_stream_live_v3(
 
     let started = Instant::now();
     let mut last_drain_at: u64 = 0;
-    let mut last_decode_at = Instant::now();
-    let decode_period = Duration::from_millis(decode_every_ms);
-    let mut last_transcript: Option<String> = None;
+    let decode_every_samples =
+        ((capture.sample_rate as u64 * decode_every_ms.max(1)) / 1000).max(1);
+    let mut last_decode_written: u64 = 0;
+    let region_decode_every_samples =
+        ((capture.sample_rate as u64 * region_decode_every_ms.max(1)) / 1000).max(1);
+    let mut last_region_decode_written: u64 = 0;
+    let decode_every_s = decode_every_ms as f32 / 1000.0;
+    let mut commit_cursor =
+        ditdah_streaming::LiveCommitCursor::new(MAX_V3_SESSION_TRANSCRIPT_CHARS);
+    let mut append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
+    let mut diag = DiagWriter::from_env();
 
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -3709,8 +4551,13 @@ fn run_stream_live_v3(
             while let Ok(msg) = rx.try_recv() {
                 if matches!(msg, StdinControlMessage::ResetLock) {
                     streamer = new_streamer();
+                    multi_streamer = new_multi();
+                    region_streamer = new_region();
                     last_drain_at = capture.buffer.lock().written;
-                    last_transcript = None;
+                    last_decode_written = last_drain_at;
+                    last_region_decode_written = last_drain_at;
+                    commit_cursor.reset_all();
+                    append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
                     if let Some(em) = emitter.as_mut() {
                         em.emit(
                             started.elapsed().as_secs_f32(),
@@ -3738,26 +4585,113 @@ fn run_stream_live_v3(
         if !chunk.is_empty() {
             // Buffer the audio without forcing a viz decode (cheap path).
             streamer.feed(&chunk);
+            if let Some(m) = multi_streamer.as_mut() {
+                let _ = m.feed(&chunk);
+            }
+            if let Some(r) = region_streamer.as_mut() {
+                r.ingest(&chunk);
+            }
         }
 
-        if last_decode_at.elapsed() < decode_period {
+        if last_drain_at.saturating_sub(last_decode_written) < decode_every_samples {
             continue;
         }
-        last_decode_at = Instant::now();
+        last_decode_written = last_drain_at;
 
         // Force a viz-producing decode now.
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        last_transcript = Some(snap.transcript.clone());
+        // When --region-transcript is set, drive the cumulative
+        // transcript field from the region-isolated decoder. This
+        // handles real-world QSO audio with pauses between bursts at
+        // very different WPMs (e.g. 8 vs 39 WPM) where a single-pass
+        // envelope decoder is structurally limited to one WPM lock.
+        let mut region_commits = Vec::new();
+        let mut region_text_full = String::new();
+        if let Some(r) = region_streamer.as_mut() {
+            if last_drain_at.saturating_sub(last_region_decode_written)
+                >= region_decode_every_samples
+            {
+                last_region_decode_written = last_drain_at;
+                region_commits = r.try_commit();
+                r.trim_committed(region_keep_back_s);
+            }
+            region_text_full = r.transcript().to_string();
+        }
+        let region_appended: String = region_commits
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        // Approach A+: event-driven commit cursor (sample-indexed,
+        // idempotent across re-decodes) replaces the old
+        // string-stitching path that produced ghost-repeats like
+        // "TSA USA EE   SA USA EE   ..." when the rolling window's
+        // first character drifted between cycles.
+        let commit = if let Some(viz) = snap.viz.as_ref() {
+            commit_cursor.update_from_viz(viz, decode_every_s)
+        } else {
+            ditdah_streaming::CommitUpdate::default()
+        };
+        let append = if let Some(viz) = snap.viz.as_ref() {
+            append_decoder.ingest_viz(viz)
+        } else {
+            cw_decoder_poc::append_decode::AppendDecodeUpdate::default()
+        };
+        let session_transcript: String = format!(
+            "{}{}{}",
+            commit.committed_text,
+            if !commit.committed_text.is_empty()
+                && !commit.provisional_tail.is_empty()
+                && !commit.committed_text.ends_with(' ')
+            {
+                " "
+            } else {
+                ""
+            },
+            commit.provisional_tail
+        );
+        let stitched = !commit.committed_text.is_empty() || !commit.provisional_tail.is_empty();
+        let appended_session = String::new();
+        if let Some(d) = diag.as_mut() {
+            d.record(
+                t,
+                &snap,
+                stitched,
+                &appended_session,
+                &session_transcript,
+                "live",
+            );
+        }
 
+        // Effective transcript-event payload. Region path overrides
+        // text/appended when active.
+        let use_region = region_streamer.is_some();
+        let eff_text = if use_region {
+            region_text_full.clone()
+        } else {
+            append.decoded_text.clone()
+        };
+        let eff_appended = if use_region {
+            region_appended.clone()
+        } else {
+            appended_session.clone()
+        };
         if let Some(em) = emitter.as_mut() {
             em.emit(
                 t,
                 serde_json::json!({
                     "type": "transcript",
-                    "text": snap.transcript,
-                    "appended": snap.appended,
+                    "text": eff_text,
+                    "appended": eff_appended,
+                    "transcript": eff_text,
+                    "committed": if use_region { region_text_full.clone() } else { commit.committed_text.clone() },
+                    "provisional": if use_region { String::new() } else { commit.provisional_tail.clone() },
+                    "cursor_transcript": session_transcript.clone(),
+                    "raw_morse": append.raw_stream,
+                    "window_text": snap.transcript,
                     "wpm": snap.wpm,
+                    "region_mode": use_region,
                 }),
             );
             if let Some(viz) = snap.viz {
@@ -3784,6 +4718,9 @@ fn run_stream_live_v3(
                     t,
                     serde_json::json!({
                         "type": "viz",
+                        "sample_rate": viz.sample_rate,
+                        "window_start_sample": viz.window_start_sample,
+                        "window_end_sample": viz.window_end_sample,
                         "buffer_seconds": viz.buffer_seconds,
                         "frame_step_s": viz.frame_step_s,
                         "pitch_hz": viz.pitch_hz,
@@ -3791,20 +4728,59 @@ fn run_stream_live_v3(
                         "envelope_max": viz.envelope_max,
                         "noise_floor": viz.noise_floor,
                         "signal_floor": viz.signal_floor,
+                        "snr_db": viz.snr_db,
+                        "snr_suppressed": viz.snr_suppressed,
                         "hyst_high": viz.hyst_high,
                         "hyst_low": viz.hyst_low,
                         "events": events_json,
                         "on_durations": viz.on_durations,
                         "dot_seconds": viz.dot_seconds,
                         "wpm": viz.wpm,
+                        "wpm_kmeans": viz.wpm_kmeans,
                         "centroid_dot": viz.centroid_dot,
                         "centroid_dah": viz.centroid_dah,
                         "locked_wpm": viz.locked_wpm,
                     }),
                 );
             }
+            // Multi-pitch event: emit alongside the single-track
+            // events so back-compat consumers keep working.
+            if let Some(m) = multi_streamer.as_mut() {
+                let snaps = m.flush_with_viz();
+                if !snaps.is_empty() {
+                    let tracks_json: Vec<serde_json::Value> = snaps
+                        .iter()
+                        .map(|s| {
+                            serde_json::json!({
+                                "track_id": s.track_id,
+                                "pitch_hz": s.pitch_hz,
+                                "wpm": s.wpm,
+                                "transcript": s.transcript,
+                                "appended": s.appended,
+                            })
+                        })
+                        .collect();
+                    em.emit(
+                        t,
+                        serde_json::json!({
+                            "event": "multi_track_transcript",
+                            "type": "multi_track_transcript",
+                            "tracks": tracks_json,
+                        }),
+                    );
+                }
+            }
         } else {
             println!("[t={:>6.2}s wpm={:>5.1}] {}", t, snap.wpm, snap.transcript);
+            if let Some(m) = multi_streamer.as_mut() {
+                let snaps = m.flush();
+                for s in snaps {
+                    println!(
+                        "  track {} @ {:>5.1} Hz wpm={:>5.1}: {}",
+                        s.track_id, s.pitch_hz, s.wpm, s.transcript
+                    );
+                }
+            }
         }
     }
 
@@ -3812,19 +4788,36 @@ fn run_stream_live_v3(
     let recording_saved = capture
         .finalize_recording()
         .map(|p| p.display().to_string());
+    // Final flush for region streamer to commit any in-flight burst.
+    let final_region_text = if let Some(r) = region_streamer.as_mut() {
+        let _ = r.flush();
+        r.transcript().to_string()
+    } else {
+        String::new()
+    };
     if let Some(em) = emitter.as_mut() {
+        let final_text = if region_streamer.is_some() {
+            final_region_text
+        } else {
+            commit_cursor.committed_text().to_string()
+        };
         em.emit(
             started.elapsed().as_secs_f32(),
             serde_json::json!({
                 "type": "end",
-                "transcript": last_transcript.unwrap_or_default(),
+                "transcript": final_text,
+                "committed": final_text,
                 "recording": recording_saved.or(recording_path),
             }),
         );
     } else {
         println!();
         println!("Final transcript (v3):");
-        println!("{}", last_transcript.unwrap_or_default());
+        if region_streamer.is_some() {
+            println!("{final_region_text}");
+        } else {
+            println!("{}", commit_cursor.committed_text());
+        }
     }
     Ok(())
 }
@@ -3836,19 +4829,62 @@ fn run_stream_live_v3_file(
     decode_every_ms: u64,
     pin_wpm: Option<f32>,
     pin_hz: Option<f32>,
+    min_snr_db: f32,
+    play_file_audio: bool,
+    multi_pitch: usize,
+    region_transcript: bool,
+    region_stable_latency_s: f32,
+    region_decode_every_ms: u64,
 ) -> Result<()> {
     use cw_decoder_poc::envelope_decoder::{
-        LiveEnvelopeStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
+        LiveEnvelopeStreamer, LiveMultiPitchStreamer, VizEventKind, MAX_VIZ_ENVELOPE_SAMPLES,
     };
+    use cw_decoder_poc::region_streamer::{RegionStreamer, RegionStreamerConfig};
     use std::time::{Duration, Instant};
 
     let decoded = audio::decode_file(path)?;
     let sr = decoded.sample_rate;
     let total_samples = decoded.samples.len();
     let duration_s = total_samples as f32 / sr as f32;
+    let playback = if play_file_audio {
+        Some(
+            audio::play_samples_with_control(decoded.samples.clone(), sr)
+                .context("starting file playback")?,
+        )
+    } else {
+        None
+    };
     let mut streamer = LiveEnvelopeStreamer::new(sr);
     streamer.set_pinned_hz(pin_hz);
     streamer.set_pinned_wpm(pin_wpm);
+    streamer.set_min_snr_db(min_snr_db);
+
+    let mut multi_streamer = if multi_pitch == 0 {
+        None
+    } else {
+        let mut s = LiveMultiPitchStreamer::new(sr, multi_pitch);
+        s.set_pinned_wpm(pin_wpm);
+        s.set_min_snr_db(min_snr_db);
+        Some(s)
+    };
+
+    let mut region_streamer = if region_transcript {
+        // See run_stream_live_v3 for rationale on starting from the
+        // RegionStreamerConfig::default() tuned defaults rather than
+        // raw RegionStreamConfig::default().
+        let defaults = RegionStreamerConfig::default();
+        let mut region = defaults.region;
+        if let Some(w) = pin_wpm {
+            region.pin_wpm = Some(w);
+        }
+        let cfg = RegionStreamerConfig {
+            region,
+            stable_latency_s: region_stable_latency_s.max(0.0),
+        };
+        Some(RegionStreamer::with_config(sr, cfg))
+    } else {
+        None
+    };
 
     let mut emitter = if json {
         Some(json::JsonEmitter::new())
@@ -3863,7 +4899,9 @@ fn run_stream_live_v3_file(
                 "source": "live-v3-file",
                 "device": format!("file:{}", path.display()),
                 "rate": sr,
+                "playback_device": playback.as_ref().map(|p| p.device_name.as_str()),
                 "decode_every_ms": decode_every_ms,
+                "region_decode_every_ms": region_decode_every_ms,
                 "max_viz_envelope_samples": MAX_VIZ_ENVELOPE_SAMPLES,
                 "recording": serde_json::Value::Null,
                 "pin_wpm": pin_wpm,
@@ -3881,41 +4919,126 @@ fn run_stream_live_v3_file(
     }
 
     let started = Instant::now();
-    let mut last_decode_at = Instant::now();
-    let decode_period = Duration::from_millis(decode_every_ms);
+    let decode_every_samples = ((sr as u64 * decode_every_ms.max(1)) / 1000).max(1) as usize;
+    let mut last_decode_cursor = 0usize;
+    let region_decode_every_samples =
+        ((sr as u64 * region_decode_every_ms.max(1)) / 1000).max(1) as usize;
+    let mut last_region_decode_cursor = 0usize;
     let chunk_period = Duration::from_millis(50);
     let chunk_samples = ((sr as u64 * 50) / 1000) as usize;
+    let pump_period = if playback.is_some() {
+        Duration::from_millis(8)
+    } else {
+        chunk_period
+    };
     let mut cursor = 0usize;
-    let mut last_transcript: Option<String> = None;
+    let decode_every_s = decode_every_ms as f32 / 1000.0;
+    let mut commit_cursor =
+        ditdah_streaming::LiveCommitCursor::new(MAX_V3_SESSION_TRANSCRIPT_CHARS);
+    let mut append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
+    let mut diag = DiagWriter::from_env();
 
     while cursor < total_samples {
         if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
             break;
         }
-        std::thread::sleep(chunk_period);
-        let end = (cursor + chunk_samples).min(total_samples);
+        std::thread::sleep(pump_period);
+        let end = if let Some(p) = playback.as_ref() {
+            (p.position_input_frames() as usize).min(total_samples)
+        } else {
+            (cursor + chunk_samples).min(total_samples)
+        };
         if end > cursor {
             streamer.feed(&decoded.samples[cursor..end]);
+            if let Some(m) = multi_streamer.as_mut() {
+                let _ = m.feed(&decoded.samples[cursor..end]);
+            }
+            if let Some(r) = region_streamer.as_mut() {
+                r.ingest(&decoded.samples[cursor..end]);
+            }
             cursor = end;
         }
 
-        if last_decode_at.elapsed() < decode_period {
+        if cursor.saturating_sub(last_decode_cursor) < decode_every_samples {
             continue;
         }
-        last_decode_at = Instant::now();
+        last_decode_cursor = cursor;
 
         let snap = streamer.flush_with_viz();
         let t = started.elapsed().as_secs_f32();
-        last_transcript = Some(snap.transcript.clone());
+        // Region path runs alongside envelope to handle multi-burst
+        // real-world QSO audio with pauses + speed changes.
+        let mut region_text_full = String::new();
+        if let Some(r) = region_streamer.as_mut() {
+            if cursor.saturating_sub(last_region_decode_cursor) >= region_decode_every_samples {
+                last_region_decode_cursor = cursor;
+                let _ = r.try_commit();
+            }
+            region_text_full = r.transcript().to_string();
+        }
+        // Approach A+: drive the event-driven commit cursor instead of
+        // string-stitching. The cursor is sample-indexed and idempotent
+        // across re-decodes of the same audio region, so the
+        // "TSA USA EE   SA USA EE   ..." ghost-repeat pattern that the
+        // old `append_snapshot_text` produced is structurally
+        // impossible.
+        let commit = if let Some(viz) = snap.viz.as_ref() {
+            commit_cursor.update_from_viz(viz, decode_every_s)
+        } else {
+            ditdah_streaming::CommitUpdate::default()
+        };
+        let append = if let Some(viz) = snap.viz.as_ref() {
+            append_decoder.ingest_viz(viz)
+        } else {
+            cw_decoder_poc::append_decode::AppendDecodeUpdate::default()
+        };
+        let session_transcript: String = format!(
+            "{}{}{}",
+            commit.committed_text,
+            if !commit.committed_text.is_empty()
+                && !commit.provisional_tail.is_empty()
+                && !commit.committed_text.ends_with(' ')
+            {
+                " "
+            } else {
+                ""
+            },
+            commit.provisional_tail
+        );
+        let stitched = !commit.committed_text.is_empty() || !commit.provisional_tail.is_empty();
+        let appended_session = String::new();
+        if let Some(d) = diag.as_mut() {
+            d.record(
+                t,
+                &snap,
+                stitched,
+                &appended_session,
+                &session_transcript,
+                "file",
+            );
+        }
 
+        let use_region = region_streamer.is_some();
+        let eff_text = if use_region {
+            region_text_full.clone()
+        } else {
+            append.decoded_text.clone()
+        };
         if let Some(em) = emitter.as_mut() {
             em.emit(
                 t,
                 serde_json::json!({
                     "type": "transcript",
-                    "text": snap.transcript,
-                    "appended": snap.appended,
+                    "text": eff_text,
+                    "appended": appended_session,
+                    "transcript": eff_text,
+                    "committed": if use_region { region_text_full.clone() } else { commit.committed_text.clone() },
+                    "provisional": if use_region { String::new() } else { commit.provisional_tail.clone() },
+                    "cursor_transcript": session_transcript.clone(),
+                    "raw_morse": append.raw_stream,
+                    "window_text": snap.transcript,
                     "wpm": snap.wpm,
+                    "region_mode": use_region,
                 }),
             );
             if let Some(viz) = snap.viz {
@@ -3942,6 +5065,9 @@ fn run_stream_live_v3_file(
                     t,
                     serde_json::json!({
                         "type": "viz",
+                        "sample_rate": viz.sample_rate,
+                        "window_start_sample": viz.window_start_sample,
+                        "window_end_sample": viz.window_end_sample,
                         "buffer_seconds": viz.buffer_seconds,
                         "frame_step_s": viz.frame_step_s,
                         "pitch_hz": viz.pitch_hz,
@@ -3949,36 +5075,599 @@ fn run_stream_live_v3_file(
                         "envelope_max": viz.envelope_max,
                         "noise_floor": viz.noise_floor,
                         "signal_floor": viz.signal_floor,
+                        "snr_db": viz.snr_db,
+                        "snr_suppressed": viz.snr_suppressed,
                         "hyst_high": viz.hyst_high,
                         "hyst_low": viz.hyst_low,
                         "events": events_json,
                         "on_durations": viz.on_durations,
                         "dot_seconds": viz.dot_seconds,
                         "wpm": viz.wpm,
+                        "wpm_kmeans": viz.wpm_kmeans,
                         "centroid_dot": viz.centroid_dot,
                         "centroid_dah": viz.centroid_dah,
                         "locked_wpm": viz.locked_wpm,
                     }),
                 );
             }
+            if let Some(m) = multi_streamer.as_mut() {
+                let snaps = m.flush_with_viz();
+                if !snaps.is_empty() {
+                    let tracks_json: Vec<serde_json::Value> = snaps
+                        .iter()
+                        .map(|s| {
+                            serde_json::json!({
+                                "track_id": s.track_id,
+                                "pitch_hz": s.pitch_hz,
+                                "wpm": s.wpm,
+                                "transcript": s.transcript,
+                                "appended": s.appended,
+                            })
+                        })
+                        .collect();
+                    em.emit(
+                        t,
+                        serde_json::json!({
+                            "event": "multi_track_transcript",
+                            "type": "multi_track_transcript",
+                            "tracks": tracks_json,
+                        }),
+                    );
+                }
+            }
         } else {
             println!("[t={:>6.2}s wpm={:>5.1}] {}", t, snap.wpm, snap.transcript);
+            if let Some(m) = multi_streamer.as_mut() {
+                let snaps = m.flush();
+                for s in snaps {
+                    println!(
+                        "  track {} @ {:>5.1} Hz wpm={:>5.1}: {}",
+                        s.track_id, s.pitch_hz, s.wpm, s.transcript
+                    );
+                }
+            }
         }
     }
 
+    let final_region_text = if let Some(r) = region_streamer.as_mut() {
+        let _ = r.flush();
+        r.transcript().to_string()
+    } else {
+        String::new()
+    };
     if let Some(em) = emitter.as_mut() {
+        let final_text = if region_streamer.is_some() {
+            final_region_text
+        } else {
+            commit_cursor.committed_text().to_string()
+        };
         em.emit(
             started.elapsed().as_secs_f32(),
             serde_json::json!({
                 "type": "end",
-                "transcript": last_transcript.unwrap_or_default(),
+                "transcript": final_text,
+                "committed": final_text,
                 "recording": serde_json::Value::Null,
             }),
         );
     } else {
         println!();
         println!("Final transcript (v3 file):");
-        println!("{}", last_transcript.unwrap_or_default());
+        if region_streamer.is_some() {
+            println!("{final_region_text}");
+        } else {
+            println!("{}", commit_cursor.committed_text());
+        }
     }
     Ok(())
+}
+
+/// Region-based streaming decoder (file mode).
+///
+/// Streams the file at real-time pace into a [`RegionStreamer`] that
+/// detects active morse bursts (separated by background static),
+/// decodes each burst at its own auto-WPM with the ditdah baseline,
+/// and emits append-only `transcript` JSON events to stdout.
+///
+/// Validated end-to-end on the `radio-20260502-105714.mp3` real-world
+/// sample (4 bursts at 13/8/39/29 WPM separated by ~1-7s of static)
+/// where it produces an exact match for the ground truth transcript.
+fn run_stream_region_file(
+    path: &std::path::Path,
+    json: bool,
+    decode_every_ms: u64,
+    stable_latency_s: f32,
+    merge_gap_s: f32,
+    min_region_s: f32,
+    threshold_factor: f32,
+    pad_s: f32,
+    realtime: bool,
+) -> Result<()> {
+    use cw_decoder_poc::region_stream::RegionStreamConfig;
+    use cw_decoder_poc::region_streamer::{RegionStreamer, RegionStreamerConfig};
+    use std::time::{Duration, Instant};
+
+    let decoded = audio::decode_file(path)?;
+    let sr = decoded.sample_rate;
+    let total_samples = decoded.samples.len();
+    let duration_s = total_samples as f32 / sr.max(1) as f32;
+
+    let region_cfg = RegionStreamConfig {
+        merge_gap_s,
+        min_region_s,
+        threshold_factor,
+        pad_s,
+        ..RegionStreamConfig::default()
+    };
+
+    let cfg = RegionStreamerConfig {
+        region: region_cfg,
+        stable_latency_s,
+    };
+    let mut streamer = RegionStreamer::with_config(sr, cfg);
+
+    let mut emitter = if json {
+        Some(json::JsonEmitter::new())
+    } else {
+        None
+    };
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            0.0,
+            serde_json::json!({
+                "type": "ready",
+                "source": "stream-region-file",
+                "device": format!("file:{}", path.display()),
+                "rate": sr,
+                "decode_every_ms": decode_every_ms,
+                "duration_s": duration_s,
+                "stable_latency_s": stable_latency_s,
+                "merge_gap_s": merge_gap_s,
+                "min_region_s": min_region_s,
+                "threshold_factor": threshold_factor,
+                "pad_s": pad_s,
+            }),
+        );
+    } else {
+        println!(
+            "Streaming file (region-based): {} @ {} Hz ({:.2}s); decode every {} ms; stable_latency={:.2}s",
+            path.display(),
+            sr,
+            duration_s,
+            decode_every_ms,
+            stable_latency_s,
+        );
+    }
+
+    let chunk_period = Duration::from_millis(50);
+    let chunk_samples = ((sr as u64 * 50) / 1000).max(1) as usize;
+    let decode_every_samples = ((sr as u64 * decode_every_ms.max(1)) / 1000).max(1) as usize;
+    let started = Instant::now();
+    let mut last_decode_cursor = 0usize;
+    let mut cursor = 0usize;
+
+    while cursor < total_samples {
+        let end = (cursor + chunk_samples).min(total_samples);
+        let chunk = &decoded.samples[cursor..end];
+        cursor = end;
+        streamer.ingest(chunk);
+
+        if cursor.saturating_sub(last_decode_cursor) >= decode_every_samples {
+            last_decode_cursor = cursor;
+            let committed = streamer.try_commit();
+            let t = started.elapsed().as_secs_f32();
+            emit_region_transcript(emitter.as_mut(), t, streamer.transcript(), &committed);
+        }
+
+        if realtime {
+            std::thread::sleep(chunk_period);
+        }
+    }
+
+    // Final commit: force-flush any in-flight regions.
+    let final_committed = streamer.flush();
+    let t = started.elapsed().as_secs_f32();
+    emit_region_transcript(emitter.as_mut(), t, streamer.transcript(), &final_committed);
+
+    if let Some(em) = emitter.as_mut() {
+        em.emit(
+            t,
+            serde_json::json!({
+                "type": "end",
+                "transcript": streamer.transcript(),
+                "committed": streamer.transcript(),
+            }),
+        );
+    } else {
+        println!();
+        println!("Final transcript (region-based):");
+        println!("{}", streamer.transcript());
+    }
+    Ok(())
+}
+
+fn emit_region_transcript(
+    emitter: Option<&mut json::JsonEmitter>,
+    t: f32,
+    transcript: &str,
+    just_committed: &[cw_decoder_poc::region_streamer::CommittedRegion],
+) {
+    if let Some(em) = emitter {
+        let appended: String = just_committed
+            .iter()
+            .map(|r| r.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        em.emit(
+            t,
+            serde_json::json!({
+                "type": "transcript",
+                "text": transcript,
+                "appended": appended,
+                "transcript": transcript,
+                "committed": transcript,
+                "provisional": "",
+                "wpm": 0.0,
+            }),
+        );
+    } else if !just_committed.is_empty() {
+        for r in just_committed {
+            println!(
+                "[t={:>6.2}s region {:.2}-{:.2}] {}",
+                t, r.start_s, r.end_s, r.text
+            );
+        }
+    }
+}
+
+/// enough to be stitched into the persistent session transcript.
+///
+/// The streamer enters `LOCKED` (i.e. `viz.locked_wpm = Some(_)`) only
+/// after `lock_after_elements` consistent symbol observations. Cycles
+/// before that point are still useful for the live envelope viz but
+/// their `text` is typically classifier garbage from the keying
+/// hysteresis sliding around. SNR-suppressed cycles are also skipped
+/// even if locked, because by definition they emitted no transcript.
+///
+/// This intentionally does NOT inspect the snapshot text itself — the
+/// "operator sees what the decoder is making" principle from PR #362
+/// still applies to *which characters* end up in the session. We are
+/// only filtering *which cycles* are allowed to contribute.
+#[allow(dead_code)] // Retained for legacy tests; V3 now uses LiveCommitCursor.
+fn should_stitch_to_session(snap: &cw_decoder_poc::envelope_decoder::LiveEnvelopeSnapshot) -> bool {
+    let Some(viz) = snap.viz.as_ref() else {
+        return false;
+    };
+    viz.locked_wpm.is_some() && !viz.snr_suppressed
+}
+
+/// Per-cycle diagnostic recorder for the V3 live path.
+///
+/// TEMPORARY — added under #364 follow-up to gather rich data before
+/// hypothesizing about why locked windows still drop characters into
+/// the session transcript. Remove or gate behind a build flag once the
+/// transcript-fidelity work is done.
+///
+/// Activated by setting the env var `QSORIPPER_CW_DIAG_LOG` to a file
+/// path before launching `cw-decoder.exe stream-live-v3` (directly or
+/// via the GUI). One JSON line per decode cycle is appended.
+struct DiagWriter {
+    file: std::fs::File,
+    cycle: u64,
+}
+
+impl DiagWriter {
+    fn from_env() -> Option<Self> {
+        let path = std::env::var("QSORIPPER_CW_DIAG_LOG").ok()?;
+        let path = path.trim();
+        if path.is_empty() {
+            return None;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| eprintln!("[diag] cannot open {path}: {e}"))
+            .ok()?;
+        eprintln!("[diag] writing per-cycle diagnostics to {path}");
+        Some(Self { file, cycle: 0 })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record(
+        &mut self,
+        t_seconds: f32,
+        snap: &cw_decoder_poc::envelope_decoder::LiveEnvelopeSnapshot,
+        stitched: bool,
+        appended_session: &str,
+        session_transcript: &str,
+        source: &str,
+    ) {
+        use std::io::Write;
+        let viz = snap.viz.as_ref();
+        let locked = viz.is_some_and(|v| v.locked_wpm.is_some());
+        let locked_wpm = viz.and_then(|v| v.locked_wpm);
+        let snr_db = viz.map(|v| v.snr_db).unwrap_or(0.0);
+        let snr_suppressed = viz.is_some_and(|v| v.snr_suppressed);
+        let pitch_hz = viz.map(|v| v.pitch_hz).unwrap_or(0.0);
+        let signal_floor = viz.map(|v| v.signal_floor).unwrap_or(0.0);
+        let noise_floor = viz.map(|v| v.noise_floor).unwrap_or(0.0);
+        let envelope_max = viz.map(|v| v.envelope_max).unwrap_or(0.0);
+        let dyn_range = if envelope_max > 0.0 {
+            (signal_floor - noise_floor) / envelope_max
+        } else {
+            0.0
+        };
+        let dot_seconds = viz.map(|v| v.dot_seconds).unwrap_or(0.0);
+        let viz_wpm = viz.map(|v| v.wpm).unwrap_or(0.0);
+        let n_events = viz.map(|v| v.events.len()).unwrap_or(0);
+        let n_on_durations = viz.map(|v| v.on_durations.len()).unwrap_or(0);
+        let session_len = session_transcript.chars().count();
+        let line = serde_json::json!({
+            "type": "diag_cycle",
+            "source": source,
+            "cycle": self.cycle,
+            "t_s": t_seconds,
+            "snap": {
+                "text": snap.transcript,
+                "appended": snap.appended,
+                "wpm": snap.wpm,
+            },
+            "viz": {
+                "locked": locked,
+                "locked_wpm": locked_wpm,
+                "snr_db": snr_db,
+                "snr_suppressed": snr_suppressed,
+                "dyn_range_ratio": dyn_range,
+                "signal_floor": signal_floor,
+                "noise_floor": noise_floor,
+                "envelope_max": envelope_max,
+                "pitch_hz": pitch_hz,
+                "dot_seconds": dot_seconds,
+                "wpm": viz_wpm,
+                "n_events": n_events,
+                "n_on_durations": n_on_durations,
+            },
+            "session": {
+                "stitched": stitched,
+                "appended": appended_session,
+                "len_chars": session_len,
+            },
+        });
+        if let Err(e) = writeln!(self.file, "{line}") {
+            eprintln!("[diag] write failed: {e}");
+        }
+        self.cycle += 1;
+    }
+}
+
+/// Maximum characters retained in the V3 visualizer's session transcript.
+/// When exceeded, [`cap_session_transcript`] trims back to ~80% on a
+/// whitespace boundary so old garbage is evicted as fresh copy lands.
+const MAX_V3_SESSION_TRANSCRIPT_CHARS: usize = 12_000;
+
+/// Cap the running session transcript at `max_chars`. When over the limit,
+/// keep roughly the last 80% of the buffer, snapping the trim point to the
+/// nearest whitespace so we don't shear a token in half.
+#[allow(dead_code)] // Retained for legacy tests; V3 now uses LiveCommitCursor.
+fn cap_session_transcript(transcript: &mut String, max_chars: usize) {
+    if transcript.chars().count() <= max_chars {
+        return;
+    }
+    let target = (max_chars * 4) / 5;
+    let total = transcript.chars().count();
+    let drop_chars = total.saturating_sub(target);
+    let mut byte_cut = 0usize;
+    for (i, (b, _)) in transcript.char_indices().enumerate() {
+        if i >= drop_chars {
+            byte_cut = b;
+            break;
+        }
+    }
+    let tail = &transcript[byte_cut..];
+    let trimmed = match tail.find(char::is_whitespace) {
+        Some(ws) => tail[ws..].trim_start().to_string(),
+        None => tail.to_string(),
+    };
+    *transcript = trimmed;
+}
+
+#[cfg(test)]
+mod v3_session_transcript_tests {
+    use super::*;
+    use cw_decoder_poc::envelope_decoder;
+
+    #[test]
+    fn rolling_snapshots_grow_session_via_token_overlap() {
+        let mut session = String::new();
+        ditdah_streaming::append_snapshot_text(&mut session, "CQ DE K7XYZ");
+        ditdah_streaming::append_snapshot_text(&mut session, "DE K7XYZ K7XYZ");
+        ditdah_streaming::append_snapshot_text(&mut session, "K7XYZ K UR RST");
+        // The session grows monotonically and contains the original tokens.
+        assert!(session.contains("CQ"));
+        assert!(session.contains("K7XYZ"));
+        assert!(session.contains("RST"));
+    }
+
+    #[test]
+    fn rolling_snapshots_dont_double_repeat_callsigns() {
+        let mut session = String::new();
+        ditdah_streaming::append_snapshot_text(&mut session, "CQ DE K7XYZ");
+        ditdah_streaming::append_snapshot_text(&mut session, "CQ DE K7XYZ");
+        // Repeating the same snapshot should NOT double the content.
+        let count = session.matches("K7XYZ").count();
+        assert_eq!(count, 1, "session was: {session:?}");
+    }
+
+    #[test]
+    fn unrelated_garbage_snapshot_is_appended_not_filtered() {
+        // Explicit anti-anchor test: we deliberately do NOT gate or filter
+        // garbage snapshots. The operator sees what the decoder is making.
+        let mut session = String::new();
+        ditdah_streaming::append_snapshot_text(&mut session, "CQ DE K7XYZ");
+        ditdah_streaming::append_snapshot_text(&mut session, "?Q??E??ZZ");
+        assert!(
+            session.contains("?Q??E??ZZ") || session.len() > "CQ DE K7XYZ".len(),
+            "garbage snapshot should reach the session unmodified, got: {session:?}",
+        );
+    }
+
+    #[test]
+    fn cap_session_transcript_keeps_recent_tail_on_word_boundary() {
+        let mut s = ('A'..='Z')
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        // Repeat to exceed the cap.
+        let mut big = String::new();
+        for _ in 0..600 {
+            big.push_str(&s);
+            big.push(' ');
+        }
+        s = big;
+        let original_len = s.chars().count();
+        assert!(original_len > 12_000);
+        cap_session_transcript(&mut s, 12_000);
+        assert!(s.chars().count() < original_len);
+        assert!(s.chars().count() <= 12_000);
+        // Trim should snap to whitespace so first chunk isn't a half token.
+        assert!(s.chars().next().is_some_and(|c| c.is_ascii_uppercase()));
+    }
+
+    #[test]
+    fn cap_session_transcript_noop_when_under_limit() {
+        let original = "CQ DE K7XYZ".to_string();
+        let mut s = original.clone();
+        cap_session_transcript(&mut s, 12_000);
+        assert_eq!(s, original);
+    }
+
+    fn make_snapshot(
+        text: &str,
+        viz: Option<envelope_decoder::VizFrame>,
+    ) -> envelope_decoder::LiveEnvelopeSnapshot {
+        envelope_decoder::LiveEnvelopeSnapshot {
+            transcript: text.to_string(),
+            appended: text.to_string(),
+            wpm: 20.0,
+            viz,
+        }
+    }
+
+    fn make_viz(locked: bool, suppressed: bool) -> envelope_decoder::VizFrame {
+        envelope_decoder::VizFrame {
+            sample_rate: 8000,
+            frame_step_s: 0.005,
+            buffer_seconds: 1.0,
+            pitch_hz: 700.0,
+            envelope: vec![],
+            envelope_max: 1.0,
+            noise_floor: 0.05,
+            signal_floor: 0.5,
+            snr_db: 20.0,
+            snr_suppressed: suppressed,
+            hyst_high: 0.55,
+            hyst_low: 0.35,
+            events: vec![],
+            on_durations: vec![],
+            dot_seconds: 0.06,
+            wpm: 20.0,
+            wpm_kmeans: 20.0,
+            centroid_dot: 0.06,
+            centroid_dah: 0.18,
+            locked_wpm: if locked { Some(20.0) } else { None },
+            window_start_sample: 0,
+            window_end_sample: 8000,
+        }
+    }
+
+    #[test]
+    fn should_stitch_to_session_requires_lock() {
+        // ACQUIRING (locked_wpm = None) → no stitch even if the cycle
+        // produced text. This filters the per-cycle classifier garbage
+        // that PR #362 made visible in the operator-facing transcript.
+        let snap = make_snapshot("US AS USE", Some(make_viz(false, false)));
+        assert!(!should_stitch_to_session(&snap));
+    }
+
+    #[test]
+    fn should_stitch_to_session_blocks_snr_suppressed_cycles() {
+        // Even if the streamer is locked, an SNR-suppressed cycle
+        // contributed nothing meaningful. Don't stitch (and avoid
+        // race conditions where text is non-empty due to leftover
+        // state but the gate fired).
+        let snap = make_snapshot("CQ", Some(make_viz(true, true)));
+        assert!(!should_stitch_to_session(&snap));
+    }
+
+    #[test]
+    fn should_stitch_to_session_allows_locked_clean_cycles() {
+        let snap = make_snapshot("CQ DE K7XYZ", Some(make_viz(true, false)));
+        assert!(should_stitch_to_session(&snap));
+    }
+
+    #[test]
+    fn should_stitch_to_session_skips_when_viz_absent() {
+        // Snapshots produced by the non-viz path have no information
+        // about lock state, so be conservative and skip.
+        let snap = make_snapshot("CQ", None);
+        assert!(!should_stitch_to_session(&snap));
+    }
+}
+
+#[cfg(test)]
+mod stdin_control_tests {
+    use super::*;
+
+    /// Critical regression: the GUI's graceful Stop signal arrives as a
+    /// literal `stop\n` line, not as JSON. Without the `Stop` outcome,
+    /// the V3 child never observes the request, the GUI eventually falls
+    /// back to Process.Kill, LiveCapture::drop never runs, and every
+    /// saved capture lands on disk with riffSize=0/dataSize=0 — making
+    /// real-radio diagnostic captures unusable for offline replay /
+    /// regression scoring.
+    #[test]
+    fn parser_treats_literal_stop_line_as_stop() {
+        let mut state = streaming::DecoderConfig::defaults();
+        assert!(parse_stdin_control_line(&mut state, "stop").is_stop());
+        assert!(parse_stdin_control_line(&mut state, "  STOP  \r").is_stop());
+        assert!(parse_stdin_control_line(&mut state, "Stop\n").is_stop());
+    }
+
+    #[test]
+    fn parser_skips_blank_and_unknown_lines() {
+        let mut state = streaming::DecoderConfig::defaults();
+        assert!(parse_stdin_control_line(&mut state, "").is_skip());
+        assert!(parse_stdin_control_line(&mut state, "    ").is_skip());
+        assert!(parse_stdin_control_line(&mut state, "garbage{").is_skip());
+        // Valid JSON without a recognized type is also a no-op.
+        assert!(parse_stdin_control_line(&mut state, r#"{"hello":"world"}"#).is_skip());
+    }
+
+    #[test]
+    fn parser_recognizes_reset_lock_and_config() {
+        let mut state = streaming::DecoderConfig::defaults();
+        assert!(parse_stdin_control_line(&mut state, r#"{"type":"reset_lock"}"#).is_reset_lock());
+        match parse_stdin_control_line(
+            &mut state,
+            r#"{"type":"config","min_snr_db":12.5,"threshold_scale":1.5}"#,
+        ) {
+            StdinParseOutcome::Message(StdinControlMessage::Config(cfg)) => {
+                assert!((cfg.min_snr_db - 12.5).abs() < 1e-3);
+                assert!((cfg.threshold_scale - 1.5).abs() < 1e-3);
+            }
+            other => panic!("expected Config message, got {other:?}"),
+        }
+        // Cumulative state: a partial config message preserves prior values.
+        match parse_stdin_control_line(&mut state, r#"{"type":"config","min_snr_db":3.0}"#) {
+            StdinParseOutcome::Message(StdinControlMessage::Config(cfg)) => {
+                assert!((cfg.min_snr_db - 3.0).abs() < 1e-3);
+                assert!(
+                    (cfg.threshold_scale - 1.5).abs() < 1e-3,
+                    "threshold_scale should persist across config updates",
+                );
+            }
+            other => panic!("expected Config message, got {other:?}"),
+        }
+    }
 }

@@ -88,11 +88,18 @@ internal sealed class CwDecoderProcess : IDisposable
     /// Live capture using the in-house envelope decoder + visualizer
     /// emission (stream-live-v3). Drives the VISUALIZER tab.
     /// </summary>
+    private const int RegionTranscriptDecodeEveryMs = 2000;
+
     public void StartLiveV3(string? device, int decodeEveryMs = 250, string? recordPath = null, bool loopback = false, double pinWpm = 0, double pinHz = 0)
     {
         Stop();
         var ic = CultureInfo.InvariantCulture;
-        var args = $"stream-live-v3 --json --stdin-control --decode-every-ms {decodeEveryMs.ToString(ic)}";
+        // --region-transcript runs a RegionStreamer alongside the
+        // envelope decoder so the visualizer keeps its viz events but
+        // the transcript field is sourced from region-isolated decode.
+        // Handles real-world QSO audio with pauses between bursts at
+        // very different WPMs.
+        var args = $"stream-live-v3 --json --stdin-control --region-transcript --decode-every-ms {decodeEveryMs.ToString(ic)} --region-decode-every-ms {RegionTranscriptDecodeEveryMs.ToString(ic)}";
         if (pinWpm > 0) args += $" --pin-wpm {pinWpm.ToString(ic)}";
         if (pinHz > 0) args += $" --pin-hz {pinHz.ToString(ic)}";
         if (!string.IsNullOrWhiteSpace(device)) args += $" --device \"{device}\"";
@@ -101,11 +108,13 @@ internal sealed class CwDecoderProcess : IDisposable
         Spawn(args);
     }
 
-    public void StartFileV3(string filePath, int decodeEveryMs = 250, double pinWpm = 0, double pinHz = 0)
+    public void StartFileV3(string filePath, int decodeEveryMs = 250, double pinWpm = 0, double pinHz = 0, bool playAudio = false)
     {
         Stop();
         var ic = CultureInfo.InvariantCulture;
-        var args = $"stream-live-v3 --json --decode-every-ms {decodeEveryMs.ToString(ic)} --file \"{filePath}\"";
+        // See StartLiveV3 for --region-transcript rationale.
+        var args = $"stream-live-v3 --json --region-transcript --decode-every-ms {decodeEveryMs.ToString(ic)} --region-decode-every-ms {RegionTranscriptDecodeEveryMs.ToString(ic)} --file \"{filePath}\"";
+        if (playAudio) args += " --play";
         if (pinWpm > 0) args += $" --pin-wpm {pinWpm.ToString(ic)}";
         if (pinHz > 0) args += $" --pin-hz {pinHz.ToString(ic)}";
         Spawn(args);
@@ -499,10 +508,11 @@ internal sealed class CwDecoderProcess : IDisposable
 
     public void Stop()
     {
+        var cts = _cts;
+        var proc = _proc;
         try
         {
-            _cts?.Cancel();
-            if (_proc is { HasExited: false } proc)
+            if (proc is { HasExited: false })
             {
                 // Signal the Rust child to shut down gracefully:
                 //   1) Write "stop\n" — the watcher thread's blocking read
@@ -512,9 +522,11 @@ internal sealed class CwDecoderProcess : IDisposable
                 //      hound finalizes the WAV header. Without this the
                 //      recording has RIFF size=0 / missing data chunk and
                 //      Replay & Score gets "(empty)".
-                // The Rust path finalizes the WAV BEFORE emitting the end
-                // event, so even if we fall through to Kill the header is
-                // already valid.
+                //
+                // Keep stdout/stderr pumps alive while waiting. stream-live-v3
+                // emits large viz JSON; canceling the pumps first can fill the
+                // redirected stdout pipe, block Rust before it observes stop,
+                // and force the Kill fallback before the WAV is finalized.
                 try
                 {
                     proc.StandardInput.WriteLine("stop");
@@ -527,8 +539,12 @@ internal sealed class CwDecoderProcess : IDisposable
                     try { proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
                 }
             }
+            cts?.Cancel();
         }
-        catch { /* ignored */ }
+        catch
+        {
+            cts?.Cancel();
+        }
         _proc = null;
         _cts = null;
     }

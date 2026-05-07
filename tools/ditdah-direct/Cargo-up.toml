@@ -1,0 +1,13 @@
+[package]
+name = "ditdah-direct-up"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+ditdah = { path = "../../experiments/cw-decoder/vendor/ditdah" }
+
+[[bin]]
+name = "ditdah-direct-up"
+path = "main.rs"
+
+[workspace]

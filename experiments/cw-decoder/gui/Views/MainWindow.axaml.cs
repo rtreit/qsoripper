@@ -1,16 +1,49 @@
 using Avalonia.Controls;
 using Avalonia.Markup.Xaml;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using CwDecoderGui.ViewModels;
+using System.ComponentModel;
 using System.Linq;
 
 namespace CwDecoderGui.Views;
 
 public partial class MainWindow : Window
 {
-    public MainWindow() => InitializeComponent();
+    public MainWindow()
+    {
+        InitializeComponent();
+        DataContextChanged += OnDataContextChanged;
+        HookVmForTranscriptScroll(DataContext as MainWindowViewModel);
+    }
 
     private void InitializeComponent() => AvaloniaXamlLoader.Load(this);
+
+    private MainWindowViewModel? _vmHooked;
+
+    private void OnDataContextChanged(object? sender, System.EventArgs e)
+    {
+        HookVmForTranscriptScroll(DataContext as MainWindowViewModel);
+    }
+
+    private void HookVmForTranscriptScroll(MainWindowViewModel? vm)
+    {
+        if (ReferenceEquals(_vmHooked, vm)) return;
+        if (_vmHooked is not null) _vmHooked.PropertyChanged -= OnVmPropertyChanged;
+        _vmHooked = vm;
+        if (_vmHooked is not null) _vmHooked.PropertyChanged += OnVmPropertyChanged;
+    }
+
+    private void OnVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(MainWindowViewModel.VizTranscript)) return;
+        // Defer to keep the scroll-extent updated after layout so we land at the bottom.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (this.FindControl<ScrollViewer>("VizTranscriptScroll") is { } sv)
+                sv.ScrollToEnd();
+        }, DispatcherPriority.Background);
+    }
 
     private MainWindowViewModel? Vm => DataContext as MainWindowViewModel;
 
@@ -38,6 +71,30 @@ public partial class MainWindow : Window
         var first = picked.FirstOrDefault();
         if (first?.TryGetLocalPath() is string path)
             Vm.StartVizFile(path);
+    }
+
+    private async void OnCopyVizTranscriptClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm is null || string.IsNullOrWhiteSpace(Vm.VizCopyText)) return;
+        if (Clipboard is { } clip)
+        {
+            await clip.SetTextAsync(Vm.VizCopyText);
+        }
+    }
+
+    private void OnToggleVizEditClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.ToggleVizEditMode();
+
+    private void OnSaveVizTruthClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.SaveVizTruth();
+
+    private void OnUseVizCaptureInLabelingClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (Vm?.SendVizCaptureToLabeling() == true
+            && this.FindControl<TabControl>("MainTabs") is { } tabs)
+        {
+            tabs.SelectedIndex = 1;
+        }
     }
 
     private void OnRefreshClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -119,6 +176,9 @@ public partial class MainWindow : Window
     private void OnStartPlaybackClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.StartPlayback();
 
+    private void OnRewindPlaybackClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.RewindPlayback();
+
     private void OnStopPlaybackClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => Vm?.StopPlayback();
 
@@ -186,6 +246,9 @@ public partial class MainWindow : Window
         if (Vm is null) return;
         await Vm.RunStrategySweepAsync();
     }
+
+    private void OnResetStrategyDefaultsClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => Vm?.ResetStrategyDefaults();
 
     private async void OnCopyStrategySweepMarkdownClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {

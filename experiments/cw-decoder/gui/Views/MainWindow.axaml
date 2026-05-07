@@ -130,7 +130,7 @@
     </Border>
 
 
-    <TabControl Grid.Row="2" Margin="14,12,14,4">
+    <TabControl x:Name="MainTabs" Grid.Row="2" Margin="14,12,14,4">
       <TabItem Header="DECODE">
         <Border Classes="panel">
           <Grid RowDefinitions="Auto,Auto,Auto,Auto,*,Auto">
@@ -577,7 +577,7 @@
                 <NumericUpDown Minimum="0.25" Maximum="6" Increment="0.25" Value="{Binding HarvestHopSeconds, Mode=TwoWay}" />
               </StackPanel>
               <StackPanel Grid.Column="3" Spacing="2">
-                <TextBlock Text="SLOWDOWN ×" Classes="label" />
+                <TextBlock Text="SLOWDOWN × (1 = original)" Classes="label" />
                 <NumericUpDown Minimum="1" Maximum="6" Increment="0.25" Value="{Binding PreviewSlowdown, Mode=TwoWay}" />
               </StackPanel>
               <Button Grid.Column="4" Classes="primary" Content="PLAY PREVIEW" Click="OnPlayPreviewClick" Margin="0,16,0,0"
@@ -655,7 +655,7 @@
                     <TextBlock Grid.Column="1" Text="{Binding SelectedCandidateNeedles}" Foreground="{StaticResource AccentLime}" />
                   </Grid>
                   <Border Grid.Row="3" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8">
-                    <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+                    <Grid RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="8">
                       <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="10">
                         <TextBlock Text="SIGNAL PROFILE" Classes="label" />
                         <TextBlock Grid.Column="1" Text="{Binding AdjustedRangeLabel}" Foreground="{StaticResource AccentMag}" />
@@ -665,7 +665,7 @@
                                 IsEnabled="{Binding CanUseSuggestedSpan}" FontSize="11" Padding="14,4" />
                       </Grid>
                       <TextBlock Grid.Row="1"
-                                 Text="Cyan outline = harvested span. Lime outline = pause-based suggestion. Drag the magenta handles or drag inside the magenta range to move the exact window."
+                                 Text="Cyan outline = harvested span. Lime outline = pause-based suggestion. Drag the magenta handles or drag inside the magenta range to move the exact window. Cyan playhead tracks audio playback."
                                  Classes="label" TextWrapping="Wrap" />
                       <Grid Grid.Row="2" RowDefinitions="Auto,*" RowSpacing="6">
                         <TextBlock Text="LOADING PROFILE..."
@@ -682,8 +682,41 @@
                                                SuggestedEndSeconds="{Binding CurrentSignalProfile.SuggestedEndSeconds}"
                                                SelectionStartSeconds="{Binding AdjustedStartSeconds, Mode=TwoWay}"
                                                SelectionEndSeconds="{Binding AdjustedEndSeconds, Mode=TwoWay}"
-                                               Threshold="{Binding CurrentSignalProfile.Threshold}" />
+                                               Threshold="{Binding CurrentSignalProfile.Threshold}"
+                                               PlayheadSeconds="{Binding LabelPreviewPlayheadSeconds}"
+                                               ShowPlayhead="{Binding IsLabelPreviewActive}" />
                       </Grid>
+                      <Border Grid.Row="3" BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="6"
+                              IsVisible="{Binding IsLabelPreviewActive}">
+                        <Grid RowDefinitions="Auto,Auto" RowSpacing="6">
+                          <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto" ColumnSpacing="6">
+                            <Button Classes="primary" Content="⏮" Click="OnRewindPlaybackClick"
+                                    IsEnabled="{Binding HasPlaybackSource}" FontSize="14" Padding="10,4"
+                                    ToolTip.Tip="Rewind to start of preview" />
+                            <Button Grid.Column="1" Classes="primary" Content="▶ PLAY" Click="OnStartPlaybackClick"
+                                    IsEnabled="{Binding CanStartPlayback}" FontSize="11" Padding="12,4" />
+                            <Button Grid.Column="2" Classes="primary" Content="{Binding PauseResumeLabel}" Click="OnPauseResumeClick"
+                                    IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="12,4" />
+                            <Button Grid.Column="3" Classes="primary" Content="⏹ STOP" Click="OnStopPlaybackClick"
+                                    IsEnabled="{Binding CanStopPlayback}" FontSize="11" Padding="12,4" />
+                            <Button Grid.Column="4" Classes="primary" Content="✕ CLOSE" Click="OnClosePlaybackClick"
+                                    FontSize="11" Padding="12,4"
+                                    ToolTip.Tip="Close audio preview" />
+                          </Grid>
+                          <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                            <TextBlock Text="{Binding PlaybackPositionDisplay}" FontFamily="Consolas"
+                                       Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
+                            <Slider Grid.Column="1" Minimum="0"
+                                    Maximum="{Binding PlaybackDurationSeconds}"
+                                    Value="{Binding PlaybackPositionSeconds, Mode=TwoWay}"
+                                    IsEnabled="{Binding HasPlaybackSource}"
+                                    VerticalAlignment="Center"
+                                    ToolTip.Tip="Drag to scrub through the slowed preview" />
+                            <TextBlock Grid.Column="2" Text="{Binding PlaybackDurationDisplay}" FontFamily="Consolas"
+                                       Foreground="{StaticResource AccentLime}" VerticalAlignment="Center" />
+                          </Grid>
+                        </Grid>
+                      </Border>
                     </Grid>
                   </Border>
                   <StackPanel Grid.Row="4" Spacing="6">
@@ -721,32 +754,52 @@
             <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" ColumnSpacing="10">
               <TextBlock Text="LABEL EVAL / SWEEP" Classes="label" VerticalAlignment="Center" />
               <CheckBox Grid.Column="1" Content="ALL LABELS" IsChecked="{Binding EvaluateAllLabels, Mode=TwoWay}" VerticalAlignment="Center" />
-              <CheckBox Grid.Column="2" Content="FULL STREAM" IsChecked="{Binding UseFullStreamScorer, Mode=TwoWay}" VerticalAlignment="Center"
-                        ToolTip.Tip="SCORE LABELS scoring mode. Off = exact-window (decode just the labeled slice; measures decoder quality). On = full-stream (run the streaming decoder over the whole file and align to the label window; measures live acquisition + lock behavior — much harsher, often CER 0.8+ on the same clip)." />
-              <CheckBox Grid.Column="3" Content="WIDE SWEEP" IsChecked="{Binding UseWideSweep, Mode=TwoWay}" VerticalAlignment="Center" />
-              <CheckBox Grid.Column="4" Content="USE CHECKED LABELS" IsChecked="{Binding UseSelectedLabelFiles, Mode=TwoWay}" VerticalAlignment="Center" />
-              <Button Grid.Column="5" Classes="primary" Content="SCORE LABELS (v1 legacy)" Click="OnRunLabelScoreClick"
+              <CheckBox Grid.Column="2" Content="WIDE SWEEP" IsChecked="{Binding UseWideSweep, Mode=TwoWay}" VerticalAlignment="Center" />
+              <CheckBox Grid.Column="3" Content="USE CHECKED LABELS" IsChecked="{Binding UseSelectedLabelFiles, Mode=TwoWay}" VerticalAlignment="Center" />
+              <Button Grid.Column="4" Content="{Binding StrategyPickerSummary}" FontSize="11" Padding="14,4"
+                      VerticalAlignment="Center"
+                      ToolTip.Tip="Pick which strategies the eval binary scores. auto/N = ditdah whole-buffer. region/regionN = region-stream pipeline + ditdah. env/envN = offline envelope decoder. live-env = VISUALIZER tab streamer. Use CUSTOM TOKENS for one-offs (e.g. region30,env25).">
+                <Button.Flyout>
+                  <Flyout Placement="Bottom">
+                    <StackPanel Orientation="Vertical" Spacing="6" MinWidth="240">
+                      <TextBlock Text="STRATEGIES" Classes="label" />
+                      <ItemsControl ItemsSource="{Binding StrategyOptions}">
+                        <ItemsControl.ItemTemplate>
+                          <DataTemplate>
+                            <CheckBox Content="{Binding Label}"
+                                      IsChecked="{Binding IsChecked, Mode=TwoWay}"
+                                      ToolTip.Tip="{Binding Tooltip}" />
+                          </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                      </ItemsControl>
+                      <TextBlock Text="CUSTOM TOKENS" Classes="label" Margin="0,4,0,0" />
+                      <TextBox Text="{Binding StrategySweepCustomTokens, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                               Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}"
+                               Watermark="region30,env25,live-env"
+                               ToolTip.Tip="Comma-separated extra tokens forwarded verbatim to the eval binary." />
+                      <Button Content="RESET TO DEFAULTS" Click="OnResetStrategyDefaultsClick"
+                              FontSize="11" Padding="10,4" HorizontalAlignment="Stretch" />
+                    </StackPanel>
+                  </Flyout>
+                </Button.Flyout>
+              </Button>
+              <Button Grid.Column="5" Classes="primary" Content="SCORE LABELS (v2 — recommended)" Click="OnRunStrategySweepClick"
                       IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4"
-                      ToolTip.Tip="LEGACY label-eval harness that runs the v1 streaming decoder (window/decode_every/confirmations). The live decoder on the DECODE tab does NOT use this path — it uses Whole-buffer ditdah (v2) by default. Use STRATEGY SWEEP for honest decoder-quality numbers; this button is kept only for historical comparison." />
-              <Button Grid.Column="6" Classes="primary" Content="SWEEP BASELINE (v1 legacy)" Click="OnRunLabelSweepClick"
+                      ToolTip.Tip="Recommended decoder-quality test. Runs the bounded v2 decoder (the same one the live DECODE tab uses by default) across the selected labels using the STRATEGIES picker tokens. auto/N = ditdah whole-buffer. region/regionN = region-stream pipeline + ditdah. env/envN = alternate envelope decoder. live-env = VISUALIZER tab streamer. Outputs a per-clip × strategy CER table." />
+              <CheckBox Grid.Column="6" Content="FULL STREAM" IsChecked="{Binding UseFullStreamScorer, Mode=TwoWay}" VerticalAlignment="Center"
+                        ToolTip.Tip="v1 legacy SCORE LABELS scoring mode. Off = exact-window (decode just the labeled slice; measures decoder quality). On = full-stream (run the streaming decoder over the whole file and align to the label window; measures live acquisition + lock behavior — much harsher, often CER 0.8+ on the same clip). Does not affect the v2 SCORE LABELS button above." />
+              <Button Grid.Column="7" Content="SCORE LABELS (v1 legacy)" Click="OnRunLabelScoreClick"
+                      IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4"
+                      ToolTip.Tip="LEGACY label-eval harness that runs the v1 streaming decoder (window/decode_every/confirmations). The live decoder on the DECODE tab does NOT use this path — it uses Whole-buffer ditdah (v2) by default. Use the v2 SCORE LABELS button above for honest decoder-quality numbers; this button is kept only for historical comparison." />
+              <Button Grid.Column="8" Content="SWEEP BASELINE (v1 legacy)" Click="OnRunLabelSweepClick"
                       IsEnabled="{Binding CanRunLabelSweep}" FontSize="11" Padding="14,4"
                       ToolTip.Tip="LEGACY: tunes v1 streaming parameters. The live decoder doesn't use these. Kept for historical comparison." />
-              <StackPanel Grid.Column="7" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center"
-                          ToolTip.Tip="Comma-separated strategy tokens. auto / N (e.g. 28) = ditdah exact-window. region / regionN = region-stream pipeline + ditdah. env / envN = alternate envelope decoder. Example: auto,28,region28,env,env28">
-                <TextBlock Text="STRAT WPMS" Classes="label" VerticalAlignment="Center" />
-                <TextBox Width="240" Text="{Binding StrategySweepWpms, Mode=TwoWay}"
-                         Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}"
-                         Watermark="auto,28,region28,env28" />
-              </StackPanel>
-              <Button Grid.Column="8" Classes="primary" Content="STRATEGY SWEEP" Click="OnRunStrategySweepClick"
-                      IsEnabled="{Binding CanRunLabelScore}" FontSize="11" Padding="14,4"
-                      ToolTip.Tip="Recommended decoder-quality test. Runs the bounded v2 decoder across the selected labels. auto/N = ditdah whole-buffer (the live default). region/regionN = region-stream pipeline + ditdah. env/envN = alternate envelope decoder. Outputs a per-clip × strategy CER table." />
             </Grid>
 
             <Border Grid.Row="1" BorderBrush="{StaticResource AccentCyan}" BorderThickness="1" CornerRadius="2" Padding="8"
                     IsVisible="{Binding ShowSelectedLabelPicker}">
               <Grid RowDefinitions="Auto,Auto,Auto,*" RowSpacing="6">
-                <TextBlock Text="LABEL FILES — check the .labels.jsonl files to include in SCORE LABELS / SWEEP BASELINE / STRATEGY SWEEP"
+                <TextBlock Text="LABEL FILES — check the .labels.jsonl files to include in SCORE LABELS (v2) and the v1 legacy harnesses"
                            Classes="label" Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
                 <Grid Grid.Row="1" ColumnDefinitions="Auto,Auto,Auto,Auto,*" ColumnSpacing="8">
                   <TextBlock Text="FOLDER" Classes="label" VerticalAlignment="Center" />
@@ -935,7 +988,7 @@
                 <Border BorderBrush="{StaticResource GridLine}" BorderThickness="1" CornerRadius="2" Padding="8"
                         IsVisible="{Binding HasStrategySweepResult}">
                   <StackPanel Spacing="8">
-                    <TextBlock Text="STRATEGY SWEEP — bounded v2 decoder (the same one the live DECODE tab uses by default). auto/N = whole-buffer ditdah. region/regionN = region-stream pipeline. env/envN = alternate envelope decoder."
+                    <TextBlock Text="SCORE LABELS (v2) — bounded v2 decoder (the same one the live DECODE tab uses by default). auto/N = whole-buffer ditdah. region/regionN = region-stream pipeline. env/envN = alternate envelope decoder."
                                Foreground="{StaticResource AccentAmber}" FontSize="11" TextWrapping="Wrap" />
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                       <TextBlock Text="{Binding StrategySweepSummaryText}" Foreground="{StaticResource AccentCyan}" TextWrapping="Wrap" />
@@ -979,7 +1032,7 @@
                 <Expander Header="RAW RESULT JSON — SCORE LABELS (v1 legacy harness)"
                           IsVisible="{Binding LabelEvaluationOutputText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                   <StackPanel Spacing="6">
-                    <TextBlock Text="LEGACY: this is from the v1 streaming label-eval harness, not the live decoder. The live decoder defaults to Whole-buffer ditdah (v2) which gets near-zero CER on these same clips — see STRATEGY SWEEP above."
+                    <TextBlock Text="LEGACY: this is from the v1 streaming label-eval harness, not the live decoder. The live decoder defaults to Whole-buffer ditdah (v2) which gets near-zero CER on these same clips — see SCORE LABELS (v2) above."
                                Foreground="{StaticResource AccentAmber}" FontSize="11" TextWrapping="Wrap" />
                     <TextBox Text="{Binding LabelEvaluationOutputText}"
                            IsReadOnly="True"
@@ -1041,19 +1094,28 @@
                 <NumericUpDown Minimum="1" Maximum="20" Increment="1" Value="{Binding BenchStableN, Mode=TwoWay}" Width="100" />
               </StackPanel>
               <StackPanel Grid.Column="1" Spacing="2">
-                <TextBlock Text="PURITY" Classes="label" />
+                <TextBlock Text="DECODER" Classes="label" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                  <RadioButton GroupName="BenchDecoder" Content="REGION" IsChecked="{Binding BenchUseFoundation, Mode=TwoWay}"
+                               ToolTip.Tip="Region-isolated stream transcript (production CW SCOPE path)" />
+                  <RadioButton GroupName="BenchDecoder" Content="STREAMING (V2)" IsChecked="{Binding BenchUseStreamingV2, Mode=TwoWay}"
+                               ToolTip.Tip="Legacy ConfidenceState path. Kept for A/B comparison only." />
+                </StackPanel>
+              </StackPanel>
+              <StackPanel Grid.Column="2" Spacing="2" IsEnabled="{Binding BenchV2KnobsEnabled}">
+                <TextBlock Text="PURITY (V2)" Classes="label" />
                 <NumericUpDown Minimum="0" Maximum="20" Increment="0.5" Value="{Binding BenchPurity, Mode=TwoWay}" Width="100" />
               </StackPanel>
-              <StackPanel Grid.Column="2" Spacing="2">
-                <TextBlock Text="WIDE BINS" Classes="label" />
+              <StackPanel Grid.Column="3" Spacing="2" IsEnabled="{Binding BenchV2KnobsEnabled}">
+                <TextBlock Text="WIDE BINS (V2)" Classes="label" />
                 <NumericUpDown Minimum="0" Maximum="6" Increment="1" Value="{Binding BenchWideBins, Mode=TwoWay}" Width="100" />
               </StackPanel>
-              <StackPanel Grid.Column="3" Spacing="2">
+              <StackPanel Grid.Column="4" Spacing="2">
                 <TextBlock Text="FORCE PITCH (Hz)" Classes="label" />
                 <NumericUpDown Minimum="0" Maximum="2000" Increment="10" Value="{Binding BenchForcePitchHz, Mode=TwoWay}" Width="120" />
               </StackPanel>
-              <StackPanel Grid.Column="4" Spacing="2" VerticalAlignment="Bottom">
-                <TextBlock Text="THRESHOLD" Classes="label" />
+              <StackPanel Grid.Column="5" Spacing="2" VerticalAlignment="Bottom" IsEnabled="{Binding BenchV2KnobsEnabled}">
+                <TextBlock Text="THRESHOLD (V2)" Classes="label" />
                 <CheckBox Content="AUTO" IsChecked="{Binding BenchAutoThreshold, Mode=TwoWay}" />
               </StackPanel>
               <StackPanel Grid.Column="7" VerticalAlignment="Bottom">
@@ -1071,7 +1133,9 @@
                           FontFamily="Consolas" FontSize="12">
                   <DataGrid.Columns>
                     <DataGridTextColumn Header="SCENARIO" Binding="{Binding ScenarioDisplay}" Width="*" />
+                    <DataGridTextColumn Header="DECODER" Binding="{Binding DecoderDisplay}" Width="110" />
                     <DataGridTextColumn Header="LAT" Binding="{Binding LatencyDisplay}" Width="80" />
+                    <DataGridTextColumn Header="CER" Binding="{Binding CerDisplay}" Width="70" />
                     <DataGridTextColumn Header="UPTIME" Binding="{Binding UptimeDisplay}" Width="80" />
                     <DataGridTextColumn Header="DROPS" Binding="{Binding DropsDisplay}" Width="70" />
                     <DataGridTextColumn Header="RELOCK" Binding="{Binding RelocksDisplay}" Width="70" />
@@ -1103,7 +1167,7 @@
         <Border Padding="14" Background="{StaticResource BgPanel}">
           <Grid RowDefinitions="Auto,Auto,*,Auto" ColumnDefinitions="*">
             <!-- Controls row -->
-            <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,*,Auto"
+            <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,*,Auto"
                   Margin="0,0,0,8">
               <Button Grid.Column="0" Classes="primary"
                       Content="{Binding VizStartStopLabel}"
@@ -1113,24 +1177,34 @@
                       Content="PLAY FILE..."
                       Click="OnVizPlayFileClick"
                       MinWidth="110" />
-              <CheckBox Grid.Column="2" Margin="14,0,0,0"
+              <CheckBox Grid.Column="2" Margin="8,0,0,0"
+                        Content="MUTE AUDIO"
+                        IsChecked="{Binding VizMute}"
+                        ToolTip.Tip="When checked, PLAY FILE drives the visualizer without sending the WAV to the speakers."
+                        VerticalAlignment="Center" />
+              <CheckBox Grid.Column="3" Margin="14,0,0,0"
                         Content="LOOPBACK"
                         IsChecked="{Binding VizUseLoopback}"
                         VerticalAlignment="Center" />
-              <TextBlock Grid.Column="3" Margin="20,0,6,0"
+              <CheckBox Grid.Column="4" Margin="14,0,0,0"
+                        Content="PERIOD WPM (FIX)"
+                        IsChecked="{Binding VizUsePeriodWpm}"
+                        ToolTip.Tip="When ON (default), the displayed WPM uses the period-based dot estimator (rising-edge intervals, invariant to compander/threshold bias). When OFF, shows the legacy k-means dot WPM. The decoder always classifies dits/dahs/gaps from the same k-means dot — this toggle ONLY changes the displayed WPM number."
+                        VerticalAlignment="Center" />
+              <TextBlock Grid.Column="5" Margin="20,0,6,0"
                          Text="WINDOW"
                          FontFamily="Consolas"
                          VerticalAlignment="Center"
                          Foreground="{StaticResource TextDim}" />
-              <Slider Grid.Column="4" Width="160"
+              <Slider Grid.Column="6" Width="160"
                       Minimum="2" Maximum="30"
                       TickFrequency="2" IsSnapToTickEnabled="True"
                       Value="{Binding VizWindowSeconds}" />
-              <TextBlock Grid.Column="5" Margin="6,0,0,0"
+              <TextBlock Grid.Column="7" Margin="6,0,0,0"
                          Text="{Binding VizWindowSeconds, StringFormat='{}{0:F0}s'}"
                          FontFamily="Consolas"
                          VerticalAlignment="Center" />
-              <TextBlock Grid.Column="7"
+              <TextBlock Grid.Column="9"
                          Text="{Binding VizStatus}"
                          FontFamily="Consolas"
                          FontSize="11"
@@ -1189,19 +1263,55 @@
                                   MinHeight="320" />
             </Border>
 
-            <!-- Live transcript -->
+            <!-- Live transcript / truth capture -->
             <Border Grid.Row="3" Background="{StaticResource BgDeep}" CornerRadius="4"
                     BorderBrush="{StaticResource EdgeGlow}" BorderThickness="1"
                     Padding="10,8" Margin="0,8,0,0">
-              <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                            VerticalScrollBarVisibility="Auto"
-                            MaxHeight="120">
-                <TextBlock Text="{Binding VizTranscript}"
-                           FontFamily="Consolas"
-                           FontSize="14"
+              <Grid RowDefinitions="Auto,*" RowSpacing="6">
+                <Grid ColumnDefinitions="Auto,Auto,Auto,Auto,Auto,*" ColumnSpacing="8">
+                  <TextBlock Text="DECODED / TRUTH"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             Foreground="{StaticResource TextDim}"
+                             VerticalAlignment="Center" />
+                  <Button Grid.Column="1" Content="COPY TEXT" Click="OnCopyVizTranscriptClick"
+                          FontSize="11" Padding="10,3"
+                          ToolTip.Tip="Copy the decoded/corrected text. Ctrl+C also works when the text box is focused." />
+                  <Button Grid.Column="2" Content="{Binding VizEditModeLabel}" Click="OnToggleVizEditClick"
+                          FontSize="11" Padding="10,3"
+                          ToolTip.Tip="Toggle edit mode so you can correct the decoded text before saving truth." />
+                  <Button Grid.Column="3" Content="SAVE TRUTH" Click="OnSaveVizTruthClick"
+                          IsEnabled="{Binding CanSaveVizTruth}"
+                          FontSize="11" Padding="10,3"
+                          ToolTip.Tip="Save .truth.txt and .labels.jsonl next to the captured visualizer WAV." />
+                  <Button Grid.Column="4" Content="USE IN LABELING" Click="OnUseVizCaptureInLabelingClick"
+                          IsEnabled="{Binding CanUseVizCaptureInLabeling}"
+                          FontSize="11" Padding="10,3"
+                          ToolTip.Tip="Load the captured WAV into the Labeling tab for harvest, preview, and corpus export." />
+                  <TextBlock Grid.Column="5" Text="{Binding VizCaptureDisplay}"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             Foreground="{StaticResource TextDim}"
+                             HorizontalAlignment="Right"
+                             VerticalAlignment="Center" />
+                </Grid>
+                <ScrollViewer Name="VizTranscriptScroll"
+                              Grid.Row="1"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto"
+                              MinHeight="120"
+                              MaxHeight="240">
+                  <TextBox Text="{Binding VizTruthText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                           IsReadOnly="{Binding IsVizTranscriptReadOnly}"
+                           AcceptsReturn="True"
                            TextWrapping="Wrap"
+                           BorderThickness="0"
+                           Background="Transparent"
+                           FontFamily="Consolas"
+                           FontSize="16"
                            Foreground="{StaticResource TextHi}" />
-              </ScrollViewer>
+                </ScrollViewer>
+              </Grid>
             </Border>
           </Grid>
         </Border>

@@ -212,7 +212,7 @@ impl MorseDecoder {
 
         // --- The rest of the decoding pipeline is unchanged ---
         let pitch = self.detect_pitch_stft()?;
-        log::info!("Estimated pitch: {:.2} Hz", pitch);
+        log::info!("Estimated pitch: {pitch:.2} Hz");
 
         let goertzel_window_size = (self.target_sample_rate as f32 * 0.025) as usize;
         let step_size = (goertzel_window_size / 4).max(1);
@@ -228,11 +228,7 @@ impl MorseDecoder {
 
         let (best_wpm, best_threshold) =
             self.find_best_params(&smoothed_power, power_signal_rate)?;
-        log::info!(
-            "Best fit: WPM = {:.1}, Threshold = {:.4e}",
-            best_wpm,
-            best_threshold
-        );
+        log::info!("Best fit: WPM = {best_wpm:.1}, Threshold = {best_threshold:.4e}");
 
         if log::log_enabled!(log::Level::Trace) {
             trace_signal(&smoothed_power, best_threshold, best_wpm)?;
@@ -521,12 +517,9 @@ impl MorseDecoder {
 
         // Log calibration for debugging
         log::debug!(
-            "Self-calibration: WPM={:.1} (authoritative={}), actual_dot_len={:.1} samples",
-            wpm,
-            wpm_is_authoritative,
-            actual_dot_len
+            "Self-calibration: WPM={wpm:.1} (authoritative={wpm_is_authoritative}), actual_dot_len={actual_dot_len:.1} samples"
         );
-        log::debug!("Element lengths: {:?}", on_intervals);
+        log::debug!("Element lengths: {on_intervals:?}");
 
         let mut result = String::new();
         let mut current_letter = String::new();
@@ -536,7 +529,7 @@ impl MorseDecoder {
         let mut current_len = 0;
         let mut is_on = power_signal[0] > threshold;
         let debounce_samples = (actual_dot_len * 0.3).round() as usize;
-        log::debug!("Debounce threshold: {} samples", debounce_samples);
+        log::debug!("Debounce threshold: {debounce_samples} samples");
         for &p in power_signal.iter().chain(std::iter::once(&0.0)) {
             if (p > threshold) == is_on {
                 current_len += 1;
@@ -638,7 +631,7 @@ fn moving_average(data: &[f32], window_size: usize) -> Vec<f32> {
 
 fn trace_signal(signal: &[f32], threshold: f32, wpm: f32) -> std::io::Result<()> {
     let mut file = std::fs::File::create("signal_trace.txt")?;
-    writeln!(file, "# WPM: {:.1}, Threshold: {:.4e}", wpm, threshold)?;
+    writeln!(file, "# WPM: {wpm:.1}, Threshold: {threshold:.4e}")?;
     let max_val = signal.iter().cloned().fold(f32::MIN, f32::max);
     if max_val <= 0.0 {
         return Ok(());
@@ -697,6 +690,60 @@ fn morse_to_char(s: &str) -> Option<char> {
         "---.." => Some('8'),
         "----." => Some('9'),
         "-----" => Some('0'),
+        // ITU punctuation and prosigns (commonly seen in real CW traffic
+        // including ARRL code practice transmissions and contest exchanges).
+        "-...-" => Some('='),   // BT prosign / equals (ARRL section separator)
+        "--..--" => Some(','),  // comma
+        ".-.-.-" => Some('.'),  // period
+        "..--.." => Some('?'),  // question mark
+        "-..-." => Some('/'),   // slash
+        ".-.-." => Some('+'),   // AR prosign / plus
+        "-....-" => Some('-'),  // hyphen / minus
+        ".----." => Some('\''), // apostrophe
+        ".-..-." => Some('"'),  // quotation mark
+        "---..." => Some(':'),  // colon
+        "-.-.-." => Some(';'),  // semicolon
+        "-.--." => Some('('),   // open parenthesis (also KN prosign)
+        "-.--.-" => Some(')'),  // close parenthesis
+        ".-..." => Some('&'),   // ampersand (also AS / wait prosign)
+        ".--.-." => Some('@'),  // at sign
+        "..--.-" => Some('_'),  // underscore
+        "-.-.--" => Some('!'),  // exclamation
+        "...-..-" => Some('$'), // dollar sign
+        "...-.-" => Some('<'),  // SK / VA end-of-work prosign
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod morse_to_char_tests {
+    use super::morse_to_char;
+
+    #[test]
+    fn alphanumeric_round_trip() {
+        assert_eq!(morse_to_char(".-"), Some('A'));
+        assert_eq!(morse_to_char("-.-"), Some('K'));
+        assert_eq!(morse_to_char("-----"), Some('0'));
+        assert_eq!(morse_to_char("....."), Some('5'));
+    }
+
+    #[test]
+    fn itu_punctuation_decodes() {
+        assert_eq!(morse_to_char("-...-"), Some('='));
+        assert_eq!(morse_to_char("--..--"), Some(','));
+        assert_eq!(morse_to_char(".-.-.-"), Some('.'));
+        assert_eq!(morse_to_char("..--.."), Some('?'));
+        assert_eq!(morse_to_char("-..-."), Some('/'));
+        assert_eq!(morse_to_char(".-.-."), Some('+'));
+        assert_eq!(morse_to_char("-....-"), Some('-'));
+        assert_eq!(morse_to_char(".----."), Some('\''));
+        assert_eq!(morse_to_char("...-.-"), Some('<'));
+    }
+
+    #[test]
+    fn unknown_morse_returns_none() {
+        assert_eq!(morse_to_char("........"), None);
+        assert_eq!(morse_to_char("-.-..-.-"), None);
+        assert_eq!(morse_to_char(""), None);
     }
 }

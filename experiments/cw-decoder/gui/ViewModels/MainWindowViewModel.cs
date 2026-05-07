@@ -30,6 +30,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     private SweepTopResult? _topSweepResult;
 
     private const string CustomDecoderModeLabel = "Custom streaming";
+    private const string FoundationDecoderModeLabel = "Region-isolated stream";
     private const string BaselineDecoderModeLabel = "Baseline ditdah (rolling window)";
     private const string V2DecoderModeLabel = "Whole-buffer ditdah (v2)";
 
@@ -39,9 +40,9 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         _inputDevices = devs.Inputs;
         _outputDevices = devs.Outputs;
         Devices = new ObservableCollection<string>(_inputDevices);
-        DecoderModes = new ObservableCollection<string>(new[] { V2DecoderModeLabel, CustomDecoderModeLabel, BaselineDecoderModeLabel });
+        DecoderModes = new ObservableCollection<string>(new[] { FoundationDecoderModeLabel, V2DecoderModeLabel, CustomDecoderModeLabel, BaselineDecoderModeLabel });
         SelectedDevice = Devices.Count > 0 ? Devices[0] : null;
-        SelectedDecoderMode = DecoderModes[0];
+        SelectedDecoderMode = FoundationDecoderModeLabel;
         Cells = new ObservableCollection<TranscriptCell>();
         WpmHistory = new ObservableCollection<double>();
         HarvestCandidates = new ObservableCollection<HarvestCandidate>();
@@ -53,6 +54,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                             ?? AllFoldersSentinel;
         _selectedLabelCorpusFolder = defaultFolder;
         ReloadAvailableLabelFiles();
+
+        HookStrategyOptionEvents();
 
         _process.EventReceived += OnEvent;
         _process.StderrLine += line => Dispatcher.UIThread.Post(() => StatusText = line);
@@ -204,6 +207,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             if (Set(ref _selectedDecoderMode, value))
             {
                 OnPropertyChanged(nameof(IsCustomDecoderMode));
+                OnPropertyChanged(nameof(IsFoundationDecoderMode));
                 OnPropertyChanged(nameof(IsBaselineDecoderMode));
                 OnPropertyChanged(nameof(IsV2DecoderMode));
                 OnPropertyChanged(nameof(BaselineDecoderSummary));
@@ -363,6 +367,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                 OnPropertyChanged(nameof(HasPlaybackSource));
                 OnPropertyChanged(nameof(PlaybackSourceDisplay));
                 OnPropertyChanged(nameof(CanStartPlayback));
+                OnPropertyChanged(nameof(IsLabelPreviewActive));
+                OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
             }
         }
     }
@@ -371,7 +377,46 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     public string PlaybackSourceDisplay => string.IsNullOrWhiteSpace(_playbackSourcePath) ? "" : System.IO.Path.GetFileName(_playbackSourcePath);
 
     private string _playbackSourceLabel = "AUDIO";
-    public string PlaybackSourceLabel { get => _playbackSourceLabel; private set => Set(ref _playbackSourceLabel, value); }
+    public string PlaybackSourceLabel
+    {
+        get => _playbackSourceLabel;
+        private set
+        {
+            if (Set(ref _playbackSourceLabel, value))
+            {
+                OnPropertyChanged(nameof(IsLabelPreviewActive));
+                OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
+            }
+        }
+    }
+
+    /// <summary>
+    /// True when the playback panel is currently sourced from a slowed
+    /// "LABEL PREVIEW" render produced for the LABELING tab.
+    /// </summary>
+    public bool IsLabelPreviewActive => HasPlaybackSource
+        && string.Equals(_playbackSourceLabel, "LABEL PREVIEW", StringComparison.Ordinal);
+
+    private double _labelPreviewPlaybackScale = 1.0;
+
+    /// <summary>
+    /// Maps the current playback position (which is in slowed-preview
+    /// seconds) back to the original-file timeline shown by the
+    /// SignalProfileEditor on the LABELING tab. Returns NaN when the
+    /// label preview is not active so the playhead stays hidden.
+    /// </summary>
+    public double LabelPreviewPlayheadSeconds => IsLabelPreviewActive
+        ? AdjustedStartSeconds + PlaybackPositionSeconds / Math.Max(1.0, _labelPreviewPlaybackScale)
+        : double.NaN;
+
+    /// <summary>Rewind playback to the beginning. Triggers a seek if running.</summary>
+    public void RewindPlayback()
+    {
+        if (HasPlaybackSource)
+        {
+            PlaybackPositionSeconds = 0;
+        }
+    }
 
     private string _playbackStatusText = "Open a file or render a preview to play audio inline.";
     public string PlaybackStatusText { get => _playbackStatusText; private set => Set(ref _playbackStatusText, value); }
@@ -408,13 +453,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             {
                 OnPropertyChanged(nameof(PlaybackPositionDisplay));
                 OnPropertyChanged(nameof(PlaybackProgress));
+                OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
                 if (!_suppressSeekEcho && IsPlaybackRunning)
                 {
                     // User-driven change. Mark scrubbing so engine position
                     // updates don't fight the operator until the seek is
-                    // acknowledged.
+                    // acknowledged. Send to both transports; each ignores
+                    // the command unless it is the one currently driving
+                    // audio (decode-and-play vs play-file).
                     _userIsScrubbing = true;
                     try { _process.Seek(clamped); } catch { /* best effort */ }
+                    try { _playback.Seek(clamped); } catch { /* best effort */ }
                 }
             }
         }
@@ -871,8 +920,18 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     private double _harvestHopSeconds = 1.0;
     public double HarvestHopSeconds { get => _harvestHopSeconds; set => Set(ref _harvestHopSeconds, value); }
 
-    private double _previewSlowdown = 2.5;
-    public double PreviewSlowdown { get => _previewSlowdown; set => Set(ref _previewSlowdown, value); }
+    private double _previewSlowdown = 1.0;
+    public double PreviewSlowdown
+    {
+        get => _previewSlowdown;
+        set
+        {
+            if (Set(ref _previewSlowdown, value))
+            {
+                OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
+            }
+        }
+    }
 
     private bool _evaluateAllLabels = true;
     public bool EvaluateAllLabels
@@ -1067,6 +1126,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         : $"{CurrentLabelSweepResult.SweepMode} sweep · {CurrentLabelSweepResult.CoarseConfigs} coarse + {CurrentLabelSweepResult.RefinedConfigs} refined configs · best exact={CurrentLabelSweepResult.Results.FirstOrDefault()?.Exact ?? 0}/{CurrentLabelSweepResult.Labels}";
 
     public bool IsCustomDecoderMode => string.Equals(SelectedDecoderMode, CustomDecoderModeLabel, StringComparison.Ordinal);
+    public bool IsFoundationDecoderMode => string.Equals(SelectedDecoderMode, FoundationDecoderModeLabel, StringComparison.Ordinal);
     public bool IsBaselineDecoderMode => string.Equals(SelectedDecoderMode, BaselineDecoderModeLabel, StringComparison.Ordinal);
     public bool IsV2DecoderMode => string.Equals(SelectedDecoderMode, V2DecoderModeLabel, StringComparison.Ordinal);
     public string BaselineDecoderSummary => $"Baseline uses Tuning settings: {CurrentBaselineConfig().WindowSeconds:F1}s window / {CurrentBaselineConfig().MinWindowSeconds:F1}s min / {CurrentBaselineConfig().DecodeEveryMs}ms cadence / {CurrentBaselineConfig().Confirmations} confirmations.";
@@ -1455,7 +1515,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         ReplayStatus = null;
         ReplayCer = null;
 
-        _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, recordPath, UseLoopback, IsV2DecoderMode, IsV2DecoderMode ? PinWpm : 0);
+        if (IsFoundationDecoderMode)
+        {
+            _process.StartLiveV3(SelectedDevice, decodeEveryMs: 250, recordPath: recordPath, loopback: UseLoopback, pinWpm: 0, pinHz: 0);
+        }
+        else
+        {
+            _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, recordPath, UseLoopback, IsV2DecoderMode, IsV2DecoderMode ? PinWpm : 0);
+        }
         IsRunning = true;
     }
 
@@ -1503,8 +1570,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         {
             var useBaseline = IsBaselineDecoderMode;
             var cfg = CurrentConfig();
-            ReplayDecoderLabel = useBaseline ? "OFFLINE REPLAY (BASELINE)" : "OFFLINE REPLAY (CUSTOM)";
-            var transcript = await Task.Run(() => RunOfflineReplay(path, useBaseline, cfg)).ConfigureAwait(false);
+            ReplayDecoderLabel = IsFoundationDecoderMode ? "OFFLINE REPLAY (REGION)" : useBaseline ? "OFFLINE REPLAY (BASELINE)" : "OFFLINE REPLAY (CUSTOM)";
+            var transcript = await Task.Run(() => RunOfflineReplay(path, useBaseline, IsFoundationDecoderMode, cfg)).ConfigureAwait(false);
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 ReplayTranscript = string.IsNullOrWhiteSpace(transcript) ? "(empty)" : transcript.Trim();
@@ -1651,7 +1718,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         IsPlaybackRunning = false;
     }
 
-    private static string RunOfflineReplay(string wavPath, bool useBaseline, DecoderConfig cfg)
+    private static string RunOfflineReplay(string wavPath, bool useBaseline, bool useFoundation, DecoderConfig cfg)
     {
         var exeEnv = Environment.GetEnvironmentVariable("CW_DECODER_EXE");
         string? exe = (!string.IsNullOrWhiteSpace(exeEnv) && System.IO.File.Exists(exeEnv)) ? exeEnv : null;
@@ -1683,7 +1750,17 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        if (useBaseline)
+        if (useFoundation)
+        {
+            psi.ArgumentList.Add("stream-live-v3");
+            psi.ArgumentList.Add("--json");
+            psi.ArgumentList.Add("--region-transcript");
+            psi.ArgumentList.Add("--decode-every-ms");
+            psi.ArgumentList.Add("250");
+            psi.ArgumentList.Add("--file");
+            psi.ArgumentList.Add(wavPath);
+        }
+        else if (useBaseline)
         {
             psi.ArgumentList.Add("stream-file-ditdah");
             psi.ArgumentList.Add("--json");
@@ -1784,6 +1861,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         var fileDur = TryProbeFileDurationSeconds(path);
         if (fileDur > 0) FileDurationSeconds = fileDur;
 
+        if (IsFoundationDecoderMode)
+        {
+            _process.StartFileV3(path, decodeEveryMs: 250, pinWpm: 0, pinHz: 0, playAudio: true);
+            IsRunning = true;
+            await Task.CompletedTask;
+            return;
+        }
+
         if (IsBaselineDecoderMode)
         {
             // Baseline path doesn't yet have a decode-and-play variant; fall
@@ -1816,8 +1901,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
     public void TogglePauseResume()
     {
         if (!IsPlaybackRunning) return;
-        if (IsPlaybackPaused) { _process.Resume(); IsPlaybackPaused = false; }
-        else { _process.Pause(); IsPlaybackPaused = true; }
+        if (IsPlaybackPaused)
+        {
+            // Send to both transports; each is a no-op if its process isn't
+            // the one currently driving audio (decode-and-play vs play-file).
+            try { _process.Resume(); } catch { /* best effort */ }
+            try { _playback.Resume(); } catch { /* best effort */ }
+            IsPlaybackPaused = false;
+        }
+        else
+        {
+            try { _process.Pause(); } catch { /* best effort */ }
+            try { _playback.Pause(); } catch { /* best effort */ }
+            IsPlaybackPaused = true;
+        }
     }
 
     /// <summary>
@@ -1980,12 +2077,19 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         try
         {
             IsAdvancedBusy = true;
-            AdvancedStatusText = $"Rendering slowed preview for {AdjustedRangeLabel}…";
-            var previewPath = await _process.RenderPreviewAsync(
-                HarvestFilePath,
-                AdjustedStartSeconds,
-                AdjustedEndSeconds - AdjustedStartSeconds,
-                PreviewSlowdown).ConfigureAwait(true);
+            var sourceIsWav = string.Equals(Path.GetExtension(HarvestFilePath), ".wav", StringComparison.OrdinalIgnoreCase);
+            AdvancedStatusText = sourceIsWav
+                ? $"Rendering full-fidelity preview for {AdjustedRangeLabel}..."
+                : $"Rendering preview for {AdjustedRangeLabel}...";
+            var previewPath = sourceIsWav
+                ? RenderFullFidelityWavPreview(HarvestFilePath, AdjustedStartSeconds, AdjustedEndSeconds)
+                : await _process.RenderPreviewAsync(
+                    HarvestFilePath,
+                    AdjustedStartSeconds,
+                    AdjustedEndSeconds - AdjustedStartSeconds,
+                    PreviewSlowdown).ConfigureAwait(true);
+            _labelPreviewPlaybackScale = sourceIsWav ? 1.0 : Math.Max(1.0, PreviewSlowdown);
+            OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
             await PreparePlaybackSourceAsync(previewPath, "LABEL PREVIEW", autoPlay: true).ConfigureAwait(true);
             AdvancedStatusText = $"Playing preview: {Path.GetFileName(previewPath)}";
         }
@@ -2043,7 +2147,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
 
         try
         {
-            _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, targetPath, UseLoopback, IsV2DecoderMode, IsV2DecoderMode ? PinWpm : 0);
+            if (IsFoundationDecoderMode)
+            {
+                _process.StartLiveV3(SelectedDevice, decodeEveryMs: 250, recordPath: targetPath, loopback: UseLoopback, pinWpm: 0, pinHz: 0);
+            }
+            else
+            {
+                _process.StartLive(SelectedDevice, CurrentConfig(), CurrentBaselineConfig(), IsBaselineDecoderMode, targetPath, UseLoopback, IsV2DecoderMode, IsV2DecoderMode ? PinWpm : 0);
+            }
             IsRunning = true;
             IsLabelingRecording = true;
         }
@@ -2287,7 +2398,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         if (fs.Length < 44) throw new InvalidDataException("File too small to be a WAV.");
         var riff = new string(br.ReadChars(4));
         if (riff != "RIFF") throw new InvalidDataException("Not a RIFF file.");
-        br.ReadInt32();
+        var riffSize = br.ReadInt32();
         var wave = new string(br.ReadChars(4));
         if (wave != "WAVE") throw new InvalidDataException("Not a WAVE file.");
 
@@ -2308,12 +2419,24 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                 br.ReadInt32(); // byteRate
                 blockAlign = br.ReadInt16();
                 bitsPerSample = br.ReadInt16();
+                if (audioFormat == -2 && size >= 40)
+                {
+                    br.ReadInt16(); // extension size
+                    br.ReadInt16(); // valid bits per sample
+                    br.ReadInt32(); // channel mask
+                    var subFormat = br.ReadBytes(16);
+                    audioFormat = subFormat.Length >= 2
+                        ? BitConverter.ToInt16(subFormat, 0)
+                        : audioFormat;
+                }
                 fs.Position = fmtStart + size;
             }
             else if (id == "data")
             {
                 dataStart = fs.Position;
-                dataSize = size;
+                dataSize = size == 0 && riffSize == 0
+                    ? checked((int)(fs.Length - dataStart))
+                    : size;
                 break;
             }
             else
@@ -2342,6 +2465,20 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             throw new InvalidDataException($"Short read while slicing WAV: expected {payload.Length}, got {read}.");
 
         return (channels, sampleRate, bitsPerSample, audioFormat, payload);
+    }
+
+    private static string RenderFullFidelityWavPreview(string sourcePath, double startS, double endS)
+    {
+        var previewDir = Path.Combine(Path.GetTempPath(), "cw-decoder-preview");
+        Directory.CreateDirectory(previewDir);
+
+        var output = Path.Combine(
+            previewDir,
+            $"{Path.GetFileNameWithoutExtension(sourcePath)}_{startS:0000.000}_{DateTime.UtcNow:yyyyMMddHHmmssfff}_full-fidelity.wav");
+
+        var (channels, sampleRate, bitsPerSample, audioFormat, payloadBytes) = SliceWavWindow(sourcePath, startS, endS);
+        WriteWavFile(output, channels, sampleRate, bitsPerSample, audioFormat, payloadBytes);
+        return output;
     }
 
     /// <summary>
@@ -2503,13 +2640,124 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         }
     }
 
-    private string _strategySweepWpms = "auto,28,region28,env,env28";
-    /// <summary>Comma-separated list of pin-WPM values to sweep alongside auto.
-    /// Editable by the operator. "auto" is always included.</summary>
+    private string _strategySweepWpms = "region,foundation,auto,28,env,env28,live-env";
+    /// <summary>Comma-separated list of strategy tokens. Retained for
+    /// backwards compatibility (some tests/bindings still reference it),
+    /// but no longer the source of truth for the TUNING tab — the picker
+    /// (<see cref="StrategyOptions"/> + <see cref="StrategySweepCustomTokens"/>)
+    /// is what <see cref="RunStrategySweepAsync"/> forwards to the eval binary.</summary>
     public string StrategySweepWpms
     {
         get => _strategySweepWpms;
         set => Set(ref _strategySweepWpms, value);
+    }
+
+    /// <summary>Predefined strategy checkboxes shown in the TUNING tab picker.
+    /// Tokens are forwarded verbatim to the Rust eval binary's
+    /// parse_strategy_list (region, foundation, auto, region&lt;N&gt;,
+    /// env, env&lt;N&gt;, live-env, bare numbers).</summary>
+    public ObservableCollection<StrategyOption> StrategyOptions { get; } = new()
+    {
+        new StrategyOption("region",   "region",   true,  "Region-isolated stream transcript used by DECODE/LABELING/VISUALIZER"),
+        new StrategyOption("foundation", "foundation", false, "Append-only event-stream foundation, kept for baseline comparison"),
+        new StrategyOption("auto",     "auto",     true,  "Whole-buffer ditdah, auto-detect WPM"),
+        new StrategyOption("22",       "22 wpm",   false, "Whole-buffer ditdah, pinned to 22 wpm"),
+        new StrategyOption("25",       "25 wpm",   false, "Whole-buffer ditdah, pinned to 25 wpm"),
+        new StrategyOption("28",       "28 wpm",   true,  "Whole-buffer ditdah, pinned to 28 wpm"),
+        new StrategyOption("30",       "30 wpm",   false, "Whole-buffer ditdah, pinned to 30 wpm"),
+        new StrategyOption("region28", "region28", true,  "Region-stream pipeline, pinned to 28 wpm"),
+        new StrategyOption("env",      "env",      true,  "Offline envelope decoder, auto-detect WPM"),
+        new StrategyOption("env28",    "env28",    true,  "Offline envelope decoder, pinned to 28 wpm"),
+        new StrategyOption("live-env", "live-env", true,  "Live envelope streamer (VISUALIZER tab decoder), auto-detect WPM"),
+    };
+
+    private string _strategySweepCustomTokens = string.Empty;
+    /// <summary>One-off comma-separated tokens (e.g. "region30,env25") appended
+    /// to the picker selection before forwarding to the eval binary.</summary>
+    public string StrategySweepCustomTokens
+    {
+        get => _strategySweepCustomTokens;
+        set
+        {
+            if (Set(ref _strategySweepCustomTokens, value))
+            {
+                OnPropertyChanged(nameof(StrategyPickerSummary));
+            }
+        }
+    }
+
+    /// <summary>Live label for the picker button — e.g. "STRATEGIES (5)" or
+    /// "STRATEGIES (5+2 custom)" when custom tokens are present.</summary>
+    public string StrategyPickerSummary
+    {
+        get
+        {
+            int checkedCount = 0;
+            foreach (var opt in StrategyOptions)
+            {
+                if (opt.IsChecked) checkedCount++;
+            }
+            int customCount = 0;
+            foreach (var tok in (_strategySweepCustomTokens ?? string.Empty).Split(','))
+            {
+                if (!string.IsNullOrWhiteSpace(tok)) customCount++;
+            }
+            return customCount > 0
+                ? $"STRATEGIES ({checkedCount}+{customCount} custom)"
+                : $"STRATEGIES ({checkedCount})";
+        }
+    }
+
+    /// <summary>Resolve the ordered, deduped (case-insensitive) token list to send
+    /// to the eval binary: always "region" first, then checked picker tokens in
+    /// declaration order, then comma-split custom tokens.</summary>
+    private List<string> BuildStrategyTokens()
+    {
+        var tokens = new List<string> { "region" };
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "region" };
+        foreach (var opt in StrategyOptions)
+        {
+            if (!opt.IsChecked) continue;
+            var t = opt.Token?.Trim();
+            if (string.IsNullOrEmpty(t)) continue;
+            if (!seen.Add(t)) continue;
+            tokens.Add(t);
+        }
+        foreach (var raw in (_strategySweepCustomTokens ?? string.Empty).Split(','))
+        {
+            var t = raw.Trim();
+            if (string.IsNullOrEmpty(t)) continue;
+            if (!seen.Add(t)) continue;
+            tokens.Add(t);
+        }
+        return tokens;
+    }
+
+    /// <summary>Restore the strategy picker to its documented defaults and
+    /// clear the custom-tokens textbox. Wired to the RESET TO DEFAULTS button.</summary>
+    public void ResetStrategyDefaults()
+    {
+        foreach (var opt in StrategyOptions)
+        {
+            opt.IsChecked = opt.DefaultChecked;
+        }
+        StrategySweepCustomTokens = string.Empty;
+    }
+
+    private void HookStrategyOptionEvents()
+    {
+        foreach (var opt in StrategyOptions)
+        {
+            opt.PropertyChanged += OnStrategyOptionPropertyChanged;
+        }
+    }
+
+    private void OnStrategyOptionPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(StrategyOption.IsChecked))
+        {
+            OnPropertyChanged(nameof(StrategyPickerSummary));
+        }
     }
 
     private StrategySweepResult? _strategySweepResult;
@@ -2570,17 +2818,14 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             return;
         }
 
-        // Always include "auto" plus operator-supplied pin values.
-        var strategies = new List<string> { "auto" };
-        foreach (var tok in (StrategySweepWpms ?? string.Empty).Split(','))
-        {
-            var t = tok.Trim();
-            if (string.IsNullOrEmpty(t) || t.Equals("auto", StringComparison.OrdinalIgnoreCase)) continue;
-            if (double.TryParse(t, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && v > 0)
-            {
-                strategies.Add(v.ToString("0.##", CultureInfo.InvariantCulture));
-            }
-        }
+        // The picker (StrategyOptions + StrategySweepCustomTokens) is the
+        // source of truth. The Rust eval binary's parse_strategy_list accepts:
+        // auto, region, region<N>, region:<N>, env, envelope, env<N>,
+        // envelope<N>, env:<N>, envelope:<N>, live-env, liveenv, and bare
+        // numbers (ExactPin). BuildStrategyTokens always includes
+        // "region" first and dedupes case-insensitively across picker
+        // + custom tokens.
+        var strategies = BuildStrategyTokens();
 
         CancelAndDisposeEvaluation();
         var cts = new CancellationTokenSource();
@@ -2598,7 +2843,13 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
                 strategies,
                 cts.Token).ConfigureAwait(true);
             StrategySweepResult = result;
-            LabelEvaluationStatusText = $"Strategy sweep done — {result.Labels} labels × {result.Strategies.Length} strategies.";
+            var autoApply = TryAutoApplyBestPinToVisualizer(result);
+            var status = $"Strategy sweep done — {result.Labels} labels × {result.Strategies.Length} strategies.";
+            if (autoApply is not null)
+            {
+                status += $" Auto-applied to visualizer: PIN WPM={autoApply.Value.Wpm:0.##} (best {autoApply.Value.Strategy} CER {autoApply.Value.WeightedCer:0.000}).";
+            }
+            LabelEvaluationStatusText = status;
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -2615,6 +2866,50 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             IsEvaluationBusy = false;
             IsAdvancedBusy = false;
         }
+    }
+
+    /// <summary>
+    /// After a strategy sweep, find the best <c>pinNN</c> strategy by weighted CER
+    /// and apply that NN to the visualizer's PIN WPM control. This automates the
+    /// "explore the best decode path" loop: run sweep on a labeled clip, then
+    /// drop the same clip into the visualizer with the WPM the sweep proved
+    /// works best for it.
+    ///
+    /// Only triggers when the best pinNN strategy meaningfully beats the auto
+    /// row (delta CER &gt;= 0.02) so that pristine clips where auto already wins
+    /// don't pin away the auto-detect path. Returns the applied details, or
+    /// null if no auto-apply happened.
+    /// </summary>
+    private (string Strategy, double Wpm, double WeightedCer)? TryAutoApplyBestPinToVisualizer(StrategySweepResult result)
+    {
+        if (result.Summary is null || result.Summary.Length == 0) return null;
+
+        var auto = Array.Find(result.Summary, s => string.Equals(s.Strategy, "auto", StringComparison.OrdinalIgnoreCase));
+        var autoCer = auto?.WeightedCer ?? double.PositiveInfinity;
+
+        (string Strategy, double Wpm, double WeightedCer)? best = null;
+        foreach (var row in result.Summary)
+        {
+            if (string.IsNullOrEmpty(row.Strategy)) continue;
+            // Match pinNN tokens like "pin28", "pin22.5". Skip region/env/live-env -
+            // those are different decoder pipelines, not WPM hints for the visualizer.
+            if (!row.Strategy.StartsWith("pin", StringComparison.OrdinalIgnoreCase)) continue;
+            var numPart = row.Strategy.Substring(3);
+            if (!double.TryParse(numPart, NumberStyles.Float, CultureInfo.InvariantCulture, out var wpm) || wpm <= 0)
+                continue;
+            if (best is null || row.WeightedCer < best.Value.WeightedCer)
+            {
+                best = (row.Strategy, wpm, row.WeightedCer);
+            }
+        }
+
+        if (best is null) return null;
+        // Only auto-apply when the pin meaningfully helps. Avoids pinning away
+        // a working auto-detect on clean clips.
+        if (autoCer - best.Value.WeightedCer < 0.02) return null;
+
+        VizPinWpm = best.Value.Wpm;
+        return best;
     }
 
     public string BuildStrategySweepMarkdown()
@@ -2807,7 +3102,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             case "garbled":
                 break;
             case "transcript":
-                if (ev.Text is string txt)
+                if ((ev.Transcript ?? ev.Text) is string txt)
                 {
                     Cells.Clear();
                     _liveTranscriptBuilder.Clear();
@@ -2905,6 +3200,8 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
         CancelAndDisposeEvaluation();
         _playback.Dispose();
         _process.Dispose();
+        _vizProcess.Dispose();
+        _vizPlayback.Dispose();
     }
 
     private void CancelAndDisposePlaybackProfileLoad()
@@ -3114,6 +3411,7 @@ public sealed partial class MainWindowViewModel : INotifyPropertyChanged, IDispo
             OnPropertyChanged(nameof(CanExportSelectionToTrainingSet));
             OnPropertyChanged(nameof(CanResetAdjustedSpan));
             OnPropertyChanged(nameof(CanUseSuggestedSpan));
+            OnPropertyChanged(nameof(LabelPreviewPlayheadSeconds));
         }
     }
 
