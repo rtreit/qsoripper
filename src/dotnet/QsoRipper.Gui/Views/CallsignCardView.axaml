@@ -43,6 +43,16 @@
     <Style Selector="TextBlock.qslUnknown">
       <Setter Property="Foreground" Value="#ffaa00" />
     </Style>
+    <Style Selector="Button.linkButton">
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="Transparent" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Foreground" Value="#66b3ff" />
+      <Setter Property="FontSize" Value="13" />
+      <Setter Property="HorizontalAlignment" Value="Left" />
+      <Setter Property="HorizontalContentAlignment" Value="Left" />
+    </Style>
   </UserControl.Styles>
 
   <Border Background="#1a1a2e"
@@ -209,7 +219,7 @@
           <!-- Profile Section -->
           <Border Classes="sectionDivider" />
           <TextBlock Classes="sectionHeader" Text="PROFILE" />
-          <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto,Auto">
+          <Grid ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
             <TextBlock Classes="cardLabel" Grid.Row="0" Text="Aliases"
                        IsVisible="{Binding HasAliases}" />
             <TextBlock Classes="cardValue" Grid.Row="0" Grid.Column="1" Text="{Binding Aliases}"
@@ -218,13 +228,19 @@
                        IsVisible="{Binding HasPreviousCall}" />
             <TextBlock Classes="cardValue" Grid.Row="1" Grid.Column="1" Text="{Binding PreviousCall}"
                        IsVisible="{Binding HasPreviousCall}" />
-            <TextBlock Classes="cardLabel" Grid.Row="2" Text="Web"
+            <TextBlock Classes="cardLabel" Grid.Row="2" Text="QRZ"
+                       IsVisible="{Binding HasQrzPageUrl}" />
+            <Button Classes="linkButton" Grid.Row="2" Grid.Column="1"
+                    Content="{Binding QrzPageUrl}"
+                    Command="{Binding OpenQrzPageCommand}"
+                    IsVisible="{Binding HasQrzPageUrl}" />
+            <TextBlock Classes="cardLabel" Grid.Row="3" Text="Web"
                        IsVisible="{Binding HasWebUrl}" />
-            <TextBlock Classes="cardValue" Grid.Row="2" Grid.Column="1" Text="{Binding WebUrl}"
+            <TextBlock Classes="cardValue" Grid.Row="3" Grid.Column="1" Text="{Binding WebUrl}"
                        IsVisible="{Binding HasWebUrl}" />
-            <TextBlock Classes="cardLabel" Grid.Row="3" Text="Email"
+            <TextBlock Classes="cardLabel" Grid.Row="4" Text="Email"
                        IsVisible="{Binding HasEmail}" />
-            <TextBlock Classes="cardValue" Grid.Row="3" Grid.Column="1" Text="{Binding Email}"
+            <TextBlock Classes="cardValue" Grid.Row="4" Grid.Column="1" Text="{Binding Email}"
                        IsVisible="{Binding HasEmail}" />
           </Grid>
 
