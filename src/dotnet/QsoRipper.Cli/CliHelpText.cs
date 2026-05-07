@@ -20,7 +20,7 @@ internal static class CliHelpText
 
             ADIF:
               import <file>                    Import QSOs from an ADIF file
-              export [--file out.adi]          Export QSOs to ADIF (stdout or file)
+              export [--file out.adi]          Export QSOs to ADIF (stdout, file, or directory)
 
             Lookup:
               lookup <callsign>                Look up a callsign via QRZ
@@ -171,7 +171,8 @@ internal static class CliHelpText
 
                 Export QSOs to ADIF format.
 
-                  --file <path>        Write to file (default: stdout)
+                  --file <path>        Write to file (default: stdout). If <path> is a
+                                       directory, writes <logdbname>-yyyy-MM-dd.adi there.
                   --include-header     Include ADIF header
                 """,
             "lookup" => """
