@@ -15,7 +15,10 @@
 //! during static, then transmits again at a different speed (e.g.
 //! `IHU NVCHU 7QP W7N 7QP W7N` with bursts at 13 / 8 / 39 / 29 WPM).
 
-use crate::region_stream::{decode_region_stream, normalize_region_transcript, RegionStreamConfig};
+use crate::region_stream::{
+    decode_region_stream, has_transcript_start_anchor, normalize_region_transcript,
+    RegionStreamConfig,
+};
 
 /// Tunables for the region-based streamer.
 #[derive(Debug, Clone)]
@@ -181,6 +184,10 @@ impl RegionStreamer {
             }
             if region.end_s > stability_threshold {
                 break; // region is still active; wait for more trailing static
+            }
+            if self.committed_text.is_empty() && !has_transcript_start_anchor(&region.text) {
+                self.last_committed_end_s = region.end_s;
+                continue;
             }
             newly.push(CommittedRegion {
                 start_s: region.start_s,

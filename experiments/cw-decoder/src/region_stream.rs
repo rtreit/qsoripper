@@ -53,6 +53,13 @@ pub struct RegionStreamConfig {
     /// active run is decoded. White noise can still produce percentile-threshold
     /// runs; this guard requires those runs to contain a narrowband CW tone.
     pub min_tonal_prominence_ratio: f32,
+    /// Minimum keyed elements required before a region is considered CW-like.
+    /// This rejects voice-over and random tonal syllables before the decoder
+    /// can turn them into E/T/A-style ghost copy.
+    pub min_cw_elements: usize,
+    /// Minimum timing-fit score for keyed regions. 1.0 means on/off runs align
+    /// exactly with dit/dah and intra/letter/word gaps; 0.0 means no CW rhythm.
+    pub min_cw_timing_score: f32,
 }
 
 impl Default for RegionStreamConfig {
@@ -69,6 +76,8 @@ impl Default for RegionStreamConfig {
             pad_s: 0.10,
             pin_wpm: None,
             min_tonal_prominence_ratio: 8.0,
+            min_cw_elements: 3,
+            min_cw_timing_score: 0.30,
         }
     }
 }
@@ -133,6 +142,21 @@ struct RegionCandidate {
     score: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct CwWaveformEvidence {
+    elements: usize,
+    timing_score: f32,
+    duty_cycle: f32,
+}
+
+impl CwWaveformEvidence {
+    fn passes(self, cfg: &RegionStreamConfig) -> bool {
+        self.elements >= cfg.min_cw_elements
+            && self.timing_score >= cfg.min_cw_timing_score
+            && (0.08..=0.78).contains(&self.duty_cycle)
+    }
+}
+
 fn collect_region_candidates(
     samples: &[f32],
     sample_rate: u32,
@@ -152,6 +176,8 @@ fn collect_region_candidates(
         if prominence < cfg.min_tonal_prominence_ratio.max(0.0) {
             continue;
         }
+        let evidence =
+            cw_waveform_evidence(&samples[region_s..region_e], sample_rate, pitch_hz, cfg);
         let pad = cfg.pad_s.max(0.0);
         let s = ((start_s - pad).max(0.0) * sample_rate as f32) as usize;
         let e = (((end_s + pad) * sample_rate as f32) as usize).min(samples.len());
@@ -160,8 +186,11 @@ fn collect_region_candidates(
         }
         let slice = &samples[s..e];
         let text = decode_region_slice(slice, sample_rate, pitch_hz, cfg);
-        let text = text.trim().to_string();
+        let text = trim_leading_voice_like_prefix(text.trim());
         if text.is_empty() || is_low_confidence_region_text(&text) {
+            continue;
+        }
+        if !evidence.passes(cfg) && !is_short_distinctive_cw_text(&text) {
             continue;
         }
         let useful_chars = text.chars().filter(|ch| ch.is_ascii_alphanumeric()).count() as f32;
@@ -175,7 +204,65 @@ fn collect_region_candidates(
 }
 
 fn is_low_confidence_region_text(text: &str) -> bool {
-    text.contains('?')
+    text.contains('?') || useful_copy_chars(text) == 0
+}
+
+fn trim_leading_voice_like_prefix(text: &str) -> String {
+    let normalized = normalize_region_text(text);
+    let tokens: Vec<&str> = normalized.split_whitespace().collect();
+    if tokens.len() < 4 {
+        return normalized;
+    }
+
+    let Some(first_distinctive) = tokens
+        .iter()
+        .position(|token| is_distinctive_cw_token(token))
+    else {
+        return normalized;
+    };
+    if first_distinctive < 3 {
+        return normalized;
+    }
+    if !tokens[..first_distinctive]
+        .iter()
+        .all(|token| is_weak_voice_like_token(token))
+    {
+        return normalized;
+    }
+    tokens[first_distinctive..].join(" ")
+}
+
+fn is_distinctive_cw_token(token: &str) -> bool {
+    token.chars().any(|ch| ch.is_ascii_digit())
+        || token
+            .chars()
+            .any(|ch| ch.is_ascii_alphabetic() && !"ETIANMOSH".contains(ch))
+}
+
+fn is_weak_voice_like_token(token: &str) -> bool {
+    !token.is_empty()
+        && token
+            .chars()
+            .all(|ch| ch.is_ascii_alphabetic() && "ETIANMOSH".contains(ch))
+}
+
+fn is_short_distinctive_cw_text(text: &str) -> bool {
+    matches!(
+        normalize_region_text(text).as_str(),
+        "K" | "BK" | "AR" | "+"
+    )
+}
+
+pub(crate) fn has_transcript_start_anchor(text: &str) -> bool {
+    normalize_region_text(text).split_whitespace().any(|token| {
+        matches!(token, "CQ" | "DE" | "K" | "BK" | "AR" | "+")
+            || token.chars().any(|ch| ch.is_ascii_digit())
+            || is_callsign_token(token)
+            || (token.len() >= 3
+                && token
+                    .chars()
+                    .any(|ch| ch.is_ascii_alphabetic() && !"ETIANMOSH".contains(ch)))
+    })
 }
 
 fn decode_region_slice(
@@ -282,6 +369,113 @@ impl FrameRun {
     fn duration_s(self, step_s: f32, frame_s: f32) -> f32 {
         active_run_duration_s(self.start_frame, self.end_frame, step_s, frame_s)
     }
+}
+
+fn cw_waveform_evidence(
+    samples: &[f32],
+    sample_rate: u32,
+    pitch_hz: f32,
+    cfg: &RegionStreamConfig,
+) -> CwWaveformEvidence {
+    let frame_len = ((cfg.frame_len_s * sample_rate as f32).round() as usize).max(64);
+    let frame_step = ((cfg.frame_step_s * sample_rate as f32).round() as usize).max(8);
+    if samples.len() < frame_len {
+        return CwWaveformEvidence {
+            elements: 0,
+            timing_score: 0.0,
+            duty_cycle: 0.0,
+        };
+    }
+
+    let mut powers = Vec::new();
+    let mut offset = 0usize;
+    while offset + frame_len <= samples.len() {
+        let power = goertzel_power(&samples[offset..offset + frame_len], sample_rate, pitch_hz);
+        powers.push(power);
+        offset += frame_step;
+    }
+    if powers.len() < 4 {
+        return CwWaveformEvidence {
+            elements: 0,
+            timing_score: 0.0,
+            duty_cycle: 0.0,
+        };
+    }
+
+    let step_s = frame_step as f32 / sample_rate as f32;
+    let frame_s = frame_len as f32 / sample_rate as f32;
+    let mut active = adaptive_active_mask(&powers, cfg, step_s);
+    clean_interval_mask(&mut active);
+
+    let runs = collect_frame_runs(&active);
+    let Some(dot_s) = estimate_dot_from_runs(&runs, step_s, frame_s) else {
+        return CwWaveformEvidence {
+            elements: 0,
+            timing_score: 0.0,
+            duty_cycle: 0.0,
+        };
+    };
+
+    let active_runs: Vec<FrameRun> = runs.iter().copied().filter(|run| run.active).collect();
+    if active_runs.is_empty() {
+        return CwWaveformEvidence {
+            elements: 0,
+            timing_score: 0.0,
+            duty_cycle: 0.0,
+        };
+    }
+
+    let on_scores: Vec<f32> = active_runs
+        .iter()
+        .map(|run| timing_fit_score(run.duration_s(step_s, frame_s) / dot_s, &[1.0, 3.0], 0.55))
+        .collect();
+    let on_score = average_score(&on_scores);
+
+    let first_active = active_runs[0].start_frame;
+    let last_active = active_runs[active_runs.len() - 1].end_frame;
+    let gap_scores: Vec<f32> = runs
+        .iter()
+        .filter(|run| !run.active && run.start_frame > first_active && run.end_frame < last_active)
+        .map(|run| {
+            timing_fit_score(
+                run.duration_s(step_s, frame_s) / dot_s,
+                &[1.0, 3.0, 7.0],
+                0.65,
+            )
+        })
+        .collect();
+    let gap_score = average_score(&gap_scores);
+
+    let active_s: f32 = active_runs
+        .iter()
+        .map(|run| run.duration_s(step_s, frame_s))
+        .sum();
+    let span_s = active_run_duration_s(first_active, last_active, step_s, frame_s).max(frame_s);
+    let duty_cycle = active_s / span_s;
+
+    CwWaveformEvidence {
+        elements: active_runs.len(),
+        timing_score: on_score * 0.70 + gap_score * 0.30,
+        duty_cycle,
+    }
+}
+
+fn timing_fit_score(units: f32, targets: &[f32], tolerance: f32) -> f32 {
+    if !units.is_finite() || units <= 0.0 || targets.is_empty() {
+        return 0.0;
+    }
+    let best_error = targets
+        .iter()
+        .map(|target| ((units - *target).abs() / target.max(0.001)).min(1.0))
+        .fold(1.0_f32, f32::min);
+    (1.0 - best_error / tolerance.max(0.001)).clamp(0.0, 1.0)
+}
+
+fn average_score(scores: &[f32]) -> f32 {
+    if scores.is_empty() {
+        return 0.0;
+    }
+    scores.iter().sum::<f32>() / scores.len() as f32
 }
 
 fn decode_region_slice_from_intervals(
@@ -1534,6 +1728,121 @@ mod tests {
             .collect()
     }
 
+    fn synth_silence(dur_s: f32, sample_rate: u32) -> Vec<f32> {
+        vec![0.0; (dur_s * sample_rate as f32) as usize]
+    }
+
+    fn morse_code(ch: char) -> Option<&'static str> {
+        match ch {
+            'A' => Some(".-"),
+            'B' => Some("-..."),
+            'C' => Some("-.-."),
+            'D' => Some("-.."),
+            'E' => Some("."),
+            'F' => Some("..-."),
+            'G' => Some("--."),
+            'H' => Some("...."),
+            'I' => Some(".."),
+            'J' => Some(".---"),
+            'K' => Some("-.-"),
+            'L' => Some(".-.."),
+            'M' => Some("--"),
+            'N' => Some("-."),
+            'O' => Some("---"),
+            'P' => Some(".--."),
+            'Q' => Some("--.-"),
+            'R' => Some(".-."),
+            'S' => Some("..."),
+            'T' => Some("-"),
+            'U' => Some("..-"),
+            'V' => Some("...-"),
+            'W' => Some(".--"),
+            'X' => Some("-..-"),
+            'Y' => Some("-.--"),
+            'Z' => Some("--.."),
+            '0' => Some("-----"),
+            '1' => Some(".----"),
+            '2' => Some("..---"),
+            '3' => Some("...--"),
+            '4' => Some("....-"),
+            '5' => Some("....."),
+            '6' => Some("-...."),
+            '7' => Some("--..."),
+            '8' => Some("---.."),
+            '9' => Some("----."),
+            _ => None,
+        }
+    }
+
+    fn synth_morse(sample_rate: u32, pitch_hz: f32, wpm: f32, text: &str, amp: f32) -> Vec<f32> {
+        let dot_s = 1.2 / wpm;
+        let mut out = Vec::new();
+        let mut phase_samples = 0usize;
+        let chars: Vec<char> = text.to_uppercase().chars().collect();
+        for (idx, ch) in chars.iter().copied().enumerate() {
+            if ch.is_whitespace() {
+                out.extend(synth_silence(dot_s * 7.0, sample_rate));
+                phase_samples += (dot_s * 7.0 * sample_rate as f32).round() as usize;
+                continue;
+            }
+            let Some(code) = morse_code(ch) else {
+                continue;
+            };
+            for (element_idx, element) in code.chars().enumerate() {
+                let units = if element == '.' { 1.0 } else { 3.0 };
+                let n = (dot_s * units * sample_rate as f32).round() as usize;
+                for _ in 0..n {
+                    let t = phase_samples as f32 / sample_rate as f32;
+                    out.push((2.0 * std::f32::consts::PI * pitch_hz * t).sin() * amp);
+                    phase_samples += 1;
+                }
+                if element_idx + 1 < code.len() {
+                    let gap = (dot_s * sample_rate as f32).round() as usize;
+                    out.resize(out.len() + gap, 0.0);
+                    phase_samples += gap;
+                }
+            }
+            if idx + 1 < chars.len() && !chars[idx + 1].is_whitespace() {
+                let gap = (dot_s * 3.0 * sample_rate as f32).round() as usize;
+                out.resize(out.len() + gap, 0.0);
+                phase_samples += gap;
+            }
+        }
+        out
+    }
+
+    fn irregular_tonal_syllables(sample_rate: u32, pitch_hz: f32) -> Vec<f32> {
+        let on_s = [0.035_f32, 0.22, 0.06, 0.40, 0.11, 0.27];
+        let off_s = [0.16_f32, 0.045, 0.29, 0.08, 0.22];
+        let pitch_offsets = [-180.0_f32, -45.0, 130.0, -110.0, 70.0, 210.0];
+        let mut out = Vec::new();
+        for (idx, dur) in on_s.iter().enumerate() {
+            out.extend(synth_tone(
+                pitch_hz + pitch_offsets[idx],
+                *dur,
+                sample_rate,
+                0.45,
+            ));
+            if let Some(gap) = off_s.get(idx) {
+                out.extend(synth_silence(*gap, sample_rate));
+            }
+        }
+        out
+    }
+
+    fn vowel_like_tone(sample_rate: u32, pitch_hz: f32, seconds: f32) -> Vec<f32> {
+        let n = (seconds * sample_rate as f32) as usize;
+        (0..n)
+            .map(|i| {
+                let t = i as f32 / sample_rate as f32;
+                let carrier = (2.0 * std::f32::consts::PI * pitch_hz * t).sin();
+                let formant = (2.0 * std::f32::consts::PI * (pitch_hz + 185.0) * t).sin() * 0.35;
+                let envelope = 0.55 + 0.25 * (2.0 * std::f32::consts::PI * 5.0 * t).sin();
+                (carrier + formant) * envelope * 0.35
+            })
+            .collect()
+    }
+
     #[test]
     fn detects_single_region_in_padded_tone() {
         let sr = 12_000u32;
@@ -1590,6 +1899,83 @@ mod tests {
     fn unknown_region_text_is_low_confidence() {
         assert!(is_low_confidence_region_text("E?R"));
         assert!(!is_low_confidence_region_text("7QP W7N"));
+    }
+
+    #[test]
+    fn trims_voice_like_prefix_before_first_distinctive_cw_token() {
+        assert_eq!(
+            trim_leading_voice_like_prefix("S NEN ITA ME ENTE CQ DE K"),
+            "CQ DE K"
+        );
+        assert_eq!(trim_leading_voice_like_prefix("OM FB PSE"), "OM FB PSE");
+        assert_eq!(
+            trim_leading_voice_like_prefix("NAME QTH RIG"),
+            "NAME QTH RIG"
+        );
+    }
+
+    #[test]
+    fn transcript_start_anchor_rejects_weak_voice_preamble_copy() {
+        assert!(!has_transcript_start_anchor("AQ ITTT NE T ITE UD"));
+        assert!(has_transcript_start_anchor("CQ DE K"));
+        assert!(has_transcript_start_anchor("IHU NVCHU"));
+        assert!(has_transcript_start_anchor("W7N W7N K"));
+    }
+
+    #[test]
+    fn cw_waveform_evidence_accepts_keyed_morse() {
+        let sr = 12_000u32;
+        let cfg = RegionStreamConfig::default();
+        let cw = synth_morse(sr, 700.0, 30.0, "CQ DE K", 0.55);
+        let evidence = cw_waveform_evidence(&cw, sr, 700.0, &cfg);
+        assert!(
+            evidence.passes(&cfg),
+            "expected keyed CW evidence to pass, got {evidence:?}"
+        );
+    }
+
+    #[test]
+    fn cw_waveform_evidence_rejects_unkeyed_voice_like_tone() {
+        let sr = 12_000u32;
+        let cfg = RegionStreamConfig::default();
+        let voice_like = vowel_like_tone(sr, 700.0, 1.8);
+        let evidence = cw_waveform_evidence(&voice_like, sr, 700.0, &cfg);
+        assert!(
+            !evidence.passes(&cfg),
+            "unkeyed voice-like tone must not pass as CW evidence: {evidence:?}"
+        );
+    }
+
+    #[test]
+    fn decode_region_stream_ignores_voice_over_before_cw() {
+        let sr = 12_000u32;
+        let mut buf = irregular_tonal_syllables(sr, 700.0);
+        let voice_end_s = buf.len() as f32 / sr as f32;
+        buf.extend(synth_silence(0.8, sr));
+        buf.extend(synth_morse(sr, 700.0, 30.0, "CQ DE K UR 73", 0.55));
+        buf.extend(synth_silence(0.6, sr));
+
+        let cfg = RegionStreamConfig {
+            merge_gap_s: 0.5,
+            min_region_s: 0.3,
+            pad_s: 0.15,
+            ..RegionStreamConfig::default()
+        };
+        let result = decode_region_stream(&buf, sr, &cfg);
+        assert!(
+            result
+                .regions
+                .iter()
+                .filter(|region| region.start_s < voice_end_s)
+                .all(|region| !has_transcript_start_anchor(&region.text)),
+            "voice-over produced a transcript-start anchor: {:?}",
+            result.regions
+        );
+        assert!(
+            result.text.contains("CQ"),
+            "expected the CW portion to still decode, got {:?}",
+            result.text
+        );
     }
 
     #[test]
