@@ -465,6 +465,89 @@ public sealed class CommandHelperTests
     }
 
     [Fact]
+    public void ResolveOutputFile_generates_dated_filename_for_existing_directory()
+    {
+        var outputDirectory = Directory.CreateTempSubdirectory();
+        try
+        {
+            var resolved = ExportAdifCommand.ResolveOutputFile(
+                outputDirectory.FullName,
+                "C:\\logs\\kc7ava-debug-log.db",
+                new DateOnly(2026, 5, 7));
+
+            Assert.Equal(
+                Path.Combine(outputDirectory.FullName, "kc7ava-debug-log-2026-05-07.adi"),
+                resolved);
+        }
+        finally
+        {
+            outputDirectory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveOutputFile_treats_trailing_separator_as_directory_and_avoids_overwrite()
+    {
+        var root = Directory.CreateTempSubdirectory();
+        try
+        {
+            var outputDirectory = Path.Combine(root.FullName, "Backups") + Path.DirectorySeparatorChar;
+            Directory.CreateDirectory(outputDirectory);
+            File.WriteAllText(Path.Combine(outputDirectory, "qsoripper-logbook-2026-05-07.adi"), "existing");
+
+            var resolved = ExportAdifCommand.ResolveOutputFile(
+                outputDirectory,
+                null,
+                new DateOnly(2026, 5, 7));
+
+            Assert.Equal(
+                Path.Combine(outputDirectory, "qsoripper-logbook-2026-05-07-001.adi"),
+                resolved);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ResolveOutputFile_keeps_exact_file_paths_exact()
+    {
+        var exactPath = Path.Combine(Path.GetTempPath(), "my-log.adi");
+
+        var resolved = ExportAdifCommand.ResolveOutputFile(
+            exactPath,
+            "C:\\logs\\kc7ava-debug-log.db",
+            new DateOnly(2026, 5, 7));
+
+        Assert.Equal(exactPath, resolved);
+    }
+
+    [Fact]
+    public async Task Export_returns_error_when_exact_file_parent_is_missing()
+    {
+        var originalError = Console.Error;
+        using var error = new StringWriter();
+        Console.SetError(error);
+        try
+        {
+            var missingParentFile = Path.Combine(
+                Path.GetTempPath(),
+                Guid.NewGuid().ToString("N"),
+                "backup.adi");
+
+            var exitCode = await ExportAdifCommand.RunAsync(null!, ["--file", missingParentFile]);
+
+            Assert.Equal(1, exitCode);
+            Assert.Contains("Unable to open ADIF export file", error.ToString(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+    }
+
+    [Fact]
     public void TryParseArgs_deleted_flag_sets_deleted_only_filter()
     {
         var success = ListQsosCommand.TryParseArgs(["--deleted"], out var request, out var displayOptions, out var error);
