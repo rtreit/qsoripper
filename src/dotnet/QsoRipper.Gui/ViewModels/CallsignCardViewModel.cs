@@ -106,6 +106,9 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
     private string _webUrl = string.Empty;
 
     [ObservableProperty]
+    private string _qrzPageUrl = string.Empty;
+
+    [ObservableProperty]
     private string _email = string.Empty;
 
     [ObservableProperty]
@@ -174,6 +177,8 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
     public bool HasIota => !string.IsNullOrEmpty(Iota);
 
     public bool HasWebUrl => !string.IsNullOrEmpty(WebUrl);
+
+    public bool HasQrzPageUrl => !string.IsNullOrEmpty(QrzPageUrl);
 
     public bool HasEmail => !string.IsNullOrEmpty(Email);
 
@@ -257,9 +262,21 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
         ExpandMapRequested?.Invoke(this, EventArgs.Empty);
     }
 
+    [RelayCommand]
+    private void OpenQrzPage()
+    {
+        if (!HasQrzPageUrl)
+        {
+            return;
+        }
+        OpenExternalUrlRequested?.Invoke(this, QrzPageUrl);
+    }
+
     internal event EventHandler? CloseRequested;
 
     internal event EventHandler? ExpandMapRequested;
+
+    internal event EventHandler<string>? OpenExternalUrlRequested;
 
     /// <summary>
     /// Raised when a callsign record is successfully loaded, carrying the
@@ -294,6 +311,7 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
         QslManager = record.QslManager ?? string.Empty;
 
         ImageUrl = record.ImageUrl;
+        QrzPageUrl = BuildQrzPageUrl(record.Callsign);
         WebUrl = record.WebUrl ?? string.Empty;
         Email = record.Email ?? string.Empty;
         Aliases = record.Aliases.Count > 0 ? string.Join(", ", record.Aliases) : string.Empty;
@@ -304,10 +322,22 @@ internal sealed partial class CallsignCardViewModel : ObservableObject
         OnPropertyChanged(nameof(HasPreviousCall));
         OnPropertyChanged(nameof(HasQslManager));
         OnPropertyChanged(nameof(HasIota));
+        OnPropertyChanged(nameof(HasQrzPageUrl));
         OnPropertyChanged(nameof(HasWebUrl));
         OnPropertyChanged(nameof(HasEmail));
         OnPropertyChanged(nameof(HasCounty));
         OnPropertyChanged(nameof(HasTimeZone));
+    }
+
+    private static string BuildQrzPageUrl(string? callsign)
+    {
+        if (string.IsNullOrWhiteSpace(callsign))
+        {
+            return string.Empty;
+        }
+
+        var normalized = callsign.Trim().ToUpperInvariant();
+        return $"https://www.qrz.com/db/{Uri.EscapeDataString(normalized)}";
     }
 
     private async Task LoadMapAsync(CallsignRecord record)

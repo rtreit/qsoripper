@@ -1,4 +1,6 @@
 using System;
+using System.ComponentModel;
+using System.Diagnostics;
 using Avalonia.Controls;
 using QsoRipper.Gui.ViewModels;
 
@@ -22,6 +24,7 @@ internal sealed partial class CallsignCardView : UserControl
         {
             _attachedViewModel = vm;
             vm.ExpandMapRequested += OnExpandMapRequested;
+            vm.OpenExternalUrlRequested += OnOpenExternalUrlRequested;
         }
     }
 
@@ -30,6 +33,7 @@ internal sealed partial class CallsignCardView : UserControl
         if (_attachedViewModel is not null)
         {
             _attachedViewModel.ExpandMapRequested -= OnExpandMapRequested;
+            _attachedViewModel.OpenExternalUrlRequested -= OnOpenExternalUrlRequested;
             _attachedViewModel = null;
         }
     }
@@ -56,6 +60,35 @@ internal sealed partial class CallsignCardView : UserControl
         else
         {
             popout.Show();
+        }
+    }
+
+    private static void OnOpenExternalUrlRequested(object? sender, string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return;
+        }
+        if (!uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            && !uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            _ = Process.Start(new ProcessStartInfo(uri.AbsoluteUri)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (InvalidOperationException ex)
+        {
+            Trace.WriteLine($"[CallsignCard] Failed to open URL '{uri}': {ex.Message}");
+        }
+        catch (Win32Exception ex)
+        {
+            Trace.WriteLine($"[CallsignCard] Failed to open URL '{uri}': {ex.Message}");
         }
     }
 }
