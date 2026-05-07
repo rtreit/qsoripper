@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <BuiltInComeFromNuGet>true</BuiltInComeFromNuGet>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\cw-scope.ico</ApplicationIcon>
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <RootNamespace>CwDecoderGui</RootNamespace>
     <AssemblyName>CwDecoderGui</AssemblyName>
@@ -14,6 +15,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <AvaloniaResource Include="Assets\cw-scope.ico" />
     <PackageReference Include="Avalonia" Version="11.3.14" />
     <PackageReference Include="Avalonia.Desktop" Version="11.3.14" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.14" />

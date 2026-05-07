@@ -549,6 +549,10 @@ enum Cmd {
         /// instead of a separate wall-clock replay loop.
         #[arg(long)]
         play: bool,
+        /// When used with --file, replay as fast as possible instead of
+        /// sleeping at real-time pace. Intended for tests and diagnostics.
+        #[arg(long)]
+        no_realtime: bool,
 
         /// Multi-pitch (CW Skimmer-style) decode: also run K parallel
         /// per-pitch decoders alongside the existing single-pitch
@@ -1199,6 +1203,7 @@ fn run_cli() -> Result<()> {
             min_snr_db,
             file,
             play,
+            no_realtime,
             multi_pitch,
             region_transcript,
             region_stable_latency_s,
@@ -1217,6 +1222,7 @@ fn run_cli() -> Result<()> {
             min_snr_db,
             file.as_deref(),
             play,
+            no_realtime,
             multi_pitch,
             region_transcript,
             region_stable_latency_s,
@@ -1665,6 +1671,112 @@ fn append_region_commits(
         transcript.push_str(text);
         char_times.extend(std::iter::repeat_n(t_ms, text.chars().count()));
     }
+}
+
+fn select_region_effective_text(region_text: &str, append_text: &str) -> String {
+    let region = region_text.trim();
+    let append = append_text.trim();
+    if append.is_empty() {
+        return region.to_string();
+    }
+    if region.is_empty() {
+        return append.to_string();
+    }
+
+    let region_chars = useful_transcript_chars(region);
+    let append_chars = useful_transcript_chars(append);
+    let append_has_cq_anchor =
+        has_token_phrase(append, &["CQ", "DE"]) && !has_token_phrase(region, &["CQ", "DE"]);
+    let append_is_much_richer =
+        append_chars >= region_chars.saturating_add(6) || append_chars >= region_chars * 2;
+    if append_has_cq_anchor || append_is_much_richer {
+        append.to_string()
+    } else {
+        region.to_string()
+    }
+}
+
+fn has_token_phrase(text: &str, phrase: &[&str]) -> bool {
+    let tokens: Vec<&str> = text.split_whitespace().collect();
+    tokens.windows(phrase.len()).any(|window| window == phrase)
+}
+
+fn continuous_append_mode_active(text: &str) -> bool {
+    has_token_phrase(text, &["CQ", "DE"]) && useful_transcript_chars(text) >= 16
+}
+
+fn crop_and_repair_continuous_cw_transcript(text: &str) -> String {
+    let normalized = ditdah_streaming::normalize_snapshot_text(text);
+    let tokens: Vec<&str> = normalized.split_whitespace().collect();
+    let Some(start) = find_continuous_cw_start(&tokens) else {
+        return String::new();
+    };
+    repair_split_cw_tokens(&tokens[start..])
+}
+
+fn find_continuous_cw_start(tokens: &[&str]) -> Option<usize> {
+    tokens.iter().position(|token| *token == "CQ").or_else(|| {
+        tokens
+            .windows(3)
+            .position(|window| window == ["C", "Q", "DE"])
+    })
+}
+
+fn repair_split_cw_tokens(tokens: &[&str]) -> String {
+    const KNOWN_COMPACT: &[&str] = &[
+        "AGN", "ANT", "BK", "CQ", "CUL", "DE", "DX", "ES", "FB", "FER", "HI", "HPE", "HR", "HW",
+        "NAME", "NW", "OM", "OP", "PSE", "QRM", "QRN", "QRP", "QSL", "QTH", "RIG", "RST", "SRI",
+        "STN", "TNX", "TU", "UR", "WKD", "WX",
+    ];
+
+    let mut repaired = Vec::new();
+    let mut i = 0usize;
+    while i < tokens.len() {
+        if tokens[i] == "=" {
+            repaired.push("BT".to_string());
+            i += 1;
+            continue;
+        }
+        if tokens[i] == "?"
+            && repaired.last().is_some_and(|token| token == "ES")
+            && tokens.get(i + 1).is_some_and(|token| *token == "CUL")
+        {
+            repaired.push("BK".to_string());
+            i += 1;
+            continue;
+        }
+
+        let mut matched = false;
+        for width in (2..=4).rev() {
+            if i + width > tokens.len() {
+                continue;
+            }
+            if !tokens[i..i + width]
+                .iter()
+                .all(|token| token.len() == 1 && token.chars().all(|ch| ch.is_ascii_alphabetic()))
+            {
+                continue;
+            }
+            let candidate = tokens[i..i + width].join("");
+            if KNOWN_COMPACT.contains(&candidate.as_str()) {
+                repaired.push(candidate);
+                i += width;
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            repaired.push(tokens[i].to_string());
+            i += 1;
+        }
+    }
+    repaired.join(" ")
+}
+
+fn useful_transcript_chars(text: &str) -> usize {
+    text.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '+' | '='))
+        .count()
 }
 
 fn trim_char_times_to_transcript(raw: &str, raw_times: &[u32]) -> Vec<u32> {
@@ -4392,6 +4504,7 @@ fn run_stream_live_v3(
     min_snr_db: f32,
     file: Option<&std::path::Path>,
     play_file_audio: bool,
+    no_realtime: bool,
     multi_pitch: usize,
     region_transcript: bool,
     region_stable_latency_s: f32,
@@ -4408,6 +4521,7 @@ fn run_stream_live_v3(
             pin_hz,
             min_snr_db,
             play_file_audio,
+            no_realtime,
             multi_pitch,
             region_transcript,
             region_stable_latency_s,
@@ -4536,6 +4650,7 @@ fn run_stream_live_v3(
     let mut commit_cursor =
         ditdah_streaming::LiveCommitCursor::new(MAX_V3_SESSION_TRANSCRIPT_CHARS);
     let mut append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
+    let mut best_region_effective_text = String::new();
     let mut diag = DiagWriter::from_env();
 
     loop {
@@ -4553,6 +4668,7 @@ fn run_stream_live_v3(
                     streamer = new_streamer();
                     multi_streamer = new_multi();
                     region_streamer = new_region();
+                    best_region_effective_text.clear();
                     last_drain_at = capture.buffer.lock().written;
                     last_decode_written = last_drain_at;
                     last_region_decode_written = last_drain_at;
@@ -4609,14 +4725,18 @@ fn run_stream_live_v3(
         let mut region_commits = Vec::new();
         let mut region_text_full = String::new();
         if let Some(r) = region_streamer.as_mut() {
-            if last_drain_at.saturating_sub(last_region_decode_written)
+            if continuous_append_mode_active(&best_region_effective_text) {
+                region_text_full = r.transcript().to_string();
+            } else if last_drain_at.saturating_sub(last_region_decode_written)
                 >= region_decode_every_samples
             {
                 last_region_decode_written = last_drain_at;
                 region_commits = r.try_commit();
                 r.trim_committed(region_keep_back_s);
+                region_text_full = r.transcript().to_string();
+            } else {
+                region_text_full = r.transcript().to_string();
             }
-            region_text_full = r.transcript().to_string();
         }
         let region_appended: String = region_commits
             .iter()
@@ -4667,11 +4787,18 @@ fn run_stream_live_v3(
         // Effective transcript-event payload. Region path overrides
         // text/appended when active.
         let use_region = region_streamer.is_some();
-        let eff_text = if use_region {
-            region_text_full.clone()
+        let append_region_text = crop_and_repair_continuous_cw_transcript(&append.decoded_text);
+        let mut eff_text = if use_region {
+            select_region_effective_text(&region_text_full, &append_region_text)
         } else {
             append.decoded_text.clone()
         };
+        if use_region && !best_region_effective_text.is_empty() {
+            eff_text = select_region_effective_text(&eff_text, &best_region_effective_text);
+        }
+        if use_region && !eff_text.is_empty() {
+            best_region_effective_text = eff_text.clone();
+        }
         let eff_appended = if use_region {
             region_appended.clone()
         } else {
@@ -4685,7 +4812,7 @@ fn run_stream_live_v3(
                     "text": eff_text,
                     "appended": eff_appended,
                     "transcript": eff_text,
-                    "committed": if use_region { region_text_full.clone() } else { commit.committed_text.clone() },
+                    "committed": if use_region { eff_text.clone() } else { commit.committed_text.clone() },
                     "provisional": if use_region { String::new() } else { commit.provisional_tail.clone() },
                     "cursor_transcript": session_transcript.clone(),
                     "raw_morse": append.raw_stream,
@@ -4797,7 +4924,7 @@ fn run_stream_live_v3(
     };
     if let Some(em) = emitter.as_mut() {
         let final_text = if region_streamer.is_some() {
-            final_region_text
+            select_region_effective_text(&final_region_text, &best_region_effective_text)
         } else {
             commit_cursor.committed_text().to_string()
         };
@@ -4814,7 +4941,10 @@ fn run_stream_live_v3(
         println!();
         println!("Final transcript (v3):");
         if region_streamer.is_some() {
-            println!("{final_region_text}");
+            println!(
+                "{}",
+                select_region_effective_text(&final_region_text, &best_region_effective_text)
+            );
         } else {
             println!("{}", commit_cursor.committed_text());
         }
@@ -4831,6 +4961,7 @@ fn run_stream_live_v3_file(
     pin_hz: Option<f32>,
     min_snr_db: f32,
     play_file_audio: bool,
+    no_realtime: bool,
     multi_pitch: usize,
     region_transcript: bool,
     region_stable_latency_s: f32,
@@ -4926,7 +5057,9 @@ fn run_stream_live_v3_file(
     let mut last_region_decode_cursor = 0usize;
     let chunk_period = Duration::from_millis(50);
     let chunk_samples = ((sr as u64 * 50) / 1000) as usize;
-    let pump_period = if playback.is_some() {
+    let pump_period = if no_realtime && playback.is_none() {
+        Duration::ZERO
+    } else if playback.is_some() {
         Duration::from_millis(8)
     } else {
         chunk_period
@@ -4936,13 +5069,16 @@ fn run_stream_live_v3_file(
     let mut commit_cursor =
         ditdah_streaming::LiveCommitCursor::new(MAX_V3_SESSION_TRANSCRIPT_CHARS);
     let mut append_decoder = cw_decoder_poc::append_decode::AppendEventDecoder::new();
+    let mut best_region_effective_text = String::new();
     let mut diag = DiagWriter::from_env();
 
     while cursor < total_samples {
         if seconds > 0.0 && started.elapsed().as_secs_f32() >= seconds {
             break;
         }
-        std::thread::sleep(pump_period);
+        if !pump_period.is_zero() {
+            std::thread::sleep(pump_period);
+        }
         let end = if let Some(p) = playback.as_ref() {
             (p.position_input_frames() as usize).min(total_samples)
         } else {
@@ -4970,11 +5106,17 @@ fn run_stream_live_v3_file(
         // real-world QSO audio with pauses + speed changes.
         let mut region_text_full = String::new();
         if let Some(r) = region_streamer.as_mut() {
-            if cursor.saturating_sub(last_region_decode_cursor) >= region_decode_every_samples {
+            if continuous_append_mode_active(&best_region_effective_text) {
+                region_text_full = r.transcript().to_string();
+            } else if cursor.saturating_sub(last_region_decode_cursor)
+                >= region_decode_every_samples
+            {
                 last_region_decode_cursor = cursor;
                 let _ = r.try_commit();
+                region_text_full = r.transcript().to_string();
+            } else {
+                region_text_full = r.transcript().to_string();
             }
-            region_text_full = r.transcript().to_string();
         }
         // Approach A+: drive the event-driven commit cursor instead of
         // string-stitching. The cursor is sample-indexed and idempotent
@@ -5019,11 +5161,18 @@ fn run_stream_live_v3_file(
         }
 
         let use_region = region_streamer.is_some();
-        let eff_text = if use_region {
-            region_text_full.clone()
+        let append_region_text = crop_and_repair_continuous_cw_transcript(&append.decoded_text);
+        let mut eff_text = if use_region {
+            select_region_effective_text(&region_text_full, &append_region_text)
         } else {
             append.decoded_text.clone()
         };
+        if use_region && !best_region_effective_text.is_empty() {
+            eff_text = select_region_effective_text(&eff_text, &best_region_effective_text);
+        }
+        if use_region && !eff_text.is_empty() {
+            best_region_effective_text = eff_text.clone();
+        }
         if let Some(em) = emitter.as_mut() {
             em.emit(
                 t,
@@ -5032,7 +5181,7 @@ fn run_stream_live_v3_file(
                     "text": eff_text,
                     "appended": appended_session,
                     "transcript": eff_text,
-                    "committed": if use_region { region_text_full.clone() } else { commit.committed_text.clone() },
+                    "committed": if use_region { eff_text.clone() } else { commit.committed_text.clone() },
                     "provisional": if use_region { String::new() } else { commit.provisional_tail.clone() },
                     "cursor_transcript": session_transcript.clone(),
                     "raw_morse": append.raw_stream,
@@ -5137,7 +5286,7 @@ fn run_stream_live_v3_file(
     };
     if let Some(em) = emitter.as_mut() {
         let final_text = if region_streamer.is_some() {
-            final_region_text
+            select_region_effective_text(&final_region_text, &best_region_effective_text)
         } else {
             commit_cursor.committed_text().to_string()
         };
@@ -5154,7 +5303,10 @@ fn run_stream_live_v3_file(
         println!();
         println!("Final transcript (v3 file):");
         if region_streamer.is_some() {
-            println!("{final_region_text}");
+            println!(
+                "{}",
+                select_region_effective_text(&final_region_text, &best_region_effective_text)
+            );
         } else {
             println!("{}", commit_cursor.committed_text());
         }
@@ -5540,6 +5692,31 @@ mod v3_session_transcript_tests {
         let mut s = original.clone();
         cap_session_transcript(&mut s, 12_000);
         assert_eq!(s, original);
+    }
+
+    #[test]
+    fn continuous_cw_crop_drops_voice_preamble_and_repairs_split_tokens() {
+        let raw = "B N A W5 I E T A D IT A AEE E ? I I ENIIEE C Q DE K UR 73 TNX R S T R T U = O M F B P S E N A M E QTH RIG ANT WX HR FER ES ? CUL";
+        assert_eq!(
+            crop_and_repair_continuous_cw_transcript(raw),
+            "CQ DE K UR 73 TNX RST R TU BT OM FB PSE NAME QTH RIG ANT WX HR FER ES BK CUL"
+        );
+    }
+
+    #[test]
+    fn region_effective_text_prefers_much_richer_append_copy() {
+        assert_eq!(
+            select_region_effective_text("CQ K U R 73", "CQ DE K UR 73 TNX RST"),
+            "CQ DE K UR 73 TNX RST"
+        );
+        assert_eq!(
+            select_region_effective_text("CQ K U R 73 TNX ETE EEE T", "CQ DE K UR 73 TNX RST R"),
+            "CQ DE K UR 73 TNX RST R"
+        );
+        assert_eq!(
+            select_region_effective_text("IHU NVCHU", "IHU"),
+            "IHU NVCHU"
+        );
     }
 
     fn make_snapshot(
