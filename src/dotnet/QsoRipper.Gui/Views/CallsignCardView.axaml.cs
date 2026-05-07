@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using Avalonia.Controls;
 using QsoRipper.Gui.ViewModels;
@@ -81,7 +82,11 @@ internal sealed partial class CallsignCardView : UserControl
                 UseShellExecute = true,
             });
         }
-        catch (Exception ex)
+        catch (InvalidOperationException ex)
+        {
+            Trace.WriteLine($"[CallsignCard] Failed to open URL '{uri}': {ex.Message}");
+        }
+        catch (Win32Exception ex)
         {
             Trace.WriteLine($"[CallsignCard] Failed to open URL '{uri}': {ex.Message}");
         }
