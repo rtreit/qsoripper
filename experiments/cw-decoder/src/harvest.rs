@@ -883,7 +883,7 @@ fn append_stream_events(transcript: &mut String, events: Vec<StreamEvent>) {
         match ev {
             StreamEvent::Char { ch, .. } => transcript.push(ch),
             StreamEvent::Word => transcript.push(' '),
-            StreamEvent::Garbled { .. } => transcript.push('?'),
+            StreamEvent::Garbled { .. } => transcript.push('*'),
             StreamEvent::PitchUpdate { .. }
             | StreamEvent::PitchLost { .. }
             | StreamEvent::WpmUpdate { .. }

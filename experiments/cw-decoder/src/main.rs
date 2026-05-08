@@ -11,6 +11,8 @@ use cw_decoder_poc::{
     preview, streaming, streaming_v2, synthetic_qso, tui,
 };
 
+const BAD_COPY_MARKER: char = '*';
+
 #[derive(Parser, Debug)]
 #[command(
     name = "cw-decoder",
@@ -1600,29 +1602,43 @@ fn run_region_bench_scenario(
     stable_n: usize,
     label: &str,
 ) -> bench_latency::BenchResult {
+    const REGION_BENCH_DECODE_EVERY_MS: u64 = 2000;
+
     let sr = scen.audio.sample_rate;
     let chunk_samples = ((sr as u64 * chunk_ms as u64) / 1000).max(1) as usize;
+    let decode_every_samples = ((sr as u64 * REGION_BENCH_DECODE_EVERY_MS) / 1000).max(1) as usize;
     let truth_upper = scen.truth.to_uppercase();
     let mut streamer = cw_decoder_poc::region_streamer::RegionStreamer::new(sr);
     let mut transcript = String::new();
     let mut char_times = Vec::new();
 
     let mut consumed = 0usize;
+    let mut last_decode_consumed = 0usize;
     while consumed < scen.audio.samples.len() {
         let end = (consumed + chunk_samples).min(scen.audio.samples.len());
         streamer.ingest(&scen.audio.samples[consumed..end]);
-        let t_ms = ((end as u64 * 1000) / sr as u64) as u32;
-        append_region_commits(
-            streamer.try_commit(),
-            t_ms,
-            &mut transcript,
-            &mut char_times,
-        );
+        if end.saturating_sub(last_decode_consumed) >= decode_every_samples {
+            last_decode_consumed = end;
+            let t_ms = ((end as u64 * 1000) / sr as u64) as u32;
+            let _ = streamer.try_commit();
+            sync_region_visible_snapshot(
+                &streamer.transcript_with_provisional(),
+                t_ms,
+                &mut transcript,
+                &mut char_times,
+            );
+        }
         consumed = end;
     }
 
     let t_end = ((scen.audio.samples.len() as u64 * 1000) / sr as u64) as u32;
-    append_region_commits(streamer.flush(), t_end, &mut transcript, &mut char_times);
+    let _ = streamer.flush();
+    sync_region_visible_snapshot(
+        streamer.transcript(),
+        t_end,
+        &mut transcript,
+        &mut char_times,
+    );
 
     let mut result = bench_latency::BenchResult {
         scenario: scen.name.clone(),
@@ -1653,24 +1669,29 @@ fn run_region_bench_scenario(
     result
 }
 
-fn append_region_commits(
-    commits: Vec<cw_decoder_poc::region_streamer::CommittedRegion>,
+fn sync_region_visible_snapshot(
+    snapshot: &str,
     t_ms: u32,
     transcript: &mut String,
     char_times: &mut Vec<u32>,
 ) {
-    for commit in commits {
-        let text = commit.text.trim();
-        if text.is_empty() {
-            continue;
-        }
-        if !transcript.is_empty() {
-            transcript.push(' ');
-            char_times.push(t_ms);
-        }
-        transcript.push_str(text);
-        char_times.extend(std::iter::repeat_n(t_ms, text.chars().count()));
+    let snapshot = snapshot.trim();
+    if snapshot.is_empty() {
+        return;
     }
+
+    let common_prefix = transcript
+        .chars()
+        .zip(snapshot.chars())
+        .take_while(|(old, new)| old == new)
+        .count();
+    let new_len = snapshot.chars().count();
+    char_times.truncate(common_prefix);
+    char_times.extend(std::iter::repeat_n(
+        t_ms,
+        new_len.saturating_sub(common_prefix),
+    ));
+    *transcript = snapshot.to_string();
 }
 
 fn select_region_effective_text(region_text: &str, append_text: &str) -> String {
@@ -2555,7 +2576,7 @@ fn emit_decoder_events(
         match &ev {
             streaming::StreamEvent::Char { ch, .. } => transcript.push(*ch),
             streaming::StreamEvent::Word => transcript.push(' '),
-            streaming::StreamEvent::Garbled { .. } => transcript.push('?'),
+            streaming::StreamEvent::Garbled { .. } => transcript.push(BAD_COPY_MARKER),
             _ => {}
         }
         if let Some(em) = emitter.as_deref_mut() {
@@ -2729,7 +2750,7 @@ fn run_stream_file(
                 match &ev {
                     streaming::StreamEvent::Char { ch, .. } => transcript.push(*ch),
                     streaming::StreamEvent::Word => transcript.push(' '),
-                    streaming::StreamEvent::Garbled { .. } => transcript.push('?'),
+                    streaming::StreamEvent::Garbled { .. } => transcript.push(BAD_COPY_MARKER),
                     _ => {}
                 }
                 continue;
@@ -2783,7 +2804,7 @@ fn run_stream_file(
                 streaming::StreamEvent::Garbled {
                     morse, pitch_hz, ..
                 } => {
-                    transcript.push('?');
+                    transcript.push(BAD_COPY_MARKER);
                     if !quiet {
                         let pitch_suffix = pitch_hz
                             .map(|hz| format!("  @{hz:>6.1} Hz"))
@@ -2818,7 +2839,7 @@ fn run_stream_file(
         }
         match ev {
             streaming::StreamEvent::Char { ch, .. } => transcript.push(ch),
-            streaming::StreamEvent::Garbled { .. } => transcript.push('?'),
+            streaming::StreamEvent::Garbled { .. } => transcript.push(BAD_COPY_MARKER),
             _ => {}
         }
     }
@@ -3589,7 +3610,7 @@ fn run_stream_live(
                 match &ev {
                     streaming::StreamEvent::Char { ch, .. } => transcript.push(*ch),
                     streaming::StreamEvent::Word => transcript.push(' '),
-                    streaming::StreamEvent::Garbled { .. } => transcript.push('?'),
+                    streaming::StreamEvent::Garbled { .. } => transcript.push(BAD_COPY_MARKER),
                     _ => {}
                 }
                 continue;
@@ -3629,7 +3650,7 @@ fn run_stream_live(
                 streaming::StreamEvent::Garbled {
                     morse, pitch_hz, ..
                 } => {
-                    transcript.push('?');
+                    transcript.push(BAD_COPY_MARKER);
                     let pitch_suffix = pitch_hz
                         .map(|hz| format!("  @{hz:>6.1} Hz"))
                         .unwrap_or_default();
@@ -4726,16 +4747,16 @@ fn run_stream_live_v3(
         let mut region_text_full = String::new();
         if let Some(r) = region_streamer.as_mut() {
             if continuous_append_mode_active(&best_region_effective_text) {
-                region_text_full = r.transcript().to_string();
+                region_text_full = r.transcript_with_provisional();
             } else if last_drain_at.saturating_sub(last_region_decode_written)
                 >= region_decode_every_samples
             {
                 last_region_decode_written = last_drain_at;
                 region_commits = r.try_commit();
                 r.trim_committed(region_keep_back_s);
-                region_text_full = r.transcript().to_string();
+                region_text_full = r.transcript_with_provisional();
             } else {
-                region_text_full = r.transcript().to_string();
+                region_text_full = r.transcript_with_provisional();
             }
         }
         let region_appended: String = region_commits
@@ -4793,6 +4814,9 @@ fn run_stream_live_v3(
         } else {
             append.decoded_text.clone()
         };
+        if use_region && eff_text.is_empty() {
+            eff_text = snap.transcript.clone();
+        }
         if use_region && !best_region_effective_text.is_empty() {
             eff_text = select_region_effective_text(&eff_text, &best_region_effective_text);
         }
@@ -5107,15 +5131,15 @@ fn run_stream_live_v3_file(
         let mut region_text_full = String::new();
         if let Some(r) = region_streamer.as_mut() {
             if continuous_append_mode_active(&best_region_effective_text) {
-                region_text_full = r.transcript().to_string();
+                region_text_full = r.transcript_with_provisional();
             } else if cursor.saturating_sub(last_region_decode_cursor)
                 >= region_decode_every_samples
             {
                 last_region_decode_cursor = cursor;
                 let _ = r.try_commit();
-                region_text_full = r.transcript().to_string();
+                region_text_full = r.transcript_with_provisional();
             } else {
-                region_text_full = r.transcript().to_string();
+                region_text_full = r.transcript_with_provisional();
             }
         }
         // Approach A+: drive the event-driven commit cursor instead of
@@ -5167,6 +5191,9 @@ fn run_stream_live_v3_file(
         } else {
             append.decoded_text.clone()
         };
+        if use_region && eff_text.is_empty() {
+            eff_text = snap.transcript.clone();
+        }
         if use_region && !best_region_effective_text.is_empty() {
             eff_text = select_region_effective_text(&eff_text, &best_region_effective_text);
         }
@@ -5408,7 +5435,8 @@ fn run_stream_region_file(
             last_decode_cursor = cursor;
             let committed = streamer.try_commit();
             let t = started.elapsed().as_secs_f32();
-            emit_region_transcript(emitter.as_mut(), t, streamer.transcript(), &committed);
+            let transcript = streamer.transcript_with_provisional();
+            emit_region_transcript(emitter.as_mut(), t, &transcript, &committed);
         }
 
         if realtime {
@@ -5717,6 +5745,31 @@ mod v3_session_transcript_tests {
             select_region_effective_text("IHU NVCHU", "IHU"),
             "IHU NVCHU"
         );
+    }
+
+    #[test]
+    fn region_visible_snapshot_preserves_early_prefix_times() {
+        let mut transcript = String::new();
+        let mut times = Vec::new();
+        sync_region_visible_snapshot("FF ? BK DE A", 2_000, &mut transcript, &mut times);
+        sync_region_visible_snapshot("FF ? BK DE @7", 4_000, &mut transcript, &mut times);
+
+        assert_eq!(transcript, "FF ? BK DE @7");
+        let prefix_len = "FF ? BK DE ".chars().count();
+        assert!(times.iter().take(prefix_len).all(|t| *t == 2_000));
+        assert!(times.iter().skip(prefix_len).all(|t| *t == 4_000));
+    }
+
+    #[test]
+    fn region_visible_snapshot_truncates_revised_shorter_copy() {
+        let mut transcript = String::new();
+        let mut times = Vec::new();
+        sync_region_visible_snapshot("FF ? BK DE AC7", 2_000, &mut transcript, &mut times);
+        sync_region_visible_snapshot("FF ? BK", 4_000, &mut transcript, &mut times);
+
+        assert_eq!(transcript, "FF ? BK");
+        assert_eq!(times.len(), transcript.chars().count());
+        assert!(times.iter().all(|t| *t == 2_000));
     }
 
     fn make_snapshot(
