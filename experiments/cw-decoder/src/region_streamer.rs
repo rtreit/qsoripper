@@ -128,6 +128,22 @@ impl RegionStreamer {
         &self.committed_text
     }
 
+    /// Transcript plus the current uncommitted active region, for live UI
+    /// preview. The committed transcript remains append-only; this view may
+    /// change as more audio arrives.
+    pub fn transcript_with_provisional(&self) -> String {
+        let Some(provisional) = self.first_uncommitted_region_text() else {
+            return self.committed_text.clone();
+        };
+
+        let mut text = self.committed_text.clone();
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(&provisional);
+        normalize_region_transcript(&text)
+    }
+
     /// Buffered audio length in seconds (relative to the current buffer
     /// start, i.e. always >= 0 and bounded by the trim policy).
     pub fn buffered_seconds(&self) -> f32 {
@@ -166,6 +182,22 @@ impl RegionStreamer {
         self.head_s = self.buffer.len() as f32 / sr;
     }
 
+    fn first_uncommitted_region_text(&self) -> Option<String> {
+        if self.buffer.is_empty() {
+            return None;
+        }
+        let result = decode_region_stream(&self.buffer, self.sample_rate, &self.cfg.region);
+        result.regions.into_iter().find_map(|region| {
+            if region.end_s <= self.last_committed_end_s {
+                return None;
+            }
+            if self.committed_text.is_empty() && !has_transcript_start_anchor(&region.text) {
+                return None;
+            }
+            (!region.text.trim().is_empty()).then_some(region.text)
+        })
+    }
+
     fn commit_stable_regions(&mut self, force_all: bool) -> Vec<CommittedRegion> {
         if self.buffer.is_empty() {
             return Vec::new();
@@ -179,7 +211,7 @@ impl RegionStreamer {
 
         let mut newly = Vec::new();
         for region in &result.regions {
-            if region.start_s <= self.last_committed_end_s {
+            if region.end_s <= self.last_committed_end_s {
                 continue; // already committed in an earlier cycle
             }
             if region.end_s > stability_threshold {
@@ -255,6 +287,26 @@ mod tests {
             committed.is_empty(),
             "active region must be held back until trailing static is seen"
         );
+    }
+
+    #[test]
+    fn streamer_exposes_uncommitted_region_as_provisional_transcript() {
+        let sr = 12_000;
+        let mut s = RegionStreamer::new(sr);
+        let mut audio = synthesize_silence(sr, 0.6);
+        audio.extend(synth_morse(sr, 700.0, 24.0, "BK DE W1AW", 0.55));
+        s.ingest(&audio);
+
+        assert!(
+            s.try_commit().is_empty(),
+            "active region should not be committed before trailing static"
+        );
+        let provisional = s.transcript_with_provisional();
+        assert!(
+            provisional.contains("BK") && provisional.contains("DE"),
+            "active region should be visible as provisional copy, got {provisional:?}"
+        );
+        assert_eq!(s.transcript(), "");
     }
 
     #[test]

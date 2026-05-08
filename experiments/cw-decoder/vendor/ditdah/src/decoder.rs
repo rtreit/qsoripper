@@ -14,6 +14,7 @@ const RESAMPLER_CHUNK_SIZE: usize = 1024;
 const DIT_DAH_BOUNDARY: f32 = 2.0;
 const LETTER_SPACE_BOUNDARY: f32 = 2.0; // Gaps > 2x dot length end the current letter
 const WORD_SPACE_BOUNDARY: f32 = 5.0; // Gaps > 5x dot length add word space
+const BAD_COPY_MARKER: char = '*';
 
 // --- BiquadFilter (Unchanged) ---
 #[derive(Debug, Clone, Copy)]
@@ -550,7 +551,7 @@ impl MorseDecoder {
                                 if let Some(c) = morse_to_char(&current_letter) {
                                     result.push(c);
                                 } else {
-                                    result.push('?');
+                                    result.push(BAD_COPY_MARKER);
                                 }
                                 current_letter.clear();
                             }
@@ -572,7 +573,7 @@ impl MorseDecoder {
             if let Some(c) = morse_to_char(&current_letter) {
                 result.push(c);
             } else {
-                result.push('?');
+                result.push(BAD_COPY_MARKER);
             }
         }
 

@@ -17,6 +17,7 @@
 
 use crate::decoder::{decode_text, decode_text_pinned};
 
+const BAD_COPY_MARKER: char = '*';
 const DIT_DAH_BOUNDARY: f32 = 2.0;
 const LETTER_SPACE_BOUNDARY: f32 = 2.0;
 const WORD_SPACE_BOUNDARY: f32 = 5.0;
@@ -204,7 +205,28 @@ fn collect_region_candidates(
 }
 
 fn is_low_confidence_region_text(text: &str) -> bool {
-    text.contains('?') || useful_copy_chars(text) == 0
+    let normalized = normalize_region_text(text);
+    let useful_chars = useful_copy_chars(&normalized);
+    if useful_chars == 0 {
+        return true;
+    }
+
+    if !normalized.contains(BAD_COPY_MARKER) {
+        return false;
+    }
+
+    // `?` is valid CW (`..--..`). Bad element clusters use a separate
+    // marker, and are only kept when the region has enough QSO context.
+    has_no_strong_qso_anchor(&normalized) || useful_chars < 6
+}
+
+fn has_no_strong_qso_anchor(text: &str) -> bool {
+    !text.split_whitespace().any(|token| {
+        matches!(
+            token,
+            "CQ" | "DE" | "K" | "BK" | "AR" | "+" | "QSL" | "TU" | "73"
+        ) || is_callsign_token(token)
+    })
 }
 
 fn trim_leading_voice_like_prefix(text: &str) -> String {
@@ -276,9 +298,15 @@ fn decode_region_slice(
     }
 
     let auto = decode_text(samples, sample_rate);
-    let interval = decode_region_slice_from_intervals(samples, sample_rate, pitch_hz, cfg);
-    if should_prefer_interval_decode(&auto, &interval) {
-        return interval;
+    if let Some(interval) = decode_region_slice_from_intervals(samples, sample_rate, pitch_hz, cfg)
+    {
+        if let Some(spaced) = best_timing_spacing_overlay(&auto, samples, sample_rate, interval.wpm)
+        {
+            return spaced;
+        }
+        if should_prefer_interval_decode(&auto, &interval.text) {
+            return interval.text;
+        }
     }
 
     let duration_s = samples.len() as f32 / sample_rate.max(1) as f32;
@@ -297,10 +325,211 @@ fn decode_region_slice(
     }
 }
 
+fn best_timing_spacing_overlay(
+    auto: &str,
+    samples: &[f32],
+    sample_rate: u32,
+    interval_wpm: f32,
+) -> Option<String> {
+    let auto_norm = normalize_region_text(auto);
+    if !looks_run_together(&auto_norm) {
+        return None;
+    }
+
+    let mut wpms = Vec::new();
+    let rounded = (interval_wpm / 2.0).round() * 2.0;
+    for wpm in [
+        rounded - 4.0,
+        rounded - 2.0,
+        rounded,
+        rounded + 2.0,
+        rounded + 4.0,
+    ] {
+        if (5.0..=60.0).contains(&wpm) {
+            wpms.push(wpm);
+        }
+    }
+    for wpm in [18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 30.0] {
+        wpms.push(wpm);
+    }
+    wpms.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    wpms.dedup_by(|a, b| (*a - *b).abs() < 0.1);
+
+    let auto_chars = useful_copy_chars(&auto_norm);
+    let auto_spaces = space_count(&auto_norm);
+    let mut best: Option<(f32, String)> = None;
+    for wpm in wpms {
+        let source = normalize_region_text(&decode_text_pinned(samples, sample_rate, wpm));
+        if source.is_empty()
+            || useful_copy_chars(&source) < auto_chars.saturating_mul(3) / 4
+            || !has_transcript_start_anchor(&source)
+            || singleton_token_count(&source) > 4
+        {
+            continue;
+        }
+        let Some(spaced) = transfer_timing_spaces(&auto_norm, &source) else {
+            continue;
+        };
+        let spaced = smooth_spurious_timing_splits(&normalize_region_text(&spaced));
+        let gained_spaces = space_count(&spaced).saturating_sub(auto_spaces);
+        if gained_spaces < 2 || longest_token_len(&spaced) >= longest_token_len(&auto_norm) {
+            continue;
+        }
+        let score = timing_spacing_source_score(&source) + gained_spaces as f32 * 0.2;
+        if best
+            .as_ref()
+            .is_none_or(|(best_score, _)| score > *best_score)
+        {
+            best = Some((score, spaced));
+        }
+    }
+
+    best.map(|(_, spaced)| spaced)
+}
+
+fn smooth_spurious_timing_splits(text: &str) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for token in text.split_whitespace() {
+        if let Some(prev) = out.last_mut() {
+            if should_merge_spurious_timing_split(prev, token) {
+                prev.push_str(token);
+                continue;
+            }
+        }
+        out.push(token.to_string());
+    }
+    out.join(" ")
+}
+
+fn should_merge_spurious_timing_split(left: &str, right: &str) -> bool {
+    let left_useful = useful_copy_chars(left);
+    let right_useful = useful_copy_chars(right);
+    let left_alnum = left.chars().all(|ch| ch.is_ascii_alphanumeric());
+    let right_alnum = right.chars().all(|ch| ch.is_ascii_alphanumeric());
+    if !left_alnum || !right_alnum {
+        return false;
+    }
+    (left_useful == 1 && right_useful == 1)
+        || (left_useful == 2
+            && left.chars().all(|ch| ch.is_ascii_alphabetic())
+            && !matches!(left, "DE" | "BK" | "TU")
+            && right.chars().any(|ch| ch.is_ascii_digit()))
+}
+
+fn looks_run_together(text: &str) -> bool {
+    longest_token_len(text) >= 10
+}
+
+fn longest_token_len(text: &str) -> usize {
+    text.split_whitespace()
+        .map(useful_copy_chars)
+        .max()
+        .unwrap_or(0)
+}
+
+fn space_count(text: &str) -> usize {
+    text.split_whitespace().count().saturating_sub(1)
+}
+
+fn timing_spacing_source_score(text: &str) -> f32 {
+    let bad = text.chars().filter(|ch| *ch == BAD_COPY_MARKER).count() as f32;
+    let singletons = singleton_token_count(text) as f32;
+    transcript_quality_score(text) + space_count(text) as f32 * 0.2 - bad * 3.0 - singletons * 2.0
+}
+
+fn singleton_token_count(text: &str) -> usize {
+    text.split_whitespace()
+        .filter(|token| useful_copy_chars(token) == 1)
+        .count()
+}
+
+fn transfer_timing_spaces(primary: &str, spacing_source: &str) -> Option<String> {
+    let primary_chars: Vec<char> = primary.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let source_chars: Vec<char> = spacing_source
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    if primary_chars.is_empty() || source_chars.is_empty() {
+        return None;
+    }
+
+    let mapping = lcs_source_to_primary_mapping(&primary_chars, &source_chars);
+    let mut insert_space_after = vec![false; primary_chars.len()];
+    let mut source_seen = 0usize;
+    for token in spacing_source.split_whitespace() {
+        let token_len = token.chars().count();
+        if token_len == 0 {
+            continue;
+        }
+        source_seen += token_len;
+        if source_seen >= source_chars.len() {
+            break;
+        }
+        if let Some(primary_idx) = nearest_primary_mapping(&mapping, source_seen - 1, source_seen) {
+            if primary_idx + 1 < insert_space_after.len() {
+                insert_space_after[primary_idx] = true;
+            }
+        }
+    }
+
+    let mut out = String::new();
+    for (idx, ch) in primary_chars.iter().copied().enumerate() {
+        out.push(ch);
+        if insert_space_after[idx] && !out.ends_with(' ') {
+            out.push(' ');
+        }
+    }
+    Some(out)
+}
+
+fn nearest_primary_mapping(
+    mapping: &[Option<usize>],
+    prev_source_idx: usize,
+    next_source_idx: usize,
+) -> Option<usize> {
+    mapping.get(prev_source_idx).copied().flatten().or_else(|| {
+        mapping
+            .get(next_source_idx)
+            .copied()
+            .flatten()
+            .map(|idx| idx.saturating_sub(1))
+    })
+}
+
+fn lcs_source_to_primary_mapping(primary: &[char], source: &[char]) -> Vec<Option<usize>> {
+    let n = primary.len();
+    let m = source.len();
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            dp[i][j] = if primary[i] == source[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+
+    let mut mapping = vec![None; m];
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < n && j < m {
+        if primary[i] == source[j] {
+            mapping[j] = Some(i);
+            i += 1;
+            j += 1;
+        } else if dp[i + 1][j] >= dp[i][j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    mapping
+}
+
 fn should_prefer_interval_decode(auto: &str, interval: &str) -> bool {
     let auto_norm = normalize_region_text(auto);
     let interval_norm = normalize_region_text(interval);
-    if interval_norm.is_empty() || auto_norm == interval_norm || interval_norm.contains('?') {
+    if interval_norm.is_empty() || auto_norm == interval_norm {
         return false;
     }
 
@@ -320,14 +549,16 @@ fn should_prefer_interval_decode(auto: &str, interval: &str) -> bool {
         || interval_norm.contains('/');
 
     interval_score > auto_score + 2.0
-        || (auto_norm.contains('?') && interval_score >= auto_score)
+        || (auto_norm.contains(BAD_COPY_MARKER) && interval_score >= auto_score)
         || (auto_has_garbage_tail && interval_score >= auto_score - 6.0)
         || (interval_has_callsign_shape && interval_score >= auto_score - 0.5)
 }
 
 fn useful_copy_chars(text: &str) -> usize {
     text.chars()
-        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '+' | '=' | '.' | ','))
+        .filter(|ch| {
+            ch.is_ascii_alphanumeric() || matches!(ch, '/' | '+' | '=' | '.' | ',' | '?' | '@')
+        })
         .count()
 }
 
@@ -340,9 +571,9 @@ fn transcript_quality_score(text: &str) -> f32 {
     for ch in text.chars() {
         if ch.is_ascii_alphanumeric() {
             score += 1.0;
-        } else if matches!(ch, '/' | '+' | '=' | '.' | ',') {
+        } else if matches!(ch, '/' | '+' | '=' | '.' | ',' | '?' | '@') {
             score += 0.6;
-        } else if ch == '?' {
+        } else if ch == BAD_COPY_MARKER {
             score -= 3.0;
         }
     }
@@ -478,16 +709,22 @@ fn average_score(scores: &[f32]) -> f32 {
     scores.iter().sum::<f32>() / scores.len() as f32
 }
 
+#[derive(Debug, Clone)]
+struct IntervalDecode {
+    text: String,
+    wpm: f32,
+}
+
 fn decode_region_slice_from_intervals(
     samples: &[f32],
     sample_rate: u32,
     pitch_hz: f32,
     cfg: &RegionStreamConfig,
-) -> String {
+) -> Option<IntervalDecode> {
     let frame_len = ((cfg.frame_len_s * sample_rate as f32).round() as usize).max(64);
     let frame_step = ((cfg.frame_step_s * sample_rate as f32).round() as usize).max(8);
     if samples.len() < frame_len {
-        return String::new();
+        return None;
     }
 
     let mut log_powers = Vec::new();
@@ -498,23 +735,23 @@ fn decode_region_slice_from_intervals(
         offset += frame_step;
     }
     if log_powers.len() < 4 {
-        return String::new();
+        return None;
     }
 
-    let Some(threshold) = otsu_log_power_threshold(&log_powers) else {
-        return String::new();
-    };
+    let threshold = otsu_log_power_threshold(&log_powers)?;
     let mut active: Vec<bool> = log_powers.iter().map(|power| *power >= threshold).collect();
     clean_interval_mask(&mut active);
 
     let runs = collect_frame_runs(&active);
     let step_s = frame_step as f32 / sample_rate as f32;
     let frame_s = frame_len as f32 / sample_rate as f32;
-    let Some(dot_s) = estimate_dot_from_runs(&runs, step_s, frame_s) else {
-        return String::new();
-    };
+    let dot_s = estimate_dot_from_runs(&runs, step_s, frame_s)?;
 
-    decode_runs_to_text(&runs, step_s, frame_s, dot_s)
+    let wpm = 1.2 / dot_s.max(0.001);
+    Some(IntervalDecode {
+        text: decode_runs_to_text(&runs, step_s, frame_s, dot_s),
+        wpm,
+    })
 }
 
 fn otsu_log_power_threshold(log_powers: &[f32]) -> Option<f32> {
@@ -662,7 +899,7 @@ fn push_morse_letter(out: &mut String, current: &mut String) {
     if let Some(ch) = morse_to_char(current) {
         out.push(ch);
     } else {
-        out.push('?');
+        out.push(BAD_COPY_MARKER);
     }
     current.clear();
 }
@@ -758,8 +995,40 @@ fn normalize_region_text(text: &str) -> String {
 
 pub(crate) fn normalize_region_transcript(text: &str) -> String {
     let normalized = normalize_region_text(text);
-    let repaired = repair_repeated_callsign_portable_suffix(&normalized);
+    let repaired = repair_embedded_at_sign_callsign(&normalized);
+    let repaired = repair_repeated_callsign_portable_suffix(&repaired);
     replace_final_ar_prosign(&repaired)
+}
+
+fn repair_embedded_at_sign_callsign(text: &str) -> String {
+    text.split_whitespace()
+        .flat_map(|token| {
+            let Some(at_idx) = token.find('@') else {
+                return vec![token.to_string()];
+            };
+            if token[at_idx + 1..].contains('@') {
+                return vec![token.to_string()];
+            }
+
+            let prefix = &token[..at_idx];
+            let suffix = &token[at_idx + 1..];
+            let suffix_looks_like_callsign_tail = !suffix.is_empty()
+                && suffix.chars().all(|ch| ch.is_ascii_alphanumeric())
+                && suffix.chars().any(|ch| ch.is_ascii_digit());
+            let prefix_is_alnum = prefix.chars().all(|ch| ch.is_ascii_alphanumeric());
+            if !prefix_is_alnum || !suffix_looks_like_callsign_tail {
+                return vec![token.to_string()];
+            }
+
+            let expanded = format!("AC{suffix}");
+            if prefix.is_empty() {
+                vec![expanded]
+            } else {
+                vec![prefix.to_string(), expanded]
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn replace_final_ar_prosign(text: &str) -> String {
@@ -1896,9 +2165,20 @@ mod tests {
     }
 
     #[test]
-    fn unknown_region_text_is_low_confidence() {
-        assert!(is_low_confidence_region_text("E?R"));
+    fn bad_copy_marker_fragment_is_low_confidence() {
+        assert!(is_low_confidence_region_text("E*R"));
+        assert!(!is_low_confidence_region_text("E?R"));
+        assert!(!is_low_confidence_region_text("BK ? DE W1AW"));
         assert!(!is_low_confidence_region_text("7QP W7N"));
+    }
+
+    #[test]
+    fn anchored_partial_copy_with_question_marks_is_not_low_confidence() {
+        assert!(!is_low_confidence_region_text(
+            "FF ? BK DE @7FFU*5FB*KQSL AC7FFTUDAVE 73DEK5OHYTU EEEE"
+        ));
+        assert!(is_low_confidence_region_text("* EEN EKTTE T0N"));
+        assert!(is_low_confidence_region_text("BK *"));
     }
 
     #[test]
@@ -1984,12 +2264,41 @@ mod tests {
     }
 
     #[test]
+    fn timing_spacing_overlay_transfers_spaces_without_qso_tokens() {
+        let primary = "FF ? BK DE @7FFU*5FB*KQSL AC7FFTUDAVE 73DEK5OHYTU EEEE";
+        let timing = "FF ? BK LE **KIE*IEIEEH4ETIEEEIEEHEB4BKQSL AC7FF TU DAVE 73 DE K5OHY TU EE E";
+        let spaced = transfer_timing_spaces(primary, timing).expect("spacing overlay");
+        assert!(
+            spaced.contains("AC7FF TU DAVE") && spaced.contains("73 DE K5OHY TU"),
+            "expected timing-derived spaces in {spaced:?}"
+        );
+    }
+
+    #[test]
+    fn timing_spacing_smoothing_removes_single_character_splits() {
+        assert_eq!(
+            smooth_spurious_timing_splits("F F ? BK A C 7FF T U DAVE 73 D E K5OHY"),
+            "FF ? BK AC7FF TU DAVE 73 DE K5OHY"
+        );
+    }
+
+    #[test]
     fn transcript_normalization_repairs_repeated_callsign_portable_tail() {
         let raw = "IQ CQ CQ DE WA2IAC WA2IAC WA2 AD /1 +";
         assert_eq!(
             normalize_region_transcript(raw),
             "IQ CQ CQ DE WA2IAC WA2IAC WA2IAC/1 AR"
         );
+    }
+
+    #[test]
+    fn transcript_normalization_expands_embedded_at_in_callsign_like_copy() {
+        assert_eq!(
+            normalize_region_transcript("FF ? BK DE@7FFA"),
+            "FF ? BK DE AC7FFA"
+        );
+        assert_eq!(normalize_region_transcript("@7FFA"), "AC7FFA");
+        assert_eq!(normalize_region_transcript("CQ @ TEST"), "CQ @ TEST");
     }
 
     fn noise_buf(rate: u32, seconds: f32, seed: u64, amplitude: f32) -> Vec<f32> {
@@ -2209,21 +2518,21 @@ mod tests {
         // Regression guard for the PR #378 -> PR #379 cycle: my windowed
         // pitch discovery (PR #378) re-promoted noise-window pitches that
         // produced low-quality region decodes. PR #379 patched the
-        // operator-visible symptom with `is_low_confidence_region_text`
-        // (any region text containing `?` is dropped at candidate
-        // collection time).
+        // operator-visible symptom with `is_low_confidence_region_text`,
+        // which drops short bad-copy fragments that have no strong QSO
+        // anchor.
         //
-        // Probing reveals the `?`-text filter is load-bearing here:
-        // `decode_region_slice` happily returns `"? EEN EKTTE T0N…"` for
+        // Probing reveals the ambiguous-fragment filter is load-bearing here:
+        // `decode_region_slice` happily returns `"* EEN EKTTE T0N…"` for
         // colored hiss at 700 Hz. The end-to-end empty result depends on
         // that filter doing its job.
         //
         // We lock both layers in:
-        //   1. `decode_region_slice` produces text containing `?` — the
+        //   1. `decode_region_slice` produces text containing `*` — the
         //      explicit precondition that `is_low_confidence_region_text`
-        //      relies on. If a future change scrubs `?` from raw region
-        //      text without strengthening the deeper rejection, this
-        //      assertion fires and forces a conscious update.
+        //      relies on. If a future change resolves unknown clusters
+        //      without strengthening the deeper rejection, this assertion
+        //      fires and forces a conscious update.
         //   2. `decode_region_stream` returns empty text end-to-end — the
         //      operator-facing contract: no ghost characters reach the UI.
         let sr = 12_000u32;
@@ -2231,8 +2540,8 @@ mod tests {
         let cfg = RegionStreamConfig::default();
         let slice_text = decode_region_slice(&buf, sr, 700.0, &cfg);
         assert!(
-            slice_text.contains('?'),
-            "expected raw region slice on colored hiss to contain `?` (so the low-confidence filter has something to drop); got {slice_text:?}"
+            slice_text.contains('*'),
+            "expected raw region slice on colored hiss to contain `*` (so the low-confidence filter has something to drop); got {slice_text:?}"
         );
         let result = decode_region_stream(&buf, sr, &cfg);
         assert!(
