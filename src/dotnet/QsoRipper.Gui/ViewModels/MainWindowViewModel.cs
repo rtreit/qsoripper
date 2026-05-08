@@ -1789,7 +1789,16 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             return "Log: engine-managed";
         }
 
-        return $"Log: {Path.GetFileNameWithoutExtension(pathValue.Trim())}";
+        return $"Log: {GetFileNameWithoutExtensionPortable(pathValue)}";
+    }
+
+    private static string GetFileNameWithoutExtensionPortable(string path)
+    {
+        var trimmed = path.Trim().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, '\\', '/');
+        var fileName = trimmed
+            .Split(['\\', '/'], StringSplitOptions.RemoveEmptyEntries)
+            .LastOrDefault();
+        return string.IsNullOrWhiteSpace(fileName) ? trimmed : Path.GetFileNameWithoutExtension(fileName);
     }
 
     private static string BuildProfileText(QsoRipper.Domain.StationProfile? profile)
