@@ -82,8 +82,9 @@ stress-report.html
 *.wav
 
 
+# Syncthing-managed local data, captures, corpora, and runtime databases.
+data/
+
 # cw-decoder stress-test generated audio (large, regenerable via stress-gen.ps1)
-data/cw-stress/
 experiments/cw-decoder/bench-runs/
 experiments/cw-decoder/captures/
-data/cw-recordings/
