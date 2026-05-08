@@ -16,6 +16,7 @@
 //! buffer.
 
 use crate::decoder::{decode_text, decode_text_pinned};
+use crate::preprocess::bandpass_in_place;
 
 const BAD_COPY_MARKER: char = '*';
 const DIT_DAH_BOUNDARY: f32 = 2.0;
@@ -139,6 +140,7 @@ pub fn decode_region_stream(
 struct RegionCandidate {
     start_s: f32,
     end_s: f32,
+    pitch_hz: f32,
     text: String,
     score: f32,
 }
@@ -186,22 +188,124 @@ fn collect_region_candidates(
             continue;
         }
         let slice = &samples[s..e];
-        let text = decode_region_slice(slice, sample_rate, pitch_hz, cfg);
+        let interval = decode_region_slice_from_intervals(slice, sample_rate, pitch_hz, cfg);
+        let text =
+            decode_region_slice_with_interval(slice, sample_rate, pitch_hz, cfg, interval.as_ref());
         let text = trim_leading_voice_like_prefix(text.trim());
-        if text.is_empty() || is_low_confidence_region_text(&text) {
-            continue;
+        maybe_push_region_candidate(
+            candidates,
+            RegionCandidateInput {
+                start_s,
+                end_s,
+                pitch_hz,
+                text: text.clone(),
+                prominence,
+                evidence,
+                cfg,
+            },
+        );
+
+        if let Some(interval) = interval {
+            let interval_text = trim_leading_voice_like_prefix(interval.text.trim());
+            if should_keep_pitch_isolated_candidate(&text, &interval_text) {
+                maybe_push_region_candidate(
+                    candidates,
+                    RegionCandidateInput {
+                        start_s,
+                        end_s,
+                        pitch_hz,
+                        text: interval_text,
+                        prominence,
+                        evidence,
+                        cfg,
+                    },
+                );
+            }
         }
-        if !evidence.passes(cfg) && !is_short_distinctive_cw_text(&text) {
-            continue;
+
+        let focused_text = trim_leading_voice_like_prefix(
+            pitch_focused_decode_text(slice, sample_rate, pitch_hz).trim(),
+        );
+        if should_keep_pitch_isolated_candidate(&text, &focused_text) {
+            maybe_push_region_candidate(
+                candidates,
+                RegionCandidateInput {
+                    start_s,
+                    end_s,
+                    pitch_hz,
+                    text: focused_text,
+                    prominence,
+                    evidence,
+                    cfg,
+                },
+            );
         }
-        let useful_chars = text.chars().filter(|ch| ch.is_ascii_alphanumeric()).count() as f32;
-        candidates.push(RegionCandidate {
-            start_s,
-            end_s,
-            text,
-            score: prominence * (1.0 + useful_chars * 0.05),
-        });
     }
+}
+
+struct RegionCandidateInput<'a> {
+    start_s: f32,
+    end_s: f32,
+    pitch_hz: f32,
+    text: String,
+    prominence: f32,
+    evidence: CwWaveformEvidence,
+    cfg: &'a RegionStreamConfig,
+}
+
+fn maybe_push_region_candidate(
+    candidates: &mut Vec<RegionCandidate>,
+    input: RegionCandidateInput<'_>,
+) {
+    if input.text.is_empty() || is_low_confidence_region_text(&input.text) {
+        return;
+    }
+    if !input.evidence.passes(input.cfg) && !is_short_distinctive_cw_text(&input.text) {
+        return;
+    }
+    candidates.push(RegionCandidate {
+        start_s: input.start_s,
+        end_s: input.end_s,
+        pitch_hz: input.pitch_hz,
+        score: region_candidate_score(input.prominence, &input.text),
+        text: input.text,
+    });
+}
+
+fn should_keep_pitch_isolated_candidate(primary: &str, isolated: &str) -> bool {
+    let primary = normalize_region_text(primary);
+    let isolated = normalize_region_text(isolated);
+    if isolated.is_empty() || isolated == primary {
+        return false;
+    }
+
+    let isolated_chars = useful_copy_chars(&isolated);
+    if isolated_chars < 3 {
+        return false;
+    }
+
+    let primary_score = transcript_quality_score(&primary);
+    let isolated_score = transcript_quality_score(&isolated);
+    let isolated_has_strong_anchor = !has_no_strong_qso_anchor(&isolated);
+    isolated_has_strong_anchor
+        && (isolated_score > primary_score + 1.0
+            || (primary.contains(BAD_COPY_MARKER) && !isolated.contains(BAD_COPY_MARKER))
+            || (!has_transcript_start_anchor(&primary) && isolated_score >= primary_score - 0.5))
+}
+
+fn pitch_focused_decode_text(samples: &[f32], sample_rate: u32, pitch_hz: f32) -> String {
+    if samples.is_empty() || sample_rate == 0 || !pitch_hz.is_finite() || pitch_hz <= 0.0 {
+        return String::new();
+    }
+
+    let mut focused = samples.to_vec();
+    bandpass_in_place(&mut focused, sample_rate, pitch_hz, 100.0);
+    decode_text(&focused, sample_rate)
+}
+
+fn region_candidate_score(prominence: f32, text: &str) -> f32 {
+    let useful_chars = text.chars().filter(|ch| ch.is_ascii_alphanumeric()).count() as f32;
+    prominence * (1.0 + useful_chars * 0.05)
 }
 
 fn is_low_confidence_region_text(text: &str) -> bool {
@@ -280,32 +384,46 @@ pub(crate) fn has_transcript_start_anchor(text: &str) -> bool {
         matches!(token, "CQ" | "DE" | "K" | "BK" | "AR" | "+")
             || token.chars().any(|ch| ch.is_ascii_digit())
             || is_callsign_token(token)
+            || token == "IHU"
             || (token.len() >= 3
                 && token
                     .chars()
-                    .any(|ch| ch.is_ascii_alphabetic() && !"ETIANMOSH".contains(ch)))
+                    .filter(|ch| ch.is_ascii_alphabetic() && !"ETIANMOSH".contains(*ch))
+                    .count()
+                    >= 2)
     })
 }
 
+#[cfg(test)]
 fn decode_region_slice(
     samples: &[f32],
     sample_rate: u32,
     pitch_hz: f32,
     cfg: &RegionStreamConfig,
 ) -> String {
+    let interval = decode_region_slice_from_intervals(samples, sample_rate, pitch_hz, cfg);
+    decode_region_slice_with_interval(samples, sample_rate, pitch_hz, cfg, interval.as_ref())
+}
+
+fn decode_region_slice_with_interval(
+    samples: &[f32],
+    sample_rate: u32,
+    pitch_hz: f32,
+    cfg: &RegionStreamConfig,
+    interval: Option<&IntervalDecode>,
+) -> String {
     if let Some(w) = cfg.pin_wpm {
         return decode_text_pinned(samples, sample_rate, w);
     }
 
     let auto = decode_text(samples, sample_rate);
-    if let Some(interval) = decode_region_slice_from_intervals(samples, sample_rate, pitch_hz, cfg)
-    {
+    if let Some(interval) = interval {
         if let Some(spaced) = best_timing_spacing_overlay(&auto, samples, sample_rate, interval.wpm)
         {
             return spaced;
         }
         if should_prefer_interval_decode(&auto, &interval.text) {
-            return interval.text;
+            return interval.text.clone();
         }
     }
 
@@ -1187,6 +1305,11 @@ fn dedupe_region_candidates(mut candidates: Vec<RegionCandidate>) -> Vec<Decoded
             .partial_cmp(&b.start_s)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| {
+                a.pitch_hz
+                    .partial_cmp(&b.pitch_hz)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| {
                 b.score
                     .partial_cmp(&a.score)
                     .unwrap_or(std::cmp::Ordering::Equal)
@@ -1194,19 +1317,33 @@ fn dedupe_region_candidates(mut candidates: Vec<RegionCandidate>) -> Vec<Decoded
     });
     let mut chosen: Vec<RegionCandidate> = Vec::new();
     for candidate in candidates {
-        if let Some(last) = chosen.last_mut() {
-            let overlap =
-                (last.end_s.min(candidate.end_s) - last.start_s.max(candidate.start_s)).max(0.0);
-            let min_len = (last.end_s - last.start_s).min(candidate.end_s - candidate.start_s);
-            if min_len > 0.0 && overlap / min_len >= 0.45 {
-                if candidate.score > last.score {
-                    *last = candidate;
-                }
-                continue;
+        let mut redundant_idx = None;
+        for (idx, existing) in chosen.iter().enumerate() {
+            if overlapping_region_ratio(existing, &candidate) >= 0.45
+                && redundant_region_candidate(existing, &candidate)
+            {
+                redundant_idx = Some(idx);
+                break;
             }
         }
-        chosen.push(candidate);
+        if let Some(idx) = redundant_idx {
+            if candidate.score > chosen[idx].score {
+                chosen[idx] = candidate;
+            }
+        } else {
+            chosen.push(candidate);
+        }
     }
+    chosen.sort_by(|a, b| {
+        a.start_s
+            .partial_cmp(&b.start_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                a.pitch_hz
+                    .partial_cmp(&b.pitch_hz)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
     chosen
         .into_iter()
         .map(|candidate| DecodedRegion {
@@ -1215,6 +1352,52 @@ fn dedupe_region_candidates(mut candidates: Vec<RegionCandidate>) -> Vec<Decoded
             text: candidate.text,
         })
         .collect()
+}
+
+fn overlapping_region_ratio(a: &RegionCandidate, b: &RegionCandidate) -> f32 {
+    let overlap = (a.end_s.min(b.end_s) - a.start_s.max(b.start_s)).max(0.0);
+    let min_len = (a.end_s - a.start_s).min(b.end_s - b.start_s);
+    if min_len <= 0.0 {
+        0.0
+    } else {
+        overlap / min_len
+    }
+}
+
+fn redundant_region_candidate(a: &RegionCandidate, b: &RegionCandidate) -> bool {
+    (a.pitch_hz - b.pitch_hz).abs() < 35.0 || compact_text_similarity(&a.text, &b.text) >= 0.80
+}
+
+fn compact_text_similarity(a: &str, b: &str) -> f32 {
+    let a: Vec<char> = a
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '?' | '@'))
+        .collect();
+    let b: Vec<char> = b
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '?' | '@'))
+        .collect();
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    lcs_len(&a, &b) as f32 / a.len().min(b.len()) as f32
+}
+
+fn lcs_len(a: &[char], b: &[char]) -> usize {
+    let mut prev = vec![0usize; b.len() + 1];
+    let mut cur = vec![0usize; b.len() + 1];
+    for a_ch in a {
+        for (j, b_ch) in b.iter().enumerate() {
+            cur[j + 1] = if a_ch == b_ch {
+                prev[j] + 1
+            } else {
+                prev[j + 1].max(cur[j])
+            };
+        }
+        std::mem::swap(&mut prev, &mut cur);
+        cur.fill(0);
+    }
+    prev[b.len()]
 }
 
 fn tonal_prominence_ratio(
@@ -2080,6 +2263,13 @@ mod tests {
         out
     }
 
+    fn mix(a: &[f32], b: &[f32]) -> Vec<f32> {
+        let n = a.len().max(b.len());
+        (0..n)
+            .map(|i| a.get(i).copied().unwrap_or(0.0) + b.get(i).copied().unwrap_or(0.0))
+            .collect()
+    }
+
     fn irregular_tonal_syllables(sample_rate: u32, pitch_hz: f32) -> Vec<f32> {
         let on_s = [0.035_f32, 0.22, 0.06, 0.40, 0.11, 0.27];
         let off_s = [0.16_f32, 0.045, 0.29, 0.08, 0.22];
@@ -2254,6 +2444,36 @@ mod tests {
         assert!(
             result.text.contains("CQ"),
             "expected the CW portion to still decode, got {:?}",
+            result.text
+        );
+    }
+
+    #[test]
+    fn decode_region_stream_preserves_overlapping_distinct_pitch_regions() {
+        let sr = 12_000u32;
+        let low = synth_morse(sr, 600.0, 24.0, "CQ CQ", 0.45);
+        let high = synth_morse(sr, 850.0, 24.0, "DE W1AW", 0.45);
+        let mut buf = synth_silence(0.5, sr);
+        buf.extend(mix(&low, &high));
+        buf.extend(synth_silence(0.7, sr));
+
+        let cfg = RegionStreamConfig {
+            pitch_step_hz: 10.0,
+            merge_gap_s: 0.5,
+            min_region_s: 0.3,
+            pad_s: 0.15,
+            ..RegionStreamConfig::default()
+        };
+        let result = decode_region_stream(&buf, sr, &cfg);
+
+        assert!(
+            result.regions.len() >= 2,
+            "expected separate pitch regions, got {:?}",
+            result.regions
+        );
+        assert!(
+            result.text.contains("CQ") && result.text.contains("W1AW"),
+            "expected copy from both pitch-separated stations, got {:?}",
             result.text
         );
     }
