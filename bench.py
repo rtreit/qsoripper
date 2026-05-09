@@ -5,18 +5,14 @@ Decodes every *.mp3 in data/cw-samples/training-set-a/ that has a paired
 the worktree), and emits a JSON report with CER / WER / per-sample text.
 
 Usage:
-    python bench.py <worktree_root> [<label>] [<output_filename>]
+    python bench.py <worktree_root>
 
-Writes results to: <worktree_root>/<output_filename> (default
-experiment_report.json). Set DITDAH_DISABLE_WPM_SEED=1 in the
-environment to disable the warm-start WPM seed for diagnostic A/B runs;
-the harness will record the resulting label/env state in the JSON.
+Writes results to: <worktree_root>/experiment_report.json
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import sys
@@ -44,27 +40,20 @@ def levenshtein(a, b):
     return prev[-1]
 
 
-def decode(exe: Path, mp3: Path):
+def decode(exe: Path, mp3: Path) -> str:
     p = subprocess.run(
         [str(exe), "stream-region", "--file", str(mp3), "--json", "--no-realtime"],
         capture_output=True, text=True, timeout=120,
     )
     text = ""
-    seed_wpm = None
-    seed_pitch_hz = None
-    wpm_seed_disabled = None
     for line in p.stdout.splitlines():
         try:
             o = json.loads(line)
         except Exception:
             continue
-        if o.get("type") == "ready":
-            seed_wpm = o.get("seed_wpm")
-            seed_pitch_hz = o.get("seed_pitch_hz")
-            wpm_seed_disabled = o.get("wpm_seed_disabled")
         if o.get("type") in ("transcript", "end") and o.get("transcript"):
             text = o["transcript"]
-    return text, seed_wpm, seed_pitch_hz, wpm_seed_disabled
+    return text
 
 
 def score_sample(truth: str, hyp: str) -> dict:
@@ -86,47 +75,32 @@ def score_sample(truth: str, hyp: str) -> dict:
     )
 
 
-def main(worktree: Path, label: str, out_name: str) -> None:
+def main(worktree: Path) -> None:
     exe = worktree / "experiments" / "cw-decoder" / "target" / "release" / "cw-decoder.exe"
     if not exe.exists():
         print(f"ERROR: build first: {exe} not found", file=sys.stderr)
         sys.exit(2)
-    out: dict = {
-        "worktree": str(worktree),
-        "label": label,
-        "env_DITDAH_DISABLE_WPM_SEED": os.environ.get("DITDAH_DISABLE_WPM_SEED"),
-        "samples": {},
-    }
+    out: dict = {"worktree": str(worktree), "samples": {}}
     samples = sorted(SAMPLES_DIR.glob("*.mp3"))
     for mp3 in samples:
         truth_path = mp3.with_suffix(".truth.txt")
         if not truth_path.exists():
             continue
         truth = truth_path.read_text(encoding="utf-8").strip()
-        hyp, seed_wpm, seed_pitch, seed_disabled = decode(exe, mp3)
+        hyp = decode(exe, mp3)
         rec = score_sample(truth, hyp)
-        rec["seed_wpm"] = seed_wpm
-        rec["seed_pitch_hz"] = seed_pitch
-        rec["wpm_seed_disabled_in_run"] = seed_disabled
         out["samples"][mp3.stem] = rec
-        seed_str = "off" if seed_disabled else (f"{seed_wpm:.1f}" if seed_wpm else "none")
-        print(
-            f"{mp3.stem:32s} CER={rec['cer']:.3f} WER={rec['wer']:.3f} "
-            f"recall={rec['recall']:.2f}  seed={seed_str}"
-        )
+        print(f"{mp3.stem:32s} CER={rec['cer']:.3f} WER={rec['wer']:.3f} recall={rec['recall']:.2f}")
     cers = [s["cer"] for s in out["samples"].values()]
     wers = [s["wer"] for s in out["samples"].values()]
     out["mean_cer"] = round(sum(cers) / len(cers), 4) if cers else None
     out["mean_wer"] = round(sum(wers) / len(wers), 4) if wers else None
-    print(f"\n[{label}] MEAN CER={out['mean_cer']}  MEAN WER={out['mean_wer']}")
-    (worktree / out_name).write_text(json.dumps(out, indent=2))
+    print(f"\nMEAN CER={out['mean_cer']}  MEAN WER={out['mean_wer']}")
+    (worktree / "experiment_report.json").write_text(json.dumps(out, indent=2))
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
+    if len(sys.argv) != 2:
         print(__doc__)
         sys.exit(1)
-    wt = Path(sys.argv[1])
-    lbl = sys.argv[2] if len(sys.argv) >= 3 else "default"
-    name = sys.argv[3] if len(sys.argv) >= 4 else "experiment_report.json"
-    main(wt, lbl, name)
+    main(Path(sys.argv[1]))

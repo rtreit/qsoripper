@@ -13,6 +13,17 @@ const RESAMPLER_CHUNK_SIZE: usize = 1024;
 // --- Decoding Constants ---
 const BAD_COPY_MARKER: char = '*';
 
+// --- Element-gate experiment constants ---
+/// Default per-element SNR threshold in dB. Elements whose local SNR falls
+/// below this are dropped before self-calibration and the per-sample walk.
+/// Set the `DITDAH_ELEM_GATE_DB` environment variable to a number to
+/// override, or to "off" to disable element gating entirely.
+const ELEM_GATE_DEFAULT_DB: f32 = 12.0;
+/// Total length (seconds) of the local noise-floor window centered on each
+/// candidate on-interval. Off-mask samples inside this window are used to
+/// estimate the background noise power.
+const ELEM_GATE_NOISE_WINDOW_S: f32 = 1.5;
+
 // --- BiquadFilter (Unchanged) ---
 #[derive(Debug, Clone, Copy)]
 pub enum FilterType {
@@ -476,6 +487,55 @@ impl MorseDecoder {
             return String::new();
         }
 
+        // ELEM-GATE EXPERIMENT (stacked on top of the viterbi soft decoder):
+        // Per-element confidence gating before the soft decode pass.
+        //
+        // Live OTA CW produces "ghost character" cascades (E/T/I/M/S) when the
+        // SNR drops within an active region. Window-level pitch-power gating
+        // can't separate ghosts from legit weak elements because they share
+        // the same pitch. Here we instead score every detected on-interval
+        // against the *local* envelope noise floor (samples NOT inside any
+        // detected on-interval, in a window centered on the element). Drop
+        // intervals whose SNR falls below `DITDAH_ELEM_GATE_DB` (default 6.0).
+        //
+        // Dropped on-intervals get zeroed in a working copy of `power_signal`
+        // BEFORE the soft decoder runs, which causes the surrounding
+        // off-intervals to merge naturally — turning a spurious "letter
+        // break" into a longer letter or word gap.
+        let gate_db = elem_gate_threshold_db();
+        let working_signal: std::borrow::Cow<'_, [f32]> = if let Some(t_db) = gate_db {
+            let on_with_pos = get_raw_on_intervals_with_positions(power_signal, threshold);
+            if on_with_pos.is_empty() {
+                std::borrow::Cow::Borrowed(power_signal)
+            } else {
+                let snrs = compute_element_snrs_db(
+                    power_signal,
+                    &on_with_pos,
+                    power_signal_rate,
+                    ELEM_GATE_NOISE_WINDOW_S,
+                );
+                let mut dropped = 0usize;
+                let mut masked = power_signal.to_vec();
+                for ((start, len), snr) in on_with_pos.iter().zip(snrs.iter()) {
+                    if !snr.is_finite() || *snr < t_db {
+                        let end = (start + len).min(masked.len());
+                        for s in &mut masked[*start..end] {
+                            *s = 0.0;
+                        }
+                        dropped += 1;
+                    }
+                }
+                log::debug!(
+                    "elem-gate: dropped {dropped}/{} on-intervals (threshold={t_db:.1} dB)",
+                    on_with_pos.len()
+                );
+                std::borrow::Cow::Owned(masked)
+            }
+        } else {
+            std::borrow::Cow::Borrowed(power_signal)
+        };
+        let power_signal: &[f32] = &working_signal;
+
         // Collect interleaved on/off intervals for the whole signal.
         let raw_intervals = get_interleaved_intervals(power_signal, threshold);
         if raw_intervals.is_empty() {
@@ -779,6 +839,139 @@ fn get_raw_intervals(power_signal: &[f32], threshold: f32) -> (Vec<usize>, Vec<u
     (on, off)
 }
 
+/// Like `get_raw_intervals`, but returns `(start_index, length)` pairs for
+/// the on-intervals only. Used by the element-gate experiment so we can
+/// compute per-element SNR against the local noise floor.
+fn get_raw_on_intervals_with_positions(
+    power_signal: &[f32],
+    threshold: f32,
+) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    if power_signal.is_empty() {
+        return out;
+    }
+    let mut current_len = 0usize;
+    let mut current_start = 0usize;
+    let mut is_on = power_signal[0] > threshold;
+    for (i, &p) in power_signal.iter().enumerate() {
+        let now_on = p > threshold;
+        if now_on == is_on {
+            current_len += 1;
+        } else {
+            if is_on {
+                out.push((current_start, current_len));
+            }
+            is_on = now_on;
+            current_start = i;
+            current_len = 1;
+        }
+    }
+    if is_on {
+        out.push((current_start, current_len));
+    }
+    out
+}
+
+/// Read the user-tunable per-element SNR gate from the `DITDAH_ELEM_GATE_DB`
+/// environment variable. Returns `None` when the gate is explicitly disabled
+/// ("off"/"none"/"disabled"), and `Some(default)` when the variable is unset
+/// or unparsable.
+fn elem_gate_threshold_db() -> Option<f32> {
+    match std::env::var("DITDAH_ELEM_GATE_DB") {
+        Err(_) => Some(ELEM_GATE_DEFAULT_DB),
+        Ok(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Some(ELEM_GATE_DEFAULT_DB);
+            }
+            if matches!(
+                trimmed.to_ascii_lowercase().as_str(),
+                "off" | "none" | "disabled" | "0off" | "false"
+            ) {
+                return None;
+            }
+            match trimmed.parse::<f32>() {
+                Ok(v) if v.is_finite() => Some(v),
+                _ => Some(ELEM_GATE_DEFAULT_DB),
+            }
+        }
+    }
+}
+
+/// For each on-interval, compute SNR (dB) against the local off-mask noise
+/// floor. The element power is `mean(power_signal[i]^2)` over the interval.
+/// The noise floor is the 20th percentile of `power_signal[i]^2` over a
+/// window of `noise_window_s` seconds centered on the interval, restricted
+/// to samples that are NOT inside any detected on-interval (so we never
+/// score a ghost against another ghost — only against true background).
+fn compute_element_snrs_db(
+    power_signal: &[f32],
+    on_intervals: &[(usize, usize)],
+    power_signal_rate: f32,
+    noise_window_s: f32,
+) -> Vec<f32> {
+    let n = power_signal.len();
+    let mut snrs = Vec::with_capacity(on_intervals.len());
+    if n == 0 || on_intervals.is_empty() {
+        return snrs;
+    }
+    let mut on_mask = vec![false; n];
+    for &(start, len) in on_intervals {
+        let end = (start + len).min(n);
+        for slot in &mut on_mask[start..end] {
+            *slot = true;
+        }
+    }
+    let half_window = ((power_signal_rate * noise_window_s * 0.5).round() as usize).max(1);
+    let mut bg: Vec<f32> = Vec::new();
+    for &(start, len) in on_intervals {
+        let end = (start + len).min(n);
+        if end <= start {
+            snrs.push(f32::NEG_INFINITY);
+            continue;
+        }
+        // Element power: mean of squared envelope over the on-interval.
+        let mut esum = 0.0_f64;
+        for &v in &power_signal[start..end] {
+            let v = v as f64;
+            esum += v * v;
+        }
+        let elem_power = (esum / (end - start) as f64) as f32;
+
+        // Local noise samples = squared envelope over the surrounding window
+        // EXCLUDING all on-intervals (including this one).
+        bg.clear();
+        let lo = start.saturating_sub(half_window);
+        let hi = (end + half_window).min(n);
+        for i in lo..hi {
+            if !on_mask[i] {
+                let v = power_signal[i];
+                bg.push(v * v);
+            }
+        }
+        let noise = if bg.len() >= 5 {
+            // Use nth_element-style partial sort for the 20th percentile.
+            let p_idx = bg.len() / 5;
+            bg.select_nth_unstable_by(p_idx, |a, b| {
+                a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            bg[p_idx]
+        } else if !bg.is_empty() {
+            // Fall back to mean when too few samples for a stable percentile.
+            bg.iter().sum::<f32>() / bg.len() as f32
+        } else {
+            // No noise samples in the window (long element with no padding).
+            // Treat as infinite SNR so we never drop the only thing we see.
+            snrs.push(f32::INFINITY);
+            continue;
+        };
+        let denom = noise.max(1e-20);
+        let ratio = (elem_power / denom).max(1e-20);
+        snrs.push(10.0 * ratio.log10());
+    }
+    snrs
+}
+
 fn moving_average(data: &[f32], window_size: usize) -> Vec<f32> {
     if window_size <= 1 {
         return data.to_vec();
@@ -913,6 +1106,103 @@ mod morse_to_char_tests {
         assert_eq!(morse_to_char("........"), None);
         assert_eq!(morse_to_char("-.-..-.-"), None);
         assert_eq!(morse_to_char(""), None);
+    }
+}
+
+#[cfg(test)]
+mod elem_gate_tests {
+    use super::*;
+
+    #[test]
+    fn snr_is_high_for_clean_signal_against_quiet_floor() {
+        // 2s of quiet background (envelope amplitude ~0.01) with a clean
+        // dit (amplitude 1.0) inserted at the middle. The element should
+        // score well above any reasonable gate threshold.
+        let rate = 100.0_f32;
+        let mut sig = vec![0.01_f32; 200];
+        for s in &mut sig[100..110] {
+            *s = 1.0;
+        }
+        let intervals = vec![(100usize, 10usize)];
+        let snrs = compute_element_snrs_db(&sig, &intervals, rate, 1.5);
+        assert_eq!(snrs.len(), 1);
+        assert!(
+            snrs[0] > 30.0,
+            "expected clean dit SNR > 30 dB, got {}",
+            snrs[0]
+        );
+    }
+
+    #[test]
+    fn snr_drops_low_for_ghost_against_noisy_background() {
+        // Background is a noise burst at amp 0.5 (squared = 0.25). A "ghost"
+        // element pokes only slightly above (amp 0.6, squared = 0.36).
+        // SNR ~= 10*log10(0.36/0.25) ~= 1.58 dB, which must fall below the
+        // default gate threshold.
+        let rate = 100.0_f32;
+        let mut sig = vec![0.5_f32; 300];
+        for s in &mut sig[150..160] {
+            *s = 0.6;
+        }
+        let intervals = vec![(150usize, 10usize)];
+        let snrs = compute_element_snrs_db(&sig, &intervals, rate, 1.5);
+        assert_eq!(snrs.len(), 1);
+        assert!(
+            snrs[0] < super::ELEM_GATE_DEFAULT_DB,
+            "ghost element SNR ({}) should fall below the {} dB default gate",
+            snrs[0],
+            super::ELEM_GATE_DEFAULT_DB,
+        );
+        assert!(
+            snrs[0] < 3.0,
+            "ghost SNR should be only marginal (<3 dB), got {}",
+            snrs[0]
+        );
+    }
+
+    #[test]
+    fn noise_floor_excludes_other_on_intervals() {
+        // If we did NOT mask out other on-intervals, a sea of equally-loud
+        // ghosts would inflate the noise floor and accidentally save each
+        // ghost. Verify that two adjacent equal-amplitude ghosts on a quiet
+        // background BOTH score very high (because each ghost's noise
+        // estimate excludes the other's samples too).
+        let rate = 100.0_f32;
+        let mut sig = vec![0.01_f32; 300];
+        for s in &mut sig[100..110] {
+            *s = 1.0;
+        }
+        for s in &mut sig[200..210] {
+            *s = 1.0;
+        }
+        let intervals = vec![(100usize, 10usize), (200usize, 10usize)];
+        let snrs = compute_element_snrs_db(&sig, &intervals, rate, 1.5);
+        assert_eq!(snrs.len(), 2);
+        for snr in &snrs {
+            assert!(*snr > 30.0, "expected high SNR for both, got {}", snr);
+        }
+    }
+
+    #[test]
+    fn raw_on_intervals_with_positions_round_trip() {
+        // Construct a signal with three on-intervals at known positions so
+        // we can verify the start/length tuples line up with the legacy
+        // length-only `get_raw_intervals` output.
+        let mut sig = vec![0.0_f32; 100];
+        for s in &mut sig[10..15] {
+            *s = 1.0;
+        }
+        for s in &mut sig[30..40] {
+            *s = 1.0;
+        }
+        for s in &mut sig[70..72] {
+            *s = 1.0;
+        }
+        let with_pos = get_raw_on_intervals_with_positions(&sig, 0.5);
+        assert_eq!(with_pos, vec![(10, 5), (30, 10), (70, 2)]);
+        let (lengths, _) = get_raw_intervals(&sig, 0.5);
+        let from_pos: Vec<usize> = with_pos.iter().map(|(_, l)| *l).collect();
+        assert_eq!(lengths, from_pos);
     }
 }
 
