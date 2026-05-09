@@ -2770,10 +2770,17 @@ mod tests {
         let buf = colored_hiss(sr, 30.0, 0xC0_FF_EE_07, 700.0);
         let cfg = RegionStreamConfig::default();
         let slice_text = decode_region_slice(&buf, sr, 700.0, &cfg);
-        assert!(
-            slice_text.contains('*'),
-            "expected raw region slice on colored hiss to contain `*` (so the low-confidence filter has something to drop); got {slice_text:?}"
-        );
+        // ELEM-GATE EXPERIMENT (u/randy/cw-exp-elem-gate): per-element SNR
+        // gating now masks out low-confidence on-intervals BEFORE the
+        // morse-to-char step, so colored hiss no longer stochastically
+        // produces unknown-cluster `*` markers — it produces a long stream
+        // of valid-but-meaningless T/E letters instead. The original
+        // lock-in assertion (`slice_text.contains('*')`) is therefore no
+        // longer meaningful. We keep the operator-facing contract: the
+        // end-to-end region-stream result must still be empty on hiss.
+        // The slice text is allowed to contain anything as long as the
+        // downstream `is_low_confidence_region_text` filter rejects it.
+        let _ = slice_text;
         let result = decode_region_stream(&buf, sr, &cfg);
         assert!(
             result.text.trim().is_empty(),
