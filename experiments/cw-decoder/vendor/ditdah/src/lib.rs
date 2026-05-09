@@ -1,6 +1,7 @@
 // src/lib.rs
 // Library interface for ditdah
 
+mod bigram_lm;
 mod decoder;
 pub mod generator;
 

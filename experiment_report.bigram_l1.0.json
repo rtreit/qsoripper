@@ -1,0 +1,67 @@
+{
+  "worktree": "C:\\Users\\randy\\Git\\qsoripper-experiments\\bigram-corpus",
+  "samples": {
+    "arrl-13wpm-farnsworth": {
+      "truth": "CALLS YOU YOU",
+      "hyp": "CALLS YOU YOU NEEN",
+      "cer": 0.3846,
+      "wer": 0.3333,
+      "recall": 1.0,
+      "precision": 0.6667,
+      "truth_words": 3,
+      "hyp_words": 4
+    },
+    "arrl-20wpm": {
+      "truth": "SHORT PATH I INITIALLY USED A",
+      "hyp": "ETER SHORT PATH I INITIALLY USED A MEDIU",
+      "cer": 0.3793,
+      "wer": 0.3333,
+      "recall": 1.0,
+      "precision": 0.75,
+      "truth_words": 6,
+      "hyp_words": 8
+    },
+    "arrl-30wpm": {
+      "truth": "WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR",
+      "hyp": "EE WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR",
+      "cer": 0.0556,
+      "wer": 0.1,
+      "recall": 1.0,
+      "precision": 0.9091,
+      "truth_words": 10,
+      "hyp_words": 11
+    },
+    "arrl-40wpm": {
+      "truth": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE",
+      "hyp": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE GRG",
+      "cer": 0.0519,
+      "wer": 0.0769,
+      "recall": 1.0,
+      "precision": 0.9286,
+      "truth_words": 13,
+      "hyp_words": 14
+    },
+    "cq-pota-aa6pw": {
+      "truth": "NQ POTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW AA6PW CQPOTA AA6PW AA6PW C",
+      "hyp": "ND AI6PR AA6PR CQPOTA AA6PR AI6PW CQPOTA AA6PR AI6PR CXPOTA AA6PR AA6PR",
+      "cer": 0.2976,
+      "wer": 0.8667,
+      "recall": 0.2,
+      "precision": 0.1667,
+      "truth_words": 15,
+      "hyp_words": 12
+    },
+    "cq-pota-de-wa6mow": {
+      "truth": "NQ CQ POTA DE WA6MOW CQ POTA DE WA6MOW K",
+      "hyp": "NZ CQPOTA DE46MOU CQ PO TADEWA6M OW K",
+      "cer": 0.25,
+      "wer": 0.8,
+      "recall": 0.3333,
+      "precision": 0.25,
+      "truth_words": 10,
+      "hyp_words": 8
+    }
+  },
+  "mean_cer": 0.2365,
+  "mean_wer": 0.4184
+}

@@ -538,8 +538,121 @@ impl MorseDecoder {
             return String::new();
         }
 
-        soft_decode_intervals(&intervals, actual_dot_len)
+        if crate::bigram_lm::enabled() {
+            decode_with_bigram_lm(&intervals, actual_dot_len, crate::bigram_lm::lambda())
+        } else {
+            soft_decode_intervals(&intervals, actual_dot_len)
+        }
     }
+}
+
+/// Build a slot lattice from intervals, mirroring the segmentation logic
+/// of `soft_decode_intervals` but emitting per-letter element posteriors
+/// (for downstream bigram-LM rescoring) instead of a hard string.
+fn build_lattice(intervals: &[(bool, usize)], dot_len: f32) -> Vec<crate::bigram_lm::Slot> {
+    use crate::bigram_lm::Slot;
+
+    let mut slots: Vec<Slot> = Vec::new();
+    if dot_len <= 0.0 || intervals.is_empty() {
+        return slots;
+    }
+
+    // Per-letter accumulators.
+    let mut letter_elements: Vec<(f32, f32)> = Vec::new();
+    let mut letter_morse = String::new();
+    let mut letter_min_conf = f32::INFINITY;
+
+    let flush_letter = |slots: &mut Vec<Slot>,
+                        elements: &mut Vec<(f32, f32)>,
+                        morse: &mut String,
+                        min_conf: &mut f32,
+                        force_keep: bool| {
+        if elements.is_empty() {
+            *min_conf = f32::INFINITY;
+            return;
+        }
+        let is_single = elements.len() == 1;
+        let suppressed = !force_keep && is_single && *min_conf < SINGLE_ELEMENT_EMIT_FLOOR;
+        if !suppressed {
+            slots.push(Slot::Letter {
+                elements: std::mem::take(elements),
+                greedy_morse: std::mem::take(morse),
+            });
+        } else {
+            elements.clear();
+            morse.clear();
+        }
+        *min_conf = f32::INFINITY;
+    };
+
+    for &(is_on, len) in intervals {
+        let l = len as f32;
+        if is_on {
+            let s = score_on_interval(l, dot_len);
+            let best = s.log_p_dot.max(s.log_p_dash);
+            if best < ELEMENT_NOISE_FLOOR {
+                continue;
+            }
+            letter_elements.push((s.log_p_dot, s.log_p_dash));
+            if s.log_p_dot >= s.log_p_dash {
+                letter_morse.push('.');
+                letter_min_conf = letter_min_conf.min(s.log_p_dot);
+            } else {
+                letter_morse.push('-');
+                letter_min_conf = letter_min_conf.min(s.log_p_dash);
+            }
+        } else {
+            let g = score_off_interval(l, dot_len);
+            let single = letter_elements.len() == 1;
+            let prior_break = if single {
+                -SINGLE_ELEMENT_GAP_PENALTY
+            } else {
+                0.0
+            };
+            let s_elem = g.log_p_elem;
+            let s_letter = g.log_p_letter + prior_break;
+            let s_word = g.log_p_word + prior_break;
+
+            if s_word >= s_letter && s_word >= s_elem {
+                flush_letter(
+                    &mut slots,
+                    &mut letter_elements,
+                    &mut letter_morse,
+                    &mut letter_min_conf,
+                    false,
+                );
+                if !matches!(slots.last(), Some(Slot::WordBreak) | None) {
+                    slots.push(Slot::WordBreak);
+                }
+            } else if s_letter >= s_elem {
+                flush_letter(
+                    &mut slots,
+                    &mut letter_elements,
+                    &mut letter_morse,
+                    &mut letter_min_conf,
+                    false,
+                );
+            }
+        }
+    }
+
+    flush_letter(
+        &mut slots,
+        &mut letter_elements,
+        &mut letter_morse,
+        &mut letter_min_conf,
+        false,
+    );
+
+    slots
+}
+
+/// Decode using the bigram-LM-rescored lattice path. Equivalent to
+/// `soft_decode_intervals` when `lambda == 0` (modulo Morse-code-set
+/// pruning), and progressively biases toward the LM as lambda grows.
+pub fn decode_with_bigram_lm(intervals: &[(bool, usize)], dot_len: f32, lambda: f32) -> String {
+    let slots = build_lattice(intervals, dot_len);
+    crate::bigram_lm::decode_lattice(&slots, lambda)
 }
 
 // --- Soft / Viterbi-style decoder ---

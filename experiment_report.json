@@ -1,0 +1,223 @@
+{
+  "description": "Bigram-LM Viterbi rescoring on ARRL corpus (Round 4)",
+  "configs": {
+    "viterbi_only": {
+      "mean_cer": 0.2022,
+      "mean_wer": 0.285,
+      "samples": {
+        "arrl-13wpm-farnsworth": {
+          "cer": 0.3846,
+          "wer": 0.3333,
+          "hyp": "CALLS YOU YOU NEEN"
+        },
+        "arrl-20wpm": {
+          "cer": 0.3793,
+          "wer": 0.3333,
+          "hyp": "ETER SHORT PATH I INITIALLY USED A MEDIU"
+        },
+        "arrl-30wpm": {
+          "cer": 0.0556,
+          "wer": 0.1,
+          "hyp": "EE WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR"
+        },
+        "arrl-40wpm": {
+          "cer": 0.0519,
+          "wer": 0.0769,
+          "hyp": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE GRG"
+        },
+        "cq-pota-aa6pw": {
+          "cer": 0.1667,
+          "wer": 0.2667,
+          "hyp": "ND AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW"
+        },
+        "cq-pota-de-wa6mow": {
+          "cer": 0.175,
+          "wer": 0.6,
+          "hyp": "NQ CQPOTA DE 6MOW CQ PO TADEWA6M OW K"
+        }
+      }
+    },
+    "bigram_l0.0": {
+      "mean_cer": 0.2064,
+      "mean_wer": 0.3017,
+      "samples": {
+        "arrl-13wpm-farnsworth": {
+          "cer": 0.3846,
+          "wer": 0.3333,
+          "hyp": "CALLS YOU YOU NEEN"
+        },
+        "arrl-20wpm": {
+          "cer": 0.3793,
+          "wer": 0.3333,
+          "hyp": "ETER SHORT PATH I INITIALLY USED A MEDIU"
+        },
+        "arrl-30wpm": {
+          "cer": 0.0556,
+          "wer": 0.1,
+          "hyp": "EE WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR"
+        },
+        "arrl-40wpm": {
+          "cer": 0.0519,
+          "wer": 0.0769,
+          "hyp": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE GRG"
+        },
+        "cq-pota-aa6pw": {
+          "cer": 0.1667,
+          "wer": 0.2667,
+          "hyp": "ND AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW"
+        },
+        "cq-pota-de-wa6mow": {
+          "cer": 0.2,
+          "wer": 0.7,
+          "hyp": "NQ CQPOTA DE16MOW CQ PO TADEWA6M OW K"
+        }
+      }
+    },
+    "bigram_l0.25": {
+      "mean_cer": 0.2064,
+      "mean_wer": 0.3017,
+      "samples": {
+        "arrl-13wpm-farnsworth": {
+          "cer": 0.3846,
+          "wer": 0.3333,
+          "hyp": "CALLS YOU YOU NEEN"
+        },
+        "arrl-20wpm": {
+          "cer": 0.3793,
+          "wer": 0.3333,
+          "hyp": "ETER SHORT PATH I INITIALLY USED A MEDIU"
+        },
+        "arrl-30wpm": {
+          "cer": 0.0556,
+          "wer": 0.1,
+          "hyp": "EE WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR"
+        },
+        "arrl-40wpm": {
+          "cer": 0.0519,
+          "wer": 0.0769,
+          "hyp": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE GRG"
+        },
+        "cq-pota-aa6pw": {
+          "cer": 0.1667,
+          "wer": 0.2667,
+          "hyp": "ND AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW"
+        },
+        "cq-pota-de-wa6mow": {
+          "cer": 0.2,
+          "wer": 0.7,
+          "hyp": "NQ CQPOTA DE46MOW CQ PO TADEWA6M OW K"
+        }
+      }
+    },
+    "bigram_l0.5": {
+      "mean_cer": 0.2064,
+      "mean_wer": 0.3017,
+      "samples": {
+        "arrl-13wpm-farnsworth": {
+          "cer": 0.3846,
+          "wer": 0.3333,
+          "hyp": "CALLS YOU YOU NEEN"
+        },
+        "arrl-20wpm": {
+          "cer": 0.3793,
+          "wer": 0.3333,
+          "hyp": "ETER SHORT PATH I INITIALLY USED A MEDIU"
+        },
+        "arrl-30wpm": {
+          "cer": 0.0556,
+          "wer": 0.1,
+          "hyp": "EE WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR"
+        },
+        "arrl-40wpm": {
+          "cer": 0.0519,
+          "wer": 0.0769,
+          "hyp": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE GRG"
+        },
+        "cq-pota-aa6pw": {
+          "cer": 0.1667,
+          "wer": 0.2667,
+          "hyp": "ND AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW"
+        },
+        "cq-pota-de-wa6mow": {
+          "cer": 0.2,
+          "wer": 0.7,
+          "hyp": "NQ CQPOTA DE46MOW CQ PO TADEWA6M OW K"
+        }
+      }
+    },
+    "bigram_l1.0": {
+      "mean_cer": 0.2365,
+      "mean_wer": 0.4184,
+      "samples": {
+        "arrl-13wpm-farnsworth": {
+          "cer": 0.3846,
+          "wer": 0.3333,
+          "hyp": "CALLS YOU YOU NEEN"
+        },
+        "arrl-20wpm": {
+          "cer": 0.3793,
+          "wer": 0.3333,
+          "hyp": "ETER SHORT PATH I INITIALLY USED A MEDIU"
+        },
+        "arrl-30wpm": {
+          "cer": 0.0556,
+          "wer": 0.1,
+          "hyp": "EE WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR"
+        },
+        "arrl-40wpm": {
+          "cer": 0.0519,
+          "wer": 0.0769,
+          "hyp": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE GRG"
+        },
+        "cq-pota-aa6pw": {
+          "cer": 0.2976,
+          "wer": 0.8667,
+          "hyp": "ND AI6PR AA6PR CQPOTA AA6PR AI6PW CQPOTA AA6PR AI6PR CXPOTA AA6PR AA6PR"
+        },
+        "cq-pota-de-wa6mow": {
+          "cer": 0.25,
+          "wer": 0.8,
+          "hyp": "NZ CQPOTA DE46MOU CQ PO TADEWA6M OW K"
+        }
+      }
+    },
+    "bigram_l2.0": {
+      "mean_cer": 0.2928,
+      "mean_wer": 0.4906,
+      "samples": {
+        "arrl-13wpm-farnsworth": {
+          "cer": 0.3846,
+          "wer": 0.3333,
+          "hyp": "CALLS YOU YOU NEEN"
+        },
+        "arrl-20wpm": {
+          "cer": 0.3793,
+          "wer": 0.3333,
+          "hyp": "ETER SHORT PATH I INITIALLY USED A MEDIS"
+        },
+        "arrl-30wpm": {
+          "cer": 0.0741,
+          "wer": 0.2,
+          "hyp": "EE WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELLFUL FOR"
+        },
+        "arrl-40wpm": {
+          "cer": 0.0519,
+          "wer": 0.0769,
+          "hyp": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE GRG"
+        },
+        "cq-pota-aa6pw": {
+          "cer": 0.4167,
+          "wer": 1.0,
+          "hyp": "ND AI6PR AI6PR CXPOTA AM6PR AI6PR CLLOTA AI6PR AI6PR CLLOTA AI6PR AI6PR"
+        },
+        "cq-pota-de-wa6mow": {
+          "cer": 0.45,
+          "wer": 1.0,
+          "hyp": "IZ CLLOTA DE46MOU CLLO TADERA6M OW D"
+        }
+      }
+    }
+  },
+  "best_config": "viterbi_only",
+  "best_mean_cer": 0.2022
+}
