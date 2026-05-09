@@ -1,0 +1,6 @@
+# Generated artifacts — do not commit.
+synthetic_minisuite/
+synthetic_minisuite_manifest.jsonl
+manifest.jsonl
+submission.csv
+*.json
