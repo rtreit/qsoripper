@@ -1,0 +1,334 @@
+{
+  "description": "CW decoder vit-elem-stack: viterbi-only baseline + 3 stack variants",
+  "variants": {
+    "viterbi-only": {
+      "env": {
+        "DITDAH_STACK": "viterbi"
+      },
+      "mean_cer": 0.2022,
+      "mean_wer": 0.285,
+      "samples": {
+        "arrl-13wpm-farnsworth": {
+          "truth": "CALLS YOU YOU",
+          "hyp": "CALLS YOU YOU NEEN",
+          "cer": 0.3846,
+          "wer": 0.3333,
+          "recall": 1.0,
+          "precision": 0.6667,
+          "truth_words": 3,
+          "hyp_words": 4
+        },
+        "arrl-20wpm": {
+          "truth": "SHORT PATH I INITIALLY USED A",
+          "hyp": "ETER SHORT PATH I INITIALLY USED A MEDIU",
+          "cer": 0.3793,
+          "wer": 0.3333,
+          "recall": 1.0,
+          "precision": 0.75,
+          "truth_words": 6,
+          "hyp_words": 8
+        },
+        "arrl-30wpm": {
+          "truth": "WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR",
+          "hyp": "EE WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR",
+          "cer": 0.0556,
+          "wer": 0.1,
+          "recall": 1.0,
+          "precision": 0.9091,
+          "truth_words": 10,
+          "hyp_words": 11
+        },
+        "arrl-40wpm": {
+          "truth": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE",
+          "hyp": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE GRG",
+          "cer": 0.0519,
+          "wer": 0.0769,
+          "recall": 1.0,
+          "precision": 0.9286,
+          "truth_words": 13,
+          "hyp_words": 14
+        },
+        "cq-pota-aa6pw": {
+          "truth": "NQ POTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW AA6PW CQPOTA AA6PW AA6PW C",
+          "hyp": "ND AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW",
+          "cer": 0.1667,
+          "wer": 0.2667,
+          "recall": 0.4,
+          "precision": 0.6667,
+          "truth_words": 15,
+          "hyp_words": 12
+        },
+        "cq-pota-de-wa6mow": {
+          "truth": "NQ CQ POTA DE WA6MOW CQ POTA DE WA6MOW K",
+          "hyp": "NQ CQPOTA DE 6MOW CQ PO TADEWA6M OW K",
+          "cer": 0.175,
+          "wer": 0.6,
+          "recall": 0.6667,
+          "precision": 0.4444,
+          "truth_words": 10,
+          "hyp_words": 9
+        }
+      }
+    },
+    "hard-stack": {
+      "env": {
+        "DITDAH_STACK": "hard"
+      },
+      "mean_cer": 0.2022,
+      "mean_wer": 0.285,
+      "samples": {
+        "arrl-13wpm-farnsworth": {
+          "truth": "CALLS YOU YOU",
+          "hyp": "CALLS YOU YOU NEEN",
+          "cer": 0.3846,
+          "wer": 0.3333,
+          "recall": 1.0,
+          "precision": 0.6667,
+          "truth_words": 3,
+          "hyp_words": 4
+        },
+        "arrl-20wpm": {
+          "truth": "SHORT PATH I INITIALLY USED A",
+          "hyp": "ETER SHORT PATH I INITIALLY USED A MEDIU",
+          "cer": 0.3793,
+          "wer": 0.3333,
+          "recall": 1.0,
+          "precision": 0.75,
+          "truth_words": 6,
+          "hyp_words": 8
+        },
+        "arrl-30wpm": {
+          "truth": "WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR",
+          "hyp": "EE WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR",
+          "cer": 0.0556,
+          "wer": 0.1,
+          "recall": 1.0,
+          "precision": 0.9091,
+          "truth_words": 10,
+          "hyp_words": 11
+        },
+        "arrl-40wpm": {
+          "truth": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE",
+          "hyp": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE GRG",
+          "cer": 0.0519,
+          "wer": 0.0769,
+          "recall": 1.0,
+          "precision": 0.9286,
+          "truth_words": 13,
+          "hyp_words": 14
+        },
+        "cq-pota-aa6pw": {
+          "truth": "NQ POTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW AA6PW CQPOTA AA6PW AA6PW C",
+          "hyp": "ND AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW",
+          "cer": 0.1667,
+          "wer": 0.2667,
+          "recall": 0.4,
+          "precision": 0.6667,
+          "truth_words": 15,
+          "hyp_words": 12
+        },
+        "cq-pota-de-wa6mow": {
+          "truth": "NQ CQ POTA DE WA6MOW CQ POTA DE WA6MOW K",
+          "hyp": "NQ CQPOTA DE 6MOW CQ PO TADEWA6M OW K",
+          "cer": 0.175,
+          "wer": 0.6,
+          "recall": 0.6667,
+          "precision": 0.4444,
+          "truth_words": 10,
+          "hyp_words": 9
+        }
+      }
+    },
+    "soft-stack-best (lambda=1.0)": {
+      "env": {
+        "DITDAH_STACK": "soft",
+        "DITDAH_STACK_LAMBDA": "1.0"
+      },
+      "mean_cer": 0.2059,
+      "mean_wer": 0.285,
+      "samples": {
+        "arrl-13wpm-farnsworth": {
+          "truth": "CALLS YOU YOU",
+          "hyp": "CALLS YOU YOU NEEN",
+          "cer": 0.3846,
+          "wer": 0.3333,
+          "recall": 1.0,
+          "precision": 0.6667,
+          "truth_words": 3,
+          "hyp_words": 4
+        },
+        "arrl-20wpm": {
+          "truth": "SHORT PATH I INITIALLY USED A",
+          "hyp": "ETER SHORT PATH I INITIALLY USED A MEDIUT",
+          "cer": 0.4138,
+          "wer": 0.3333,
+          "recall": 1.0,
+          "precision": 0.75,
+          "truth_words": 6,
+          "hyp_words": 8
+        },
+        "arrl-30wpm": {
+          "truth": "WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR",
+          "hyp": "EE WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR",
+          "cer": 0.0556,
+          "wer": 0.1,
+          "recall": 1.0,
+          "precision": 0.9091,
+          "truth_words": 10,
+          "hyp_words": 11
+        },
+        "arrl-40wpm": {
+          "truth": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE",
+          "hyp": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE GRG",
+          "cer": 0.0519,
+          "wer": 0.0769,
+          "recall": 1.0,
+          "precision": 0.9286,
+          "truth_words": 13,
+          "hyp_words": 14
+        },
+        "cq-pota-aa6pw": {
+          "truth": "NQ POTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW AA6PW CQPOTA AA6PW AA6PW C",
+          "hyp": "ND E AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW",
+          "cer": 0.1548,
+          "wer": 0.2667,
+          "recall": 0.4,
+          "precision": 0.5,
+          "truth_words": 15,
+          "hyp_words": 13
+        },
+        "cq-pota-de-wa6mow": {
+          "truth": "NQ CQ POTA DE WA6MOW CQ POTA DE WA6MOW K",
+          "hyp": "NQ CQPOTA DE 6MOW CQ PO TADEWA6M OW K",
+          "cer": 0.175,
+          "wer": 0.6,
+          "recall": 0.6667,
+          "precision": 0.4444,
+          "truth_words": 10,
+          "hyp_words": 9
+        }
+      }
+    },
+    "abstaining-stack-best (lambda=1.0,abstain=-5)": {
+      "env": {
+        "DITDAH_STACK": "abstain",
+        "DITDAH_STACK_LAMBDA": "1.0",
+        "DITDAH_STACK_ABSTAIN": "-5"
+      },
+      "mean_cer": 0.2059,
+      "mean_wer": 0.285,
+      "samples": {
+        "arrl-13wpm-farnsworth": {
+          "truth": "CALLS YOU YOU",
+          "hyp": "CALLS YOU YOU NEEN",
+          "cer": 0.3846,
+          "wer": 0.3333,
+          "recall": 1.0,
+          "precision": 0.6667,
+          "truth_words": 3,
+          "hyp_words": 4
+        },
+        "arrl-20wpm": {
+          "truth": "SHORT PATH I INITIALLY USED A",
+          "hyp": "ETER SHORT PATH I INITIALLY USED A MEDIUT",
+          "cer": 0.4138,
+          "wer": 0.3333,
+          "recall": 1.0,
+          "precision": 0.75,
+          "truth_words": 6,
+          "hyp_words": 8
+        },
+        "arrl-30wpm": {
+          "truth": "WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR",
+          "hyp": "EE WITH ITS DIFFERENT TOAS A STACKED ARRAY IS HELPFUL FOR",
+          "cer": 0.0556,
+          "wer": 0.1,
+          "recall": 1.0,
+          "precision": 0.9091,
+          "truth_words": 10,
+          "hyp_words": 11
+        },
+        "arrl-40wpm": {
+          "truth": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE",
+          "hyp": "ANTENNAS MAIN LOBE A SINGLE ANTENNA INSTALLED AT MORE THAN 1 WAVELENGTH ABOVE GRG",
+          "cer": 0.0519,
+          "wer": 0.0769,
+          "recall": 1.0,
+          "precision": 0.9286,
+          "truth_words": 13,
+          "hyp_words": 14
+        },
+        "cq-pota-aa6pw": {
+          "truth": "NQ POTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW AA6PW CQPOTA AA6PW AA6PW C",
+          "hyp": "ND E AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW",
+          "cer": 0.1548,
+          "wer": 0.2667,
+          "recall": 0.4,
+          "precision": 0.5,
+          "truth_words": 15,
+          "hyp_words": 13
+        },
+        "cq-pota-de-wa6mow": {
+          "truth": "NQ CQ POTA DE WA6MOW CQ POTA DE WA6MOW K",
+          "hyp": "NQ CQPOTA DE 6MOW CQ PO TADEWA6M OW K",
+          "cer": 0.175,
+          "wer": 0.6,
+          "recall": 0.6667,
+          "precision": 0.4444,
+          "truth_words": 10,
+          "hyp_words": 9
+        }
+      }
+    }
+  },
+  "sweeps": {
+    "soft lambda=0.5": {
+      "mean_cer": 0.2059,
+      "mean_wer": 0.285,
+      "cq-pota-aa6pw_cer": 0.1548,
+      "arrl-20wpm_cer": 0.4138
+    },
+    "soft lambda=1.0": {
+      "mean_cer": 0.2059,
+      "mean_wer": 0.285,
+      "cq-pota-aa6pw_cer": 0.1548,
+      "arrl-20wpm_cer": 0.4138
+    },
+    "soft lambda=1.5": {
+      "mean_cer": 0.2059,
+      "mean_wer": 0.285,
+      "cq-pota-aa6pw_cer": 0.1548,
+      "arrl-20wpm_cer": 0.4138
+    },
+    "soft lambda=2.0": {
+      "mean_cer": 0.2022,
+      "mean_wer": 0.285,
+      "cq-pota-aa6pw_cer": 0.1667,
+      "arrl-20wpm_cer": 0.3793
+    },
+    "abstain l=1.0 a=-3": {
+      "mean_cer": 0.2022,
+      "mean_wer": 0.285,
+      "cq-pota-aa6pw_cer": 0.1667,
+      "arrl-20wpm_cer": 0.3793
+    },
+    "abstain l=1.0 a=-4": {
+      "mean_cer": 0.2059,
+      "mean_wer": 0.285,
+      "cq-pota-aa6pw_cer": 0.1548,
+      "arrl-20wpm_cer": 0.4138
+    },
+    "abstain l=1.0 a=-5": {
+      "mean_cer": 0.2059,
+      "mean_wer": 0.285,
+      "cq-pota-aa6pw_cer": 0.1548,
+      "arrl-20wpm_cer": 0.4138
+    },
+    "abstain l=1.0 a=-8": {
+      "mean_cer": 0.2022,
+      "mean_wer": 0.285,
+      "cq-pota-aa6pw_cer": 0.1667,
+      "arrl-20wpm_cer": 0.3793
+    }
+  }
+}

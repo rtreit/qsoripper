@@ -24,6 +24,24 @@ const ELEM_GATE_DEFAULT_DB: f32 = 12.0;
 /// estimate the background noise power.
 const ELEM_GATE_NOISE_WINDOW_S: f32 = 1.5;
 
+// --- Variant-stack experiment constants ---
+/// Default lambda (weight) for the SNR log-likelihood term added to per-element
+/// scores in `soft` and `abstain` stack modes. Override with
+/// `DITDAH_STACK_LAMBDA`.
+const STACK_SOFT_LAMBDA_DEFAULT: f32 = 1.0;
+/// Default mean (dB) of the "real element" SNR Gaussian used by the soft
+/// stack. Override with `DITDAH_STACK_SNR_MEAN_DB`. Defaults to the same
+/// value as the hard elem-gate threshold so the two variants share a
+/// calibration point.
+const STACK_SOFT_SNR_MEAN_DB_DEFAULT: f32 = 12.0;
+/// Default sigma (dB) of the SNR Gaussians (real and noise priors share it).
+/// Override with `DITDAH_STACK_SNR_SIGMA_DB`.
+const STACK_SOFT_SNR_SIGMA_DB_DEFAULT: f32 = 4.0;
+/// Default abstain threshold (sum of dot/dash + lambda*SNR log-prob) below
+/// which a single-element E/T letter is suppressed. Override with
+/// `DITDAH_STACK_ABSTAIN`.
+const STACK_ABSTAIN_FLOOR_DEFAULT: f32 = -5.0;
+
 // --- BiquadFilter (Unchanged) ---
 #[derive(Debug, Clone, Copy)]
 pub enum FilterType {
@@ -487,6 +505,16 @@ impl MorseDecoder {
             return String::new();
         }
 
+        // STACK EXPERIMENT (vit-elem-stack):
+        // The `DITDAH_STACK` env var selects one of four variants that
+        // combine the round-1 viterbi soft decoder with the round-2
+        // per-element SNR gate in different ways. See `StackMode` for the
+        // catalog. The default mode (`StackMode::Default`) preserves the
+        // pre-experiment behavior (hard mask at `DITDAH_ELEM_GATE_DB` +
+        // viterbi soft decode), so unset env yields the elem-gate baseline.
+        let stack_mode = stack_mode_from_env();
+        let stack_params = StackParams::from_env();
+
         // ELEM-GATE EXPERIMENT (stacked on top of the viterbi soft decoder):
         // Per-element confidence gating before the soft decode pass.
         //
@@ -496,13 +524,18 @@ impl MorseDecoder {
         // the same pitch. Here we instead score every detected on-interval
         // against the *local* envelope noise floor (samples NOT inside any
         // detected on-interval, in a window centered on the element). Drop
-        // intervals whose SNR falls below `DITDAH_ELEM_GATE_DB` (default 6.0).
+        // intervals whose SNR falls below `DITDAH_ELEM_GATE_DB` (default 12.0).
         //
         // Dropped on-intervals get zeroed in a working copy of `power_signal`
         // BEFORE the soft decoder runs, which causes the surrounding
         // off-intervals to merge naturally — turning a spurious "letter
         // break" into a longer letter or word gap.
-        let gate_db = elem_gate_threshold_db();
+        let apply_hard_mask = matches!(stack_mode, StackMode::Default | StackMode::Hard);
+        let gate_db = if apply_hard_mask {
+            elem_gate_threshold_db()
+        } else {
+            None
+        };
         let working_signal: std::borrow::Cow<'_, [f32]> = if let Some(t_db) = gate_db {
             let on_with_pos = get_raw_on_intervals_with_positions(power_signal, threshold);
             if on_with_pos.is_empty() {
@@ -598,7 +631,43 @@ impl MorseDecoder {
             return String::new();
         }
 
-        soft_decode_intervals(&intervals, actual_dot_len)
+        // Soft / abstain stack modes: compute per-on-interval SNR (dB) on the
+        // unmasked signal and pass it through to the soft decoder so it can
+        // add a likelihood term that smoothly penalizes low-SNR elements
+        // (instead of the hard threshold cliff). The merge step is monotone
+        // in cumulative sample position, so we can derive on-interval start
+        // positions directly from the post-merge interval list.
+        let soft_snrs: Option<Vec<f32>> =
+            if matches!(stack_mode, StackMode::Soft | StackMode::Abstain) {
+                let mut on_with_pos: Vec<(usize, usize)> = Vec::new();
+                let mut pos = 0usize;
+                for &(is_on, len) in &intervals {
+                    if is_on {
+                        on_with_pos.push((pos, len));
+                    }
+                    pos += len;
+                }
+                if on_with_pos.is_empty() {
+                    None
+                } else {
+                    Some(compute_element_snrs_db(
+                        power_signal,
+                        &on_with_pos,
+                        power_signal_rate,
+                        ELEM_GATE_NOISE_WINDOW_S,
+                    ))
+                }
+            } else {
+                None
+            };
+
+        soft_decode_intervals(
+            &intervals,
+            actual_dot_len,
+            soft_snrs.as_deref(),
+            stack_mode,
+            &stack_params,
+        )
     }
 }
 
@@ -707,7 +776,18 @@ fn merge_short_blips(intervals: &[(bool, usize)], debounce: usize) -> Vec<(bool,
 /// completed letter we require a per-element confidence floor for the
 /// special case of single-element letters (E and T) — the dominant source
 /// of ghost characters in real OTA noise bursts.
-fn soft_decode_intervals(intervals: &[(bool, usize)], dot_len: f32) -> String {
+///
+/// `snrs_per_on` (when `Some`) holds one SNR-in-dB per on-interval, and
+/// `mode`/`params` together control whether the SNR is folded into the
+/// element score (soft/abstain stacks) and whether single-element E/T
+/// letters get an extra abstain check (abstain stack only).
+fn soft_decode_intervals(
+    intervals: &[(bool, usize)],
+    dot_len: f32,
+    snrs_per_on: Option<&[f32]>,
+    mode: StackMode,
+    params: &StackParams,
+) -> String {
     if dot_len <= 0.0 || intervals.is_empty() {
         return String::new();
     }
@@ -717,44 +797,75 @@ fn soft_decode_intervals(intervals: &[(bool, usize)], dot_len: f32) -> String {
     // Track the worst-case (minimum) log-prob across the elements that built
     // up `letter`. Used for single-element ghost suppression at flush time.
     let mut letter_min_conf = f32::INFINITY;
+    // Track the *summed* per-element log-prob for abstain-mode evaluation.
+    // This includes the SNR term so abstain is sensitive to *both* duration
+    // and channel-quality confidence.
+    let mut letter_score_sum: f32 = 0.0;
+    // SNR cursor (parallel to on-interval index, NOT raw interval index).
+    let mut on_idx: usize = 0;
+    let use_snr = matches!(mode, StackMode::Soft | StackMode::Abstain);
+    let abstain_active = matches!(mode, StackMode::Abstain);
 
-    let flush =
-        |letter: &mut String, letter_min_conf: &mut f32, result: &mut String, force_keep: bool| {
-            if letter.is_empty() {
-                *letter_min_conf = f32::INFINITY;
-                return;
-            }
-            let is_single = letter.chars().count() == 1;
-            let suppressed =
-                !force_keep && is_single && *letter_min_conf < SINGLE_ELEMENT_EMIT_FLOOR;
-            if !suppressed {
-                if let Some(c) = morse_to_char(letter) {
-                    result.push(c);
-                } else {
-                    result.push(BAD_COPY_MARKER);
-                }
-            }
-            letter.clear();
+    let flush = |letter: &mut String,
+                 letter_min_conf: &mut f32,
+                 letter_score_sum: &mut f32,
+                 result: &mut String,
+                 force_keep: bool| {
+        if letter.is_empty() {
             *letter_min_conf = f32::INFINITY;
-        };
+            *letter_score_sum = 0.0;
+            return;
+        }
+        let is_single = letter.chars().count() == 1;
+        let suppressed_min =
+            !force_keep && is_single && *letter_min_conf < SINGLE_ELEMENT_EMIT_FLOOR;
+        // Abstain: drop a single-element E/T whose summed log-prob (duration
+        // + SNR) falls below the abstain floor. Multi-element letters are
+        // unaffected — abstain targets the ghost-prone E/T case only.
+        let suppressed_abstain =
+            !force_keep && abstain_active && is_single && *letter_score_sum < params.abstain_floor;
+        if !(suppressed_min || suppressed_abstain) {
+            if let Some(c) = morse_to_char(letter) {
+                result.push(c);
+            } else {
+                result.push(BAD_COPY_MARKER);
+            }
+        }
+        letter.clear();
+        *letter_min_conf = f32::INFINITY;
+        *letter_score_sum = 0.0;
+    };
 
     for &(is_on, len) in intervals {
         let l = len as f32;
         if is_on {
             let s = score_on_interval(l, dot_len);
-            let best = s.log_p_dot.max(s.log_p_dash);
+            // Optional SNR likelihood term (soft / abstain stack modes).
+            let snr_log_lr = if use_snr {
+                let snr = snrs_per_on.and_then(|v| v.get(on_idx).copied());
+                on_idx += 1;
+                snr.map(|db| params.snr_log_lr(db)).unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            let lambda = params.lambda;
+            let log_p_dot_eff = s.log_p_dot + lambda * snr_log_lr;
+            let log_p_dash_eff = s.log_p_dash + lambda * snr_log_lr;
+            let best = log_p_dot_eff.max(log_p_dash_eff);
             if best < ELEMENT_NOISE_FLOOR {
                 // Implausible as either dot or dash — treat as noise. Don't
                 // extend the current letter; leave the surrounding gaps to
                 // decide its boundary on the next pass.
                 continue;
             }
-            if s.log_p_dot >= s.log_p_dash {
+            if log_p_dot_eff >= log_p_dash_eff {
                 letter.push('.');
-                letter_min_conf = letter_min_conf.min(s.log_p_dot);
+                letter_min_conf = letter_min_conf.min(log_p_dot_eff);
+                letter_score_sum += log_p_dot_eff;
             } else {
                 letter.push('-');
-                letter_min_conf = letter_min_conf.min(s.log_p_dash);
+                letter_min_conf = letter_min_conf.min(log_p_dash_eff);
+                letter_score_sum += log_p_dash_eff;
             }
         } else {
             let g = score_off_interval(l, dot_len);
@@ -770,12 +881,24 @@ fn soft_decode_intervals(intervals: &[(bool, usize)], dot_len: f32) -> String {
 
             // Pick the best decision (continue letter / break letter / word).
             if s_word >= s_letter && s_word >= s_elem {
-                flush(&mut letter, &mut letter_min_conf, &mut result, false);
+                flush(
+                    &mut letter,
+                    &mut letter_min_conf,
+                    &mut letter_score_sum,
+                    &mut result,
+                    false,
+                );
                 if !result.ends_with(' ') && !result.is_empty() {
                     result.push(' ');
                 }
             } else if s_letter >= s_elem {
-                flush(&mut letter, &mut letter_min_conf, &mut result, false);
+                flush(
+                    &mut letter,
+                    &mut letter_min_conf,
+                    &mut letter_score_sum,
+                    &mut result,
+                    false,
+                );
             }
             // Otherwise s_elem wins — keep extending the current letter.
         }
@@ -783,7 +906,13 @@ fn soft_decode_intervals(intervals: &[(bool, usize)], dot_len: f32) -> String {
 
     // Flush trailing letter. Apply the same single-element suppression to the
     // tail so a noise-spike at the end of the buffer doesn't add a ghost E/T.
-    flush(&mut letter, &mut letter_min_conf, &mut result, false);
+    flush(
+        &mut letter,
+        &mut letter_min_conf,
+        &mut letter_score_sum,
+        &mut result,
+        false,
+    );
 
     result.trim().to_string()
 }
@@ -895,6 +1024,97 @@ fn elem_gate_threshold_db() -> Option<f32> {
                 _ => Some(ELEM_GATE_DEFAULT_DB),
             }
         }
+    }
+}
+
+/// Stack-variant selector. The `DITDAH_STACK` env var picks one of the four
+/// variants benched in this experiment. Unset (or unrecognized) preserves
+/// the pre-experiment default behaviour (which is itself the round-2
+/// "elem-gate" stack atop the round-1 viterbi soft decoder).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StackMode {
+    /// Unset env: keep pre-experiment behaviour = hard elem-gate + viterbi.
+    Default,
+    /// `viterbi` / `viterbi-only` / `off`: viterbi soft decoder only,
+    /// no elem-gate masking and no SNR likelihood. Baseline for the stack.
+    ViterbiOnly,
+    /// `hard`: hard elem-gate mask before viterbi (same as `Default`, but
+    /// kept as an explicit name for the bench script).
+    Hard,
+    /// `soft`: no hard mask; instead fold an SNR Gaussian log-likelihood
+    /// term into the per-element score before the dot/dash + gap walk.
+    Soft,
+    /// `abstain`: like `soft`, plus suppress single-element E/T letters
+    /// whose summed score falls below the abstain threshold.
+    Abstain,
+}
+
+fn stack_mode_from_env() -> StackMode {
+    match std::env::var("DITDAH_STACK") {
+        Err(_) => StackMode::Default,
+        Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "default" => StackMode::Default,
+            "viterbi" | "viterbi-only" | "vit" | "off" | "none" => StackMode::ViterbiOnly,
+            "hard" | "hard-stack" | "elem-gate" => StackMode::Hard,
+            "soft" | "soft-stack" => StackMode::Soft,
+            "abstain" | "abstaining" | "abstaining-stack" | "abstain-stack" => StackMode::Abstain,
+            _ => StackMode::Default,
+        },
+    }
+}
+
+/// Tunables for the `soft` and `abstain` stack variants.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StackParams {
+    pub lambda: f32,
+    pub snr_mean_db: f32,
+    pub snr_sigma_db: f32,
+    pub abstain_floor: f32,
+}
+
+impl StackParams {
+    pub(crate) fn from_env() -> Self {
+        Self {
+            lambda: env_f32_or("DITDAH_STACK_LAMBDA", STACK_SOFT_LAMBDA_DEFAULT),
+            snr_mean_db: env_f32_or("DITDAH_STACK_SNR_MEAN_DB", STACK_SOFT_SNR_MEAN_DB_DEFAULT),
+            snr_sigma_db: env_f32_or("DITDAH_STACK_SNR_SIGMA_DB", STACK_SOFT_SNR_SIGMA_DB_DEFAULT),
+            abstain_floor: env_f32_or("DITDAH_STACK_ABSTAIN", STACK_ABSTAIN_FLOOR_DEFAULT),
+        }
+    }
+
+    /// Log-likelihood ratio of "real element" vs "noise" given an observed
+    /// SNR in dB. Both priors are Gaussian in dB with a shared sigma; the
+    /// real-element prior is centered at `snr_mean_db`, the noise prior at
+    /// 0 dB. The result is linear in the observed SNR:
+    ///
+    /// ```text
+    /// LLR(snr) = (snr_mean / sigma^2) * (snr - snr_mean / 2)
+    /// ```
+    ///
+    /// Positive when `snr > snr_mean / 2`, negative below — a soft sigmoid
+    /// ramp around `snr_mean / 2` instead of the hard step at `snr_mean`
+    /// that the elem-gate uses.
+    pub(crate) fn snr_log_lr(&self, snr_db: f32) -> f32 {
+        if !snr_db.is_finite() {
+            // +inf SNR (no noise samples in window): fully favor "real".
+            // -inf SNR (degenerate interval): fully favor "noise".
+            return if snr_db > 0.0 { 5.0 } else { -5.0 };
+        }
+        let sigma = self.snr_sigma_db.max(0.5);
+        let mean = self.snr_mean_db;
+        (mean / (sigma * sigma)) * (snr_db - mean * 0.5)
+    }
+}
+
+fn env_f32_or(name: &str, default: f32) -> f32 {
+    match std::env::var(name) {
+        Err(_) => default,
+        Ok(raw) => raw
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|v| v.is_finite())
+            .unwrap_or(default),
     }
 }
 
