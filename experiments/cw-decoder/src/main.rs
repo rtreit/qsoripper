@@ -640,6 +640,12 @@ enum Cmd {
         /// pace. Useful for tests and one-shot batch decodes.
         #[arg(long)]
         no_realtime: bool,
+        /// Round 4 experiment: use the matched-filter bank front-end for
+        /// element detection (replaces the single-WPM Goertzel + Otsu
+        /// power-threshold path). Also enabled when env var
+        /// `DITDAH_MATCHED_FILTER=1` is set.
+        #[arg(long, default_value_t = false)]
+        matched_filter: bool,
     },
     /// Diagnostic: scan candidate pitches across an audio file and print
     /// the trial-decode Fisher score per pitch. Use this to compare
@@ -1241,6 +1247,7 @@ fn run_cli() -> Result<()> {
             threshold_factor,
             pad_s,
             no_realtime,
+            matched_filter,
         } => run_stream_region_file(
             &file,
             json,
@@ -1251,6 +1258,7 @@ fn run_cli() -> Result<()> {
             threshold_factor,
             pad_s,
             !no_realtime,
+            matched_filter || std::env::var("DITDAH_MATCHED_FILTER").ok().as_deref() == Some("1"),
         ),
         Cmd::ProbeFisher {
             path,
@@ -5361,6 +5369,7 @@ fn run_stream_region_file(
     threshold_factor: f32,
     pad_s: f32,
     realtime: bool,
+    use_matched_filter: bool,
 ) -> Result<()> {
     use cw_decoder_poc::region_stream::RegionStreamConfig;
     use cw_decoder_poc::region_streamer::{RegionStreamer, RegionStreamerConfig};
@@ -5376,6 +5385,7 @@ fn run_stream_region_file(
         min_region_s,
         threshold_factor,
         pad_s,
+        use_matched_filter,
         ..RegionStreamConfig::default()
     };
 
@@ -5405,6 +5415,7 @@ fn run_stream_region_file(
                 "min_region_s": min_region_s,
                 "threshold_factor": threshold_factor,
                 "pad_s": pad_s,
+                "matched_filter": use_matched_filter,
             }),
         );
     } else {

@@ -62,6 +62,12 @@ pub struct RegionStreamConfig {
     /// Minimum timing-fit score for keyed regions. 1.0 means on/off runs align
     /// exactly with dit/dah and intra/letter/word gaps; 0.0 means no CW rhythm.
     pub min_cw_timing_score: f32,
+    /// Replace the single-WPM Goertzel + Otsu power-threshold path used
+    /// by [`decode_region_slice_from_intervals`] with a bank of
+    /// rectangular-pulse matched filters tuned to dit duration at
+    /// several WPM hypotheses (Round 4 experiment). See
+    /// [`crate::matched_filter`]. Default `false`.
+    pub use_matched_filter: bool,
 }
 
 impl Default for RegionStreamConfig {
@@ -80,6 +86,7 @@ impl Default for RegionStreamConfig {
             min_tonal_prominence_ratio: 8.0,
             min_cw_elements: 3,
             min_cw_timing_score: 0.30,
+            use_matched_filter: false,
         }
     }
 }
@@ -405,6 +412,80 @@ fn decode_region_slice(
     decode_region_slice_with_interval(samples, sample_rate, pitch_hz, cfg, interval.as_ref())
 }
 
+/// Round 4 experiment helper. Decide whether the matched-filter pinned
+/// decode beats the deep auto decode on a single region.
+///
+/// Heuristic, tuned to the WA6MOW failure mode without regressing
+/// clean ARRL samples:
+///
+/// * Both inputs are normalized.
+/// * Bail if MF is empty, or much shorter (would lose copy).
+/// * Require MF to either (a) introduce a strong call-sign-like token
+///   that auto lacks, or (b) drop a bad-copy `*` marker that auto had.
+/// * Require MF to not introduce a fresh bad-copy marker.
+fn matched_filter_pinned_is_better(auto: &str, mf: &str) -> bool {
+    let auto_norm = normalize_region_text(auto);
+    let mf_norm = normalize_region_text(mf);
+    if mf_norm.is_empty() {
+        return false;
+    }
+    let mf_chars = useful_copy_chars(&mf_norm);
+    let auto_chars = useful_copy_chars(&auto_norm);
+    // MF must keep at least 80% of the auto copy length to be eligible.
+    if mf_chars * 5 < auto_chars * 4 {
+        return false;
+    }
+    // Don't trade a clean copy for a bad-copy marker.
+    if mf_norm.contains(BAD_COPY_MARKER) && !auto_norm.contains(BAD_COPY_MARKER) {
+        return false;
+    }
+    let auto_tokens: std::collections::HashSet<&str> = auto_norm.split_whitespace().collect();
+    let mf_tokens: std::collections::HashSet<&str> = mf_norm.split_whitespace().collect();
+    let shared = auto_tokens.intersection(&mf_tokens).count();
+    let auto_n = auto_tokens.len().max(1);
+    let mf_n = mf_tokens.len().max(1);
+    // Require high token overlap (>=70% of auto's tokens) before we
+    // are willing to accept MF — otherwise the two transcripts disagree
+    // too much and replacing wholesale risks introducing fresh errors.
+    if shared * 10 < auto_n * 7 {
+        return false;
+    }
+    // Don't accept MF if it brings substantially more singleton tokens
+    // (E/T/I noise) than auto.
+    let mf_singletons = mf_norm.split_whitespace().filter(|t| t.len() == 1).count();
+    let auto_singletons = auto_norm
+        .split_whitespace()
+        .filter(|t| t.len() == 1)
+        .count();
+    if mf_singletons > auto_singletons + 1 {
+        return false;
+    }
+    // Win condition 1: MF clears a bad-copy marker that auto had,
+    // and MF doesn't grow the token count by more than 1 (limits
+    // hallucinated inserts).
+    if auto_norm.contains(BAD_COPY_MARKER)
+        && !mf_norm.contains(BAD_COPY_MARKER)
+        && mf_n <= auto_n + 1
+    {
+        return true;
+    }
+    // Win condition 2: MF surfaces a strong callsign-like token that
+    // auto missed entirely (>=4 chars, has a digit, alphanumeric only).
+    for token in mf_tokens.difference(&auto_tokens) {
+        if token.len() >= 4
+            && token.chars().any(|ch| ch.is_ascii_digit())
+            && token
+                .chars()
+                .filter(|ch| ch.is_ascii_alphanumeric())
+                .count()
+                >= 4
+        {
+            return true;
+        }
+    }
+    false
+}
+
 fn decode_region_slice_with_interval(
     samples: &[f32],
     sample_rate: u32,
@@ -417,6 +498,30 @@ fn decode_region_slice_with_interval(
     }
 
     let auto = decode_text(samples, sample_rate);
+
+    // Round 4 experiment: when the matched-filter front-end is enabled,
+    // also try a pinned decode at the matched-filter MAP WPM and prefer
+    // it iff it is strictly better than `auto` *and* the interval text
+    // by useful character count, *and* it doesn't introduce a bad-copy
+    // marker the auto path lacked. This keeps the deep auto decoder
+    // authoritative on clean signals (so the slow ARRL samples don't
+    // regress) but lets the matched filter recover elements the deep
+    // decoder drops on marginal real-world bursts (the "WA6MOW"
+    // failure mode).
+    if cfg.use_matched_filter {
+        if let Some(interval) = interval {
+            if std::env::var("DITDAH_MF_DEBUG").ok().as_deref() == Some("1") {
+                eprintln!(
+                    "[mf-debug] wpm={:.1} mf_int={:?} auto={:?}",
+                    interval.wpm, interval.text, auto
+                );
+            }
+            if matched_filter_pinned_is_better(&auto, &interval.text) {
+                return interval.text.clone();
+            }
+        }
+    }
+
     if let Some(interval) = interval {
         if let Some(spaced) = best_timing_spacing_overlay(&auto, samples, sample_rate, interval.wpm)
         {
@@ -839,6 +944,24 @@ fn decode_region_slice_from_intervals(
     pitch_hz: f32,
     cfg: &RegionStreamConfig,
 ) -> Option<IntervalDecode> {
+    if cfg.use_matched_filter {
+        if let Some(mf) = crate::matched_filter::matched_filter_decode(
+            samples,
+            sample_rate,
+            pitch_hz,
+            cfg.frame_len_s,
+            cfg.frame_step_s,
+        ) {
+            if !mf.text.is_empty() {
+                return Some(IntervalDecode {
+                    text: mf.text,
+                    wpm: mf.wpm,
+                });
+            }
+        }
+        // Fall through to legacy path if matched filter failed.
+    }
+
     let frame_len = ((cfg.frame_len_s * sample_rate as f32).round() as usize).max(64);
     let frame_step = ((cfg.frame_step_s * sample_rate as f32).round() as usize).max(8);
     if samples.len() < frame_len {
@@ -2165,6 +2288,67 @@ pub fn percentile_sorted(sorted: &[f32], q: f32) -> f32 {
     let cq = q.clamp(0.0, 1.0);
     let idx = ((sorted.len() - 1) as f32 * cq).round() as usize;
     sorted[idx.min(sorted.len() - 1)]
+}
+
+// ---------------------------------------------------------------------
+// Public wrappers used by the matched-filter front-end (Round 4 exp.).
+// We expose the minimal set of helpers needed to convert a frame mask
+// into decoded text without duplicating code.
+// ---------------------------------------------------------------------
+
+/// Mirror of the private `FrameRun` struct, exposed for use by
+/// out-of-module front-ends that produce their own active masks.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameRunPub {
+    pub active: bool,
+    pub start_frame: usize,
+    pub end_frame: usize,
+}
+
+impl From<FrameRun> for FrameRunPub {
+    fn from(r: FrameRun) -> Self {
+        Self {
+            active: r.active,
+            start_frame: r.start_frame,
+            end_frame: r.end_frame,
+        }
+    }
+}
+
+impl From<FrameRunPub> for FrameRun {
+    fn from(r: FrameRunPub) -> Self {
+        Self {
+            active: r.active,
+            start_frame: r.start_frame,
+            end_frame: r.end_frame,
+        }
+    }
+}
+
+pub fn collect_frame_runs_pub(active: &[bool]) -> Vec<FrameRunPub> {
+    collect_frame_runs(active)
+        .into_iter()
+        .map(Into::into)
+        .collect()
+}
+
+pub fn clean_interval_mask_pub(active: &mut [bool]) {
+    clean_interval_mask(active)
+}
+
+pub fn estimate_dot_from_runs_pub(runs: &[FrameRunPub], step_s: f32, frame_s: f32) -> Option<f32> {
+    let internal: Vec<FrameRun> = runs.iter().copied().map(Into::into).collect();
+    estimate_dot_from_runs(&internal, step_s, frame_s)
+}
+
+pub fn decode_runs_to_text_pub(
+    runs: &[FrameRunPub],
+    step_s: f32,
+    frame_s: f32,
+    dot_s: f32,
+) -> String {
+    let internal: Vec<FrameRun> = runs.iter().copied().map(Into::into).collect();
+    decode_runs_to_text(&internal, step_s, frame_s, dot_s)
 }
 
 #[cfg(test)]

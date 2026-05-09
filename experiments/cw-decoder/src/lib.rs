@@ -12,6 +12,7 @@ pub mod envelope_decoder;
 pub mod harvest;
 pub mod json;
 pub mod log_capture;
+pub mod matched_filter;
 pub mod preprocess;
 pub mod preview;
 pub mod region_stream;
