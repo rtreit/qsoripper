@@ -16,6 +16,7 @@ pub mod preprocess;
 pub mod preview;
 pub mod region_stream;
 pub mod region_streamer;
+pub mod region_trace;
 pub mod streaming;
 pub mod streaming_v2;
 pub mod synthetic_qso;
