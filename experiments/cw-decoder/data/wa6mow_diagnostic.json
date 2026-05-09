@@ -1,0 +1,194 @@
+{
+  "sample": "C:\\Users\\randy\\Git\\qsoripper\\data\\cw-samples\\training-set-a\\cq-pota-de-wa6mow.mp3",
+  "truth": "NQ CQ POTA DE WA6MOW CQ POTA DE WA6MOW K",
+  "summary": {
+    "verdict": "- **Verdict: WPM auto-lock is the bug.**  Forcing `--force-wpm 22` (\u2248 truth) recovers the leading WA of the first WA6MOW. Larger `pad_s` does not. This confirms the front-end short-burst WPM estimator seeds too low at startup (the `bayes-joint` agent's 11\u201313 WPM observation), and the entire first transmission is decoded against the wrong rate.",
+    "force_wpm_recovers": true,
+    "any_pad_recovers": false,
+    "force_pitch_recovers": false,
+    "manual_window_recovers": false,
+    "file_full_recovers": false,
+    "region_default_recovers": false
+  },
+  "results": [
+    {
+      "toggle": "1-file-fullpath-auto-wpm",
+      "args": [
+        "file",
+        "C:\\Users\\randy\\Git\\qsoripper\\data\\cw-samples\\training-set-a\\cq-pota-de-wa6mow.mp3"
+      ],
+      "returncode": 0,
+      "decoded": "NQ CQPO TA DE 5RHTI OW CQ PO TA DEWA6M OW K",
+      "decoded_normalized": "NQ CQPO TA DE 5RHTI OW CQ PO TA DEWA6M OW K",
+      "wa6mow_count": 1,
+      "first_wa6mow_recovered": false,
+      "second_wa6mow_recovered": false,
+      "sole_occurrence_in_second_half": true,
+      "transcript_head_before_first_wa6mow": "NQCQPOTADE5RHTIOWCQPOTADE"
+    },
+    {
+      "toggle": "2-region-default",
+      "args": [
+        "stream-region",
+        "--file",
+        "C:\\Users\\randy\\Git\\qsoripper\\data\\cw-samples\\training-set-a\\cq-pota-de-wa6mow.mp3",
+        "--json",
+        "--no-realtime"
+      ],
+      "returncode": 0,
+      "decoded": "NQ CQPOTA DE*6MOW CQ PO TADEWA6M OW K",
+      "decoded_normalized": "NQ CQPOTA DE 6MOW CQ PO TADEWA6M OW K",
+      "wa6mow_count": 1,
+      "first_wa6mow_recovered": false,
+      "second_wa6mow_recovered": false,
+      "sole_occurrence_in_second_half": true,
+      "transcript_head_before_first_wa6mow": "NQCQPOTADE6MOWCQPOTADE"
+    },
+    {
+      "toggle": "3-region-pad-0.30",
+      "args": [
+        "stream-region",
+        "--file",
+        "C:\\Users\\randy\\Git\\qsoripper\\data\\cw-samples\\training-set-a\\cq-pota-de-wa6mow.mp3",
+        "--json",
+        "--no-realtime",
+        "--pad-s",
+        "0.30"
+      ],
+      "returncode": 0,
+      "decoded": "NQ CQPOTA DE*6MOW CQ PO TADEWA6M OW K",
+      "decoded_normalized": "NQ CQPOTA DE 6MOW CQ PO TADEWA6M OW K",
+      "wa6mow_count": 1,
+      "first_wa6mow_recovered": false,
+      "second_wa6mow_recovered": false,
+      "sole_occurrence_in_second_half": true,
+      "transcript_head_before_first_wa6mow": "NQCQPOTADE6MOWCQPOTADE"
+    },
+    {
+      "toggle": "4-region-pad-0.50",
+      "args": [
+        "stream-region",
+        "--file",
+        "C:\\Users\\randy\\Git\\qsoripper\\data\\cw-samples\\training-set-a\\cq-pota-de-wa6mow.mp3",
+        "--json",
+        "--no-realtime",
+        "--pad-s",
+        "0.50"
+      ],
+      "returncode": 0,
+      "decoded": "NQ CQPOTA DE*6MOW CQ PO TADEWA6M OW K",
+      "decoded_normalized": "NQ CQPOTA DE 6MOW CQ PO TADEWA6M OW K",
+      "wa6mow_count": 1,
+      "first_wa6mow_recovered": false,
+      "second_wa6mow_recovered": false,
+      "sole_occurrence_in_second_half": true,
+      "transcript_head_before_first_wa6mow": "NQCQPOTADE6MOWCQPOTADE"
+    },
+    {
+      "toggle": "5-region-pad-1.00",
+      "args": [
+        "stream-region",
+        "--file",
+        "C:\\Users\\randy\\Git\\qsoripper\\data\\cw-samples\\training-set-a\\cq-pota-de-wa6mow.mp3",
+        "--json",
+        "--no-realtime",
+        "--pad-s",
+        "1.00"
+      ],
+      "returncode": 0,
+      "decoded": "NQ CQ P O T A D E SIRSI TI OW C Q P O T A D E WA 6 M OW K",
+      "decoded_normalized": "NQ CQ P O T A D E SIRSI TI OW C Q P O T A D E WA 6 M OW K",
+      "wa6mow_count": 1,
+      "first_wa6mow_recovered": false,
+      "second_wa6mow_recovered": false,
+      "sole_occurrence_in_second_half": true,
+      "transcript_head_before_first_wa6mow": "NQCQPOTADESIRSITIOWCQPOTADE"
+    },
+    {
+      "toggle": "6-region-force-wpm-22",
+      "args": [
+        "stream-region",
+        "--file",
+        "C:\\Users\\randy\\Git\\qsoripper\\data\\cw-samples\\training-set-a\\cq-pota-de-wa6mow.mp3",
+        "--json",
+        "--no-realtime",
+        "--force-wpm",
+        "22"
+      ],
+      "returncode": 0,
+      "decoded": "NQ CQPOTADEWA6MOW CQPOTA DEWA6MOW K",
+      "decoded_normalized": "NQ CQPOTADEWA6MOW CQPOTA DEWA6MOW K",
+      "wa6mow_count": 2,
+      "first_wa6mow_recovered": true,
+      "second_wa6mow_recovered": true,
+      "sole_occurrence_in_second_half": null,
+      "transcript_head_before_first_wa6mow": "NQCQPOTADE"
+    },
+    {
+      "toggle": "7-region-force-pitch-760",
+      "args": [
+        "stream-region",
+        "--file",
+        "C:\\Users\\randy\\Git\\qsoripper\\data\\cw-samples\\training-set-a\\cq-pota-de-wa6mow.mp3",
+        "--json",
+        "--no-realtime",
+        "--force-pitch",
+        "760"
+      ],
+      "returncode": 0,
+      "decoded": "NQ CQ P O T A D E SIRSI TI OW C Q P O T A D E WA 6 M OW K",
+      "decoded_normalized": "NQ CQ P O T A D E SIRSI TI OW C Q P O T A D E WA 6 M OW K",
+      "wa6mow_count": 1,
+      "first_wa6mow_recovered": false,
+      "second_wa6mow_recovered": false,
+      "sole_occurrence_in_second_half": true,
+      "transcript_head_before_first_wa6mow": "NQCQPOTADESIRSITIOWCQPOTADE"
+    },
+    {
+      "toggle": "8-region-manual-window-0-to-12s",
+      "args": [
+        "stream-region",
+        "--file",
+        "C:\\Users\\randy\\Git\\qsoripper\\data\\cw-samples\\training-set-a\\cq-pota-de-wa6mow.mp3",
+        "--json",
+        "--no-realtime",
+        "--region-start-s",
+        "0",
+        "--region-end-s",
+        "12"
+      ],
+      "returncode": 0,
+      "decoded": "NQ CQPOTA DE*6MOW CQ E",
+      "decoded_normalized": "NQ CQPOTA DE 6MOW CQ E",
+      "wa6mow_count": 0,
+      "first_wa6mow_recovered": false,
+      "second_wa6mow_recovered": false,
+      "sole_occurrence_in_second_half": null,
+      "transcript_head_before_first_wa6mow": "NQCQPOTADE6MOWCQE"
+    },
+    {
+      "toggle": "9-region-manual-window-force-wpm-22",
+      "args": [
+        "stream-region",
+        "--file",
+        "C:\\Users\\randy\\Git\\qsoripper\\data\\cw-samples\\training-set-a\\cq-pota-de-wa6mow.mp3",
+        "--json",
+        "--no-realtime",
+        "--region-start-s",
+        "0",
+        "--region-end-s",
+        "12",
+        "--force-wpm",
+        "22"
+      ],
+      "returncode": 0,
+      "decoded": "NQ CQPOTADEWA6MOW CQE",
+      "decoded_normalized": "NQ CQPOTADEWA6MOW CQE",
+      "wa6mow_count": 1,
+      "first_wa6mow_recovered": false,
+      "second_wa6mow_recovered": false,
+      "sole_occurrence_in_second_half": true,
+      "transcript_head_before_first_wa6mow": "NQCQPOTADE"
+    }
+  ]
+}

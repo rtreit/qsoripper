@@ -51,6 +51,11 @@ pub struct RegionStreamConfig {
     pub pad_s: f32,
     /// Optional pinned WPM for the per-region decode. None = ditdah auto.
     pub pin_wpm: Option<f32>,
+    /// Optional pinned Goertzel pitch (Hz). When set, skips the
+    /// pitch-discovery sweep and forces all detection/decoding to use this
+    /// single pitch. Used by the wa6mow diagnostic harness; default behavior
+    /// (None = auto-discover) is unchanged.
+    pub pin_pitch_hz: Option<f32>,
     /// Minimum Goertzel-vs-broadband energy ratio required before a detected
     /// active run is decoded. White noise can still produce percentile-threshold
     /// runs; this guard requires those runs to contain a narrowband CW tone.
@@ -77,6 +82,7 @@ impl Default for RegionStreamConfig {
             min_region_s: 0.6,
             pad_s: 0.10,
             pin_wpm: None,
+            pin_pitch_hz: None,
             min_tonal_prominence_ratio: 8.0,
             min_cw_elements: 3,
             min_cw_timing_score: 0.30,
@@ -112,11 +118,16 @@ pub fn decode_region_stream(
         };
     }
 
-    let dominant_pitch_hz = estimate_dominant_pitch(samples, sample_rate, cfg);
-    let mut pitches = discover_burst_pitches(samples, sample_rate, cfg);
-    if pitches.is_empty() {
-        pitches.push(dominant_pitch_hz);
-    }
+    let (dominant_pitch_hz, pitches) = if let Some(pinned) = cfg.pin_pitch_hz {
+        (pinned, vec![pinned])
+    } else {
+        let dom = estimate_dominant_pitch(samples, sample_rate, cfg);
+        let mut p = discover_burst_pitches(samples, sample_rate, cfg);
+        if p.is_empty() {
+            p.push(dom);
+        }
+        (dom, p)
+    };
 
     let mut candidates = Vec::new();
     for pitch_hz in pitches {

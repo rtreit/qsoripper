@@ -640,6 +640,24 @@ enum Cmd {
         /// pace. Useful for tests and one-shot batch decodes.
         #[arg(long)]
         no_realtime: bool,
+        /// Diagnostic: pin per-region decode WPM. 0 = auto (default).
+        /// Use to test whether front-end WPM auto-lock is the failure
+        /// layer (`wa6mow_diagnostic.py`).
+        #[arg(long, default_value_t = 0.0)]
+        force_wpm: f32,
+        /// Diagnostic: pin Goertzel center pitch (Hz), bypassing the
+        /// pitch-discovery sweep. 0 = auto (default).
+        #[arg(long, default_value_t = 0.0)]
+        force_pitch: f32,
+        /// Diagnostic: clip the input audio to [start, end] seconds before
+        /// running region detection. Negative = unset. Use with
+        /// `--region-end-s` to bypass region detection entirely and decode
+        /// only an operator-supplied window.
+        #[arg(long, default_value_t = -1.0)]
+        region_start_s: f32,
+        /// Diagnostic: see `--region-start-s`. Negative = unset.
+        #[arg(long, default_value_t = -1.0)]
+        region_end_s: f32,
     },
     /// Diagnostic: scan candidate pitches across an audio file and print
     /// the trial-decode Fisher score per pitch. Use this to compare
@@ -1241,6 +1259,10 @@ fn run_cli() -> Result<()> {
             threshold_factor,
             pad_s,
             no_realtime,
+            force_wpm,
+            force_pitch,
+            region_start_s,
+            region_end_s,
         } => run_stream_region_file(
             &file,
             json,
@@ -1251,6 +1273,10 @@ fn run_cli() -> Result<()> {
             threshold_factor,
             pad_s,
             !no_realtime,
+            (force_wpm > 0.0).then_some(force_wpm),
+            (force_pitch > 0.0).then_some(force_pitch),
+            (region_start_s >= 0.0).then_some(region_start_s),
+            (region_end_s >= 0.0).then_some(region_end_s),
         ),
         Cmd::ProbeFisher {
             path,
@@ -5361,6 +5387,10 @@ fn run_stream_region_file(
     threshold_factor: f32,
     pad_s: f32,
     realtime: bool,
+    force_wpm: Option<f32>,
+    force_pitch_hz: Option<f32>,
+    region_start_s: Option<f32>,
+    region_end_s: Option<f32>,
 ) -> Result<()> {
     use cw_decoder_poc::region_stream::RegionStreamConfig;
     use cw_decoder_poc::region_streamer::{RegionStreamer, RegionStreamerConfig};
@@ -5368,7 +5398,26 @@ fn run_stream_region_file(
 
     let decoded = audio::decode_file(path)?;
     let sr = decoded.sample_rate;
-    let total_samples = decoded.samples.len();
+
+    // Optional pre-clip: bypass region detection entirely by feeding only
+    // the operator-supplied [start, end] window. Region detection still
+    // runs over this slice, but any onset/offset issues outside the window
+    // are removed from the picture.
+    let samples_owned: Vec<f32>;
+    let samples_slice: &[f32] = if region_start_s.is_some() || region_end_s.is_some() {
+        let total_s = decoded.samples.len() as f32 / sr.max(1) as f32;
+        let start_s = region_start_s.unwrap_or(0.0).max(0.0);
+        let end_s = region_end_s.unwrap_or(total_s).min(total_s);
+        let s_idx = ((start_s * sr as f32) as usize).min(decoded.samples.len());
+        let e_idx = ((end_s * sr as f32) as usize)
+            .min(decoded.samples.len())
+            .max(s_idx);
+        samples_owned = decoded.samples[s_idx..e_idx].to_vec();
+        &samples_owned
+    } else {
+        &decoded.samples
+    };
+    let total_samples = samples_slice.len();
     let duration_s = total_samples as f32 / sr.max(1) as f32;
 
     let region_cfg = RegionStreamConfig {
@@ -5376,6 +5425,8 @@ fn run_stream_region_file(
         min_region_s,
         threshold_factor,
         pad_s,
+        pin_wpm: force_wpm,
+        pin_pitch_hz: force_pitch_hz,
         ..RegionStreamConfig::default()
     };
 
@@ -5405,6 +5456,10 @@ fn run_stream_region_file(
                 "min_region_s": min_region_s,
                 "threshold_factor": threshold_factor,
                 "pad_s": pad_s,
+                "force_wpm": force_wpm,
+                "force_pitch_hz": force_pitch_hz,
+                "region_start_s": region_start_s,
+                "region_end_s": region_end_s,
             }),
         );
     } else {
@@ -5427,7 +5482,7 @@ fn run_stream_region_file(
 
     while cursor < total_samples {
         let end = (cursor + chunk_samples).min(total_samples);
-        let chunk = &decoded.samples[cursor..end];
+        let chunk = &samples_slice[cursor..end];
         cursor = end;
         streamer.ingest(chunk);
 
