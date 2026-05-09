@@ -128,6 +128,16 @@ internal sealed class CwDecoderProcessSampleSource : ICwWpmSampleSource
             CreateNoWindow = true,
             WorkingDirectory = Path.GetDirectoryName(exe)!,
         };
+        // Default the region detector's tonal-prominence floor to 3.0 (vs the
+        // built-in 8.0) for the live operator path. The 8.0 default is tuned
+        // to reject white-noise / static in offline batch contexts; on real
+        // OTA captures with QRM/QSB the stricter floor silently drops faint
+        // bursts and produces empty transcripts. Operator can still override
+        // by exporting the env var before launching the GUI.
+        if (!psi.Environment.ContainsKey("DITDAH_MIN_TONAL_PROMINENCE_RATIO"))
+        {
+            psi.Environment["DITDAH_MIN_TONAL_PROMINENCE_RATIO"] = "3.0";
+        }
         psi.ArgumentList.Add("stream-live-v3");
         psi.ArgumentList.Add("--json");
         psi.ArgumentList.Add("--stdin-control");

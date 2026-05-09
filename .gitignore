@@ -88,3 +88,8 @@ data/
 # cw-decoder stress-test generated audio (large, regenerable via stress-gen.ps1)
 experiments/cw-decoder/bench-runs/
 experiments/cw-decoder/captures/
+
+# Local cw-decoder bench reports
+experiments/cw-decoder/kaggle_report_*.json
+experiments/cw-decoder/kaggle_minisuite_report.json
+data/cw-samples/training-set-a/_benchmark_current.json
