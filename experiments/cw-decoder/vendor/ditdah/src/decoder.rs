@@ -11,9 +11,6 @@ const FREQ_MAX_HZ: f32 = 1200.0;
 const RESAMPLER_CHUNK_SIZE: usize = 1024;
 
 // --- Decoding Constants ---
-const DIT_DAH_BOUNDARY: f32 = 2.0;
-const LETTER_SPACE_BOUNDARY: f32 = 2.0; // Gaps > 2x dot length end the current letter
-const WORD_SPACE_BOUNDARY: f32 = 5.0; // Gaps > 5x dot length add word space
 const BAD_COPY_MARKER: char = '*';
 
 // --- Element-gate experiment constants ---
@@ -486,7 +483,12 @@ impl MorseDecoder {
         power_signal_rate: f32,
         wpm_is_authoritative: bool,
     ) -> String {
-        // ELEM-GATE EXPERIMENT: Per-element confidence gating.
+        if power_signal.is_empty() {
+            return String::new();
+        }
+
+        // ELEM-GATE EXPERIMENT (stacked on top of the viterbi soft decoder):
+        // Per-element confidence gating before the soft decode pass.
         //
         // Live OTA CW produces "ghost character" cascades (E/T/I/M/S) when the
         // SNR drops within an active region. Window-level pitch-power gating
@@ -497,9 +499,9 @@ impl MorseDecoder {
         // intervals whose SNR falls below `DITDAH_ELEM_GATE_DB` (default 6.0).
         //
         // Dropped on-intervals get zeroed in a working copy of `power_signal`
-        // BEFORE self-calibration and the per-sample walk, which causes the
-        // surrounding off-intervals to merge naturally — turning a spurious
-        // "letter break" into a longer letter or word gap.
+        // BEFORE the soft decoder runs, which causes the surrounding
+        // off-intervals to merge naturally — turning a spurious "letter
+        // break" into a longer letter or word gap.
         let gate_db = elem_gate_threshold_db();
         let working_signal: std::borrow::Cow<'_, [f32]> = if let Some(t_db) = gate_db {
             let on_with_pos = get_raw_on_intervals_with_positions(power_signal, threshold);
@@ -534,9 +536,15 @@ impl MorseDecoder {
         };
         let power_signal: &[f32] = &working_signal;
 
-        // First pass: collect all element lengths for self-calibration
-        let (on_intervals, _off_intervals) = get_raw_intervals(power_signal, threshold);
-
+        // Collect interleaved on/off intervals for the whole signal.
+        let raw_intervals = get_interleaved_intervals(power_signal, threshold);
+        if raw_intervals.is_empty() {
+            return String::new();
+        }
+        let on_intervals: Vec<usize> = raw_intervals
+            .iter()
+            .filter_map(|&(o, l)| if o { Some(l) } else { None })
+            .collect();
         if on_intervals.is_empty() {
             return String::new();
         }
@@ -575,69 +583,229 @@ impl MorseDecoder {
             }
         };
 
-        // Log calibration for debugging
         log::debug!(
             "Self-calibration: WPM={wpm:.1} (authoritative={wpm_is_authoritative}), actual_dot_len={actual_dot_len:.1} samples"
         );
-        log::debug!("Element lengths: {on_intervals:?}");
 
-        let mut result = String::new();
-        let mut current_letter = String::new();
-        if power_signal.is_empty() {
-            return result;
-        }
-        let mut current_len = 0;
-        let mut is_on = power_signal[0] > threshold;
-        let debounce_samples = (actual_dot_len * 0.3).round() as usize;
+        let debounce_samples = ((actual_dot_len * 0.30).round() as usize).max(1);
         log::debug!("Debounce threshold: {debounce_samples} samples");
-        for &p in power_signal.iter().chain(std::iter::once(&0.0)) {
-            if (p > threshold) == is_on {
-                current_len += 1;
-            } else {
-                if current_len > debounce_samples {
-                    let len_norm = current_len as f32 / actual_dot_len;
-                    if is_on {
-                        if len_norm < DIT_DAH_BOUNDARY {
-                            current_letter.push('.');
-                        } else {
-                            current_letter.push('-');
-                        }
-                    } else {
-                        // Handle gaps (off periods)
-                        if len_norm > LETTER_SPACE_BOUNDARY {
-                            // Gap is long enough to end the current letter
-                            if !current_letter.is_empty() {
-                                if let Some(c) = morse_to_char(&current_letter) {
-                                    result.push(c);
-                                } else {
-                                    result.push(BAD_COPY_MARKER);
-                                }
-                                current_letter.clear();
-                            }
-                            // If gap is also long enough for word boundary, add space
-                            if len_norm > WORD_SPACE_BOUNDARY && !result.ends_with(' ') {
-                                result.push(' ');
-                            }
-                        }
-                        // If gap is shorter than LETTER_SPACE_BOUNDARY, it's just an element gap - ignore
-                    }
-                }
-                is_on = !is_on;
-                current_len = 1;
-            }
+
+        // Merge sub-debounce blips into the surrounding runs; this is where
+        // most short noise-induced state flips disappear before the soft
+        // classifier ever sees them.
+        let intervals = merge_short_blips(&raw_intervals, debounce_samples);
+        if intervals.is_empty() {
+            return String::new();
         }
 
-        // Process any remaining letter at the end
-        if !current_letter.is_empty() {
-            if let Some(c) = morse_to_char(&current_letter) {
-                result.push(c);
-            } else {
-                result.push(BAD_COPY_MARKER);
-            }
-        }
-
-        result.trim().to_string()
+        soft_decode_intervals(&intervals, actual_dot_len)
     }
+}
+
+// --- Soft / Viterbi-style decoder ---
+
+#[derive(Debug, Clone, Copy)]
+struct ElementScore {
+    log_p_dot: f32,
+    log_p_dash: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GapScore {
+    log_p_elem: f32,
+    log_p_letter: f32,
+    log_p_word: f32,
+}
+
+/// Per-element noise-rejection floor (log-prob). An on-interval whose best
+/// dot/dash log-prob is below this is treated as a noise-only burst and
+/// dropped (not used to extend the current letter).
+const ELEMENT_NOISE_FLOOR: f32 = -3.0;
+
+/// Extra log-prob floor required to *emit* a single-element letter (E or T).
+/// If the lone element's best log-prob is below this, the letter is
+/// suppressed even if a clean letter-gap surrounds it. This is the headline
+/// ghost-suppression knob.
+const SINGLE_ELEMENT_EMIT_FLOOR: f32 = -0.5;
+
+/// Log-prior penalty added to the letter-break / word-break scores when the
+/// letter currently being built is a single element. Encourages the gap
+/// classifier to merge ambiguous gaps into the next element rather than
+/// emit an E/T ghost.
+const SINGLE_ELEMENT_GAP_PENALTY: f32 = 0.6;
+
+/// Sigma for on-interval scoring, in dot-length units. Equal across the dot
+/// and dash classes so the dot/dash decision boundary stays at the canonical
+/// 2*dot_len, matching the old hard-threshold semantics. The smooth scores
+/// still let us reject obvious noise (large |z|) and apply confidence
+/// floors at letter-emit time.
+const SIGMA_ON_DOTS: f32 = 0.55;
+/// Sigma for off-interval scoring, in dot-length units. Equal across the
+/// elem-gap, letter-gap, and word-gap classes so the canonical 2x/5x
+/// boundaries are preserved while still scoring borderline gaps softly.
+const SIGMA_OFF_DOTS: f32 = 0.85;
+
+fn gaussian_log_prob(value: f32, mean: f32, sigma: f32) -> f32 {
+    let s = sigma.max(0.5);
+    let z = (value - mean) / s;
+    -0.5 * z * z
+}
+
+fn score_on_interval(len: f32, dot_len: f32) -> ElementScore {
+    let dash_len = 3.0 * dot_len;
+    let sigma = SIGMA_ON_DOTS * dot_len;
+    ElementScore {
+        log_p_dot: gaussian_log_prob(len, dot_len, sigma),
+        log_p_dash: gaussian_log_prob(len, dash_len, sigma),
+    }
+}
+
+fn score_off_interval(len: f32, dot_len: f32) -> GapScore {
+    let sigma = SIGMA_OFF_DOTS * dot_len;
+    GapScore {
+        log_p_elem: gaussian_log_prob(len, dot_len, sigma),
+        log_p_letter: gaussian_log_prob(len, 3.0 * dot_len, sigma),
+        log_p_word: gaussian_log_prob(len, 7.0 * dot_len, sigma),
+    }
+}
+
+/// Merge sub-debounce intervals into the surrounding runs. A short blip is
+/// absorbed into the preceding interval (lengthening it), and the next
+/// same-type interval is then concatenated, eliminating spurious state flips
+/// caused by noise glitches.
+fn merge_short_blips(intervals: &[(bool, usize)], debounce: usize) -> Vec<(bool, usize)> {
+    let mut out: Vec<(bool, usize)> = Vec::with_capacity(intervals.len());
+    for &(is_on, len) in intervals {
+        if let Some(last) = out.last_mut() {
+            if last.0 == is_on {
+                // A previous merge left a same-type predecessor; concatenate.
+                last.1 += len;
+                continue;
+            }
+        }
+        if len < debounce && !out.is_empty() {
+            // Absorb the blip into the previous (opposite-type) interval. The
+            // next interval (which will share the previous interval's type)
+            // will then be concatenated by the branch above.
+            out.last_mut().unwrap().1 += len;
+            continue;
+        }
+        out.push((is_on, len));
+    }
+    out
+}
+
+/// Soft per-element classification + symbol-length-prior gap decoder.
+///
+/// This replaces the hard threshold-based classifier. For each on-interval we
+/// score it as dot vs dash under per-class Gaussians (with per-class sigmas
+/// proportional to the class mean). Intervals whose best class log-prob is
+/// below `ELEMENT_NOISE_FLOOR` are dropped (treated as noise that survived
+/// merge_short_blips). For each off-interval we score elem-gap / letter-gap /
+/// word-gap and pick the best score after adding a single-element-letter
+/// penalty to the letter/word-break scores. Finally, when emitting a
+/// completed letter we require a per-element confidence floor for the
+/// special case of single-element letters (E and T) — the dominant source
+/// of ghost characters in real OTA noise bursts.
+fn soft_decode_intervals(intervals: &[(bool, usize)], dot_len: f32) -> String {
+    if dot_len <= 0.0 || intervals.is_empty() {
+        return String::new();
+    }
+
+    let mut result = String::new();
+    let mut letter = String::new();
+    // Track the worst-case (minimum) log-prob across the elements that built
+    // up `letter`. Used for single-element ghost suppression at flush time.
+    let mut letter_min_conf = f32::INFINITY;
+
+    let flush =
+        |letter: &mut String, letter_min_conf: &mut f32, result: &mut String, force_keep: bool| {
+            if letter.is_empty() {
+                *letter_min_conf = f32::INFINITY;
+                return;
+            }
+            let is_single = letter.chars().count() == 1;
+            let suppressed =
+                !force_keep && is_single && *letter_min_conf < SINGLE_ELEMENT_EMIT_FLOOR;
+            if !suppressed {
+                if let Some(c) = morse_to_char(letter) {
+                    result.push(c);
+                } else {
+                    result.push(BAD_COPY_MARKER);
+                }
+            }
+            letter.clear();
+            *letter_min_conf = f32::INFINITY;
+        };
+
+    for &(is_on, len) in intervals {
+        let l = len as f32;
+        if is_on {
+            let s = score_on_interval(l, dot_len);
+            let best = s.log_p_dot.max(s.log_p_dash);
+            if best < ELEMENT_NOISE_FLOOR {
+                // Implausible as either dot or dash — treat as noise. Don't
+                // extend the current letter; leave the surrounding gaps to
+                // decide its boundary on the next pass.
+                continue;
+            }
+            if s.log_p_dot >= s.log_p_dash {
+                letter.push('.');
+                letter_min_conf = letter_min_conf.min(s.log_p_dot);
+            } else {
+                letter.push('-');
+                letter_min_conf = letter_min_conf.min(s.log_p_dash);
+            }
+        } else {
+            let g = score_off_interval(l, dot_len);
+            let single = letter.chars().count() == 1;
+            let prior_break = if single {
+                -SINGLE_ELEMENT_GAP_PENALTY
+            } else {
+                0.0
+            };
+            let s_elem = g.log_p_elem;
+            let s_letter = g.log_p_letter + prior_break;
+            let s_word = g.log_p_word + prior_break;
+
+            // Pick the best decision (continue letter / break letter / word).
+            if s_word >= s_letter && s_word >= s_elem {
+                flush(&mut letter, &mut letter_min_conf, &mut result, false);
+                if !result.ends_with(' ') && !result.is_empty() {
+                    result.push(' ');
+                }
+            } else if s_letter >= s_elem {
+                flush(&mut letter, &mut letter_min_conf, &mut result, false);
+            }
+            // Otherwise s_elem wins — keep extending the current letter.
+        }
+    }
+
+    // Flush trailing letter. Apply the same single-element suppression to the
+    // tail so a noise-spike at the end of the buffer doesn't add a ghost E/T.
+    flush(&mut letter, &mut letter_min_conf, &mut result, false);
+
+    result.trim().to_string()
+}
+
+fn get_interleaved_intervals(power_signal: &[f32], threshold: f32) -> Vec<(bool, usize)> {
+    let mut out = Vec::new();
+    if power_signal.is_empty() {
+        return out;
+    }
+    let mut current_len: usize = 0;
+    let mut is_on = power_signal[0] > threshold;
+    for &p in power_signal {
+        if (p > threshold) == is_on {
+            current_len += 1;
+        } else {
+            out.push((is_on, current_len));
+            is_on = !is_on;
+            current_len = 1;
+        }
+    }
+    out.push((is_on, current_len));
+    out
 }
 
 // --- Helper Functions ---
@@ -1035,5 +1203,220 @@ mod elem_gate_tests {
         let (lengths, _) = get_raw_intervals(&sig, 0.5);
         let from_pos: Vec<usize> = with_pos.iter().map(|(_, l)| *l).collect();
         assert_eq!(lengths, from_pos);
+    }
+}
+
+#[cfg(test)]
+mod soft_decoder_tests {
+    use super::{merge_short_blips, soft_decode_intervals};
+
+    /// Build interleaved (is_on, len) intervals for a clean morse pattern.
+    /// `pattern` is a string of `.` (dot), `-` (dash), `|` (letter gap),
+    /// and ` ` (word gap). Element gaps are inserted automatically between
+    /// elements that belong to the same letter.
+    fn build_intervals(pattern: &str, dot_len: usize) -> Vec<(bool, usize)> {
+        let dash = 3 * dot_len;
+        let letter_gap = 3 * dot_len;
+        let word_gap = 7 * dot_len;
+        let mut out: Vec<(bool, usize)> = Vec::new();
+        let mut prev_was_element = false;
+        for ch in pattern.chars() {
+            match ch {
+                '.' | '-' => {
+                    if prev_was_element {
+                        out.push((false, dot_len));
+                    }
+                    let on_len = if ch == '.' { dot_len } else { dash };
+                    out.push((true, on_len));
+                    prev_was_element = true;
+                }
+                '|' => {
+                    out.push((false, letter_gap));
+                    prev_was_element = false;
+                }
+                ' ' => {
+                    out.push((false, word_gap));
+                    prev_was_element = false;
+                }
+                _ => panic!("bad pattern char: {ch}"),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn clean_dots_decode_to_eeee() {
+        let dot_len = 30usize;
+        let intervals = build_intervals(".|.|.|.", dot_len);
+        let text = soft_decode_intervals(&intervals, dot_len as f32);
+        assert_eq!(text, "EEEE");
+    }
+
+    #[test]
+    fn clean_dashes_decode_to_tttt() {
+        let dot_len = 30usize;
+        let intervals = build_intervals("-|-|-|-", dot_len);
+        let text = soft_decode_intervals(&intervals, dot_len as f32);
+        assert_eq!(text, "TTTT");
+    }
+
+    #[test]
+    fn clean_word_decodes() {
+        let dot_len = 30usize;
+        // "CQ DE" = -.-. --.- / -.. .
+        let intervals = build_intervals("-.-.|--.- -..|.", dot_len);
+        let text = soft_decode_intervals(&intervals, dot_len as f32);
+        assert_eq!(text, "CQ DE");
+    }
+
+    #[test]
+    fn ghost_single_element_between_letters_is_suppressed() {
+        // Real word "AN" = .-|-. with a noise spike of ~0.4*dot_len in the
+        // middle of the letter gap. The noise spike survives interval
+        // collection (it's above the merge_short_blips debounce) but is too
+        // short to score as a confident dot, so the single-element ghost it
+        // would have produced should be dropped by the emit-floor check.
+        let dot_len: usize = 40;
+        let spike = (dot_len as f32 * 0.40) as usize; // noise blip
+        let intervals = vec![
+            (true, dot_len),      // .
+            (false, dot_len),     // elem gap
+            (true, 3 * dot_len),  // -
+            (false, 3 * dot_len), // letter gap
+            (true, spike),        // <-- noise spike; should be suppressed
+            (false, 3 * dot_len), // letter gap
+            (true, 3 * dot_len),  // -
+            (false, dot_len),     // elem gap
+            (true, dot_len),      // .
+        ];
+        let text = soft_decode_intervals(&intervals, dot_len as f32);
+        // Without ghost suppression we'd see "AEN"; with it we get "AN".
+        assert_eq!(text, "AN", "got {text}");
+    }
+
+    #[test]
+    fn merge_collapses_blip_inside_long_on() {
+        // A 1-sample dropout in the middle of a long key-down should be
+        // absorbed so the dash is not split into two dots.
+        let intervals = vec![(true, 100usize), (false, 1), (true, 100)];
+        let merged = merge_short_blips(&intervals, 10);
+        assert_eq!(merged, vec![(true, 201)]);
+    }
+
+    #[test]
+    fn merge_collapses_blip_inside_long_off() {
+        let intervals = vec![(false, 100usize), (true, 1), (false, 100)];
+        let merged = merge_short_blips(&intervals, 10);
+        assert_eq!(merged, vec![(false, 201)]);
+    }
+}
+
+#[cfg(test)]
+mod end_to_end_synth_tests {
+    use crate::decode_samples;
+
+    fn morse_for(ch: char) -> Option<&'static str> {
+        Some(match ch {
+            'A' => ".-",
+            'C' => "-.-.",
+            'D' => "-..",
+            'E' => ".",
+            'Q' => "--.-",
+            'W' => ".--",
+            '1' => ".----",
+            _ => return None,
+        })
+    }
+
+    /// Render a morse text to in-memory samples at the given WPM and pitch,
+    /// optionally adding deterministic pseudo-random noise scaled by
+    /// `noise_amp` (relative to the +/-1.0 signal envelope). Returns
+    /// (samples, sample_rate).
+    fn synth_samples(text: &str, wpm: f32, pitch_hz: f32, noise_amp: f32) -> (Vec<f32>, u32) {
+        use std::f32::consts::PI;
+        let sample_rate: u32 = 12000;
+        let dot_s = 1.2 / wpm;
+        let dash_s = 3.0 * dot_s;
+        let elem_gap_s = dot_s;
+        let letter_gap_s = 3.0 * dot_s;
+        let word_gap_s = 7.0 * dot_s;
+        let mut samples: Vec<f32> = Vec::new();
+        let lead_silence = (0.5 * sample_rate as f32) as usize;
+        samples.extend(std::iter::repeat_n(0.0, lead_silence));
+
+        let mut phase = 0.0f32;
+        let phase_step = 2.0 * PI * pitch_hz / sample_rate as f32;
+        let emit_tone = |samples: &mut Vec<f32>, dur_s: f32, phase: &mut f32| {
+            let n = (dur_s * sample_rate as f32) as usize;
+            for _ in 0..n {
+                samples.push(0.5 * phase.sin());
+                *phase += phase_step;
+            }
+        };
+        let emit_silence = |samples: &mut Vec<f32>, dur_s: f32| {
+            let n = (dur_s * sample_rate as f32) as usize;
+            samples.extend(std::iter::repeat_n(0.0, n));
+        };
+
+        let words: Vec<&str> = text.split_whitespace().collect();
+        for (wi, word) in words.iter().enumerate() {
+            let chars: Vec<char> = word.chars().collect();
+            for (ci, ch) in chars.iter().enumerate() {
+                let morse = morse_for(ch.to_ascii_uppercase()).expect("unsupported char");
+                for (ei, el) in morse.chars().enumerate() {
+                    if ei > 0 {
+                        emit_silence(&mut samples, elem_gap_s);
+                    }
+                    let dur = if el == '.' { dot_s } else { dash_s };
+                    emit_tone(&mut samples, dur, &mut phase);
+                }
+                if ci + 1 < chars.len() {
+                    emit_silence(&mut samples, letter_gap_s);
+                }
+            }
+            if wi + 1 < words.len() {
+                emit_silence(&mut samples, word_gap_s);
+            }
+        }
+        emit_silence(&mut samples, 0.5);
+
+        if noise_amp > 0.0 {
+            // Cheap deterministic xorshift32 PRNG (no extra dependency).
+            let mut state: u32 = 0xC0FFEE_u32;
+            for s in samples.iter_mut() {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                let f = (state as f32 / u32::MAX as f32) * 2.0 - 1.0;
+                *s += noise_amp * f;
+            }
+        }
+
+        (samples, sample_rate)
+    }
+
+    #[test]
+    fn synth_cq_de_w1aw_at_18wpm_with_low_noise() {
+        let (samples, sr) = synth_samples("CQ DE W1AW", 18.0, 700.0, 0.05);
+        let decoded = decode_samples(&samples, sr).unwrap_or_default();
+        let normalized: String = decoded
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == ' ')
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            normalized.contains("CQ") && normalized.contains("DE") && normalized.contains("W1AW"),
+            "expected CQ DE W1AW in {normalized:?}"
+        );
+        let single_char_words = normalized
+            .split_whitespace()
+            .filter(|w| w.chars().count() == 1)
+            .count();
+        assert!(
+            single_char_words <= 1,
+            "too many ghost single-char words in {normalized:?}"
+        );
     }
 }
