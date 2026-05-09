@@ -640,6 +640,11 @@ enum Cmd {
         /// pace. Useful for tests and one-shot batch decodes.
         #[arg(long)]
         no_realtime: bool,
+        /// Per-region structured trace output (NDJSON). Path of `-`
+        /// emits to stderr. When omitted, falls back to the
+        /// `DITDAH_TRACE_PATH` environment variable. Default: disabled.
+        #[arg(long)]
+        trace: Option<String>,
         /// Force a specific WPM for all per-region decoding. Mirrors the
         /// `wa6mow-diag` CLI: when set, both the auto-WPM and the
         /// whole-buffer warm-start seed are bypassed and every region is
@@ -1248,6 +1253,7 @@ fn run_cli() -> Result<()> {
             threshold_factor,
             pad_s,
             no_realtime,
+            trace,
             force_wpm,
         } => run_stream_region_file(
             &file,
@@ -1259,6 +1265,7 @@ fn run_cli() -> Result<()> {
             threshold_factor,
             pad_s,
             !no_realtime,
+            trace,
             force_wpm,
         ),
         Cmd::ProbeFisher {
@@ -5370,6 +5377,7 @@ fn run_stream_region_file(
     threshold_factor: f32,
     pad_s: f32,
     realtime: bool,
+    trace_path: Option<String>,
     force_wpm: Option<f32>,
 ) -> Result<()> {
     use cw_decoder_poc::region_stream::RegionStreamConfig;
@@ -5395,6 +5403,25 @@ fn run_stream_region_file(
         stable_latency_s,
     };
     let mut streamer = RegionStreamer::with_config(sr, cfg);
+
+    // Resolve trace sink: explicit --trace beats DITDAH_TRACE_PATH env.
+    let trace_target = trace_path.or_else(|| {
+        std::env::var("DITDAH_TRACE_PATH")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+    });
+    let mut trace_sink = match trace_target {
+        Some(t) if t == "-" => Some(TraceSink::Stderr),
+        Some(t) => match std::fs::File::create(&t) {
+            Ok(f) => Some(TraceSink::File(std::io::BufWriter::new(f))),
+            Err(e) => {
+                eprintln!("[trace] cannot open {t}: {e} — disabling trace");
+                None
+            }
+        },
+        None => None,
+    };
+    let mut next_trace_index: usize = 0;
 
     // Compute the warm-start WPM seed once on the fully-loaded buffer
     // for diagnostics. This is the same value the streaming pre-pass
@@ -5475,6 +5502,12 @@ fn run_stream_region_file(
         if cursor.saturating_sub(last_decode_cursor) >= decode_every_samples {
             last_decode_cursor = cursor;
             let committed = streamer.try_commit();
+            emit_region_traces(
+                trace_sink.as_mut(),
+                &streamer,
+                &committed,
+                &mut next_trace_index,
+            );
             let t = started.elapsed().as_secs_f32();
             let transcript = streamer.transcript_with_provisional();
             emit_region_transcript(emitter.as_mut(), t, &transcript, &committed);
@@ -5487,6 +5520,12 @@ fn run_stream_region_file(
 
     // Final commit: force-flush any in-flight regions.
     let final_committed = streamer.flush();
+    emit_region_traces(
+        trace_sink.as_mut(),
+        &streamer,
+        &final_committed,
+        &mut next_trace_index,
+    );
     let t = started.elapsed().as_secs_f32();
     emit_region_transcript(emitter.as_mut(), t, streamer.transcript(), &final_committed);
 
@@ -5538,6 +5577,66 @@ fn emit_region_transcript(
                 t, r.start_s, r.end_s, r.text
             );
         }
+    }
+}
+
+/// Trace sink for `--trace` / `DITDAH_TRACE_PATH` per-region NDJSON.
+enum TraceSink {
+    File(std::io::BufWriter<std::fs::File>),
+    Stderr,
+}
+
+impl TraceSink {
+    fn write_line(&mut self, value: &serde_json::Value) {
+        use std::io::Write;
+        match self {
+            TraceSink::File(w) => {
+                let _ = serde_json::to_writer(&mut *w, value);
+                let _ = w.write_all(b"\n");
+                let _ = w.flush();
+            }
+            TraceSink::Stderr => {
+                let stderr = std::io::stderr();
+                let mut handle = stderr.lock();
+                let _ = serde_json::to_writer(&mut handle, value);
+                let _ = handle.write_all(b"\n");
+                let _ = handle.flush();
+            }
+        }
+    }
+}
+
+fn emit_region_traces(
+    sink: Option<&mut TraceSink>,
+    streamer: &cw_decoder_poc::region_streamer::RegionStreamer,
+    just_committed: &[cw_decoder_poc::region_streamer::CommittedRegion],
+    next_index: &mut usize,
+) {
+    let Some(sink) = sink else {
+        return;
+    };
+    if just_committed.is_empty() {
+        return;
+    }
+    eprintln!("[trace] writing {} regions", just_committed.len());
+    let buffer = streamer.buffer();
+    let sr = streamer.sample_rate();
+    let cfg = streamer.region_config().clone();
+    for region in just_committed {
+        let pitch_hz = region.pitch_hz.unwrap_or(0.0);
+        let value = cw_decoder_poc::region_trace::build_region_trace(
+            buffer,
+            sr,
+            &cfg,
+            *next_index,
+            region.start_s,
+            region.end_s,
+            pitch_hz,
+            &region.text,
+            "baseline",
+        );
+        sink.write_line(&value);
+        *next_index += 1;
     }
 }
 
