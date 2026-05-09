@@ -1,184 +1,134 @@
-# exp(elem-gate): per-element confidence gating in ditdah
+# ARRL CW Corpus — Index-Driven Parallel Harvester
 
-Branch: `u/randy/cw-exp-elem-gate`
-Base: `main` @ `bc4580e`
-Status: **PARTIAL PASS — recommend MERGE**
+**Branch:** `u/randy/cw-exp-arrl-corpus-fast`
+**Predecessor:** `u/randy/cw-exp-arrl-corpus` (serial pipeline, replaced by this work)
 
-## Approach
+## TL;DR
 
-Inside `decode_with_params_inner` in
-`experiments/cw-decoder/vendor/ditdah/src/decoder.rs`, before self-calibration
-and the per-sample walk, we now score every detected on-interval against the
-**local** envelope noise floor:
+Replaced the prior agent's blind date-probing serial pipeline with an
+**index-driven parallel harvester**. Result: **6.2 minutes wall time** for
+**200 sessions × 4 speeds = 1576 labeled chunks / 17.8 hours of clean CW
+audio**, vs the prior pipeline's 80+ minutes for 2 sessions.
 
-1. Collect raw on-intervals with their `(start, length)` positions
-   (new helper `get_raw_on_intervals_with_positions`).
-2. For each on-interval, compute element power = `mean(env[i]²)` over the
-   interval.
-3. For each on-interval, compute the local noise floor as the **20th
-   percentile** of `env[i]²` over a 1.5 s window centered on the interval,
-   restricted to samples that are NOT inside *any* detected on-interval (so
-   ghosts never score against other ghosts — only against true background).
-4. SNR_dB = 10·log10(elem_power / max(noise, ε)).
-5. If SNR < `DITDAH_ELEM_GATE_DB` (default **12.0 dB**, env-var override
-   accepts a number or `"off"` to disable), zero out that on-interval's
-   samples in a working copy of the envelope.
-6. Re-derive on/off intervals from the masked envelope and run the unchanged
-   debounced per-sample walk + dit/dah/letter/word logic. Dropped on-intervals
-   become "off", which automatically merges adjacent gaps — converting a
-   spurious letter break into a longer letter or word gap.
+Speedup: roughly **600× chunks/minute throughput**.
 
-This is fundamentally different from the snr-gate experiment (which gated
-entire audio windows by pitch power and killed legit weak elements alongside
-the ghosts) and from the viterbi experiment (which uses Gaussian length
-priors but no noise context at all).
+## Pipeline overview
 
-## Bench results
-
-Run via `python bench.py C:\Users\randy\Git\qsoripper-experiments\elem-gate`
-against `data\cw-samples\training-set-a\*.mp3` (shared with the qsoripper
-repo).
-
-| Sample                  | Baseline CER | After CER | Δ CER  | Baseline WER | After WER | Recall |
-| ----------------------- | -----------: | --------: | -----: | -----------: | --------: | -----: |
-| arrl-13wpm-farnsworth   |        0.385 |     0.385 | +0.000 |        0.333 |     0.333 |   1.00 |
-| arrl-20wpm              |        0.414 |     0.414 | +0.000 |        0.333 |     0.333 |   1.00 |
-| arrl-30wpm              |        0.056 |     0.056 | +0.000 |        0.100 |     0.100 |   1.00 |
-| arrl-40wpm              |        0.052 |     0.052 | +0.000 |        0.077 |     0.077 |   1.00 |
-| **cq-pota-aa6pw**       |    **0.321** | **0.167** | −0.154 |        0.667 |     0.400 | **0.40** |
-| cq-pota-de-wa6mow       |        0.175 |     0.175 | +0.000 |        0.600 |     0.600 |   0.67 |
-| **MEAN**                |    **0.234** | **0.208** | −0.026 |        0.352 |     0.307 |        |
-
-## Acceptance
-
-| Criterion                                              | Result |
-| ------------------------------------------------------ | -----: |
-| aa6pw CER ≤ 0.22                                       | ✅ 0.167 (matches viterbi exactly) |
-| aa6pw recall ≥ 0.60                                    | ❌ stuck at 0.40 — **data ceiling**, see negative findings |
-| No regression > 0.02 CER on any other sample           | ✅ all unchanged to 3 decimals |
-| Mean CER ≤ baseline 0.234                              | ✅ 0.208 |
-
-## Tuning sweep
-
-| `DITDAH_ELEM_GATE_DB` | aa6pw CER | mean CER | Notes |
-| ---: | ---: | ---: | --- |
-| off (baseline) | 0.321 | 0.234 | identical to main |
-|  6 (initial guess) | 0.321 | 0.234 | gate doesn't fire — ghosts well above local floor |
-|  8 | 0.321 | 0.234 | same |
-|  9 | 0.321 | 0.234 | same |
-| 10 | 0.321 | 0.234 | same |
-| 11 | 0.321 | 0.234 | same |
-| **12** | **0.167** | **0.208** | sweet spot — ghosts gated, legit elements survive |
-| 13 | 0.393 | 0.246 | starts dropping legit weak dits, REGRESSION |
-| 14 | 0.309 | 0.232 | worse than 12 dB on aa6pw |
-| 15 | 0.286 | 0.228 | still worse than 12 dB on aa6pw |
-
-The gate has a tight cliff between 11 dB (no effect) and 13 dB (over-pruning).
-12.0 dB is the unique optimum across the bench set.
-
-## Honest negative findings
-
-1. **Recall is data-bound, not algorithm-bound.** The aa6pw recall stays at
-   0.40 across the whole sweep including baseline. The denominator is the
-   number of unique words in the truth file; the numerator is the count of
-   those words that appear *exactly* in the hypothesis. Several truth words
-   simply aren't audible/decodable in the recording at any SNR threshold, so
-   no element-level gating tactic can lift this score. Acceptance asked for
-   ≥ 0.60 — **not achievable on this sample with this metric**, regardless of
-   approach. Viterbi (per the prior report) also tops out around the same
-   recall while achieving the same 0.167 CER.
-
-2. **The gate does nothing on truly clean audio.** ARRL 13/20/30/40 WPM
-   samples show *zero* delta — a desirable property (no regressions) but it
-   confirms the mechanism only helps when the local noise floor is high
-   enough to make ghosts marginal. On pure tone code-practice audio the
-   noise floor is several orders of magnitude below any real element.
-
-3. **The gate does nothing on the wa6mow POTA sample.** wa6mow is the other
-   noisy real-world sample; its CER is unchanged. Inspection suggests its
-   errors are not ghost-character cascades but pitch-tracking / fading
-   issues that need a different fix (e.g., narrowed AGC window or
-   per-region pitch re-detection).
-
-4. **Required updating one pre-existing test.**
-   `region_stream::tests::decode_region_stream_returns_no_text_on_colored_hiss_700hz`
-   had a "lock-in" precondition that the raw region slice on colored hiss
-   contained `*` (BAD_COPY_MARKER), so the downstream
-   `is_low_confidence_region_text` filter had something to drop. With
-   element gating on, the masked envelope produces a long stream of
-   *valid* (but meaningless) T/E/M letters instead of unknown morse
-   clusters. The downstream filter still rejects the entire region as
-   low-confidence, so the operator-facing contract (`result.text` is
-   empty) holds. The test was updated to drop the precondition assertion
-   and keep the end-to-end check. The test comment in the original code
-   explicitly anticipated this kind of update ("If a future change resolves
-   unknown clusters without strengthening the deeper rejection, this
-   assertion fires and forces a conscious update.").
-
-## Why this works where snr-gate failed
-
-The snr-gate experiment computed pitch power over fixed windows and gated
-entire windows. Ghosts in cq-pota-aa6pw share the legit operator's pitch,
-so window-level pitch power can't separate them. **This experiment instead
-gates each candidate element against the local envelope-floor**, which IS
-different between a real element (riding above a temporary lull in the
-band noise) and a ghost (a brief mid-region SNR-drop excursion across the
-threshold). The ghost's "element power" is only marginally above the
-surrounding background; the 12 dB gate filters them out.
-
-## Why this works where viterbi-only would not (and why both could compose)
-
-Viterbi uses Gaussian priors over element length distributions and HMM
-emission probabilities. It correctly classifies a *detected* element but
-has no way to drop a noise-induced false on-interval. Element-gate runs
-**before** any classification. The two are complementary: elem-gate
-removes false positives at the front, viterbi cleans up classification on
-what remains. A future experiment could compose them (apply element-gate
-inside the viterbi branch).
-
-## Files changed
-
-- `experiments/cw-decoder/vendor/ditdah/src/decoder.rs`
-  - New constants `ELEM_GATE_DEFAULT_DB`, `ELEM_GATE_NOISE_WINDOW_S`.
-  - New helpers `get_raw_on_intervals_with_positions`,
-    `compute_element_snrs_db`, `elem_gate_threshold_db`.
-  - `decode_with_params_inner` masks low-SNR on-intervals before
-    calibration / per-sample walk.
-  - 4 new unit tests in `mod elem_gate_tests`:
-    - `snr_is_high_for_clean_signal_against_quiet_floor`
-    - `snr_drops_low_for_ghost_against_noisy_background`
-    - `noise_floor_excludes_other_on_intervals`
-    - `raw_on_intervals_with_positions_round_trip`
-- `experiments/cw-decoder/src/region_stream.rs`
-  - One pre-existing colored-hiss test updated to drop a stale lock-in
-    assertion while preserving the operator-facing contract.
-
-## Validation log
+Five stages, each idempotent and resumable. See
+`experiments/cw-decoder/scripts/arrl_corpus/README.md` for full per-stage
+documentation and CLI flags.
 
 ```
-cargo fmt --all -- --check                  # clean
-cargo clippy --release --all-targets -- -D warnings  # clean
-cargo build --release                       # clean
-cargo test --release -p ditdah --quiet      # 14/14 pass (8 lib + 1 + 3 + 2)
-cargo test --release --lib --quiet          # 171/172 pass (only pre-existing
-                                            #   harvest::w1aw test fails — needs
-                                            #   untracked data folder, predates
-                                            #   this experiment)
-python bench.py <worktree>                  # results above
+Stage 0  build_index           1 HTTP GET per speed → index.jsonl  (~8s for 4 speeds)
+Stage 1  download_parallel     aiohttp + Semaphore(8)              (3 min for 200 files × 2)
+Stage 2  trim_parallel         ProcessPool, ffmpeg + Goertzel      (11 s for 200 files)
+Stage 3  align_parallel        ProcessPool, N × cw-decoder.exe     (2.85 min for 200)
+Stage 4  manifest              concat per-session JSONL            (1 s)
+Stage 5  report                quality_report.md w/ perf section   (1 s)
 ```
 
-## Recommendation
+The big architectural win is Stage 0. ARRL bulletins are posted bi-weekly
+and every available MP3 + truth file is listed in plain HTML on the per-speed
+archive page (`https://www.arrl.org/{N}-wpm-code-archive`). Parsing that HTML
+once gives the full ground-truth session index per speed, eliminating ~9000
+blind HEAD requests the prior agent made.
 
-**MERGE.** The change:
+## Comparison vs prior `arrl-corpus` serial pipeline
 
-- Hits the CER acceptance target on aa6pw exactly (0.167), matching the
-  viterbi experiment's headline result.
-- Has zero impact on the four ARRL clean samples and on wa6mow.
-- Reduces mean CER from 0.234 to 0.208.
-- Is gated by a single env var (`DITDAH_ELEM_GATE_DB=off` disables) so
-  any unforeseen regression on live OTA traffic can be patched out
-  without a redeploy.
-- Composes cleanly with viterbi if both are eventually wanted.
+| Metric | Prior (serial, blind probe) | This (index-driven, parallel) |
+|:------|:---------------------------:|:-----------------------------:|
+| Sessions completed in pilot run | 2 | 200 |
+| Wall time | 80+ min | **6.2 min** |
+| Chunks produced | 17 | **1576** |
+| Audio hours labeled | 0.25 h | **17.84 h** |
+| Per-session avg time | ~40 min | **~1.9 s** |
+| HTTP requests for discovery | ~9000 HEADs | 4 GETs |
+| Discovery method | guess every Mon/Wed/Fri date | parse archive HTML |
+| Concurrency | none (single requests session) | 8 download / 8 align |
 
-The recall acceptance miss is a metric ceiling, not an algorithmic miss —
-the same ceiling viterbi hits.
+## Pilot run output
+
+```
+================ PIPELINE SUMMARY ================
+  build_index       8.4s
+  download        180.0s   workers=8, limit=50/speed
+  trim             11.3s   workers=8
+  align           170.9s   workers=8
+  manifest          1.0s
+  report            1.2s
+  TOTAL           372.8s
+  Sessions:      200
+  Chunks:        1576
+==================================================
+```
+
+Per-speed breakdown (from `quality_report.md`):
+
+| WPM | Sessions | Trimmed (h) | Chunks | Audio kept (h) | Median align CER |
+|---:|---:|---:|---:|---:|---:|
+| 15 | 50 | ~7.5 | **0** | 0.00 | n/a — see "limitations" |
+| 20 | 50 | ~8.0 | ~450 | ~5.4 | ~0.0023 |
+| 25 | 50 | ~8.4 | ~530 | ~6.3 | ~0.0024 |
+| 30 | 50 | ~8.6 | ~596 | ~6.1 | ~0.0017 |
+
+(Exact numbers in the committed `quality_report.md`.)
+
+## Honest assessment
+
+**What worked well**
+
+- Index parsing is robust: 858–1146 sessions discovered across the four pilot
+  speeds (the ARRL site uses both server-relative `/files/...` hrefs and
+  fully-qualified `http://www.arrl.org/files/...` hrefs depending on the
+  speed page; the regex tolerates both).
+- Parallel download saturates the polite 8-connection cap at ~1.1 files/s.
+- Alignment scales near-linearly with `align-workers`. On 8 cores, 200
+  sessions align in ~3 minutes.
+- Resumability is real: re-running `run.py` after a kill skipped all 200
+  cached entries in <2 seconds total.
+
+**What didn't work / known issues**
+
+- **15 WPM yields zero chunks.** All 50 sessions hit the
+  whole-file-CER drop threshold (CER ~0.30). The current `cw-decoder` Rust
+  binary doesn't lock onto the slower keying — the decoded transcript is
+  garbled and alignment fails. Audio + truth are fine; this is purely a
+  decoder-side capability gap. The pipeline correctly classifies these as
+  `whole-file-poor` / `no-chunks` and continues. **Recommendation:** tune the
+  decoder's WPM detection range or feed 15 WPM through a future model
+  pretrained on the 20/25/30 corpus.
+- 5/7.5/10/13 WPM not exercised in this pilot. The prior agent reported the
+  archive has many error-page entries at those speeds; opt in via
+  `--speeds 5,7.5,10,13,15,18,20,25,30,35,40` once a slower-tolerant decoder
+  is available.
+- ARRL CDN occasionally serves an image/* response for missing files. The
+  downloader detects this (`error_page` status in `*.dl.json`) and continues
+  rather than writing a corrupt file. None observed in this pilot.
+
+## Recommendations
+
+1. **Use this corpus for pretraining only** — studio-clean source, single
+   pitch (~700 Hz), bulletin vocabulary. Always combine with augmentation
+   (additive noise, pitch jitter, QSB) for any model intended for on-air use.
+2. **Hold out by date for validation** — entire sessions are highly
+   correlated within themselves; never split a single session across
+   train/eval.
+3. **Scale to full archive** by dropping `--limit-per-speed`. With the index
+   parser, a full ~3000-session run is bandwidth-bound (bytes from arrl.org)
+   and would take ~45–60 minutes wall time on the same hardware.
+4. **Fix 15 WPM (decoder side).** The 50 downloaded 15 WPM sessions are now
+   cached on disk; once the decoder lock range is widened, just re-run
+   `run.py --skip-stages 0,1,2 --speeds 15` and the alignment stage will pick
+   them up automatically.
+5. **Add 18 WPM** — it's between two known-good speeds and will likely
+   produce another ~600 chunks for cheap.
+
+## File layout
+
+- Pipeline code: `experiments/cw-decoder/scripts/arrl_corpus/`
+- Generated raw + trimmed + chunked WAVs: `data/cw-samples/arrl-archive/`
+  (gitignored — kept locally; ~5 GB after pilot run)
+- Committed artifacts:
+  - `experiments/cw-decoder/scripts/arrl_corpus/sample_manifest.jsonl` (20 chunks)
+  - `experiments/cw-decoder/scripts/arrl_corpus/quality_report.md`
+  - this file (`EXPERIMENT_REPORT.md`)
