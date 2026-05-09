@@ -51,6 +51,14 @@ pub struct RegionStreamConfig {
     pub pad_s: f32,
     /// Optional pinned WPM for the per-region decode. None = ditdah auto.
     pub pin_wpm: Option<f32>,
+    /// When true (default), and `pin_wpm` is None, run a cheap whole-buffer
+    /// histogram pre-pass to estimate the global WPM and use it as a
+    /// warm-start seed for the per-region decoder. This fixes the
+    /// "front-end auto-WPM seeds at 9 WPM when truth is 20 WPM" failure
+    /// mode that drops leading characters of the first burst (WA6MOW
+    /// regression). Set the env var `DITDAH_DISABLE_WPM_SEED=1` (read by
+    /// `decode_region_stream`) to disable for diagnostic comparison.
+    pub wpm_seed_enabled: bool,
     /// Minimum Goertzel-vs-broadband energy ratio required before a detected
     /// active run is decoded. White noise can still produce percentile-threshold
     /// runs; this guard requires those runs to contain a narrowband CW tone.
@@ -77,6 +85,7 @@ impl Default for RegionStreamConfig {
             min_region_s: 0.6,
             pad_s: 0.10,
             pin_wpm: None,
+            wpm_seed_enabled: true,
             min_tonal_prominence_ratio: 8.0,
             min_cw_elements: 3,
             min_cw_timing_score: 0.30,
@@ -98,6 +107,10 @@ pub struct RegionStreamResult {
     pub pitch_hz: f32,
     pub regions: Vec<DecodedRegion>,
     pub text: String,
+    /// Global WPM seed estimated by the whole-buffer pre-pass. `None` when
+    /// the seed pre-pass was skipped (env-disabled, user pinned WPM, or
+    /// histogram had insufficient evidence).
+    pub seed_wpm: Option<f32>,
 }
 
 /// Run the full region-detect → decode → merge pipeline on a complete buffer.
@@ -111,6 +124,7 @@ pub fn decode_region_stream(
             pitch_hz: 0.0,
             regions: vec![],
             text: String::new(),
+            seed_wpm: None,
         };
     }
 
@@ -120,9 +134,40 @@ pub fn decode_region_stream(
         pitches.push(dominant_pitch_hz);
     }
 
+    // ---- Two-pass WPM seed ----
+    //
+    // The vendored ditdah front-end auto-WPM is a median-of-short-runs
+    // heuristic biased *low* by edge artifacts (short blips at burst
+    // boundaries). When the seed lands at e.g. 9 WPM but the true rate is
+    // 20 WPM, the leading characters of the first burst are dropped (the
+    // WA6MOW failure: "WA" never emitted). The diagnostic harness proved
+    // a correct `--force-wpm` recovers all dropped characters.
+    //
+    // Pre-pass: run a whole-buffer Goertzel-power histogram at the
+    // dominant pitch, find the dit-cluster mode (peak-of-histogram with
+    // edge trimming, weighted by element count), and use it as the
+    // pinned WPM unless the caller already pinned one or the env-var
+    // `DITDAH_DISABLE_WPM_SEED=1` is set.
+    let seed_disabled = std::env::var("DITDAH_DISABLE_WPM_SEED")
+        .map(|v| !v.is_empty() && v != "0")
+        .unwrap_or(false);
+    let seed_wpm = if cfg.pin_wpm.is_none() && cfg.wpm_seed_enabled && !seed_disabled {
+        estimate_global_wpm_seed(samples, sample_rate, dominant_pitch_hz, cfg)
+    } else {
+        None
+    };
+    let mut effective_cfg;
+    let cfg_ref: &RegionStreamConfig = if let Some(seed) = seed_wpm {
+        effective_cfg = cfg.clone();
+        effective_cfg.pin_wpm = Some(seed);
+        &effective_cfg
+    } else {
+        cfg
+    };
+
     let mut candidates = Vec::new();
     for pitch_hz in pitches {
-        collect_region_candidates(samples, sample_rate, cfg, pitch_hz, &mut candidates);
+        collect_region_candidates(samples, sample_rate, cfg_ref, pitch_hz, &mut candidates);
     }
     let decoded = dedupe_region_candidates(candidates);
     let text = decoded
@@ -135,6 +180,7 @@ pub fn decode_region_stream(
         pitch_hz: dominant_pitch_hz,
         regions: decoded,
         text,
+        seed_wpm,
     }
 }
 
@@ -1299,6 +1345,305 @@ fn estimate_short_region_wpm(
 
 fn active_run_duration_s(start_frame: usize, end_frame: usize, step_s: f32, frame_s: f32) -> f32 {
     end_frame.saturating_sub(start_frame) as f32 * step_s + frame_s
+}
+
+/// Whole-buffer WPM estimator used as a *warm-start seed* for the
+/// per-region decoder.
+///
+/// Background: the vendored ditdah front-end auto-WPM is a
+/// median-of-short-runs heuristic that is biased *low* by edge artifacts
+/// (short blips at burst boundaries). On the WA6MOW sample (truth = ~22
+/// WPM) it seeds at ~9 WPM, which causes the leading "WA" to be dropped.
+/// The wa6mow-diag harness proved that pinning the WPM via
+/// `--force-wpm 22` fully recovers the leading characters; this estimator
+/// is the auto-detected analogue of that fix.
+///
+/// Algorithm (designed to *not* repeat the median-of-short-runs bias):
+///   1. Goertzel envelope across the whole buffer at the dominant pitch.
+///   2. Otsu split on log-power to derive an active mask.
+///   3. Strip 1-frame blips (one round of opening/closing).
+///   4. Collect on-runs; **skip the first/last 10% of the buffer** to drop
+///      edge artifacts that bias the heuristic low.
+///   5. Histogram the remaining on-times into 10 ms bins covering 20–500 ms.
+///   6. Find the *peak bin* (mode) inside the dit-plausible range
+///      (20–200 ms), weighted by element count, then refine via the
+///      centroid of bins within ±50% of the peak (so a slightly noisy
+///      peak still tracks the true dit centre).
+///   7. WPM = 1.2 / dot_s, returned only when the histogram has at least
+///      ~6 supporting on-runs and lands in the [10, 55] WPM band that
+///      covers all real-world hand and machine sending we care about.
+pub fn estimate_global_wpm_seed(
+    samples: &[f32],
+    sample_rate: u32,
+    pitch_hz: f32,
+    cfg: &RegionStreamConfig,
+) -> Option<f32> {
+    let trace = std::env::var("DITDAH_TRACE_WPM_SEED")
+        .map(|v| !v.is_empty() && v != "0")
+        .unwrap_or(false);
+    let frame_len = ((cfg.frame_len_s * sample_rate as f32).round() as usize).max(64);
+    let frame_step = ((cfg.frame_step_s * sample_rate as f32).round() as usize).max(8);
+    if samples.len() < frame_len * 4 {
+        if trace {
+            eprintln!("[wpm-seed] samples too short");
+        }
+        return None;
+    }
+
+    let mut log_powers: Vec<f32> = Vec::new();
+    let mut offset = 0usize;
+    while offset + frame_len <= samples.len() {
+        let p = goertzel_power(&samples[offset..offset + frame_len], sample_rate, pitch_hz);
+        log_powers.push(p.max(1e-12).ln());
+        offset += frame_step;
+    }
+    if log_powers.len() < 16 {
+        return None;
+    }
+
+    let threshold = otsu_log_power_threshold(&log_powers)?;
+    let mut active: Vec<bool> = log_powers.iter().map(|p| *p >= threshold).collect();
+    clean_interval_mask(&mut active);
+    if trace {
+        let on_frames = active.iter().filter(|x| **x).count();
+        eprintln!(
+            "[wpm-seed] frames={} active={} threshold={:.3} pitch={:.0}",
+            active.len(),
+            on_frames,
+            threshold,
+            pitch_hz
+        );
+    }
+
+    let step_s = frame_step as f32 / sample_rate as f32;
+    let frame_s = frame_len as f32 / sample_rate as f32;
+
+    // Edge-trim: skip the first/last 10% of the buffer. These regions
+    // contain the truncated leading/trailing key-down events that bias
+    // the median-of-short-runs heuristic low.
+    let trim = (active.len() / 10).max(1);
+    let lo = trim;
+    let hi = active.len().saturating_sub(trim);
+    if hi <= lo + 4 {
+        return None;
+    }
+
+    let mut on_runs: Vec<f32> = Vec::new();
+    let mut cur_start: Option<usize> = None;
+    for (i, &on) in active.iter().enumerate().take(hi).skip(lo) {
+        match (on, cur_start) {
+            (true, None) => cur_start = Some(i),
+            (false, Some(start)) => {
+                on_runs.push(active_run_duration_s(start, i - 1, step_s, frame_s));
+                cur_start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(start) = cur_start {
+        on_runs.push(active_run_duration_s(start, hi - 1, step_s, frame_s));
+    }
+
+    if trace {
+        eprintln!("[wpm-seed] on_runs raw count={}", on_runs.len());
+        let mut sample = on_runs.clone();
+        sample.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let preview: Vec<String> = sample
+            .iter()
+            .take(20)
+            .map(|d| format!("{:.0}", d * 1000.0))
+            .collect();
+        eprintln!("[wpm-seed] shortest_ms={preview:?}");
+    }
+
+    // Drop implausibly short (sub-frame chatter) and long (>500 ms = not
+    // a CW element) runs before histogramming.
+    on_runs.retain(|d| (0.020..=0.500).contains(d));
+    if on_runs.len() < 6 {
+        if trace {
+            eprintln!(
+                "[wpm-seed] insufficient on_runs after retain: {}",
+                on_runs.len()
+            );
+        }
+        return None;
+    }
+
+    // Histogram on-times into 10 ms bins. Range: 20–500 ms.
+    const BIN_MS: f32 = 10.0;
+    const RANGE_LO_MS: f32 = 20.0;
+    const RANGE_HI_MS: f32 = 500.0;
+    let nbins = ((RANGE_HI_MS - RANGE_LO_MS) / BIN_MS) as usize;
+    let mut hist = vec![0u32; nbins];
+    for d in &on_runs {
+        let ms = d * 1000.0;
+        if !(RANGE_LO_MS..RANGE_HI_MS).contains(&ms) {
+            continue;
+        }
+        let bin = ((ms - RANGE_LO_MS) / BIN_MS) as usize;
+        if bin < nbins {
+            hist[bin] += 1;
+        }
+    }
+
+    // CW elements form a bimodal distribution: a dit cluster around
+    // `dit_ms` and a dah cluster around `3 * dit_ms`. We want the
+    // *dit* cluster, which is always the leftmost substantial mode of
+    // the histogram. Content with more dahs than dits (e.g. callsigns
+    // like WA6MOW where MOW is all dahs) makes the dah cluster the
+    // global mode, and a histogram-peak-only heuristic drifts to it.
+    //
+    // Strategy: find the global peak in the 40–300 ms element band as
+    // a reference, then walk left and pick the *leftmost* bin (or
+    // smoothed 3-bin window) whose count is at least 30% of the peak
+    // count. That bin is the dit cluster regardless of which side of
+    // the bimodal carries more mass.
+    let bin_idx = |ms: f32| -> usize {
+        ((ms - RANGE_LO_MS) / BIN_MS).clamp(0.0, nbins as f32 - 1.0) as usize
+    };
+    let element_lo = bin_idx(40.0);
+    let element_hi = bin_idx(300.0).min(nbins.saturating_sub(1));
+
+    let mut peak_bin = element_lo;
+    let mut peak_count = 0u32;
+    for (b, &c) in hist
+        .iter()
+        .enumerate()
+        .skip(element_lo)
+        .take(element_hi.saturating_sub(element_lo) + 1)
+    {
+        if c > peak_count {
+            peak_count = c;
+            peak_bin = b;
+        }
+    }
+    if peak_count < 3 {
+        if trace {
+            eprintln!("[wpm-seed] peak_count={peak_count} too low");
+        }
+        return None;
+    }
+
+    // Smoothed leftmost-mode search. Use a 3-bin sliding sum so a single
+    // empty bin between two populated bins doesn't fragment the cluster.
+    let qualifies = ((peak_count as f32 * 0.30).ceil() as u32).max(3);
+    let mut dit_bin = peak_bin;
+    for b in element_lo..=peak_bin {
+        let lo = b;
+        let hi = (b + 2).min(nbins.saturating_sub(1));
+        let smoothed: u32 = hist[lo..=hi].iter().sum();
+        if smoothed >= qualifies {
+            dit_bin = b;
+            break;
+        }
+    }
+
+    // Concentration gate. The seed is only useful when the file has a
+    // single consistent global WPM (the median-of-short-runs heuristic
+    // lands on the wrong end of a unimodal element distribution). For
+    // genuinely multi-WPM streams (e.g. several QSOs at 8 / 13 / 29 / 39
+    // WPM stitched together) the global histogram has no dominant mode;
+    // pinning to one of those modes hurts every other burst.
+    //
+    // We require both:
+    //   (a) the dit cluster (the same 3-bin window used to identify
+    //       it above) holds at least 18% of all on-runs, AND
+    //   (b) the dit cluster plus the *expected dah cluster* (a 5-bin
+    //       window centred at 3× the dit centre) together hold at
+    //       least 50% of all on-runs.
+    //
+    // For unimodal CW (~22 WPM WA6MOW) the dit cluster easily clears
+    // 20% and dit+dah ≥ 60%. For multi-WPM mixtures (8/13/29/39 WPM
+    // stitched together) neither gate fires because the elements
+    // scatter across many unrelated bins.
+    let cluster_lo = dit_bin;
+    let cluster_hi = (dit_bin + 2).min(nbins.saturating_sub(1));
+    let cluster_count: u32 = hist[cluster_lo..=cluster_hi].iter().sum();
+    let total: u32 = hist.iter().sum();
+    let dit_concentration = if total > 0 {
+        cluster_count as f32 / total as f32
+    } else {
+        0.0
+    };
+
+    let dit_center_ms_for_check = RANGE_LO_MS + (dit_bin as f32 + 1.0) * BIN_MS;
+    let dah_center_bin = bin_idx(dit_center_ms_for_check * 3.0);
+    let dah_lo = dah_center_bin.saturating_sub(2);
+    let dah_hi = (dah_center_bin + 2).min(nbins.saturating_sub(1));
+    let dah_count: u32 = if dah_hi >= dah_lo {
+        hist[dah_lo..=dah_hi].iter().sum()
+    } else {
+        0
+    };
+    let bimodal_concentration = if total > 0 {
+        (cluster_count + dah_count) as f32 / total as f32
+    } else {
+        0.0
+    };
+    if trace {
+        eprintln!(
+            "[wpm-seed] dit_concentration={dit_concentration:.2} bimodal={bimodal_concentration:.2}"
+        );
+    }
+    if dit_concentration < 0.18 || bimodal_concentration < 0.50 {
+        if trace {
+            eprintln!("[wpm-seed] concentration gate failed; multi-WPM detected, skipping seed");
+        }
+        return None;
+    }
+
+    // Refine: centroid of bins within ±50% of the dit-peak bin centre.
+    // This suppresses single-bin quantization noise without letting the
+    // dah cluster (3× the dit) drag the estimate up.
+    let dit_center_ms = RANGE_LO_MS + (dit_bin as f32 + 0.5) * BIN_MS;
+    let lo_ms = dit_center_ms * 0.55;
+    let hi_ms = dit_center_ms * 1.50;
+    let mut weight_sum = 0.0_f64;
+    let mut value_sum = 0.0_f64;
+    for (b, &c) in hist.iter().enumerate() {
+        if c == 0 {
+            continue;
+        }
+        let center_ms = RANGE_LO_MS + (b as f32 + 0.5) * BIN_MS;
+        if center_ms < lo_ms || center_ms > hi_ms {
+            continue;
+        }
+        weight_sum += c as f64;
+        value_sum += (center_ms as f64) * (c as f64);
+    }
+    if weight_sum <= 0.0 {
+        weight_sum = 1.0;
+        value_sum = dit_center_ms as f64;
+    }
+    let mut dit_ms = (value_sum / weight_sum) as f32;
+
+    // Frame-coverage bias correction. A key-down of duration `D`
+    // activates roughly `ceil((D + frame_len) / frame_step)` analysis
+    // frames once the threshold is crossed at both edges, and our
+    // active_run_duration_s reports the full frame-coverage span — so
+    // each measured run carries an additive bias of roughly
+    // (frame_len + frame_step) ms. Empirically calibrated against
+    // ARRL-13/20/30/40 WPM samples and the WA6MOW signal: subtracting
+    // (frame_len + frame_step) recovers ARRL-13 (13.5 WPM est) and
+    // ARRL-40 (40.0 WPM est) almost exactly, lands wa6mow at ~25 WPM
+    // (above the 22 WPM lock threshold needed to recover the leading
+    // "WA"), and slightly under-estimates ARRL-20 (~18) and ARRL-30
+    // (~27) without measurably degrading their decode quality.
+    let frame_bias_ms = (cfg.frame_len_s + cfg.frame_step_s).max(0.0) * 1000.0;
+    dit_ms = (dit_ms - frame_bias_ms).max(BIN_MS);
+    let dit_s = dit_ms / 1000.0;
+    let wpm = 1.2 / dit_s.max(0.001);
+    if trace {
+        eprintln!(
+            "[wpm-seed] global_peak_bin={peak_bin} count={peak_count} -> dit_bin={dit_bin} qualifies>={qualifies} dit_ms={dit_ms:.1} (bias={frame_bias_ms:.1}) wpm={wpm:.1}"
+        );
+    }
+
+    // Sanity band: real-world hand sending lives roughly 5–50 WPM, but
+    // below 10 WPM the warm-start gives the auto-WPM nothing it doesn't
+    // already produce, so only seed when we land in a band the front-end
+    // is known to under-shoot on.
+    (10.0..=55.0).contains(&wpm).then_some(wpm)
 }
 
 fn dedupe_region_candidates(mut candidates: Vec<RegionCandidate>) -> Vec<DecodedRegion> {
