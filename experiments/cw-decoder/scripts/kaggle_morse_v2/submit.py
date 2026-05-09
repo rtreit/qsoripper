@@ -86,16 +86,23 @@ def main() -> None:
         preds.append((r["id"], hyp))
         print(f"  {r['id']:6s} -> {hyp[:60]!r}")
 
+    # morse-v2 expects header `ID,PREDICTION` with integer IDs (1..N).
+    # Map "cw001" -> 1, "cw042" -> 42, etc.
+    def _to_int_id(s: str) -> int:
+        digits = re.sub(r"\D", "", s)
+        return int(digits) if digits else 0
+
+    pred_map = {_to_int_id(cw_id): hyp for cw_id, hyp in preds}
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["id", "Predicted"])
-        for cw_id, hyp in preds:
-            w.writerow([cw_id, hyp])
-    print(f"\nsubmission -> {args.out} ({len(preds)} rows)")
-    print("Upload via:")
-    print(f"  kaggle competitions submit -c morse-learning-machine-challenge-v2 "
-          f"-f {args.out} -m \"qsoripper baseline\"")
+        w.writerow(["ID", "PREDICTION"])
+        for i in sorted(pred_map):
+            w.writerow([i, pred_map[i]])
+    print(f"\nsubmission -> {args.out} ({len(pred_map)} rows)")
+    print("Upload via (KAGGLE_API_TOKEN must be set in the shell env first):")
+    print("  $env:KAGGLE_API_TOKEN = (Get-Content .env | Select-String '^KAGGLE_API_TOKEN=').ToString().Split('=',2)[1]")
+    print(f'  kaggle competitions submit -c morse-learning-machine-challenge-v2 -f "{args.out}" -m "qsoripper baseline"')
 
 
 if __name__ == "__main__":
