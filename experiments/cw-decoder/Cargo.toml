@@ -12,6 +12,10 @@ path = "src/main.rs"
 name = "eval"
 path = "src/bin/eval.rs"
 
+[[bin]]
+name = "train-hmm"
+path = "src/bin/train_hmm.rs"
+
 [lib]
 name = "cw_decoder_poc"
 path = "src/lib.rs"

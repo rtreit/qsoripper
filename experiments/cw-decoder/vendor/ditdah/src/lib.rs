@@ -2,9 +2,10 @@
 // Library interface for ditdah
 
 mod decoder;
+pub mod gap_hmm;
 pub mod generator;
 
-use decoder::MorseDecoder;
+pub use decoder::{MorseDecoder, RunsResult, extract_runs_for_training};
 pub use generator::MorseGenerator;
 
 use anyhow::Result;

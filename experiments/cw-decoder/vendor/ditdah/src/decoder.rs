@@ -522,49 +522,38 @@ impl MorseDecoder {
         );
         log::debug!("Element lengths: {on_intervals:?}");
 
+        // Collect debounced run-length intervals (alternating on/off).
+        let debounce_samples = (actual_dot_len * 0.3).round() as usize;
+        let runs = collect_runs(power_signal, threshold, debounce_samples);
+
+        // If a trained HMM is installed via env var, use it to classify each
+        // run; otherwise fall back to the original ratio thresholds.
+        if let Some(hmm) = crate::gap_hmm::global() {
+            return decode_with_hmm(&runs, actual_dot_len, hmm);
+        }
+
         let mut result = String::new();
         let mut current_letter = String::new();
-        if power_signal.is_empty() {
-            return result;
-        }
-        let mut current_len = 0;
-        let mut is_on = power_signal[0] > threshold;
-        let debounce_samples = (actual_dot_len * 0.3).round() as usize;
-        log::debug!("Debounce threshold: {debounce_samples} samples");
-        for &p in power_signal.iter().chain(std::iter::once(&0.0)) {
-            if (p > threshold) == is_on {
-                current_len += 1;
-            } else {
-                if current_len > debounce_samples {
-                    let len_norm = current_len as f32 / actual_dot_len;
-                    if is_on {
-                        if len_norm < DIT_DAH_BOUNDARY {
-                            current_letter.push('.');
-                        } else {
-                            current_letter.push('-');
-                        }
-                    } else {
-                        // Handle gaps (off periods)
-                        if len_norm > LETTER_SPACE_BOUNDARY {
-                            // Gap is long enough to end the current letter
-                            if !current_letter.is_empty() {
-                                if let Some(c) = morse_to_char(&current_letter) {
-                                    result.push(c);
-                                } else {
-                                    result.push(BAD_COPY_MARKER);
-                                }
-                                current_letter.clear();
-                            }
-                            // If gap is also long enough for word boundary, add space
-                            if len_norm > WORD_SPACE_BOUNDARY && !result.ends_with(' ') {
-                                result.push(' ');
-                            }
-                        }
-                        // If gap is shorter than LETTER_SPACE_BOUNDARY, it's just an element gap - ignore
-                    }
+        for run in &runs {
+            let len_norm = run.len_samples as f32 / actual_dot_len;
+            if run.is_on {
+                if len_norm < DIT_DAH_BOUNDARY {
+                    current_letter.push('.');
+                } else {
+                    current_letter.push('-');
                 }
-                is_on = !is_on;
-                current_len = 1;
+            } else if len_norm > LETTER_SPACE_BOUNDARY {
+                if !current_letter.is_empty() {
+                    if let Some(c) = morse_to_char(&current_letter) {
+                        result.push(c);
+                    } else {
+                        result.push(BAD_COPY_MARKER);
+                    }
+                    current_letter.clear();
+                }
+                if len_norm > WORD_SPACE_BOUNDARY && !result.ends_with(' ') {
+                    result.push(' ');
+                }
             }
         }
 
@@ -579,6 +568,162 @@ impl MorseDecoder {
 
         result.trim().to_string()
     }
+}
+
+/// Walks the power signal and returns the alternating sequence of debounced
+/// run-length intervals (kept as `gap_hmm::Run` so both training and
+/// inference share one implementation).
+fn collect_runs(
+    power_signal: &[f32],
+    threshold: f32,
+    debounce_samples: usize,
+) -> Vec<crate::gap_hmm::Run> {
+    let mut runs = Vec::new();
+    if power_signal.is_empty() {
+        return runs;
+    }
+    let mut current_len: usize = 0;
+    let mut is_on = power_signal[0] > threshold;
+    for &p in power_signal.iter().chain(std::iter::once(&0.0)) {
+        if (p > threshold) == is_on {
+            current_len += 1;
+        } else {
+            if current_len > debounce_samples {
+                runs.push(crate::gap_hmm::Run {
+                    is_on,
+                    len_samples: current_len,
+                });
+            }
+            is_on = !is_on;
+            current_len = 1;
+        }
+    }
+    runs
+}
+
+fn decode_with_hmm(
+    runs: &[crate::gap_hmm::Run],
+    dot_len: f32,
+    p: &crate::gap_hmm::HmmParams,
+) -> String {
+    use crate::gap_hmm::{STATE_DAH, STATE_DIT, STATE_WORD, viterbi};
+    if runs.is_empty() {
+        return String::new();
+    }
+    let path = viterbi(runs, dot_len, p);
+    let mut result = String::new();
+    let mut current_letter = String::new();
+    for (i, run) in runs.iter().enumerate() {
+        let s = path[i];
+        if run.is_on {
+            if s == STATE_DIT {
+                current_letter.push('.');
+            } else if s == STATE_DAH {
+                current_letter.push('-');
+            }
+        } else {
+            // Off interval: Intra → element gap (do nothing), Char → end letter,
+            // Word → end letter + space.
+            if s != crate::gap_hmm::STATE_INTRA {
+                if !current_letter.is_empty() {
+                    if let Some(c) = morse_to_char(&current_letter) {
+                        result.push(c);
+                    } else {
+                        result.push(BAD_COPY_MARKER);
+                    }
+                    current_letter.clear();
+                }
+                if s == STATE_WORD && !result.ends_with(' ') && !result.is_empty() {
+                    result.push(' ');
+                }
+            }
+        }
+    }
+    if !current_letter.is_empty() {
+        if let Some(c) = morse_to_char(&current_letter) {
+            result.push(c);
+        } else {
+            result.push(BAD_COPY_MARKER);
+        }
+    }
+    result.trim().to_string()
+}
+
+/// Result of running the front-end up to (but excluding) the gap classifier.
+/// Used by the HMM training tool: gives one (runs, dot_len) pair per chunk.
+pub struct RunsResult {
+    pub runs: Vec<crate::gap_hmm::Run>,
+    pub dot_len_samples: f32,
+    pub wpm: f32,
+}
+
+/// Run the full DSP front-end (resample → bandpass → Goertzel → smooth →
+/// threshold-fit → debounce) and return the alternating run-length sequence
+/// suitable for HMM training. Caller passes a WPM hint when available
+/// (otherwise pass `None` and we fall back to the legacy grid-search WPM).
+pub fn extract_runs_for_training(
+    samples: &[f32],
+    sample_rate: u32,
+    pin_wpm: Option<f32>,
+) -> anyhow::Result<RunsResult> {
+    let mut decoder = MorseDecoder::new(sample_rate, 12000)?;
+    const CHUNK_SIZE: usize = 4096;
+    for chunk in samples.chunks(CHUNK_SIZE) {
+        decoder.process(chunk)?;
+    }
+
+    if let Some(resampler) = &mut decoder.resampler {
+        if !decoder.input_buffer.is_empty() {
+            while decoder.input_buffer.len() < RESAMPLER_CHUNK_SIZE {
+                decoder.input_buffer.push(0.0);
+            }
+            let waves_in = &[decoder.input_buffer.as_slice()];
+            let mut resampled = resampler.process(waves_in, None)?;
+            decoder.input_buffer.clear();
+            let mut processed_chunk = resampled.remove(0);
+            decoder.filter_hp.process(&mut processed_chunk);
+            decoder.filter_lp.process(&mut processed_chunk);
+            decoder.audio_buffer.extend(processed_chunk);
+        }
+    }
+
+    if decoder.audio_buffer.is_empty() {
+        anyhow::bail!("audio buffer empty");
+    }
+
+    let pitch = decoder.detect_pitch_stft()?;
+    let goertzel_window_size = (decoder.target_sample_rate as f32 * 0.025) as usize;
+    let step_size = (goertzel_window_size / 4).max(1);
+    let g = Goertzel::new(pitch, decoder.target_sample_rate, goertzel_window_size);
+    let raw_power = g.process_decimated(&decoder.audio_buffer, step_size);
+    let power_signal_rate = decoder.target_sample_rate as f32 / step_size as f32;
+    let smooth_window = (power_signal_rate * 0.02).round() as usize;
+    let smoothed = moving_average(&raw_power, smooth_window.max(1));
+    if smoothed.is_empty() {
+        anyhow::bail!("no power signal");
+    }
+
+    let (wpm, threshold) = match pin_wpm {
+        Some(w) => {
+            let mut sorted = smoothed.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let n = sorted.len();
+            let p25 = sorted[n / 4];
+            let p75 = sorted[(3 * n) / 4];
+            let iqr = p75 - p25;
+            (w, p25 + iqr * 0.50)
+        }
+        None => decoder.find_best_params(&smoothed, power_signal_rate)?,
+    };
+
+    let dot_len_samples = (1200.0 / wpm / 1000.0) * power_signal_rate;
+    let debounce_samples = (dot_len_samples * 0.3).round() as usize;
+    let runs = collect_runs(&smoothed, threshold, debounce_samples);
+    Ok(RunsResult {
+        runs,
+        dot_len_samples,
+        wpm,
+    })
 }
 
 // --- Helper Functions ---
