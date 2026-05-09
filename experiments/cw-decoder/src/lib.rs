@@ -4,6 +4,7 @@
 
 pub mod append_decode;
 pub mod audio;
+pub mod bayes_decoder;
 pub mod bench_latency;
 pub mod corpus_validator;
 pub mod decoder;

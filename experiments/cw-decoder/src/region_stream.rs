@@ -15,6 +15,7 @@
 //! truly online variant can be layered on later by feeding it a growing
 //! buffer.
 
+use crate::bayes_decoder;
 use crate::decoder::{decode_text, decode_text_pinned};
 use crate::preprocess::bandpass_in_place;
 
@@ -424,6 +425,34 @@ fn decode_region_slice_with_interval(
         }
         if should_prefer_interval_decode(&auto, &interval.text) {
             return interval.text.clone();
+        }
+        // When Bayes is enabled, give the Bayesian interval decode a softer
+        // preference: take it whenever its quality score is within 1 char of
+        // `auto`. The Bayes filter handles drift better than the vendor
+        // fixed-WPM decoder, but we keep `auto` as the floor for samples
+        // where the filter clearly underperforms. With DITDAH_BAYES_FORCE=1
+        // we always use the Bayes interval text whenever it has at least
+        // 2 useful copy chars — useful for honest A/B against the vendor
+        // pipeline.
+        if bayes_decoder::enabled() {
+            let auto_norm = normalize_region_text(&auto);
+            let bayes_norm = normalize_region_text(&interval.text);
+            if !bayes_norm.is_empty() && bayes_norm != auto_norm {
+                let auto_q = transcript_quality_score(&auto_norm);
+                let bayes_q = transcript_quality_score(&bayes_norm);
+                let force = std::env::var("DITDAH_BAYES_FORCE")
+                    .map(|v| {
+                        let v = v.trim();
+                        !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false")
+                    })
+                    .unwrap_or(false);
+                if force && useful_copy_chars(&bayes_norm) >= 2 {
+                    return interval.text.clone();
+                }
+                if bayes_q >= auto_q - 1.0 && useful_copy_chars(&bayes_norm) >= 2 {
+                    return interval.text.clone();
+                }
+            }
         }
     }
 
@@ -866,10 +895,36 @@ fn decode_region_slice_from_intervals(
     let dot_s = estimate_dot_from_runs(&runs, step_s, frame_s)?;
 
     let wpm = 1.2 / dot_s.max(0.001);
-    Some(IntervalDecode {
-        text: decode_runs_to_text(&runs, step_s, frame_s, dot_s),
-        wpm,
-    })
+    let text = if bayes_decoder::enabled() {
+        decode_runs_bayes(&runs, step_s, frame_s, dot_s)
+    } else {
+        decode_runs_to_text(&runs, step_s, frame_s, dot_s)
+    };
+    Some(IntervalDecode { text, wpm })
+}
+
+fn decode_runs_bayes(runs: &[FrameRun], step_s: f32, frame_s: f32, init_dot_s: f32) -> String {
+    let obs: Vec<bayes_decoder::ElementObservation> = runs
+        .iter()
+        .map(|run| bayes_decoder::ElementObservation {
+            active: run.active,
+            duration_s: run.duration_s(step_s, frame_s).max(1e-4),
+        })
+        .collect();
+    let posts = bayes_decoder::run_bayes_filter_calibrated(&obs, init_dot_s);
+    if bayes_decoder::debug_enabled() {
+        if let Some((start, end, range)) = bayes_decoder::wpm_drift_summary(&posts) {
+            eprintln!(
+                "[bayes] elements={} init_wpm={:.1} start_wpm={:.1} end_wpm={:.1} range_wpm={:.1}",
+                posts.len(),
+                1.2_f32 / init_dot_s.max(1e-4),
+                start,
+                end,
+                range
+            );
+        }
+    }
+    normalize_region_text(&bayes_decoder::posteriors_to_text(&posts))
 }
 
 fn otsu_log_power_threshold(log_powers: &[f32]) -> Option<f32> {
