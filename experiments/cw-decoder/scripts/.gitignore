@@ -1,0 +1,5 @@
+# Full augmentation manifest (~7 MB / 6 k rows; commit only the 100-row sample).
+arrl_augmented_manifest.jsonl
+# Stale partial outputs.
+augment_report_partial.md
+eval100.log
