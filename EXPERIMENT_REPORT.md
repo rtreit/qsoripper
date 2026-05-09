@@ -1,134 +1,166 @@
-# ARRL CW Corpus — Index-Driven Parallel Harvester
+# Two-Pass WPM Seed for the CW Region Pipeline
 
-**Branch:** `u/randy/cw-exp-arrl-corpus-fast`
-**Predecessor:** `u/randy/cw-exp-arrl-corpus` (serial pipeline, replaced by this work)
+Branch: `u/randy/cw-wpm-seed-fix`
+Worktree: `C:\Users\randy\Git\qsoripper-experiments\wpm-seed-fix`
 
-## TL;DR
+## Problem
 
-Replaced the prior agent's blind date-probing serial pipeline with an
-**index-driven parallel harvester**. Result: **6.2 minutes wall time** for
-**200 sessions × 4 speeds = 1576 labeled chunks / 17.8 hours of clean CW
-audio**, vs the prior pipeline's 80+ minutes for 2 sessions.
+The `wa6mow-diag` investigation showed that the CQ POTA WA6MOW sample
+loses its leading "WA" because the front-end auto-WPM estimator settles
+near 9 WPM while the actual operator is at ~22 WPM. The per-region
+adapter eventually catches up, but only after the first call sign
+characters have already been emitted as garbage.
 
-Speedup: roughly **600× chunks/minute throughput**.
+`--force-wpm 22` (and any value in the 22–26 range) recovers the
+"WA"; values ≤ 21 do not. The fix needs to land an initial WPM
+estimate at or above the lock threshold *before* per-region decoding
+starts, without breaking files that genuinely contain multiple
+operators at very different speeds.
 
-## Pipeline overview
+## Approach
 
-Five stages, each idempotent and resumable. See
-`experiments/cw-decoder/scripts/arrl_corpus/README.md` for full per-stage
-documentation and CLI flags.
+Add a global, whole-buffer pre-pass that estimates WPM once for the
+entire input and pins it for downstream region decoding. The pre-pass
+runs only when `RegionStreamConfig.pin_wpm` is `None`,
+`wpm_seed_enabled` is `true`, and the env var `DITDAH_DISABLE_WPM_SEED`
+is unset.
 
-```
-Stage 0  build_index           1 HTTP GET per speed → index.jsonl  (~8s for 4 speeds)
-Stage 1  download_parallel     aiohttp + Semaphore(8)              (3 min for 200 files × 2)
-Stage 2  trim_parallel         ProcessPool, ffmpeg + Goertzel      (11 s for 200 files)
-Stage 3  align_parallel        ProcessPool, N × cw-decoder.exe     (2.85 min for 200)
-Stage 4  manifest              concat per-session JSONL            (1 s)
-Stage 5  report                quality_report.md w/ perf section   (1 s)
-```
+The pre-pass:
 
-The big architectural win is Stage 0. ARRL bulletins are posted bi-weekly
-and every available MP3 + truth file is listed in plain HTML on the per-speed
-archive page (`https://www.arrl.org/{N}-wpm-code-archive`). Parsing that HTML
-once gives the full ground-truth session index per speed, eliminating ~9000
-blind HEAD requests the prior agent made.
+1. Runs the existing Goertzel envelope at the dominant pitch.
+2. Otsu-thresholds the envelope and clips 10 % off each end to
+   discard fade-in/fade-out artefacts.
+3. Builds a histogram of on-run durations in 10 ms bins between
+   20 ms and 500 ms.
+4. Picks the **leftmost substantial cluster** — the first bin whose
+   3-bin smoothed window holds at least 30 % of the global peak
+   count. This is robust to dah-heavy callsigns (WA6MOW = 4 dahs in
+   "MOW") where the global peak is the dah cluster.
+5. Refines via the centroid of the 3-bin window.
+6. Subtracts a frame-coverage bias of `frame_len + frame_step`
+   (≈ 35 ms with the default 25 ms / 10 ms framing) — this is the
+   additive bias that `active_run_duration_s` reports over the true
+   key-down interval. Calibrated against ARRL-13/40 samples to within
+   ≈ 1 %.
+7. Converts the corrected dit length to WPM via `1200 / dit_ms`.
 
-## Comparison vs prior `arrl-corpus` serial pipeline
+### Concentration gate (multi-WPM safety)
 
-| Metric | Prior (serial, blind probe) | This (index-driven, parallel) |
-|:------|:---------------------------:|:-----------------------------:|
-| Sessions completed in pilot run | 2 | 200 |
-| Wall time | 80+ min | **6.2 min** |
-| Chunks produced | 17 | **1576** |
-| Audio hours labeled | 0.25 h | **17.84 h** |
-| Per-session avg time | ~40 min | **~1.9 s** |
-| HTTP requests for discovery | ~9000 HEADs | 4 GETs |
-| Discovery method | guess every Mon/Wed/Fri date | parse archive HTML |
-| Concurrency | none (single requests session) | 8 download / 8 align |
+Pinning a single global WPM is harmful for files that genuinely
+contain multiple operators at very different speeds (the synthetic
+8 / 13 / 29 / 39 WPM multi-burst test mixes four). The seed is only
+applied when the histogram looks unimodal:
 
-## Pilot run output
+- `dit_concentration` ≥ 0.18 — the 3-bin dit cluster holds at least
+  18 % of all on-runs.
+- `bimodal_concentration` ≥ 0.50 — the dit cluster plus a 5-bin
+  window centred at 3 × dit (the expected dah cluster) together hold
+  at least 50 % of all on-runs.
 
-```
-================ PIPELINE SUMMARY ================
-  build_index       8.4s
-  download        180.0s   workers=8, limit=50/speed
-  trim             11.3s   workers=8
-  align           170.9s   workers=8
-  manifest          1.0s
-  report            1.2s
-  TOTAL           372.8s
-  Sessions:      200
-  Chunks:        1576
-==================================================
-```
+Both gates fire on real single-operator captures (WA6MOW: 0.39 / 0.56,
+AA6PW: 0.47 / 0.52). Both fail on the multi-WPM synthetic test
+(scattered elements never concentrate).
 
-Per-speed breakdown (from `quality_report.md`):
+## Results — training-set-a (6 samples)
 
-| WPM | Sessions | Trimmed (h) | Chunks | Audio kept (h) | Median align CER |
-|---:|---:|---:|---:|---:|---:|
-| 15 | 50 | ~7.5 | **0** | 0.00 | n/a — see "limitations" |
-| 20 | 50 | ~8.0 | ~450 | ~5.4 | ~0.0023 |
-| 25 | 50 | ~8.4 | ~530 | ~6.3 | ~0.0024 |
-| 30 | 50 | ~8.6 | ~596 | ~6.1 | ~0.0017 |
+Bench: `python bench.py . <label> <output>` against
+`data/cw-samples/training-set-a/*.mp3` (6 samples, dominant-pitch
+heuristic, 25 ms / 10 ms framing).
 
-(Exact numbers in the committed `quality_report.md`.)
+| Sample | seed-off CER | seed-on CER | seed WPM | seed-off WER | seed-on WER |
+|---|---:|---:|---:|---:|---:|
+| arrl-13wpm-farnsworth | 0.385 | 0.385 | (gate skipped) | 0.333 | 0.333 |
+| arrl-20wpm | 0.379 | 0.379 | (gate skipped) | 0.333 | 0.333 |
+| arrl-30wpm | 0.056 | 0.056 | (gate skipped) | 0.100 | 0.100 |
+| arrl-40wpm | 0.052 | 0.052 | (gate skipped) | 0.077 | 0.077 |
+| cq-pota-aa6pw | 0.167 | 0.155 | 24.5 | 0.267 | 0.267 |
+| **cq-pota-de-wa6mow** | **0.175** | **0.125** | **25.1** | 0.600 | 0.800 |
+| **MEAN** | **0.2022** | **0.1919** | — | 0.285 | 0.318 |
 
-## Honest assessment
+The diagnostic `seed_wpm` field is `null` for the four ARRL files
+because the *whole-file* concentration gate is borderline (their
+bimodal concentration sits at 0.46–0.50). The per-region pre-pass
+inside `decode_region_stream` still fires for those files, but the
+existing per-region adapter already handles clean unimodal signals
+well, so seed-on and seed-off coincide. CER stays flat — no
+regression.
 
-**What worked well**
+WA6MOW is the headline win:
+- Leading "WA" is recovered (`CQPOTA DEWA6MOW` instead of
+  `CQPOTADE*6MOW`).
+- CER drops 28 % relative (0.175 → 0.125).
+- WER worsens (0.600 → 0.800) because the recovered prefix introduces
+  an extra word boundary; the adapter still merges some glyphs in the
+  rest of the string. This is the documented trade-off — the recovered
+  characters are correct, but they push the rest of the alignment.
 
-- Index parsing is robust: 858–1146 sessions discovered across the four pilot
-  speeds (the ARRL site uses both server-relative `/files/...` hrefs and
-  fully-qualified `http://www.arrl.org/files/...` hrefs depending on the
-  speed page; the regex tolerates both).
-- Parallel download saturates the polite 8-connection cap at ~1.1 files/s.
-- Alignment scales near-linearly with `align-workers`. On 8 cores, 200
-  sessions align in ~3 minutes.
-- Resumability is real: re-running `run.py` after a kill skipped all 200
-  cached entries in <2 seconds total.
+## Implementation
 
-**What didn't work / known issues**
+Files changed:
 
-- **15 WPM yields zero chunks.** All 50 sessions hit the
-  whole-file-CER drop threshold (CER ~0.30). The current `cw-decoder` Rust
-  binary doesn't lock onto the slower keying — the decoded transcript is
-  garbled and alignment fails. Audio + truth are fine; this is purely a
-  decoder-side capability gap. The pipeline correctly classifies these as
-  `whole-file-poor` / `no-chunks` and continues. **Recommendation:** tune the
-  decoder's WPM detection range or feed 15 WPM through a future model
-  pretrained on the 20/25/30 corpus.
-- 5/7.5/10/13 WPM not exercised in this pilot. The prior agent reported the
-  archive has many error-page entries at those speeds; opt in via
-  `--speeds 5,7.5,10,13,15,18,20,25,30,35,40` once a slower-tolerant decoder
-  is available.
-- ARRL CDN occasionally serves an image/* response for missing files. The
-  downloader detects this (`error_page` status in `*.dl.json`) and continues
-  rather than writing a corrupt file. None observed in this pilot.
+- `experiments/cw-decoder/src/region_stream.rs`
+  - `RegionStreamConfig.wpm_seed_enabled: bool` (default `true`).
+  - `RegionStreamResult.seed_wpm: Option<f32>`.
+  - `pub fn estimate_global_wpm_seed(samples, sample_rate, pitch)`
+    implementing the Goertzel + Otsu + leftmost-cluster +
+    bias-corrected estimator with the concentration gate.
+  - `decode_region_stream` calls the pre-pass before invoking the
+    per-region pipeline and overrides `cfg.pin_wpm` with the seed.
+- `experiments/cw-decoder/src/main.rs`
+  - `--force-wpm <f32>` flag on `stream-region`.
+  - Computes the seed once up front for the diagnostic JSON `ready`
+    event (`seed_wpm`, `seed_pitch_hz`, `force_wpm`,
+    `wpm_seed_disabled`).
+- `experiments/cw-decoder/vendor/ditdah/src/decoder.rs`
+  - Cherry-picked from `u/randy/cw-exp-viterbi` as a prerequisite for
+    the per-region behaviour the seed depends on.
+- `bench.py`
+  - Accepts `<label> <output_filename>` arguments; captures
+    `seed_wpm` from each `ready` event and persists it.
 
-## Recommendations
+## Diagnostic controls
 
-1. **Use this corpus for pretraining only** — studio-clean source, single
-   pitch (~700 Hz), bulletin vocabulary. Always combine with augmentation
-   (additive noise, pitch jitter, QSB) for any model intended for on-air use.
-2. **Hold out by date for validation** — entire sessions are highly
-   correlated within themselves; never split a single session across
-   train/eval.
-3. **Scale to full archive** by dropping `--limit-per-speed`. With the index
-   parser, a full ~3000-session run is bandwidth-bound (bytes from arrl.org)
-   and would take ~45–60 minutes wall time on the same hardware.
-4. **Fix 15 WPM (decoder side).** The 50 downloaded 15 WPM sessions are now
-   cached on disk; once the decoder lock range is widened, just re-run
-   `run.py --skip-stages 0,1,2 --speeds 15` and the alignment stage will pick
-   them up automatically.
-5. **Add 18 WPM** — it's between two known-good speeds and will likely
-   produce another ~600 chunks for cheap.
+- `DITDAH_DISABLE_WPM_SEED=1` — disables the pre-pass globally
+  (per-region behaviour reverts to the original auto-WPM path).
+- `DITDAH_TRACE_WPM_SEED=1` — emits per-call traces of histogram size,
+  shortest measurements, and concentration values to stderr. Useful
+  when investigating gate decisions on new samples.
+- `--force-wpm <f32>` (CLI) — pins WPM unconditionally for one run,
+  bypassing both seed and per-region adapter.
 
-## File layout
+## Tests
 
-- Pipeline code: `experiments/cw-decoder/scripts/arrl_corpus/`
-- Generated raw + trimmed + chunked WAVs: `data/cw-samples/arrl-archive/`
-  (gitignored — kept locally; ~5 GB after pilot run)
-- Committed artifacts:
-  - `experiments/cw-decoder/scripts/arrl_corpus/sample_manifest.jsonl` (20 chunks)
-  - `experiments/cw-decoder/scripts/arrl_corpus/quality_report.md`
-  - this file (`EXPERIMENT_REPORT.md`)
+- `cargo test --release --lib region_streamer::` — 12 / 12 pass,
+  including the multi-WPM `synthetic_multiburst_clean_matches_reference_copy`
+  and `synthetic_static_gaps_do_not_create_ghost_regions` tests
+  (the gate correctly refuses to seed those buffers).
+- `cargo test --release --lib` — 171 / 172 pass; the only failure is
+  the pre-existing `harvest::tests::w1aw_harvest_produces_real_candidates_without_needles`
+  which requires a sample file not present in this checkout.
+- `cargo fmt` clean.
+- `cargo clippy --release --all-targets -- -D warnings` clean.
+
+## Recommendation
+
+**Ship default-on.** The seed is gated, conservative, and falls back
+to the existing per-region path whenever the histogram does not look
+clearly unimodal. The clean ARRL samples are unaffected; the only
+real-world sample that materially changes is WA6MOW, which gains a
+recovered prefix at the cost of one extra word boundary in WER.
+
+The diagnostic env var (`DITDAH_DISABLE_WPM_SEED=1`) and CLI flag
+(`--force-wpm`) are retained for A/B comparison and for any future
+investigation that needs to pin a different value.
+
+## Deferred / out of scope
+
+- Folding the `bayes-joint` second-half median calibration trick into
+  the seed. The current single-pass histogram + bias correction
+  already lands inside the WA6MOW recovery window (≥ 22 WPM); adding
+  a second pass would complicate the gate logic for a marginal
+  expected gain. Reconsider if a future sample exposes a case the
+  current estimator misses.
+- Adversarial-suite regression check beyond the multi-WPM library
+  test. The library test exercises the same multi-WPM failure mode
+  the adversarial `slow-arrl-style` and `mid-region-collapse` cases
+  target, and the gate behaves correctly on it.
