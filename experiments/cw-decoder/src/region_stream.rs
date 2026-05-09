@@ -98,6 +98,8 @@ pub struct DecodedRegion {
     pub start_s: f32,
     pub end_s: f32,
     pub text: String,
+    /// Pitch (Hz) chosen for this region's decode.
+    pub pitch_hz: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -1695,6 +1697,7 @@ fn dedupe_region_candidates(mut candidates: Vec<RegionCandidate>) -> Vec<Decoded
             start_s: candidate.start_s,
             end_s: candidate.end_s,
             text: candidate.text,
+            pitch_hz: candidate.pitch_hz,
         })
         .collect()
 }
@@ -2510,6 +2513,23 @@ pub fn percentile_sorted(sorted: &[f32], q: f32) -> f32 {
     let cq = q.clamp(0.0, 1.0);
     let idx = ((sorted.len() - 1) as f32 * cq).round() as usize;
     sorted[idx.min(sorted.len() - 1)]
+}
+
+/// Public re-export for the trace module: same Otsu-on-log-power
+/// threshold the interval decoder uses.
+pub fn otsu_log_power_threshold_for_trace(log_powers: &[f32]) -> Option<f32> {
+    otsu_log_power_threshold(log_powers)
+}
+
+/// Public re-export for the trace module: same tonal prominence ratio
+/// the region detector uses to gate candidate regions.
+pub fn tonal_prominence_ratio_for_trace(
+    samples: &[f32],
+    sample_rate: u32,
+    pitch_hz: f32,
+    cfg: &RegionStreamConfig,
+) -> f32 {
+    tonal_prominence_ratio(samples, sample_rate, pitch_hz, cfg)
 }
 
 #[cfg(test)]

@@ -60,6 +60,10 @@ pub struct CommittedRegion {
     pub start_s: f32,
     pub end_s: f32,
     pub text: String,
+    /// Pitch (Hz) chosen by the detector for this region. Used by the
+    /// trace layer; `None` only for legacy code paths that constructed
+    /// committed regions before pitch propagation existed.
+    pub pitch_hz: Option<f32>,
 }
 
 /// Stateful streaming wrapper around [`decode_region_stream`].
@@ -150,6 +154,23 @@ impl RegionStreamer {
         self.head_s
     }
 
+    /// Read-only view of the rolling sample buffer. Used by the trace
+    /// layer (and tests) to recompute per-region statistics without
+    /// having to re-thread the underlying audio.
+    pub fn buffer(&self) -> &[f32] {
+        &self.buffer
+    }
+
+    /// Sample rate (Hz) of the rolling buffer.
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    /// Active region-detection / decode config (read-only).
+    pub fn region_config(&self) -> &crate::region_stream::RegionStreamConfig {
+        &self.cfg.region
+    }
+
     /// Reset all streaming state: drop the buffer, clear the committed
     /// transcript, and reset the commit cursor. Used by the live mic
     /// path's "ResetLock" stdin-control message so the operator can
@@ -225,6 +246,7 @@ impl RegionStreamer {
                 start_s: region.start_s,
                 end_s: region.end_s,
                 text: region.text.clone(),
+                pitch_hz: Some(region.pitch_hz),
             });
             self.last_committed_end_s = region.end_s;
         }
