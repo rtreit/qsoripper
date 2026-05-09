@@ -640,6 +640,13 @@ enum Cmd {
         /// pace. Useful for tests and one-shot batch decodes.
         #[arg(long)]
         no_realtime: bool,
+        /// Force a specific WPM for all per-region decoding. Mirrors the
+        /// `wa6mow-diag` CLI: when set, both the auto-WPM and the
+        /// whole-buffer warm-start seed are bypassed and every region is
+        /// decoded with this pinned WPM. Useful for diagnostic A/B runs
+        /// (e.g. "does forcing 22 WPM recover the leading WA?").
+        #[arg(long)]
+        force_wpm: Option<f32>,
     },
     /// Diagnostic: scan candidate pitches across an audio file and print
     /// the trial-decode Fisher score per pitch. Use this to compare
@@ -1241,6 +1248,7 @@ fn run_cli() -> Result<()> {
             threshold_factor,
             pad_s,
             no_realtime,
+            force_wpm,
         } => run_stream_region_file(
             &file,
             json,
@@ -1251,6 +1259,7 @@ fn run_cli() -> Result<()> {
             threshold_factor,
             pad_s,
             !no_realtime,
+            force_wpm,
         ),
         Cmd::ProbeFisher {
             path,
@@ -5361,6 +5370,7 @@ fn run_stream_region_file(
     threshold_factor: f32,
     pad_s: f32,
     realtime: bool,
+    force_wpm: Option<f32>,
 ) -> Result<()> {
     use cw_decoder_poc::region_stream::RegionStreamConfig;
     use cw_decoder_poc::region_streamer::{RegionStreamer, RegionStreamerConfig};
@@ -5376,14 +5386,39 @@ fn run_stream_region_file(
         min_region_s,
         threshold_factor,
         pad_s,
+        pin_wpm: force_wpm,
         ..RegionStreamConfig::default()
     };
 
     let cfg = RegionStreamerConfig {
-        region: region_cfg,
+        region: region_cfg.clone(),
         stable_latency_s,
     };
     let mut streamer = RegionStreamer::with_config(sr, cfg);
+
+    // Compute the warm-start WPM seed once on the fully-loaded buffer
+    // for diagnostics. This is the same value the streaming pre-pass
+    // would produce on each chunk; emitting it here lets the bench
+    // harness verify the seed without scraping per-chunk events.
+    let seed_disabled = std::env::var("DITDAH_DISABLE_WPM_SEED")
+        .map(|v| !v.is_empty() && v != "0")
+        .unwrap_or(false);
+    let (seed_pitch_hz, seed_wpm) = if force_wpm.is_none() && !seed_disabled {
+        let pitch = cw_decoder_poc::region_stream::estimate_dominant_pitch(
+            &decoded.samples,
+            sr,
+            &region_cfg,
+        );
+        let seed = cw_decoder_poc::region_stream::estimate_global_wpm_seed(
+            &decoded.samples,
+            sr,
+            pitch,
+            &region_cfg,
+        );
+        (Some(pitch), seed)
+    } else {
+        (None, None)
+    };
 
     let mut emitter = if json {
         Some(json::JsonEmitter::new())
@@ -5405,16 +5440,22 @@ fn run_stream_region_file(
                 "min_region_s": min_region_s,
                 "threshold_factor": threshold_factor,
                 "pad_s": pad_s,
+                "force_wpm": force_wpm,
+                "wpm_seed_disabled": seed_disabled,
+                "seed_pitch_hz": seed_pitch_hz,
+                "seed_wpm": seed_wpm,
             }),
         );
     } else {
         println!(
-            "Streaming file (region-based): {} @ {} Hz ({:.2}s); decode every {} ms; stable_latency={:.2}s",
+            "Streaming file (region-based): {} @ {} Hz ({:.2}s); decode every {} ms; stable_latency={:.2}s; force_wpm={:?}; seed_wpm={:?}",
             path.display(),
             sr,
             duration_s,
             decode_every_ms,
             stable_latency_s,
+            force_wpm,
+            seed_wpm,
         );
     }
 
