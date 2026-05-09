@@ -44,17 +44,38 @@ The harness pattern matches `bench_adversarial.py` (PR #417) for consistency.
 
 ## Authentication
 
-The Kaggle CLI requires per-developer credentials.
+Two paths are supported.
+
+### Recommended: KAGGLE_API_TOKEN in .env (no kaggle.json needed)
 
 1. Visit <https://www.kaggle.com/settings/account> and click **Create New
-   Token**. This downloads `kaggle.json`.
-2. Place it at `%USERPROFILE%\.kaggle\kaggle.json` (Windows) or
-   `~/.kaggle/kaggle.json` (Linux/macOS).
-3. Restrict permissions on Linux/macOS: `chmod 600 ~/.kaggle/kaggle.json`.
-4. Accept the competition rules at
-   <https://www.kaggle.com/competitions/morse-learning-machine-challenge-v2/rules>.
+   Token** (the new "API Token" type that begins with `KGAT...`).
+2. Add to the repo's `.env` file:
 
-The Python `kaggle` package is required (`pip install kaggle`).
+   ```text
+   KAGGLE_API_TOKEN=KGAT...your-token...
+   ```
+
+3. **Accept the competition rules** (one-time, browser-only):
+   <https://www.kaggle.com/competitions/morse-learning-machine-challenge-v2/rules> →
+   click "I Understand and Accept". Without this step, every download endpoint
+   returns 403 Forbidden — Kaggle does not expose a programmatic
+   rules-acceptance API.
+
+`download.py` reads `.env` automatically (no `python-dotenv` dependency) and
+calls the Kaggle REST API directly. No `kaggle` CLI required.
+
+### Fallback: classic kaggle.json
+
+1. Same Create New Token page (download `kaggle.json`).
+2. Place at `%USERPROFILE%\.kaggle\kaggle.json` (Windows) or
+   `~/.kaggle/kaggle.json` (Linux/macOS).
+3. `chmod 600 ~/.kaggle/kaggle.json` on Linux/macOS.
+4. Accept the competition rules as above.
+5. `pip install kaggle`.
+
+`download.py` falls back to invoking `kaggle competitions download` when
+`KAGGLE_API_TOKEN` is not set.
 
 ## Usage
 
