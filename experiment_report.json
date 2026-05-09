@@ -1,5 +1,5 @@
 {
-  "worktree": "C:\\Users\\randy\\Git\\qsoripper-experiments\\viterbi",
+  "worktree": "C:\\Users\\randy\\Git\\qsoripper-experiments\\elem-gate",
   "samples": {
     "arrl-13wpm-farnsworth": {
       "truth": "CALLS YOU YOU",
@@ -13,8 +13,8 @@
     },
     "arrl-20wpm": {
       "truth": "SHORT PATH I INITIALLY USED A",
-      "hyp": "ETER SHORT PATH I INITIALLY USED A MEDIU",
-      "cer": 0.3793,
+      "hyp": "ETER SHORT PATH I INITIALLY USED A MEDIUT",
+      "cer": 0.4138,
       "wer": 0.3333,
       "recall": 1.0,
       "precision": 0.75,
@@ -43,13 +43,13 @@
     },
     "cq-pota-aa6pw": {
       "truth": "NQ POTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW AA6PW CQPOTA AA6PW AA6PW C",
-      "hyp": "ND AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW",
+      "hyp": "NB T AA6PW AA6PW CQPOTA AA6PW AS PW CQPOTA AA6PW AA6PW CQPOTA AA6PW AA6PW",
       "cer": 0.1667,
-      "wer": 0.2667,
+      "wer": 0.4,
       "recall": 0.4,
-      "precision": 0.6667,
+      "precision": 0.3333,
       "truth_words": 15,
-      "hyp_words": 12
+      "hyp_words": 14
     },
     "cq-pota-de-wa6mow": {
       "truth": "NQ CQ POTA DE WA6MOW CQ POTA DE WA6MOW K",
@@ -62,6 +62,6 @@
       "hyp_words": 9
     }
   },
-  "mean_cer": 0.2022,
-  "mean_wer": 0.285
+  "mean_cer": 0.2079,
+  "mean_wer": 0.3073
 }
