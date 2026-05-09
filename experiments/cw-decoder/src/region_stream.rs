@@ -72,6 +72,23 @@ pub struct RegionStreamConfig {
     pub min_cw_timing_score: f32,
 }
 
+/// Default hard-coded floor for the `min_tonal_prominence_ratio` gate.
+///
+/// 8.0 was chosen empirically to reject white-noise / static regions that
+/// otherwise produce ghost copy. Some real-world (Kaggle, low-SNR OTA)
+/// captures fall just under this floor and emit zero transcript. Operators
+/// can override at process startup with `DITDAH_MIN_TONAL_PROMINENCE_RATIO`
+/// (e.g. `3.0`) to recover them at the cost of higher false-positive risk.
+pub const MIN_TONAL_PROMINENCE_RATIO_DEFAULT: f32 = 8.0;
+
+fn min_tonal_prominence_ratio_default() -> f32 {
+    std::env::var("DITDAH_MIN_TONAL_PROMINENCE_RATIO")
+        .ok()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .unwrap_or(MIN_TONAL_PROMINENCE_RATIO_DEFAULT)
+}
+
 impl Default for RegionStreamConfig {
     fn default() -> Self {
         Self {
@@ -86,7 +103,7 @@ impl Default for RegionStreamConfig {
             pad_s: 0.10,
             pin_wpm: None,
             wpm_seed_enabled: true,
-            min_tonal_prominence_ratio: 8.0,
+            min_tonal_prominence_ratio: min_tonal_prominence_ratio_default(),
             min_cw_elements: 3,
             min_cw_timing_score: 0.30,
         }
