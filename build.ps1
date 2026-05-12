@@ -68,11 +68,89 @@ function Get-CppcheckInstallHint {
 
 function Invoke-Build([string]$Step, [string]$Command, [string[]]$Arguments) {
     Write-Step $Step
-    & $Command @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "FAILED: $Step" -ForegroundColor Red
-        exit $LASTEXITCODE
+    if (-not $script:BuildTimings) { $script:BuildTimings = [System.Collections.Generic.List[object]]::new() }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $entry = [pscustomobject]@{ Step = $Step; Status = 'RUN'; Seconds = 0.0 }
+    $code = 0
+    try {
+        & $Command @Arguments
+        $code = $LASTEXITCODE
+    } finally {
+        $sw.Stop()
+        $entry.Seconds = [Math]::Round($sw.Elapsed.TotalSeconds, 2)
+        $script:BuildTimings.Add($entry) | Out-Null
     }
+    if ($code -ne 0) {
+        $entry.Status = 'FAIL'
+        Write-Host "FAILED: $Step" -ForegroundColor Red
+        exit $code
+    }
+    $entry.Status = 'OK'
+}
+
+function Measure-BuildStep([string]$Step, [scriptblock]$Body) {
+    Write-Step $Step
+    if (-not $script:BuildTimings) { $script:BuildTimings = [System.Collections.Generic.List[object]]::new() }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $entry = [pscustomobject]@{ Step = $Step; Status = 'RUN'; Seconds = 0.0 }
+    $code = 0
+    try {
+        & $Body
+        $code = $LASTEXITCODE
+    } finally {
+        $sw.Stop()
+        $entry.Seconds = [Math]::Round($sw.Elapsed.TotalSeconds, 2)
+        $script:BuildTimings.Add($entry) | Out-Null
+    }
+    if ($code -ne 0) {
+        $entry.Status = 'FAIL'
+        Write-Host "FAILED: $Step" -ForegroundColor Red
+        exit $code
+    }
+    $entry.Status = 'OK'
+}
+
+function Format-BuildSeconds([double]$Seconds) {
+    if ($Seconds -ge 60) {
+        $m = [Math]::Floor($Seconds / 60)
+        $s = $Seconds - ($m * 60)
+        return ('{0}m{1:N1}s' -f $m, $s)
+    }
+    return ('{0:N2}s' -f $Seconds)
+}
+
+function Write-BuildSummary {
+    if (-not $script:BuildTimings -or $script:BuildTimings.Count -eq 0) { return }
+    $total = ($script:BuildTimings | Measure-Object -Property Seconds -Sum).Sum
+    $maxLen = ($script:BuildTimings | ForEach-Object { $_.Step.Length } | Measure-Object -Maximum).Maximum
+    $maxLen = [Math]::Max([int]$maxLen, 4)
+    $bar = '=' * ($maxLen + 30)
+    Write-Host ''
+    Write-Host $bar -ForegroundColor Cyan
+    Write-Host (' BUILD TIMING SUMMARY ({0} steps)' -f $script:BuildTimings.Count) -ForegroundColor Cyan
+    Write-Host $bar -ForegroundColor Cyan
+    $headerFmt = '  {0,-6} {1,-' + $maxLen + '} {2,10}  {3,6}'
+    Write-Host ($headerFmt -f 'STATUS', 'STEP', 'TIME', 'SHARE') -ForegroundColor Gray
+    foreach ($e in $script:BuildTimings) {
+        $share = if ($total -gt 0) { ('{0,5:N1}%' -f (100.0 * $e.Seconds / $total)) } else { '    -' }
+        $color = if ($e.Status -eq 'OK') { 'Green' } elseif ($e.Status -eq 'FAIL') { 'Red' } else { 'Yellow' }
+        Write-Host ($headerFmt -f $e.Status, $e.Step, (Format-BuildSeconds $e.Seconds), $share) -ForegroundColor $color
+    }
+    Write-Host $bar -ForegroundColor Cyan
+    Write-Host (('  TOTAL  {0,-' + $maxLen + '} {1,10}') -f '', (Format-BuildSeconds $total)) -ForegroundColor Cyan
+    Write-Host $bar -ForegroundColor Cyan
+    $logDir = Join-Path $PSScriptRoot 'artifacts'
+    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
+    $logFile = Join-Path $logDir 'build-timings.json'
+    $payload = [pscustomobject]@{
+        timestamp     = (Get-Date).ToString('o')
+        command       = $Command
+        configuration = $Configuration
+        total_seconds = [Math]::Round($total, 2)
+        steps         = $script:BuildTimings
+    }
+    $payload | ConvertTo-Json -Depth 5 | Set-Content -Path $logFile -Encoding utf8
+    Write-Host ('  log: {0}' -f $logFile) -ForegroundColor DarkGray
 }
 
 $Win32SourceDir = Join-Path $PSScriptRoot 'src' 'c' 'qsoripper-win32'
@@ -290,29 +368,26 @@ function Build-Win32 {
     }
 
     # cppcheck static analysis — fails the build on error-severity findings
-    Write-Step 'Win32 static analysis (cppcheck, optional)'
     $cppcheckExe = Get-Command cppcheck -ErrorAction SilentlyContinue
     if ($cppcheckExe) {
-        cppcheck --enable=warning,performance,portability `
-                 --error-exitcode=1 `
-                 --std=c11 `
-                 --suppress=missingIncludeSystem `
-                 --suppress=missingInclude `
-                 --inline-suppr `
-                 $Win32Source `
-                 $Win32JsonParserSource `
-                 $Win32FfiGateSource
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host 'FAILED: cppcheck found errors' -ForegroundColor Red
-            exit $LASTEXITCODE
+        Measure-BuildStep 'Win32 static analysis (cppcheck)' {
+            cppcheck --enable=warning,performance,portability `
+                     --error-exitcode=1 `
+                     --std=c11 `
+                     --suppress=missingIncludeSystem `
+                     --suppress=missingInclude `
+                     --inline-suppr `
+                     $Win32Source `
+                     $Win32JsonParserSource `
+                     $Win32FfiGateSource
         }
     }
     else {
+        Write-Step 'Win32 static analysis (cppcheck, optional)'
         $installHint = Get-CppcheckInstallHint
         Write-Host "cppcheck not found; continuing without optional Win32 static analysis. $installHint" -ForegroundColor Yellow
     }
 
-    Write-Step "Building qsoripper-win32 ($Configuration)"
     $null = New-Item -ItemType Directory -Force -Path $Win32PublishDir
     $optFlags = if ($IsReleaseBuild) { '/O2' } else { '/Od /Zi' }
     $exe = Join-Path $Win32PublishDir 'qsoripper-win32.exe'
@@ -328,16 +403,14 @@ if errorlevel 1 exit /b %errorlevel%
 cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" /I"$Win32ResourcesDir" "$Win32Source" "$Win32JsonParserSource" "$Win32FfiGateSource" /Fe:"$exe" /link "$win32Res" user32.lib gdi32.lib shell32.lib comctl32.lib
 "@ | Set-Content -LiteralPath $buildScript -Encoding ASCII
 
-    Push-Location $Win32PublishDir
-    try {
-        cmd /c $buildScript
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "FAILED: Building qsoripper-win32 ($Configuration)" -ForegroundColor Red
-            exit $LASTEXITCODE
+    Measure-BuildStep "Building qsoripper-win32 ($Configuration)" {
+        Push-Location $Win32PublishDir
+        try {
+            cmd /c $buildScript
         }
-    }
-    finally {
-        Pop-Location
+        finally {
+            Pop-Location
+        }
     }
 
     # Copy FFI DLL alongside the win32 executable
@@ -560,17 +633,21 @@ Examples:
 "@
 }
 
-switch ($Command) {
-    'build'        { Build-All }
-    'check'        { Check-All }
-    'rust'         { Build-Rust }
-    'cw-decoder'   { Build-CwDecoderRust }
-    'dotnet'       { Build-Dotnet }
-    'win32'        { Build-Win32 }
-    'check-rust'   { Check-Rust }
-    'check-dotnet' { Check-Dotnet }
-    'proto'        { Check-Proto }
-    'help'         { Show-Help }
+try {
+    switch ($Command) {
+        'build'        { Build-All }
+        'check'        { Check-All }
+        'rust'         { Build-Rust }
+        'cw-decoder'   { Build-CwDecoderRust }
+        'dotnet'       { Build-Dotnet }
+        'win32'        { Build-Win32 }
+        'check-rust'   { Check-Rust }
+        'check-dotnet' { Check-Dotnet }
+        'proto'        { Check-Proto }
+        'help'         { Show-Help }
+    }
+} finally {
+    Write-BuildSummary
 }
 
 Write-Host "`nDone." -ForegroundColor Green
