@@ -564,7 +564,7 @@
             <Grid Grid.Row="2" ColumnDefinitions="2*,Auto,Auto,Auto,Auto" ColumnSpacing="10">
               <StackPanel Spacing="2">
                 <TextBlock Text="ANCHOR NEEDLES" Classes="label" />
-                <TextBox Text="{Binding HarvestNeedlesText}" Watermark="Optional filters, e.g. 5NN TU W1AW"
+                <TextBox Text="{Binding HarvestNeedlesText}" PlaceholderText="Optional filters, e.g. 5NN TU W1AW"
                          Background="#0C1A28" Foreground="{StaticResource TextHi}" />
                 <TextBlock Text="Optional only. Leave blank to harvest by decoder agreement; add needles to surface windows where either decoder copy contains those anchors."
                            Classes="label" TextWrapping="Wrap" MaxWidth="420" />
@@ -776,7 +776,7 @@
                       <TextBlock Text="CUSTOM TOKENS" Classes="label" Margin="0,4,0,0" />
                       <TextBox Text="{Binding StrategySweepCustomTokens, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                Background="{StaticResource BgPanel}" Foreground="{StaticResource TextHi}"
-                               Watermark="region30,env25,live-env"
+                               PlaceholderText="region30,env25,live-env"
                                ToolTip.Tip="Comma-separated extra tokens forwarded verbatim to the eval binary." />
                       <Button Content="RESET TO DEFAULTS" Click="OnResetStrategyDefaultsClick"
                               FontSize="11" Padding="10,4" HorizontalAlignment="Stretch" />
@@ -1085,7 +1085,7 @@
                   IsVisible="{Binding IsBenchSourceFile}">
               <TextBlock Text="TRUTH" Classes="label" VerticalAlignment="Center" />
               <TextBox Grid.Column="1" Text="{Binding BenchTruth, Mode=TwoWay}" FontFamily="Consolas"
-                       FontSize="12" Watermark="Uppercase expected transcript starting at the onset" />
+                       FontSize="12" PlaceholderText="Uppercase expected transcript starting at the onset" />
             </Grid>
 
             <!-- Decoder knobs -->
