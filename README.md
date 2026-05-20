@@ -239,8 +239,14 @@ For the full dependency matrix and per-lane setup notes, see `docs\development\u
 **Interactive launcher TUI (recommended for mixed engine + UI startup):**
 
 ```powershell
+.\launcher.ps1
+```
+
+Or invoke cargo directly:
+
+```powershell
 cd src\rust
-cargo run -p qsoripper-launcher
+cargo run -p qsoripper-launcher --release
 ```
 
 `qsoripper-launcher` is a fast-starting ratatui app that lists available engines (Rust on 50051, .NET on 50052) and UIs (Avalonia GUI, DebugHost, CW Scope, Rust TUI), and lets you toggle which to start with `Space`, bind each UI to a specific engine in the third column, and `Enter` to launch. `S` stops launcher-managed processes. Selections persist under `[launcher]` in `config.toml`. The launcher does not build artifacts — run `.\build.ps1` first.
