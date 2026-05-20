@@ -112,16 +112,35 @@ where
         const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
-        let mut cmd = Command::new(exe);
-        cmd.args(args);
+        let mut cmd = if let Some(wt) = find_on_path("wt.exe") {
+            // Open in a new Windows Terminal window so the TUI gets a real,
+            // visible terminal with proper input handling. `-w new` forces a
+            // fresh window; `-d` sets the new tab's working directory; the
+            // double dash separates wt's args from the child invocation.
+            let mut c = Command::new(wt);
+            c.arg("-w").arg("new");
+            if let Some(dir) = exe.parent() {
+                c.arg("-d").arg(dir);
+            }
+            let title = format!("QsoRipper - {}", spec.display_name);
+            c.arg("--title").arg(title);
+            c.arg("--").arg(exe);
+            c.args(args);
+            c
+        } else {
+            // Fallback for systems without Windows Terminal: classic conhost
+            // window via CREATE_NEW_CONSOLE.
+            let mut c = Command::new(exe);
+            c.args(args);
+            c.creation_flags(CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP);
+            c
+        };
         if let Some(dir) = exe.parent() {
             cmd.current_dir(dir);
         }
         for (k, v) in env {
             cmd.env(k, v);
         }
-        // Inherit stdio so the new console is the child's terminal.
-        cmd.creation_flags(CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP);
         cmd
     }
 
@@ -145,6 +164,18 @@ where
         cmd.process_group(0);
         cmd
     }
+}
+
+#[cfg(windows)]
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 #[cfg(not(windows))]
@@ -280,12 +311,21 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn build_command_for_tui_keeps_exe_program_on_windows() {
+    fn build_command_for_tui_targets_a_terminal_on_windows() {
         let spec = find(UI_TUI).expect("tui");
         assert!(spec.wants_console, "TUI must request a console");
         let exe = PathBuf::from("C:/no/such/path/qsoripper-tui.exe");
         let cmd = build_command(&spec, &exe, &[], std::iter::empty::<(&str, &str)>());
-        assert_eq!(cmd.get_program(), exe.as_os_str());
+        let program = cmd.get_program().to_string_lossy().to_lowercase();
+        let args: Vec<&OsStr> = cmd.get_args().collect();
+        if program.ends_with("wt.exe") {
+            assert!(
+                args.iter().any(|a| *a == exe.as_os_str()),
+                "wt wrapper must pass the TUI exe as an argument"
+            );
+        } else {
+            assert_eq!(cmd.get_program(), exe.as_os_str());
+        }
     }
 
     #[cfg(not(windows))]
