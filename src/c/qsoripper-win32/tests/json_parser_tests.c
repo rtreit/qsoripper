@@ -330,9 +330,13 @@ static void test_deeply_nested(void)
     char *v = json_extract_object(deep);
     ASSERT_STR_EQ(deep, v); free(v);
 
-    /* Can extract inner key (strstr finds first match) */
-    v = json_get_string(deep, "e");
-    ASSERT_STR_EQ("leaf", v); free(v);
+    /* json_get_string is top-level only: outer key "a" returns the nested
+       object as a raw substring; inner-only key "e" returns NULL. Callers
+       that need to descend must call json_extract_object first. */
+    v = json_get_string(deep, "a");
+    if (v) { free(v); g_pass++; } else { g_fail++; printf("  FAIL: outer key 'a' not found\n"); }
+
+    ASSERT_NULL(json_get_string(deep, "e"));
 }
 
 static void test_numeric_edge_cases(void)
@@ -381,12 +385,70 @@ static void test_escaped_quotes_in_value(void)
 static void test_key_as_substring_of_value(void)
 {
     printf("test_key_as_substring_of_value\n");
-    /* Key "id" appears inside a value before the real key */
+    /* Key "id" appears inside a value before the real key.
+       The quoted-pattern "id" does not match inside "id_holder" because of the
+       trailing _, so the real key is found correctly. */
     char *v = json_get_string("{\"name\":\"id_holder\",\"id\":\"real\"}", "id");
-    /* strstr finds "id" inside "id_holder" first — this is a known limitation.
-       The important thing is it doesn't crash. */
-    if (v) free(v);
-    g_pass++; /* no crash */
+    ASSERT_STR_EQ("real", v); if (v) free(v);
+}
+
+/* The CLI emits well-formed JSON, but operator-supplied free-text values
+   (notes, comment, qth, workedName) can contain bytes that look like another
+   JSON key. We must only match keys at the top level of the outer object,
+   never inside a string array, nested object, or string value. */
+static void test_top_level_only_string_array_element(void)
+{
+    printf("test_top_level_only_string_array_element\n");
+
+    /* String-array element "callsign" sits in the byte stream as the literal
+       bytes "callsign" (correctly quoted by JSON). The current parser walks
+       the text with strstr and matches the array element before reaching the
+       real top-level key. */
+    const char *json =
+        "{\"tags\":[\"band\",\"callsign\"],\"callsign\":\"K7AVA\"}";
+    char *v = json_get_string(json, "callsign");
+    ASSERT_STR_EQ("K7AVA", v); if (v) free(v);
+}
+
+static void test_top_level_only_nested_object_key(void)
+{
+    printf("test_top_level_only_nested_object_key\n");
+
+    /* Same key appears in an inner object first. We want the outer value. */
+    const char *json =
+        "{\"meta\":{\"callsign\":\"NESTED\"},\"callsign\":\"OUTER\"}";
+    char *v = json_get_string(json, "callsign");
+    ASSERT_STR_EQ("OUTER", v); if (v) free(v);
+
+    /* Same for numeric values via locate_value. */
+    const char *jnum =
+        "{\"meta\":{\"cqZone\":99},\"cqZone\":5}";
+    ASSERT_INT_EQ(5, json_get_int(jnum, "cqZone", 0));
+
+    /* Same for doubles. */
+    const char *jdbl =
+        "{\"meta\":{\"kIndex\":9.9},\"kIndex\":1.5}";
+    ASSERT_DOUBLE_EQ(1.5, json_get_double(jdbl, "kIndex", 0.0), 0.001);
+}
+
+static void test_top_level_only_key_present_only_in_nested(void)
+{
+    printf("test_top_level_only_key_present_only_in_nested\n");
+
+    /* Key exists only at depth >= 2. Top-level lookup must return NULL. */
+    const char *json = "{\"meta\":{\"callsign\":\"NESTED\"}}";
+    ASSERT_NULL(json_get_string(json, "callsign"));
+    ASSERT_INT_EQ(-1, json_get_int(json, "cqZone", -1));
+}
+
+static void test_top_level_only_key_in_array_only(void)
+{
+    printf("test_top_level_only_key_in_array_only\n");
+
+    /* Key-shaped string only appears as an array element, not as a real key. */
+    const char *json = "{\"tags\":[\"callsign\",\"band\"]}";
+    ASSERT_NULL(json_get_string(json, "callsign"));
+    ASSERT_NULL(json_get_string(json, "band"));
 }
 
 static void test_consecutive_commas(void)
@@ -911,6 +973,10 @@ int main(void)
     test_value_is_boolean();
     test_escaped_quotes_in_value();
     test_key_as_substring_of_value();
+    test_top_level_only_string_array_element();
+    test_top_level_only_nested_object_key();
+    test_top_level_only_key_present_only_in_nested();
+    test_top_level_only_key_in_array_only();
     test_consecutive_commas();
     test_empty_object();
     test_array_of_one();
