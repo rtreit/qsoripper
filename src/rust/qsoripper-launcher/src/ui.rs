@@ -14,13 +14,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Terminal;
 
-use crate::catalog::{catalog, ComponentId, ComponentKind, ENGINE_DOTNET, ENGINE_RUST};
+use crate::catalog::{
+    catalog, ComponentId, ComponentKind, ENGINE_DOTNET, ENGINE_RUST, UI_DEBUGHOST,
+};
 use crate::config;
 use crate::discovery::ArtifactRoot;
 use crate::model::Selection;
 use crate::plan::{engine_plan, ui_plan};
 use crate::ports::{is_port_listening, wait_for_port};
-use crate::process::{spawn, stop_pid, ProcessRegistry};
+use crate::process::{open_url, spawn, stop_pid, ProcessRegistry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Column {
@@ -247,6 +249,7 @@ impl AppState {
         }
 
         // UIs next.
+        let mut opened_debughost = false;
         for ui_id in self.selection.uis.clone() {
             let Some(plan) = ui_plan(ui_id, &self.selection) else {
                 continue;
@@ -257,10 +260,33 @@ impl AppState {
             match spawn(&plan.spec, &exe, &arg_refs, &plan.env, &mut self.registry) {
                 Ok(p) => {
                     self.statuses.insert(ui_id, Status::running(p.pid));
+                    if ui_id == UI_DEBUGHOST {
+                        opened_debughost = true;
+                    }
                 }
                 Err(e) => {
                     self.statuses.insert(ui_id, Status::failed(&e.to_string()));
                 }
+            }
+        }
+
+        // Once everything is spawned, wait briefly for the DebugHost HTTP
+        // endpoint to come up, then point the user's default browser at it.
+        if opened_debughost {
+            const DEBUGHOST_URL: &str = "http://localhost:5082";
+            const DEBUGHOST_PORT: u16 = 5082;
+            if wait_for_port(
+                DEBUGHOST_PORT,
+                Duration::from_secs(20),
+                Duration::from_millis(300),
+            ) {
+                if let Err(e) = open_url(DEBUGHOST_URL) {
+                    self.last_message =
+                        format!("DebugHost started but failed to open browser: {e}");
+                }
+            } else {
+                self.last_message =
+                    format!("DebugHost did not respond on {DEBUGHOST_URL} within 20s");
             }
         }
 

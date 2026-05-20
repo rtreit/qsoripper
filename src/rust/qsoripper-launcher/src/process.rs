@@ -224,6 +224,50 @@ fn apply_detach_flags(cmd: &mut Command) {
     cmd.process_group(0);
 }
 
+/// Open `url` in the user's default browser. Returns an error if the OS
+/// reports the open command failed to start; success of the launch is
+/// best-effort beyond that.
+pub(crate) fn open_url(url: &str) -> Result<()> {
+    #[cfg(windows)]
+    {
+        // `cmd /C start "" "<url>"` honors the user's default browser and
+        // does not require shell escaping the URL beyond the surrounding
+        // quotes. The empty "" is start's window title argument.
+        Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("failed to launch browser for {url}"))?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("failed to launch browser for {url}"))?;
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("failed to launch browser for {url}"))?;
+        Ok(())
+    }
+}
+
 /// Spawn the executable behind `spec` and record its PID in `registry`.
 pub(crate) fn spawn(
     spec: &ComponentSpec,
