@@ -873,6 +873,51 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
+    public void Update_qso_flips_synced_to_modified_so_next_sync_uses_replace()
+    {
+        // Regression for the .NET parity of the Rust bug fixed in this change:
+        // editing a previously-synced QSO must leave the row marked Modified
+        // (with its qrz_logid intact) so the next bulk sync issues REPLACE
+        // instead of stranding the local correction. See
+        // docs/architecture/engine-specification.md §UpdateQso step 4.
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzLogbookApiKey = "test-api-key",
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87",
+            },
+        });
+        var loggedResp = state.LogQso(new LogQsoRequest
+        {
+            SyncToQrz = true,
+            Qso = new QsoRecord
+            {
+                WorkedCallsign = "WG0Y",
+                Band = Band._20M,
+                Mode = Mode.Cw,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+        var logged = state.GetQso(loggedResp.LocalId)!;
+        Assert.Equal(SyncStatus.Synced, logged.SyncStatus);
+        var originalLogid = logged.QrzLogid;
+        Assert.False(string.IsNullOrEmpty(originalLogid));
+
+        // Operator edits a field without re-syncing.
+        var edit = new QsoRecord(logged) { Notes = "Corrected state to CO" };
+        state.UpdateQso(new UpdateQsoRequest { Qso = edit, SyncToQrz = false });
+
+        var reloaded = state.GetQso(loggedResp.LocalId)!;
+        Assert.Equal(SyncStatus.Modified, reloaded.SyncStatus);
+        Assert.Equal(originalLogid, reloaded.QrzLogid);
+    }
+
+    [Fact]
     public void Restore_clears_tombstone_and_pending_flag()
     {
         var state = CreateState();
