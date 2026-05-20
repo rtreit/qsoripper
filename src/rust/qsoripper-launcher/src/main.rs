@@ -7,6 +7,7 @@ mod model;
 mod plan;
 mod ports;
 mod process;
+mod sync;
 mod ui;
 
 use std::path::PathBuf;

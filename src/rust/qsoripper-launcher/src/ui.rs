@@ -23,6 +23,7 @@ use crate::model::Selection;
 use crate::plan::{engine_plan, ui_plan};
 use crate::ports::{is_port_listening, wait_for_port};
 use crate::process::{open_url, spawn, stop_pid, ProcessRegistry};
+use crate::sync::{diff_rows, DialogState, Side, SyncDialog};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Column {
@@ -105,6 +106,8 @@ pub(crate) struct AppState {
     registry: ProcessRegistry,
     last_message: String,
     should_quit: bool,
+    runtime: Option<tokio::runtime::Runtime>,
+    sync_dialog: Option<SyncDialog>,
 }
 
 impl AppState {
@@ -125,9 +128,62 @@ impl AppState {
             cursor,
             statuses: BTreeMap::new(),
             registry: ProcessRegistry::new(),
-            last_message: "Press ? for help, Enter to launch selected, Q to quit.".to_owned(),
+            last_message:
+                "Press ? for help, Enter to launch selected, Y to sync settings, Q to quit."
+                    .to_owned(),
             should_quit: false,
+            runtime: None,
+            sync_dialog: None,
         }
+    }
+
+    fn ensure_runtime(&mut self) -> Option<&tokio::runtime::Runtime> {
+        if self.runtime.is_none() {
+            match tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => self.runtime = Some(rt),
+                Err(error) => {
+                    self.last_message = format!("Failed to start async runtime: {error}");
+                    return None;
+                }
+            }
+        }
+        self.runtime.as_ref()
+    }
+
+    fn open_sync_dialog(&mut self) {
+        let Some(runtime) = self.ensure_runtime() else {
+            return;
+        };
+        let dialog = SyncDialog::fetch(runtime);
+        "Sync dialog open: ← / → choose source, Enter apply, Esc cancel."
+            .clone_into(&mut self.last_message);
+        self.sync_dialog = Some(dialog);
+    }
+
+    fn close_sync_dialog(&mut self) {
+        self.sync_dialog = None;
+        "Sync dialog closed.".clone_into(&mut self.last_message);
+    }
+
+    fn apply_sync_dialog(&mut self) {
+        let Some(mut dialog) = self.sync_dialog.take() else {
+            return;
+        };
+        let Some(runtime) = self.ensure_runtime() else {
+            self.sync_dialog = Some(dialog);
+            return;
+        };
+        dialog.apply(runtime);
+        match &dialog.state {
+            DialogState::Applied(msg) => self.last_message = msg.clone(),
+            DialogState::Failed(msg) => self.last_message = format!("Sync failed: {msg}"),
+            _ => {}
+        }
+        self.sync_dialog = Some(dialog);
     }
 
     fn engine_components() -> Vec<ComponentId> {
@@ -404,6 +460,8 @@ fn render(frame: &mut ratatui::Frame, app: &AppState) {
         Span::raw(" stop  "),
         Span::styled("R", Style::default().fg(Color::Yellow).bold()),
         Span::raw(" restart  "),
+        Span::styled("Y", Style::default().fg(Color::Yellow).bold()),
+        Span::raw(" sync  "),
         Span::styled("Q", Style::default().fg(Color::Yellow).bold()),
         Span::raw(" quit   "),
         Span::styled(&app.last_message, Style::default().fg(Color::DarkGray)),
@@ -411,6 +469,150 @@ fn render(frame: &mut ratatui::Frame, app: &AppState) {
     .block(Block::default().borders(Borders::ALL))
     .wrap(Wrap { trim: true });
     frame.render_widget(footer, footer_area);
+
+    if let Some(dialog) = app.sync_dialog.as_ref() {
+        render_sync_dialog(frame, area, dialog);
+    }
+}
+
+fn render_sync_dialog(frame: &mut ratatui::Frame, area: Rect, dialog: &SyncDialog) {
+    let popup = centered_rect(area, 90, 80);
+    frame.render_widget(ratatui::widgets::Clear, popup);
+
+    let rows = diff_rows(dialog);
+    let [header_area, body_area, footer_area] = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(6),
+            Constraint::Length(4),
+        ])
+        .areas(popup);
+
+    let source_label = match dialog.source {
+        Side::Left => dialog.left.label,
+        Side::Right => dialog.right.label,
+    };
+    let target_label = match dialog.source {
+        Side::Left => dialog.right.label,
+        Side::Right => dialog.left.label,
+    };
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled(
+            " Sync engine settings ",
+            Style::default().bg(Color::Magenta).fg(Color::White).bold(),
+        ),
+        Span::raw("  Source: "),
+        Span::styled(source_label, Style::default().fg(Color::Green).bold()),
+        Span::raw("  ->  Target: "),
+        Span::styled(target_label, Style::default().fg(Color::Yellow).bold()),
+    ]))
+    .block(Block::default().borders(Borders::ALL));
+    frame.render_widget(header, header_area);
+
+    let [left_col, right_col] = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .areas(body_area);
+
+    let left_selected = dialog.source == Side::Left;
+    let right_selected = dialog.source == Side::Right;
+    frame.render_widget(
+        build_side_list(dialog.left.label, &rows, true, left_selected),
+        left_col,
+    );
+    frame.render_widget(
+        build_side_list(dialog.right.label, &rows, false, right_selected),
+        right_col,
+    );
+
+    let footer_text = match &dialog.state {
+        DialogState::Ready => Line::from(vec![
+            Span::styled("← / →", Style::default().fg(Color::Yellow).bold()),
+            Span::raw(" pick source  "),
+            Span::styled("Enter", Style::default().fg(Color::Yellow).bold()),
+            Span::raw(" push to other engine  "),
+            Span::styled("Esc", Style::default().fg(Color::Yellow).bold()),
+            Span::raw(" cancel"),
+        ]),
+        DialogState::Applying => Line::from(Span::styled(
+            "Applying...",
+            Style::default().fg(Color::Cyan).bold(),
+        )),
+        DialogState::Applied(msg) => Line::from(vec![
+            Span::styled("✓ ", Style::default().fg(Color::Green).bold()),
+            Span::raw(msg.clone()),
+            Span::raw("  (Esc to close)"),
+        ]),
+        DialogState::Failed(msg) => Line::from(vec![
+            Span::styled("✗ ", Style::default().fg(Color::Red).bold()),
+            Span::styled(msg.clone(), Style::default().fg(Color::Red)),
+            Span::raw("  (Esc to close)"),
+        ]),
+    };
+    let footer = Paragraph::new(footer_text)
+        .block(Block::default().borders(Borders::ALL))
+        .wrap(Wrap { trim: true });
+    frame.render_widget(footer, footer_area);
+}
+
+fn build_side_list(
+    label: &str,
+    rows: &[(String, String, String, bool)],
+    is_left: bool,
+    selected: bool,
+) -> List<'static> {
+    let items: Vec<ListItem<'static>> = rows
+        .iter()
+        .map(|(field, lhs, rhs, differs)| {
+            let value = if is_left { lhs } else { rhs };
+            let value_style = if *differs {
+                Style::default().fg(Color::Red).bold()
+            } else {
+                Style::default().fg(Color::Green)
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("  {field:18} "), Style::default().fg(Color::Gray)),
+                Span::styled(value.clone(), value_style),
+            ]))
+        })
+        .collect();
+    let title_style = if selected {
+        Style::default().fg(Color::Green).bold()
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+    let title_text = if selected {
+        format!(" {label}  [SOURCE] ")
+    } else {
+        format!(" {label} ")
+    };
+    List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(Span::styled(title_text, title_style)),
+    )
+}
+
+fn centered_rect(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+    let middle_row = vertical.get(1).copied().unwrap_or(area);
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(middle_row);
+    horizontal.get(1).copied().unwrap_or(middle_row)
 }
 
 fn render_column(
@@ -488,6 +690,10 @@ fn handle_key(app: &mut AppState, key: KeyEvent) {
     if key.kind != KeyEventKind::Press {
         return;
     }
+    if app.sync_dialog.is_some() {
+        handle_sync_key(app, key);
+        return;
+    }
     match (key.code, key.modifiers) {
         (KeyCode::Char('q') | KeyCode::Esc, _) => app.should_quit = true,
         (KeyCode::Tab, _) => app.column = app.column.cycle(),
@@ -500,6 +706,44 @@ fn handle_key(app: &mut AppState, key: KeyEvent) {
         (KeyCode::Char('r'), KeyModifiers::NONE) => {
             app.stop_managed();
             app.launch_selected();
+        }
+        (KeyCode::Char('y'), KeyModifiers::NONE) => app.open_sync_dialog(),
+        _ => {}
+    }
+}
+
+fn handle_sync_key(app: &mut AppState, key: KeyEvent) {
+    match (key.code, key.modifiers) {
+        (KeyCode::Esc, _) => app.close_sync_dialog(),
+        (KeyCode::Left, _) => {
+            if let Some(dialog) = app.sync_dialog.as_mut() {
+                if matches!(dialog.state, DialogState::Ready) {
+                    dialog.source = Side::Left;
+                }
+            }
+        }
+        (KeyCode::Right, _) => {
+            if let Some(dialog) = app.sync_dialog.as_mut() {
+                if matches!(dialog.state, DialogState::Ready) {
+                    dialog.source = Side::Right;
+                }
+            }
+        }
+        (KeyCode::Tab, _) => {
+            if let Some(dialog) = app.sync_dialog.as_mut() {
+                if matches!(dialog.state, DialogState::Ready) {
+                    dialog.source = dialog.source.toggle();
+                }
+            }
+        }
+        (KeyCode::Enter, _) => {
+            let ready = matches!(
+                app.sync_dialog.as_ref().map(|d| &d.state),
+                Some(DialogState::Ready)
+            );
+            if ready {
+                app.apply_sync_dialog();
+            }
         }
         _ => {}
     }
