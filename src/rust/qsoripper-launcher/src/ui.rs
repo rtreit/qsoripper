@@ -71,7 +71,7 @@ impl Status {
     }
     fn already_running() -> Self {
         Self {
-            message: "already listening (external)".to_owned(),
+            message: "listening (external)".to_owned(),
             style: Style::default().fg(Color::Yellow),
         }
     }
