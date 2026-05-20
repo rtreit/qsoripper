@@ -27,6 +27,10 @@ pub(crate) struct ComponentSpec {
     /// `true` if the UI honors `QSORIPPER_ENGINE` / `QSORIPPER_ENDPOINT` envs
     /// to pick an engine. Used to decide whether to show a binding picker.
     pub engine_bindable: bool,
+    /// `true` for terminal apps that need their own console window to render
+    /// (e.g. ratatui-based TUIs). On Windows we spawn with `CREATE_NEW_CONSOLE`
+    /// and inherit stdio; on Unix we route through a terminal emulator.
+    pub wants_console: bool,
     /// Resolves the executable path under the published artifact tree.
     pub artifact: ArtifactSpec,
 }
@@ -73,6 +77,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
             kind: ComponentKind::Engine,
             engine_port: Some(50051),
             engine_bindable: false,
+            wants_console: false,
             artifact: ArtifactSpec {
                 publish_subdir: "qsoripper-server",
                 executable_stem: "qsoripper-server",
@@ -84,6 +89,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
             kind: ComponentKind::Engine,
             engine_port: Some(50052),
             engine_bindable: false,
+            wants_console: false,
             artifact: ArtifactSpec {
                 publish_subdir: "qsoripper-engine-dotnet",
                 executable_stem: "QsoRipper.Engine.DotNet",
@@ -95,6 +101,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
             kind: ComponentKind::Ui,
             engine_port: None,
             engine_bindable: true,
+            wants_console: false,
             artifact: ArtifactSpec {
                 publish_subdir: "qsoripper-gui",
                 executable_stem: "QsoRipper.Gui",
@@ -106,6 +113,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
             kind: ComponentKind::Ui,
             engine_port: None,
             engine_bindable: true,
+            wants_console: false,
             artifact: ArtifactSpec {
                 publish_subdir: "qsoripper-debughost",
                 executable_stem: "QsoRipper.DebugHost",
@@ -117,6 +125,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
             kind: ComponentKind::Ui,
             engine_port: None,
             engine_bindable: true,
+            wants_console: true,
             artifact: ArtifactSpec {
                 publish_subdir: "qsoripper-tui",
                 executable_stem: "qsoripper-tui",
@@ -128,6 +137,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
             kind: ComponentKind::Ui,
             engine_port: None,
             engine_bindable: false,
+            wants_console: false,
             artifact: ArtifactSpec {
                 publish_subdir: "cw-decoder-gui",
                 executable_stem: "CwDecoderGui",

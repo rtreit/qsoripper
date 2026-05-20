@@ -64,6 +64,10 @@ where
     K: AsRef<OsStr>,
     V: AsRef<OsStr>,
 {
+    if spec.wants_console {
+        return build_console_command(spec, exe, args, env);
+    }
+
     let mut cmd = Command::new(exe);
     cmd.args(args);
     if let Some(dir) = exe.parent() {
@@ -84,6 +88,90 @@ where
     // open for future per-component spawn tweaks.
     let _ = spec.id;
     cmd
+}
+
+/// Spawn a terminal app into its own visible terminal window so its TUI has
+/// somewhere to render. On Windows that means `CREATE_NEW_CONSOLE` and
+/// inherited stdio; on Unix we wrap with the user's terminal emulator.
+fn build_console_command<I, K, V>(
+    spec: &ComponentSpec,
+    exe: &Path,
+    args: &[&OsStr],
+    env: I,
+) -> Command
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
+    let _ = spec.id;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+        let mut cmd = Command::new(exe);
+        cmd.args(args);
+        if let Some(dir) = exe.parent() {
+            cmd.current_dir(dir);
+        }
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        // Inherit stdio so the new console is the child's terminal.
+        cmd.creation_flags(CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP);
+        cmd
+    }
+
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::process::CommandExt;
+        let (terminal, terminal_args) = pick_terminal();
+
+        let mut cmd = Command::new(terminal);
+        for a in terminal_args {
+            cmd.arg(a);
+        }
+        cmd.arg(exe);
+        cmd.args(args);
+        if let Some(dir) = exe.parent() {
+            cmd.current_dir(dir);
+        }
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd.process_group(0);
+        cmd
+    }
+}
+
+#[cfg(not(windows))]
+fn pick_terminal() -> (&'static str, Vec<&'static str>) {
+    // Probe a short list of well-known terminal emulators. We pick the first
+    // one on PATH; user can override by symlinking `x-terminal-emulator`.
+    const CANDIDATES: &[(&str, &[&str])] = &[
+        ("x-terminal-emulator", &["-e"]),
+        ("gnome-terminal", &["--"]),
+        ("konsole", &["-e"]),
+        ("xfce4-terminal", &["-e"]),
+        ("alacritty", &["-e"]),
+        ("kitty", &["--"]),
+        ("xterm", &["-e"]),
+    ];
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    for (cmd, args) in CANDIDATES {
+        for dir in std::env::split_paths(&path) {
+            if dir.join(cmd).is_file() {
+                return ((*cmd), args.to_vec());
+            }
+        }
+    }
+    // Last resort: `xterm -e <cmd>` will surface a clear "not found" error if
+    // none of the candidates are installed, instead of silently launching a
+    // headless TUI.
+    ("xterm", vec!["-e"])
 }
 
 #[cfg(windows)]
@@ -171,7 +259,7 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
 
-    use crate::catalog::{find, ENGINE_RUST};
+    use crate::catalog::{find, ENGINE_RUST, UI_TUI};
 
     #[test]
     fn build_command_sets_args_and_env() {
@@ -188,6 +276,30 @@ mod tests {
             .iter()
             .any(|(k, v)| *k == OsStr::new("FOO")
                 && v.map(OsStr::to_os_string) == Some("bar".into())));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn build_command_for_tui_keeps_exe_program_on_windows() {
+        let spec = find(UI_TUI).expect("tui");
+        assert!(spec.wants_console, "TUI must request a console");
+        let exe = PathBuf::from("C:/no/such/path/qsoripper-tui.exe");
+        let cmd = build_command(&spec, &exe, &[], std::iter::empty::<(&str, &str)>());
+        assert_eq!(cmd.get_program(), exe.as_os_str());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn build_command_for_tui_wraps_with_terminal_on_unix() {
+        let spec = find(UI_TUI).expect("tui");
+        assert!(spec.wants_console, "TUI must request a console");
+        let exe = PathBuf::from("/no/such/path/qsoripper-tui");
+        let cmd = build_command(&spec, &exe, &[], std::iter::empty::<(&str, &str)>());
+        // The terminal program should be the first argv, and the exe should
+        // appear later in the argument list (after the emulator's separator).
+        assert_ne!(cmd.get_program(), exe.as_os_str());
+        let args: Vec<&OsStr> = cmd.get_args().collect();
+        assert!(args.iter().any(|a| *a == exe.as_os_str()));
     }
 
     #[test]
