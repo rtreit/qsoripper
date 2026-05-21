@@ -9,6 +9,7 @@ members = [
     "qsoripper-stress",
     "qsoripper-stress-tui",
     "qsoripper-tui",
+    "qsoripper-launcher",
 ]
 
 [workspace.package]
