@@ -30,6 +30,13 @@ target_link_libraries(qsoripper-win32 PRIVATE
 # Enable Unicode
 target_compile_definitions(qsoripper-win32 PRIVATE UNICODE _UNICODE)
 
+# main.c defines wWinMain (Unicode GUI entry). MSVC accepts this automatically,
+# but the mingw/gcc CRT defaults to looking for WinMain (ANSI). The -municode
+# flag switches mingw's startup to look for wWinMain instead.
+if(MINGW)
+    target_link_options(qsoripper-win32 PRIVATE -municode)
+endif()
+
 if(MSVC)
     target_compile_options(qsoripper-win32 PRIVATE
         /W4
