@@ -4,12 +4,21 @@ on:
   workflow_dispatch:
   workflow_call:
   push:
+    branches:
+      - main
     paths:
       - ".github/workflows/rust-quality.yml"
       - "rust-toolchain.toml"
       - "src/rust/**"
       - "proto/**"
   pull_request:
+  merge_group:
+
+# PR branches: only the pull_request trigger runs (no duplicate push run that
+# competes for the rust-quality status check). Push events still run on main.
+concurrency:
+  group: rust-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

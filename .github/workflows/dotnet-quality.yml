@@ -12,6 +12,7 @@ on:
       - "src/dotnet/**"
       - "proto/**"
   pull_request:
+  merge_group:
 
 # PR branches: only the pull_request trigger runs (no duplicate push run that
 # competes for the dotnet-quality status check). Push events still run on main.
@@ -35,6 +36,11 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
+          cache: true
+          cache-dependency-path: |
+            src/dotnet/**/*.csproj
+            src/dotnet/**/Directory.Packages.props
+            src/dotnet/**/packages.lock.json
 
       - name: Verify formatting
         run: dotnet format src/dotnet/QsoRipper.slnx --verify-no-changes
