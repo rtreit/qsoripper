@@ -220,18 +220,55 @@ pub(crate) struct DiffRow {
 }
 
 /// Field rows rendered side-by-side.
+///
+/// Merges the left and right field lists by label so the dialog is robust to
+/// either side gaining, losing, or reordering rows. Labels appearing only on
+/// one side are still displayed; the missing column shows `<absent>` and the
+/// row is flagged as differing.
 pub(crate) fn diff_rows(dialog: &SyncDialog) -> Vec<DiffRow> {
-    let left = snapshot_fields(&dialog.left);
-    let right = snapshot_fields(&dialog.right);
-    left.into_iter()
-        .zip(right)
-        .map(|((field, lhs), (_, rhs))| DiffRow {
-            field,
-            differs: lhs != rhs,
-            left: lhs,
+    merge_field_lists(
+        &snapshot_fields(&dialog.left),
+        &snapshot_fields(&dialog.right),
+    )
+}
+
+const ABSENT_MARKER: &str = "<absent>";
+
+fn merge_field_lists(
+    left: &[(&'static str, String)],
+    right: &[(&'static str, String)],
+) -> Vec<DiffRow> {
+    let right_lookup: std::collections::HashMap<&'static str, &String> =
+        right.iter().map(|(label, value)| (*label, value)).collect();
+    let left_labels: std::collections::HashSet<&'static str> =
+        left.iter().map(|(label, _)| *label).collect();
+
+    let mut rows = Vec::with_capacity(left.len() + right.len());
+    for (label, lhs) in left {
+        let (rhs, present_right) = match right_lookup.get(label) {
+            Some(value) => ((*value).clone(), true),
+            None => (ABSENT_MARKER.to_owned(), false),
+        };
+        let differs = !present_right || *lhs != rhs;
+        rows.push(DiffRow {
+            field: label,
+            left: lhs.clone(),
             right: rhs,
-        })
-        .collect()
+            differs,
+        });
+    }
+    for (label, rhs) in right {
+        if left_labels.contains(label) {
+            continue;
+        }
+        rows.push(DiffRow {
+            field: label,
+            left: ABSENT_MARKER.to_owned(),
+            right: rhs.clone(),
+            differs: true,
+        });
+    }
+    rows
 }
 
 /// Labels and order for the 13 rows shown in the dialog. Both the "reachable"
@@ -396,6 +433,45 @@ mod tests {
             .find(|row| row.field == "Log file path")
             .expect("log file path row present");
         assert!(path_row.differs, "differing log paths should flag a diff");
+    }
+
+    #[test]
+    fn diff_rows_handles_asymmetric_field_sets() {
+        let left_fields: Vec<(&'static str, String)> = vec![
+            ("shared-a", "1".to_owned()),
+            ("only-left", "lonely".to_owned()),
+            ("shared-b", "same".to_owned()),
+        ];
+        let right_fields: Vec<(&'static str, String)> = vec![
+            ("shared-a", "2".to_owned()),
+            ("shared-b", "same".to_owned()),
+            ("only-right", "different".to_owned()),
+        ];
+
+        let rows = merge_field_lists(&left_fields, &right_fields);
+        let fields: Vec<&str> = rows.iter().map(|r| r.field).collect();
+        assert_eq!(
+            fields,
+            vec!["shared-a", "only-left", "shared-b", "only-right"]
+        );
+
+        let shared_a = rows.iter().find(|r| r.field == "shared-a").unwrap();
+        assert!(shared_a.differs);
+        assert_eq!(shared_a.left, "1");
+        assert_eq!(shared_a.right, "2");
+
+        let only_left = rows.iter().find(|r| r.field == "only-left").unwrap();
+        assert!(only_left.differs);
+        assert_eq!(only_left.left, "lonely");
+        assert_eq!(only_left.right, "<absent>");
+
+        let shared_b = rows.iter().find(|r| r.field == "shared-b").unwrap();
+        assert!(!shared_b.differs);
+
+        let only_right = rows.iter().find(|r| r.field == "only-right").unwrap();
+        assert!(only_right.differs);
+        assert_eq!(only_right.left, "<absent>");
+        assert_eq!(only_right.right, "different");
     }
 
     #[test]
