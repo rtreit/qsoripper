@@ -21,8 +21,16 @@ All RPCs use unique request/response envelopes. Shared domain payloads stay nest
 | `Lookup` | ✅ Implemented | Unary callsign lookup via coordinator |
 | `StreamLookup` | ✅ Implemented | Server-streaming with `Loading → Found/Error` state transitions |
 | `GetCachedCallsign` | ✅ Implemented | L1 in-memory cache check only, no network call |
-| `GetDxccEntity` | ⚠️ Planned | Returns `UNIMPLEMENTED` — deferred from first lookup slice |
-| `BatchLookup` | ⚠️ Planned | Returns `UNIMPLEMENTED` — deferred from first lookup slice |
+| `GetDxccEntity` (by `dxcc_code`) | ✅ Implemented | Returns the entity for a numeric DXCC code, or `NOT_FOUND` |
+| `GetDxccEntity` (by `prefix`) | ⚠️ Unimplemented | Returns `UNIMPLEMENTED` in both hosts |
+| `BatchLookup` | ✅ Implemented | Bounded-concurrency parallel lookup over the coordinator (max 5 in-flight) |
+
+Source-of-truth references for parity checks:
+
+- Rust: [`src/rust/qsoripper-server/src/main.rs`](../../src/rust/qsoripper-server/src/main.rs) (`get_dxcc_entity`, `batch_lookup`)
+- .NET: [`src/dotnet/QsoRipper.Engine.DotNet/GrpcServices.cs`](../../src/dotnet/QsoRipper.Engine.DotNet/GrpcServices.cs) (`GetDxccEntity`, `BatchLookup`)
+
+When changing or adding RPCs, update this table and the matching capability list in the engine specification in the same change.
 
 ## RPCs
 
@@ -165,14 +173,14 @@ Look up a DXCC (DX Century Club) entity by numeric code or callsign prefix.
 rpc GetDxccEntity(GetDxccEntityRequest) returns (GetDxccEntityResponse)
 ```
 
-> ⚠️ **Status:** Planned. Currently returns `UNIMPLEMENTED`.
+> ✅ **Status:** Implemented for the `dxcc_code` query case. The `prefix` query case still returns `UNIMPLEMENTED` in both built-in hosts.
 
 **Request:** `GetDxccEntityRequest` (oneof)
 
 | Field | Type | Description |
 |---|---|---|
 | `dxcc_code` | `uint32` | Numeric DXCC entity code |
-| `prefix` | `string` | Callsign prefix — QRZ performs a 4→3→2 letter reduction to find the entity |
+| `prefix` | `string` | Callsign prefix — reserved for future QRZ-style 4→3→2 letter reduction; currently `UNIMPLEMENTED` |
 
 **Response:** `GetDxccEntityResponse`
 
@@ -181,8 +189,9 @@ rpc GetDxccEntity(GetDxccEntityRequest) returns (GetDxccEntityResponse)
 | `entity` | `DxccEntity` | The matched DXCC payload |
 
 **Notable status codes:**
-- `UNIMPLEMENTED` — current server response (planned feature).
-- `NOT_FOUND` — expected future status code when the entity does not exist.
+- `NOT_FOUND` — `dxcc_code` does not match any known DXCC entity.
+- `UNIMPLEMENTED` — `prefix` query case is not yet supported.
+- `INVALID_ARGUMENT` — neither `dxcc_code` nor `prefix` was supplied.
 
 ---
 
@@ -194,7 +203,7 @@ Look up multiple callsigns in a single request. Intended for contest prefetch sc
 rpc BatchLookup(BatchLookupRequest) returns (BatchLookupResponse)
 ```
 
-> ⚠️ **Status:** Planned. Currently returns `UNIMPLEMENTED`.
+> ✅ **Status:** Implemented in both built-in hosts. Runs the supplied callsigns through the lookup coordinator in parallel with a bounded concurrency cap (currently 5 in-flight).
 
 **Request:** `BatchLookupRequest`
 
@@ -211,7 +220,8 @@ rpc BatchLookup(BatchLookupRequest) returns (BatchLookupResponse)
 **Use case:** Pre-populate the cache before a contest session begins by looking up a list of expected callsigns in one call.
 
 **Notable status codes:**
-- `UNIMPLEMENTED` — current server response (planned feature).
+- `OK` — normal response, including the empty-input case (returns an empty `results` list).
+- `INTERNAL` — surfaced if a per-callsign worker task fails unexpectedly.
 
 ---
 

@@ -65,7 +65,7 @@ Proto files under `proto/` are the **single source of truth** for all shared typ
 | **DeveloperControlService** | Developer-only runtime config inspection and mutation |
 | **SpaceWeatherService** | Current NOAA SWPC snapshot reads and explicit refresh for engine clients |
 
-The built-in engine hosts intentionally advertise only the lookup capabilities they actually implement in this first slice (`lookup-callsign`, `lookup-stream`, `lookup-cache`). That keeps engine discovery truthful while `BatchLookup` and `GetDxccEntity` remain out of scope in both hosts.
+The built-in engine hosts advertise fine-grained lookup capabilities (`lookup-callsign`, `lookup-stream`, `lookup-cache`) so discovery matches the actually implemented surface. `BatchLookup` and DXCC lookup by code are implemented in both Rust and .NET hosts; DXCC lookup by prefix still returns `UNIMPLEMENTED`.
 
 **Building a client or a new engine host?** See the [Engine API Documentation](docs/api/README.md) for the shared contract reference, stub generation guidance, transport notes, and implementation-status details.
 
