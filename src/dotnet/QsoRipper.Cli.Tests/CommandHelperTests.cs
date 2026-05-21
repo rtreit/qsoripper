@@ -548,6 +548,90 @@ public sealed class CommandHelperTests
     }
 
     [Fact]
+    public void Export_TryParseArgs_accepts_after_before_and_contest_filters()
+    {
+        var request = new ExportAdifRequest();
+        var success = ExportAdifCommand.TryParseArgs(
+            ["--after", "2026-04-21T18:03:42Z", "--before", "2026-05-01", "--contest", "CQWWSSB", "--include-header"],
+            request,
+            out var outputFile,
+            out var error);
+
+        Assert.True(success);
+        Assert.Null(error);
+        Assert.Null(outputFile);
+        Assert.True(request.IncludeHeader);
+        Assert.Equal("CQWWSSB", request.ContestId);
+        Assert.NotNull(request.After);
+        Assert.Equal(new DateTime(2026, 4, 21, 18, 3, 42, DateTimeKind.Utc), request.After!.ToDateTime());
+        Assert.NotNull(request.Before);
+        Assert.Equal(new DateTime(2026, 5, 1, 0, 0, 0, DateTimeKind.Utc), request.Before!.ToDateTime());
+    }
+
+    [Fact]
+    public void Export_TryParseArgs_accepts_relative_after_filter()
+    {
+        var request = new ExportAdifRequest();
+        var before = DateTime.UtcNow;
+        var success = ExportAdifCommand.TryParseArgs(
+            ["--after", "2.days"],
+            request,
+            out _,
+            out var error);
+        var after = DateTime.UtcNow;
+
+        Assert.True(success);
+        Assert.Null(error);
+        Assert.NotNull(request.After);
+        var parsed = request.After!.ToDateTime();
+        Assert.InRange(parsed, before.AddDays(-2).AddSeconds(-5), after.AddDays(-2).AddSeconds(5));
+    }
+
+    [Fact]
+    public void Export_TryParseArgs_rejects_invalid_after_value()
+    {
+        var request = new ExportAdifRequest();
+        var success = ExportAdifCommand.TryParseArgs(
+            ["--after", "not-a-time"],
+            request,
+            out _,
+            out var error);
+
+        Assert.False(success);
+        Assert.NotNull(error);
+        Assert.Contains("--after", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Export_TryParseArgs_rejects_missing_value_for_filters()
+    {
+        var request = new ExportAdifRequest();
+        var success = ExportAdifCommand.TryParseArgs(
+            ["--before"],
+            request,
+            out _,
+            out var error);
+
+        Assert.False(success);
+        Assert.Equal("Missing value for --before.", error);
+    }
+
+    [Fact]
+    public void Export_TryParseArgs_rejects_unknown_option()
+    {
+        var request = new ExportAdifRequest();
+        var success = ExportAdifCommand.TryParseArgs(
+            ["--bogus"],
+            request,
+            out _,
+            out var error);
+
+        Assert.False(success);
+        Assert.NotNull(error);
+        Assert.Contains("--bogus", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TryParseArgs_deleted_flag_sets_deleted_only_filter()
     {
         var success = ListQsosCommand.TryParseArgs(["--deleted"], out var request, out var displayOptions, out var error);
