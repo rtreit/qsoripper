@@ -168,7 +168,7 @@ Updates an existing QSO record by `local_id`.
 1. Look up the existing record by `local_id`.
 2. Apply provided field updates. Fields not included in the request are not modified.
 3. Set `updated_at` to the current UTC time.
-4. If the QSO was previously synced, set `sync_status` to `SYNC_STATUS_MODIFIED`.
+4. If the QSO was previously synced, set `sync_status` to `SYNC_STATUS_MODIFIED`. The engine — not the client — is the source of truth for `sync_status` and `qrz_logid` on update: round-tripping the existing values from a client request MUST NOT change them, and a client MUST NOT be able to advance a `LOCAL_ONLY` row to `SYNCED` (or claim a `qrz_logid`) via `UpdateQso`. The only state transitions the engine performs here are `SYNCED → MODIFIED` on edit, and (in step 6) `MODIFIED → SYNCED` on a successful per-op sync.
 5. Persist the updated record.
 6. If `sync_to_qrz=true`, immediately push the updated record to QRZ Logbook (per-operation sync; see §7.3 below). If the row already has a `qrz_logid`, use REPLACE so the same remote row is updated in place; otherwise INSERT. On success, write back the QRZ-assigned `qrz_logid` and `sync_status=SYNC_STATUS_SYNCED`, and set `UpdateQsoResponse.sync_success=true`. On failure, leave the local row in its current state (`SYNC_STATUS_MODIFIED` or `SYNC_STATUS_NOT_SYNCED`), set `sync_success=false`, and put a human-readable message in `sync_error`. The local persist MUST succeed regardless.
 7. Return the updated `QsoRecord`.
