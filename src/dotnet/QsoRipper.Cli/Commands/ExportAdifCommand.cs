@@ -15,23 +15,11 @@ internal static class ExportAdifCommand
         string[] args,
         CancellationToken cancellationToken = default)
     {
-        string? outputFile = null;
-        var includeHeader = false;
-
-        for (var i = 0; i < args.Length; i++)
+        var request = new ExportAdifRequest();
+        if (!TryParseArgs(args, request, out var outputFile, out var error))
         {
-            switch (args[i])
-            {
-                case "--file" when i < args.Length - 1:
-                    outputFile = args[++i];
-                    break;
-                case "--file":
-                    Console.Error.WriteLine("Missing value for --file.");
-                    return 1;
-                case "--include-header":
-                    includeHeader = true;
-                    break;
-            }
+            Console.Error.WriteLine(error);
+            return 1;
         }
 
         string? resolvedOutputFile;
@@ -57,7 +45,7 @@ internal static class ExportAdifCommand
             try
             {
                 using var output = OpenOutputFile(resolvedOutputFile);
-                await WriteExportAsync(channel, includeHeader, output, cancellationToken);
+                await WriteExportAsync(channel, request, output, cancellationToken);
             }
             catch (Exception ex) when (ex is ArgumentException
                                           or DirectoryNotFoundException
@@ -75,19 +63,82 @@ internal static class ExportAdifCommand
         }
 
         using var stdout = Console.OpenStandardOutput();
-        await WriteExportAsync(channel, includeHeader, stdout, cancellationToken);
+        await WriteExportAsync(channel, request, stdout, cancellationToken);
         return 0;
+    }
+
+    internal static bool TryParseArgs(
+        string[] args,
+        ExportAdifRequest request,
+        out string? outputFile,
+        out string? error)
+    {
+        outputFile = null;
+        error = null;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--file" when i < args.Length - 1:
+                    outputFile = args[++i];
+                    break;
+                case "--file":
+                    error = "Missing value for --file.";
+                    return false;
+                case "--include-header":
+                    request.IncludeHeader = true;
+                    break;
+                case "--after" when i < args.Length - 1:
+                    var after = TimeParser.Parse(args[++i]);
+                    if (after is null)
+                    {
+                        error = "Invalid --after value. Use relative (2.days, 3.hours) or absolute (2026-04-10).";
+                        return false;
+                    }
+
+                    request.After = after;
+                    break;
+                case "--after":
+                    error = "Missing value for --after.";
+                    return false;
+                case "--before" when i < args.Length - 1:
+                    var before = TimeParser.Parse(args[++i]);
+                    if (before is null)
+                    {
+                        error = "Invalid --before value. Use relative (2.days, 3.hours) or absolute (2026-04-10).";
+                        return false;
+                    }
+
+                    request.Before = before;
+                    break;
+                case "--before":
+                    error = "Missing value for --before.";
+                    return false;
+                case "--contest" when i < args.Length - 1:
+                    request.ContestId = args[++i];
+                    break;
+                case "--contest":
+                    error = "Missing value for --contest.";
+                    return false;
+                default:
+                    error = $"Unknown option: {args[i]}";
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     private static async Task WriteExportAsync(
         GrpcChannel channel,
-        bool includeHeader,
+        ExportAdifRequest request,
         Stream output,
         CancellationToken cancellationToken)
     {
         var client = new LogbookService.LogbookServiceClient(channel);
         using var call = client.ExportAdif(
-            new ExportAdifRequest { IncludeHeader = includeHeader },
+            request,
             cancellationToken: cancellationToken);
 
         while (await call.ResponseStream.MoveNext(cancellationToken))

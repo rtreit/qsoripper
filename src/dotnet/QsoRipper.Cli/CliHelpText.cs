@@ -174,6 +174,15 @@ internal static class CliHelpText
                   --file <path>        Write to file (default: stdout). If <path> is a
                                        directory, writes <logdbname>-yyyy-MM-dd.adi there.
                   --include-header     Include ADIF header
+                  --after <time>       Only QSOs after this time. Relative (2.days, 3.hours)
+                                       or absolute (2026-04-21, 2026-04-21T18:03:42Z).
+                  --before <time>      Only QSOs before this time. Same formats as --after.
+                  --contest <id>       Only QSOs tagged with this contest id (e.g., CQWWSSB).
+
+                Examples:
+                  export --file recent.adi --after 7.days
+                  export --file cqww.adi --contest CQWWSSB
+                  export --after 2026-04-21T18:03:42Z --file new-for-lotw.adi
                 """,
             "lookup" => """
                 Usage: lookup <callsign> [--skip-cache]
