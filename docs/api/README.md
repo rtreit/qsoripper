@@ -73,8 +73,8 @@ Not every contract entry is implemented by every current engine host. The refere
 In general:
 
 - Both built-in engine hosts implement the common first slice used by the conformance harness: engine info, setup, station profiles, runtime config, logbook CRUD, sync status, ADIF import/export, rig status, space weather, and callsign lookup via unary/stream/cache RPCs.
-- Both built-in hosts still leave `LookupService.GetDxccEntity` and `LookupService.BatchLookup` unimplemented in this slice.
-- The built-in engine hosts intentionally report fine-grained lookup capabilities (`lookup-callsign`, `lookup-stream`, `lookup-cache`) instead of a broad `lookup` bucket so discovery matches the actual implemented surface.
+- Both built-in hosts also implement `LookupService.BatchLookup` and `LookupService.GetDxccEntity` for the `dxcc_code` query case. The `prefix` query case of `GetDxccEntity` still returns `UNIMPLEMENTED` in both hosts.
+- The built-in engine hosts report fine-grained lookup capabilities (`lookup-callsign`, `lookup-stream`, `lookup-cache`) instead of a broad `lookup` bucket so discovery matches the actually implemented surface.
 
 The current proto contract should now be treated as the stable **post-1-1-1 baseline**. PR [#74](https://github.com/rtreit/qsoripper/pull/74) was a deliberate breaking-contract cutover while the project is still early. From this baseline forward, additive changes are preferred and client code generated from the current proto files should continue to compile as new fields and RPCs are added. See [client-integration.md](client-integration.md#schema-evolution-and-compatibility) for field tolerance guidance.
 
