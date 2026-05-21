@@ -223,25 +223,32 @@ pub(crate) fn diff_rows(dialog: &SyncDialog) -> Vec<(String, String, String, boo
 }
 
 fn snapshot_fields(snapshot: &EngineSnapshot) -> Vec<(&'static str, String)> {
-    let Some(status) = snapshot.status.as_ref() else {
-        let err = snapshot.error.as_deref().unwrap_or("(no data)");
-        return vec![
-            ("Status", format!("unreachable: {err}")),
-            ("Station callsign", String::new()),
-            ("Operator callsign", String::new()),
-            ("Operator name", String::new()),
-            ("Grid", String::new()),
-            ("QRZ XML user", String::new()),
-            ("QRZ XML password", String::new()),
-            ("QRZ logbook key", String::new()),
-            ("Log file path", String::new()),
-            ("Auto sync", String::new()),
-            ("Sync interval (s)", String::new()),
-            ("Conflict policy", String::new()),
-            ("Rig control", String::new()),
-        ];
-    };
-    let profile = status.station_profile.clone().unwrap_or(StationProfile {
+    snapshot.status.as_ref().map_or_else(
+        || unreachable_snapshot_fields(snapshot.error.as_deref().unwrap_or("(no data)")),
+        reachable_snapshot_fields,
+    )
+}
+
+fn unreachable_snapshot_fields(error: &str) -> Vec<(&'static str, String)> {
+    vec![
+        ("Status", format!("unreachable: {error}")),
+        ("Station callsign", String::new()),
+        ("Operator callsign", String::new()),
+        ("Operator name", String::new()),
+        ("Grid", String::new()),
+        ("QRZ XML user", String::new()),
+        ("QRZ XML password", String::new()),
+        ("QRZ logbook key", String::new()),
+        ("Log file path", String::new()),
+        ("Auto sync", String::new()),
+        ("Sync interval (s)", String::new()),
+        ("Conflict policy", String::new()),
+        ("Rig control", String::new()),
+    ]
+}
+
+fn reachable_snapshot_fields(status: &SetupStatus) -> Vec<(&'static str, String)> {
+    let default_profile = StationProfile {
         profile_name: None,
         station_callsign: String::new(),
         operator_callsign: None,
@@ -256,19 +263,14 @@ fn snapshot_fields(snapshot: &EngineSnapshot) -> Vec<(&'static str, String)> {
         latitude: None,
         longitude: None,
         arrl_section: None,
-    });
-    let sync = status.sync_config.unwrap_or(SyncConfig {
+    };
+    let default_sync = SyncConfig {
         auto_sync_enabled: false,
         sync_interval_seconds: 0,
         conflict_policy: ConflictPolicy::Unspecified as i32,
-    });
-    let rig = status.rig_control.clone().unwrap_or(RigControlSettings {
-        enabled: None,
-        host: None,
-        port: None,
-        read_timeout_ms: None,
-        stale_threshold_ms: None,
-    });
+    };
+    let profile = status.station_profile.as_ref().unwrap_or(&default_profile);
+    let sync = status.sync_config.as_ref().unwrap_or(&default_sync);
 
     vec![
         ("Status", "reachable".to_owned()),
@@ -288,19 +290,11 @@ fn snapshot_fields(snapshot: &EngineSnapshot) -> Vec<(&'static str, String)> {
         ),
         (
             "QRZ XML password",
-            if status.has_qrz_xml_password {
-                "<set>".to_owned()
-            } else {
-                "<unset>".to_owned()
-            },
+            secret_status_marker(status.has_qrz_xml_password),
         ),
         (
             "QRZ logbook key",
-            if status.has_qrz_logbook_api_key {
-                "<set>".to_owned()
-            } else {
-                "<unset>".to_owned()
-            },
+            secret_status_marker(status.has_qrz_logbook_api_key),
         ),
         (
             "Log file path",
@@ -310,25 +304,41 @@ fn snapshot_fields(snapshot: &EngineSnapshot) -> Vec<(&'static str, String)> {
         ("Sync interval (s)", sync.sync_interval_seconds.to_string()),
         (
             "Conflict policy",
-            format!(
-                "{:?}",
-                ConflictPolicy::try_from(sync.conflict_policy)
-                    .unwrap_or(ConflictPolicy::Unspecified)
-            ),
+            conflict_policy_label(sync.conflict_policy),
         ),
         (
             "Rig control",
-            format!(
-                "{}@{}:{}",
-                rig.enabled.map_or_else(
-                    || "?".to_owned(),
-                    |b| if b { "on" } else { "off" }.to_owned()
-                ),
-                rig.host.clone().unwrap_or_else(|| "?".to_owned()),
-                rig.port.map_or_else(|| "?".to_owned(), |p| p.to_string()),
-            ),
+            rig_control_label(status.rig_control.as_ref()),
         ),
     ]
+}
+
+fn secret_status_marker(is_set: bool) -> String {
+    if is_set { "<set>" } else { "<unset>" }.to_owned()
+}
+
+fn conflict_policy_label(value: i32) -> String {
+    format!(
+        "{:?}",
+        ConflictPolicy::try_from(value).unwrap_or(ConflictPolicy::Unspecified)
+    )
+}
+
+fn rig_control_label(rig: Option<&RigControlSettings>) -> String {
+    let enabled = rig
+        .and_then(|settings| settings.enabled)
+        .map_or_else(|| "?".to_owned(), enabled_label);
+    let host = rig
+        .and_then(|settings| settings.host.as_deref())
+        .unwrap_or("?");
+    let port = rig
+        .and_then(|settings| settings.port)
+        .map_or_else(|| "?".to_owned(), |port| port.to_string());
+    format!("{enabled}@{host}:{port}")
+}
+
+fn enabled_label(enabled: bool) -> String {
+    if enabled { "on" } else { "off" }.to_owned()
 }
 
 #[cfg(test)]
