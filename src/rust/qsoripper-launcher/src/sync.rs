@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use qsoripper_core::proto::qsoripper::domain::{ConflictPolicy, StationProfile, SyncConfig};
+use qsoripper_core::proto::qsoripper::domain::ConflictPolicy;
 use qsoripper_core::proto::qsoripper::services::{
     setup_service_client::SetupServiceClient, GetSetupStatusRequest, RigControlSettings,
     SaveSetupRequest, SetupFieldValue, SetupStatus,
@@ -210,110 +210,139 @@ async fn connect(endpoint: &str) -> Result<Channel, String> {
         .map_err(|e| format!("connect failed: {e}"))
 }
 
-/// Field rows rendered side-by-side. Each row is `(label, left, right)`.
-pub(crate) fn diff_rows(dialog: &SyncDialog) -> Vec<(String, String, String, bool)> {
-    let left = snapshot_fields(&dialog.left);
-    let right = snapshot_fields(&dialog.right);
-    let mut rows = Vec::with_capacity(left.len());
-    for ((label, lhs), (_, rhs)) in left.into_iter().zip(right.into_iter()) {
-        let differs = lhs != rhs;
-        rows.push((label.to_owned(), lhs, rhs, differs));
+/// A side-by-side comparison row for the sync dialog.
+#[derive(Debug, Clone)]
+pub(crate) struct DiffRow {
+    pub field: &'static str,
+    pub left: String,
+    pub right: String,
+    pub differs: bool,
+}
+
+/// Field rows rendered side-by-side.
+///
+/// Merges the left and right field lists by label so the dialog is robust to
+/// either side gaining, losing, or reordering rows. Labels appearing only on
+/// one side are still displayed; the missing column shows `<absent>` and the
+/// row is flagged as differing.
+pub(crate) fn diff_rows(dialog: &SyncDialog) -> Vec<DiffRow> {
+    merge_field_lists(
+        &snapshot_fields(&dialog.left),
+        &snapshot_fields(&dialog.right),
+    )
+}
+
+const ABSENT_MARKER: &str = "<absent>";
+
+fn merge_field_lists(
+    left: &[(&'static str, String)],
+    right: &[(&'static str, String)],
+) -> Vec<DiffRow> {
+    let right_lookup: std::collections::HashMap<&'static str, &String> =
+        right.iter().map(|(label, value)| (*label, value)).collect();
+    let left_labels: std::collections::HashSet<&'static str> =
+        left.iter().map(|(label, _)| *label).collect();
+
+    let mut rows = Vec::with_capacity(left.len() + right.len());
+    for (label, lhs) in left {
+        let (rhs, present_right) = match right_lookup.get(label) {
+            Some(value) => ((*value).clone(), true),
+            None => (ABSENT_MARKER.to_owned(), false),
+        };
+        let differs = !present_right || *lhs != rhs;
+        rows.push(DiffRow {
+            field: label,
+            left: lhs.clone(),
+            right: rhs,
+            differs,
+        });
+    }
+    for (label, rhs) in right {
+        if left_labels.contains(label) {
+            continue;
+        }
+        rows.push(DiffRow {
+            field: label,
+            left: ABSENT_MARKER.to_owned(),
+            right: rhs.clone(),
+            differs: true,
+        });
     }
     rows
 }
 
-fn snapshot_fields(snapshot: &EngineSnapshot) -> Vec<(&'static str, String)> {
-    snapshot.status.as_ref().map_or_else(
-        || unreachable_snapshot_fields(snapshot.error.as_deref().unwrap_or("(no data)")),
-        reachable_snapshot_fields,
-    )
-}
+/// Labels and order for the 13 rows shown in the dialog. Both the "reachable"
+/// and "unreachable" snapshots use the same labels so `diff_rows` can zip them.
+const FIELD_LABELS: [&str; 13] = [
+    "Status",
+    "Station callsign",
+    "Operator callsign",
+    "Operator name",
+    "Grid",
+    "QRZ XML user",
+    "QRZ XML password",
+    "QRZ logbook key",
+    "Log file path",
+    "Auto sync",
+    "Sync interval (s)",
+    "Conflict policy",
+    "Rig control",
+];
 
-fn unreachable_snapshot_fields(error: &str) -> Vec<(&'static str, String)> {
-    vec![
-        ("Status", format!("unreachable: {error}")),
-        ("Station callsign", String::new()),
-        ("Operator callsign", String::new()),
-        ("Operator name", String::new()),
-        ("Grid", String::new()),
-        ("QRZ XML user", String::new()),
-        ("QRZ XML password", String::new()),
-        ("QRZ logbook key", String::new()),
-        ("Log file path", String::new()),
-        ("Auto sync", String::new()),
-        ("Sync interval (s)", String::new()),
-        ("Conflict policy", String::new()),
-        ("Rig control", String::new()),
-    ]
+fn snapshot_fields(snapshot: &EngineSnapshot) -> Vec<(&'static str, String)> {
+    if let Some(status) = snapshot.status.as_ref() {
+        return reachable_snapshot_fields(status);
+    }
+    let error = snapshot.error.as_deref().unwrap_or("(no data)");
+    let mut rows: Vec<(&'static str, String)> = FIELD_LABELS
+        .iter()
+        .map(|&label| (label, String::new()))
+        .collect();
+    if let Some(first) = rows.first_mut() {
+        first.1 = format!("unreachable: {error}");
+    }
+    rows
 }
 
 fn reachable_snapshot_fields(status: &SetupStatus) -> Vec<(&'static str, String)> {
-    let default_profile = StationProfile {
-        profile_name: None,
-        station_callsign: String::new(),
-        operator_callsign: None,
-        operator_name: None,
-        grid: None,
-        county: None,
-        state: None,
-        country: None,
-        dxcc: None,
-        cq_zone: None,
-        itu_zone: None,
-        latitude: None,
-        longitude: None,
-        arrl_section: None,
-    };
-    let default_sync = SyncConfig {
-        auto_sync_enabled: false,
-        sync_interval_seconds: 0,
-        conflict_policy: ConflictPolicy::Unspecified as i32,
-    };
-    let profile = status.station_profile.as_ref().unwrap_or(&default_profile);
-    let sync = status.sync_config.as_ref().unwrap_or(&default_sync);
-
+    let profile = status.station_profile.clone().unwrap_or_default();
+    let sync = status.sync_config.unwrap_or_default();
     vec![
-        ("Status", "reachable".to_owned()),
-        ("Station callsign", profile.station_callsign.clone()),
+        (FIELD_LABELS[0], "reachable".to_owned()),
+        (FIELD_LABELS[1], profile.station_callsign),
         (
-            "Operator callsign",
-            profile.operator_callsign.clone().unwrap_or_default(),
+            FIELD_LABELS[2],
+            profile.operator_callsign.unwrap_or_default(),
         ),
+        (FIELD_LABELS[3], profile.operator_name.unwrap_or_default()),
+        (FIELD_LABELS[4], profile.grid.unwrap_or_default()),
         (
-            "Operator name",
-            profile.operator_name.clone().unwrap_or_default(),
-        ),
-        ("Grid", profile.grid.clone().unwrap_or_default()),
-        (
-            "QRZ XML user",
+            FIELD_LABELS[5],
             status.qrz_xml_username.clone().unwrap_or_default(),
         ),
+        (FIELD_LABELS[6], secret_marker(status.has_qrz_xml_password)),
         (
-            "QRZ XML password",
-            secret_status_marker(status.has_qrz_xml_password),
+            FIELD_LABELS[7],
+            secret_marker(status.has_qrz_logbook_api_key),
         ),
         (
-            "QRZ logbook key",
-            secret_status_marker(status.has_qrz_logbook_api_key),
-        ),
-        (
-            "Log file path",
+            FIELD_LABELS[8],
             status.log_file_path.clone().unwrap_or_default(),
         ),
-        ("Auto sync", sync.auto_sync_enabled.to_string()),
-        ("Sync interval (s)", sync.sync_interval_seconds.to_string()),
+        (FIELD_LABELS[9], sync.auto_sync_enabled.to_string()),
+        (FIELD_LABELS[10], sync.sync_interval_seconds.to_string()),
         (
-            "Conflict policy",
+            FIELD_LABELS[11],
             conflict_policy_label(sync.conflict_policy),
         ),
         (
-            "Rig control",
+            FIELD_LABELS[12],
             rig_control_label(status.rig_control.as_ref()),
         ),
     ]
 }
 
-fn secret_status_marker(is_set: bool) -> String {
+fn secret_marker(is_set: bool) -> String {
     if is_set { "<set>" } else { "<unset>" }.to_owned()
 }
 
@@ -325,9 +354,10 @@ fn conflict_policy_label(value: i32) -> String {
 }
 
 fn rig_control_label(rig: Option<&RigControlSettings>) -> String {
-    let enabled = rig
-        .and_then(|settings| settings.enabled)
-        .map_or_else(|| "?".to_owned(), enabled_label);
+    let enabled = rig.and_then(|settings| settings.enabled).map_or_else(
+        || "?".to_owned(),
+        |on| if on { "on" } else { "off" }.to_owned(),
+    );
     let host = rig
         .and_then(|settings| settings.host.as_deref())
         .unwrap_or("?");
@@ -337,58 +367,22 @@ fn rig_control_label(rig: Option<&RigControlSettings>) -> String {
     format!("{enabled}@{host}:{port}")
 }
 
-fn enabled_label(enabled: bool) -> String {
-    if enabled { "on" } else { "off" }.to_owned()
-}
-
 #[cfg(test)]
-#[allow(deprecated, clippy::expect_used, clippy::unwrap_used)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use qsoripper_core::proto::qsoripper::domain::StationProfile;
 
     fn mk_status(callsign: &str, log_path: Option<&str>) -> SetupStatus {
         SetupStatus {
-            config_file_exists: true,
-            setup_complete: true,
-            config_path: "config.toml".to_owned(),
-            storage_backend: 0,
-            sqlite_path: None,
-            has_station_profile: true,
             station_profile: Some(StationProfile {
-                profile_name: None,
                 station_callsign: callsign.to_owned(),
-                operator_callsign: None,
-                operator_name: None,
-                grid: None,
-                county: None,
-                state: None,
-                country: None,
-                dxcc: None,
-                cq_zone: None,
-                itu_zone: None,
-                latitude: None,
-                longitude: None,
-                arrl_section: None,
+                ..Default::default()
             }),
             qrz_xml_username: Some("user".to_owned()),
             has_qrz_xml_password: true,
-            suggested_sqlite_path: String::new(),
-            warnings: vec![],
-            active_station_profile_id: None,
-            station_profile_count: 1,
             log_file_path: log_path.map(str::to_owned),
-            suggested_log_file_path: String::new(),
-            is_first_run: false,
-            has_qrz_logbook_api_key: false,
-            sync_config: None,
-            rig_control: None,
-            persistence_step_enabled: false,
-            persistence_label: String::new(),
-            persistence_description: String::new(),
-            persistence_definitions: vec![],
-            persistence_values: vec![],
-            persistence_contract_explicit: false,
+            ..Default::default()
         }
     }
 
@@ -428,14 +422,56 @@ mod tests {
         let rows = diff_rows(&dialog);
         let callsign_row = rows
             .iter()
-            .find(|(l, ..)| l == "Station callsign")
+            .find(|row| row.field == "Station callsign")
             .expect("station callsign row present");
-        assert!(!callsign_row.3, "matching callsigns should not flag a diff");
+        assert!(
+            !callsign_row.differs,
+            "matching callsigns should not flag a diff"
+        );
         let path_row = rows
             .iter()
-            .find(|(l, ..)| l == "Log file path")
+            .find(|row| row.field == "Log file path")
             .expect("log file path row present");
-        assert!(path_row.3, "differing log paths should flag a diff");
+        assert!(path_row.differs, "differing log paths should flag a diff");
+    }
+
+    #[test]
+    fn diff_rows_handles_asymmetric_field_sets() {
+        let left_fields: Vec<(&'static str, String)> = vec![
+            ("shared-a", "1".to_owned()),
+            ("only-left", "lonely".to_owned()),
+            ("shared-b", "same".to_owned()),
+        ];
+        let right_fields: Vec<(&'static str, String)> = vec![
+            ("shared-a", "2".to_owned()),
+            ("shared-b", "same".to_owned()),
+            ("only-right", "different".to_owned()),
+        ];
+
+        let rows = merge_field_lists(&left_fields, &right_fields);
+        let fields: Vec<&str> = rows.iter().map(|r| r.field).collect();
+        assert_eq!(
+            fields,
+            vec!["shared-a", "only-left", "shared-b", "only-right"]
+        );
+
+        let shared_a = rows.iter().find(|r| r.field == "shared-a").unwrap();
+        assert!(shared_a.differs);
+        assert_eq!(shared_a.left, "1");
+        assert_eq!(shared_a.right, "2");
+
+        let only_left = rows.iter().find(|r| r.field == "only-left").unwrap();
+        assert!(only_left.differs);
+        assert_eq!(only_left.left, "lonely");
+        assert_eq!(only_left.right, "<absent>");
+
+        let shared_b = rows.iter().find(|r| r.field == "shared-b").unwrap();
+        assert!(!shared_b.differs);
+
+        let only_right = rows.iter().find(|r| r.field == "only-right").unwrap();
+        assert!(only_right.differs);
+        assert_eq!(only_right.left, "<absent>");
+        assert_eq!(only_right.right, "different");
     }
 
     #[test]

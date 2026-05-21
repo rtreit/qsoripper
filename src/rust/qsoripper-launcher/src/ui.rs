@@ -23,7 +23,7 @@ use crate::model::Selection;
 use crate::plan::{engine_plan, ui_plan};
 use crate::ports::{is_port_listening, wait_for_port};
 use crate::process::{open_url, spawn, stop_pid, ProcessRegistry};
-use crate::sync::{diff_rows, DialogState, Side, SyncDialog};
+use crate::sync::{diff_rows, DialogState, DiffRow, Side, SyncDialog};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Column {
@@ -69,7 +69,7 @@ impl Status {
             style: Style::default().fg(Color::Green),
         }
     }
-    fn already_running() -> Self {
+    fn listening_external() -> Self {
         Self {
             message: "listening (external)".to_owned(),
             style: Style::default().fg(Color::Yellow),
@@ -186,6 +186,12 @@ impl AppState {
         self.sync_dialog = Some(dialog);
     }
 
+    fn ready_dialog_mut(&mut self) -> Option<&mut SyncDialog> {
+        self.sync_dialog
+            .as_mut()
+            .filter(|d| matches!(d.state, DialogState::Ready))
+    }
+
     fn engine_components() -> Vec<ComponentId> {
         catalog()
             .into_iter()
@@ -203,14 +209,12 @@ impl AppState {
     }
 
     fn bindable_uis_selected(&self) -> Vec<ComponentId> {
-        Self::ui_components()
+        catalog()
             .into_iter()
-            .filter(|id| {
-                catalog()
-                    .into_iter()
-                    .any(|c| c.id == *id && c.engine_bindable)
-                    && self.selection.ui_selected(id)
+            .filter(|c| {
+                c.kind == ComponentKind::Ui && c.engine_bindable && self.selection.ui_selected(c.id)
             })
+            .map(|c| c.id)
             .collect()
     }
 
@@ -279,7 +283,8 @@ impl AppState {
             let exe = plan.spec.artifact.executable_path(&self.artifact_root);
             let port = plan.spec.engine_port.unwrap_or(0);
             if port != 0 && is_port_listening(port, Duration::from_millis(200)) {
-                self.statuses.insert(engine_id, Status::already_running());
+                self.statuses
+                    .insert(engine_id, Status::listening_external());
                 continue;
             }
             self.statuses.insert(engine_id, Status::starting());
@@ -489,14 +494,8 @@ fn render_sync_dialog(frame: &mut ratatui::Frame, area: Rect, dialog: &SyncDialo
         ])
         .areas(popup);
 
-    let source_label = match dialog.source {
-        Side::Left => dialog.left.label,
-        Side::Right => dialog.right.label,
-    };
-    let target_label = match dialog.source {
-        Side::Left => dialog.right.label,
-        Side::Right => dialog.left.label,
-    };
+    let source_label = dialog.source_snapshot().label;
+    let target_label = dialog.target_snapshot().label;
     let header = Paragraph::new(Line::from(vec![
         Span::styled(
             " Sync engine settings ",
@@ -556,23 +555,21 @@ fn render_sync_dialog(frame: &mut ratatui::Frame, area: Rect, dialog: &SyncDialo
     frame.render_widget(footer, footer_area);
 }
 
-fn build_side_list(
-    label: &str,
-    rows: &[(String, String, String, bool)],
-    is_left: bool,
-    selected: bool,
-) -> List<'static> {
+fn build_side_list(label: &str, rows: &[DiffRow], is_left: bool, selected: bool) -> List<'static> {
     let items: Vec<ListItem<'static>> = rows
         .iter()
-        .map(|(field, lhs, rhs, differs)| {
-            let value = if is_left { lhs } else { rhs };
-            let value_style = if *differs {
+        .map(|row| {
+            let value = if is_left { &row.left } else { &row.right };
+            let value_style = if row.differs {
                 Style::default().fg(Color::Red).bold()
             } else {
                 Style::default().fg(Color::Green)
             };
             ListItem::new(Line::from(vec![
-                Span::styled(format!("  {field:18} "), Style::default().fg(Color::Gray)),
+                Span::styled(
+                    format!("  {field:18} ", field = row.field),
+                    Style::default().fg(Color::Gray),
+                ),
                 Span::styled(value.clone(), value_style),
             ]))
         })
@@ -716,32 +713,22 @@ fn handle_sync_key(app: &mut AppState, key: KeyEvent) {
     match (key.code, key.modifiers) {
         (KeyCode::Esc, _) => app.close_sync_dialog(),
         (KeyCode::Left, _) => {
-            if let Some(dialog) = app.sync_dialog.as_mut() {
-                if matches!(dialog.state, DialogState::Ready) {
-                    dialog.source = Side::Left;
-                }
+            if let Some(dialog) = app.ready_dialog_mut() {
+                dialog.source = Side::Left;
             }
         }
         (KeyCode::Right, _) => {
-            if let Some(dialog) = app.sync_dialog.as_mut() {
-                if matches!(dialog.state, DialogState::Ready) {
-                    dialog.source = Side::Right;
-                }
+            if let Some(dialog) = app.ready_dialog_mut() {
+                dialog.source = Side::Right;
             }
         }
         (KeyCode::Tab, _) => {
-            if let Some(dialog) = app.sync_dialog.as_mut() {
-                if matches!(dialog.state, DialogState::Ready) {
-                    dialog.source = dialog.source.toggle();
-                }
+            if let Some(dialog) = app.ready_dialog_mut() {
+                dialog.source = dialog.source.toggle();
             }
         }
         (KeyCode::Enter, _) => {
-            let ready = matches!(
-                app.sync_dialog.as_ref().map(|d| &d.state),
-                Some(DialogState::Ready)
-            );
-            if ready {
+            if app.ready_dialog_mut().is_some() {
                 app.apply_sync_dialog();
             }
         }
