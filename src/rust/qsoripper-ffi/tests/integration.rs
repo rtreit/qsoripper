@@ -158,6 +158,7 @@ fn log_list_get_delete_round_trip() {
     // 1. Log a QSO
     let mut req: QsrLogQsoRequest = unsafe { std::mem::zeroed() };
     fill_buf(&mut req.callsign, "W1AW");
+    fill_buf(&mut req.station_callsign, "K7TST");
     fill_buf(&mut req.band, "20M");
     fill_buf(&mut req.mode, "SSB");
     fill_buf(&mut req.datetime, "2025-01-15 14:30");
@@ -225,6 +226,7 @@ fn update_qso_round_trip() {
     // Log a QSO
     let mut req: QsrLogQsoRequest = unsafe { std::mem::zeroed() };
     fill_buf(&mut req.callsign, "K1ABC");
+    fill_buf(&mut req.station_callsign, "K7TST");
     fill_buf(&mut req.band, "40M");
     fill_buf(&mut req.mode, "CW");
     fill_buf(&mut req.datetime, "2025-01-15 20:00");
