@@ -35,6 +35,11 @@ typedef struct QsrLogQsoRequest {
    */
   uint8_t callsign[32];
   /**
+   * Operator's own (logging) station callsign (null-terminated UTF-8). Optional:
+   * if empty, the server materializes it from the active station profile.
+   */
+  uint8_t station_callsign[32];
+  /**
    * Band string, e.g. "20M" (null-terminated).
    */
   uint8_t band[8];
