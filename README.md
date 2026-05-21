@@ -623,3 +623,4 @@ docs/
 ## License
 
 MIT
+<!-- merge-queue-smoke-test 2 (2026-05-21T15:32:09.5642889-07:00) -->
