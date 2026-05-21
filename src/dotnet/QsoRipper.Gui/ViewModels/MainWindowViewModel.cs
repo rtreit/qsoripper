@@ -41,6 +41,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private bool _setupCompleteBeforeWizard;
     private string? _preferredEngineProfileId;
     private string? _preferredEngineEndpoint;
+    private string? _persistedEngineProfileId;
+    private string? _persistedEngineEndpoint;
     private StationProfile? _activeStationProfile;
 
     [ObservableProperty]
@@ -553,6 +555,13 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     {
         ArgumentNullException.ThrowIfNull(profile);
         return $"Engine: {profile.DisplayName}";
+    }
+
+    private static bool HasEngineEnvironmentOverride()
+    {
+        return !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(EngineCatalog.EngineProfileEnvironmentVariable))
+            || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(EngineCatalog.LegacyEngineProfileEnvironmentVariable))
+            || !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(EngineCatalog.EndpointEnvironmentVariable));
     }
 
     /// <summary>
@@ -1658,12 +1667,25 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             IsInspectorOpen = true;
         }
 
-        _preferredEngineProfileId = string.IsNullOrWhiteSpace(prefs.EngineProfileId)
+        var loadedProfileId = string.IsNullOrWhiteSpace(prefs.EngineProfileId)
             ? null
             : prefs.EngineProfileId.Trim();
-        _preferredEngineEndpoint = string.IsNullOrWhiteSpace(prefs.EngineEndpoint)
+        var loadedEndpoint = string.IsNullOrWhiteSpace(prefs.EngineEndpoint)
             ? null
             : prefs.EngineEndpoint.Trim();
+        _persistedEngineProfileId = loadedProfileId;
+        _persistedEngineEndpoint = loadedEndpoint;
+
+        if (HasEngineEnvironmentOverride())
+        {
+            _preferredEngineProfileId = null;
+            _preferredEngineEndpoint = null;
+        }
+        else
+        {
+            _preferredEngineProfileId = loadedProfileId;
+            _preferredEngineEndpoint = loadedEndpoint;
+        }
 
         if (!string.IsNullOrWhiteSpace(prefs.CwDecoderDeviceOverride))
         {
@@ -1685,21 +1707,29 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     /// <summary>
     /// Captures current UI toggle state for persistence across restarts.
     /// </summary>
-    internal UiPreferences CapturePreferences() => new()
+    internal UiPreferences CapturePreferences()
     {
-        IsRigEnabled = IsRigEnabled,
-        IsSpaceWeatherVisible = IsSpaceWeatherVisible,
-        IsInspectorOpen = IsInspectorOpen,
-        EngineProfileId = _switchableEngine?.CurrentProfile.ProfileId,
-        EngineEndpoint = _switchableEngine?.CurrentEndpoint,
-        IsCwDecoderEnabled = IsCwDecoderEnabled,
-        IsCwDecoderLoopback = IsCwDecoderLoopback,
-        IsCwWpmStatusBarVisible = IsCwWpmStatusBarVisible,
-        IsCwDiagnosticsEnabled = IsCwDiagnosticsEnabled,
-        CwDecoderDeviceOverride = string.IsNullOrWhiteSpace(CwDecoderDeviceOverride)
-            ? null
-            : CwDecoderDeviceOverride.Trim(),
-    };
+        var envOverride = HasEngineEnvironmentOverride();
+        return new UiPreferences
+        {
+            IsRigEnabled = IsRigEnabled,
+            IsSpaceWeatherVisible = IsSpaceWeatherVisible,
+            IsInspectorOpen = IsInspectorOpen,
+            EngineProfileId = envOverride
+                ? _persistedEngineProfileId
+                : (_switchableEngine?.CurrentProfile.ProfileId ?? _persistedEngineProfileId),
+            EngineEndpoint = envOverride
+                ? _persistedEngineEndpoint
+                : (_switchableEngine?.CurrentEndpoint ?? _persistedEngineEndpoint),
+            IsCwDecoderEnabled = IsCwDecoderEnabled,
+            IsCwDecoderLoopback = IsCwDecoderLoopback,
+            IsCwWpmStatusBarVisible = IsCwWpmStatusBarVisible,
+            IsCwDiagnosticsEnabled = IsCwDiagnosticsEnabled,
+            CwDecoderDeviceOverride = string.IsNullOrWhiteSpace(CwDecoderDeviceOverride)
+                ? null
+                : CwDecoderDeviceOverride.Trim(),
+        };
+    }
 
     private async Task ActivateDashboardAsync(bool focusSearch, Task? recentQsoRefreshTask = null)
     {

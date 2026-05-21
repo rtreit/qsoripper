@@ -1,6 +1,7 @@
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Gui.Services;
+using QsoRipper.Gui.Utilities;
 using QsoRipper.Gui.ViewModels;
 using QsoRipper.Services;
 
@@ -140,6 +141,71 @@ public sealed class MainWindowViewModelTests
         await viewModel.SyncNowCommand.ExecuteAsync(null);
 
         Assert.Contains("↑2", viewModel.SyncStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ApplyPreferencesIgnoresPersistedEngineWhenQsoripperEngineEnvIsSet()
+    {
+        const string envKey = "QSORIPPER_ENGINE";
+        var prior = Environment.GetEnvironmentVariable(envKey);
+        Environment.SetEnvironmentVariable(envKey, "local-dotnet");
+        try
+        {
+            using var viewModel = new MainWindowViewModel(new FakeEngineClient());
+
+            viewModel.ApplyPreferences(new UiPreferences
+            {
+                EngineProfileId = "local-rust",
+                EngineEndpoint = "http://127.0.0.1:50051",
+            });
+
+            var captured = viewModel.CapturePreferences();
+
+            // When env overrides the engine selection, the persisted preference
+            // must be preserved (not replaced by the runtime/test fixture value)
+            // so a later env-less launch falls back to what the user actually chose.
+            Assert.Equal("local-rust", captured.EngineProfileId);
+            Assert.Equal("http://127.0.0.1:50051", captured.EngineEndpoint);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envKey, prior);
+        }
+    }
+
+    [Fact]
+    public void ApplyPreferencesUsesPersistedEngineWhenEnvIsUnset()
+    {
+        const string profileKey = "QSORIPPER_ENGINE";
+        const string legacyKey = "QSORIPPER_ENGINE_IMPLEMENTATION";
+        const string endpointKey = "QSORIPPER_ENDPOINT";
+        var priorProfile = Environment.GetEnvironmentVariable(profileKey);
+        var priorLegacy = Environment.GetEnvironmentVariable(legacyKey);
+        var priorEndpoint = Environment.GetEnvironmentVariable(endpointKey);
+        Environment.SetEnvironmentVariable(profileKey, null);
+        Environment.SetEnvironmentVariable(legacyKey, null);
+        Environment.SetEnvironmentVariable(endpointKey, null);
+        try
+        {
+            using var viewModel = new MainWindowViewModel(new FakeEngineClient());
+
+            viewModel.ApplyPreferences(new UiPreferences
+            {
+                EngineProfileId = "local-dotnet",
+                EngineEndpoint = "http://127.0.0.1:50052",
+            });
+
+            var captured = viewModel.CapturePreferences();
+
+            Assert.Equal("local-dotnet", captured.EngineProfileId);
+            Assert.Equal("http://127.0.0.1:50052", captured.EngineEndpoint);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(profileKey, priorProfile);
+            Environment.SetEnvironmentVariable(legacyKey, priorLegacy);
+            Environment.SetEnvironmentVariable(endpointKey, priorEndpoint);
+        }
     }
 
     private static async Task WaitUntilAsync(Func<bool> predicate, TimeSpan timeout)
