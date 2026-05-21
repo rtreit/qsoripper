@@ -4,10 +4,17 @@ on:
   workflow_dispatch:
   workflow_call:
   push:
+    branches:
+      - main
     paths:
       - ".github/workflows/win32-quality.yml"
       - "src/c/**"
   pull_request:
+  merge_group:
+
+concurrency:
+  group: win32-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
