@@ -122,6 +122,27 @@ impl LogbookEngine {
         qso.created_at = existing.created_at.or_else(|| Some(now_timestamp()));
         qso.updated_at = Some(now_timestamp());
 
+        // The engine — not the client — is the source of truth for `sync_status`.
+        // Per the engine specification (docs/architecture/engine-specification.md
+        // §UpdateQso step 4): "If the QSO was previously synced, set
+        // `sync_status` to `SYNC_STATUS_MODIFIED`." This keeps the QRZ logid
+        // attached to the row so the next bulk sync can issue a REPLACE instead
+        // of stranding the local correction.
+        //
+        // For any other prior state (LocalOnly, Modified, Conflict) we preserve
+        // `existing.sync_status` rather than trust the inbound record, since
+        // clients typically round-trip whatever value they read and have no
+        // authority to advance the sync state on their own. A per-operation
+        // sync attempted by the server layer is what flips Modified → Synced
+        // after a successful REPLACE.
+        qso.sync_status = if existing.sync_status == SyncStatus::Synced as i32 {
+            SyncStatus::Modified as i32
+        } else {
+            existing.sync_status
+        };
+        qso.qrz_logid.clone_from(&existing.qrz_logid);
+        qso.qrz_bookid.clone_from(&existing.qrz_bookid);
+
         let updated = self.storage.logbook().update_qso(&qso).await?;
         if updated {
             Ok(qso)

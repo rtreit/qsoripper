@@ -374,7 +374,9 @@ mod tests {
     use prost_types::Timestamp;
     use qsoripper_core::application::logbook::LogbookEngine;
     use qsoripper_core::domain::qso::QsoRecordBuilder;
-    use qsoripper_core::proto::qsoripper::domain::{Band, LookupResult, LookupState, Mode};
+    use qsoripper_core::proto::qsoripper::domain::{
+        Band, LookupResult, LookupState, Mode, SyncStatus,
+    };
     use qsoripper_core::storage::{
         DeletedRecordsFilter, EngineStorage, LogbookStore, LookupSnapshot, LookupSnapshotStore,
         QsoListQuery, QsoSortOrder,
@@ -890,5 +892,130 @@ mod tests {
         let none = logbook.list_qso_history("NEVER", 5).await.unwrap();
         assert_eq!(none.total, 0);
         assert!(none.entries.is_empty());
+    }
+
+    /// Regression for the bug where editing a previously-synced QSO left the
+    /// row's `sync_status` as `SYNCED`, so the next bulk sync skipped the
+    /// upload and the local correction was stranded on the local DB. See
+    /// docs/architecture/engine-specification.md §UpdateQso step 4: "If the
+    /// QSO was previously synced, set `sync_status` to `SYNC_STATUS_MODIFIED`."
+    #[tokio::test]
+    async fn update_qso_flips_synced_to_modified() {
+        let storage: Arc<dyn EngineStorage> = Arc::new(MemoryStorage::new());
+        let engine = LogbookEngine::new(storage.clone());
+
+        let stored = engine
+            .log_qso(
+                QsoRecordBuilder::new("KC7AVA", "WG0Y")
+                    .band(Band::Band20m)
+                    .mode(Mode::Cw)
+                    .timestamp(Timestamp {
+                        seconds: 1_700_000_000,
+                        nanos: 0,
+                    })
+                    .build(),
+            )
+            .await
+            .unwrap();
+
+        // Simulate a successful prior sync: the row carries a QRZ logid and is
+        // marked Synced.
+        let mut synced = stored.clone();
+        synced.sync_status = SyncStatus::Synced as i32;
+        synced.qrz_logid = Some("1451311710".into());
+        assert!(storage.logbook().update_qso(&synced).await.unwrap());
+
+        // Operator corrects a field. The client typically round-trips the
+        // record verbatim, so the inbound `sync_status` is still Synced — the
+        // engine must override it.
+        let mut edit = synced.clone();
+        edit.notes = Some("Corrected state to CO".into());
+        let updated = engine.update_qso(edit).await.unwrap();
+
+        assert_eq!(
+            updated.sync_status,
+            SyncStatus::Modified as i32,
+            "edit of a Synced QSO must flip to Modified so the next sync uploads via REPLACE"
+        );
+        assert_eq!(
+            updated.qrz_logid.as_deref(),
+            Some("1451311710"),
+            "qrz_logid must be preserved so the next sync can issue REPLACE against the same remote row"
+        );
+
+        // And the persisted row reflects the same state — not just the
+        // returned value.
+        let reloaded = engine.get_qso(&updated.local_id).await.unwrap();
+        assert_eq!(reloaded.sync_status, SyncStatus::Modified as i32);
+        assert_eq!(reloaded.qrz_logid.as_deref(), Some("1451311710"));
+    }
+
+    /// Editing a row that's already `Modified` (a second local edit before the
+    /// next sync) keeps it `Modified` — never demotes it back to `LocalOnly`
+    /// or accidentally upgrades it to `Synced`.
+    #[tokio::test]
+    async fn update_qso_keeps_modified_modified() {
+        let storage: Arc<dyn EngineStorage> = Arc::new(MemoryStorage::new());
+        let engine = LogbookEngine::new(storage.clone());
+
+        let stored = engine
+            .log_qso(
+                QsoRecordBuilder::new("KC7AVA", "K7ABC")
+                    .band(Band::Band20m)
+                    .mode(Mode::Cw)
+                    .timestamp(Timestamp {
+                        seconds: 1_700_000_000,
+                        nanos: 0,
+                    })
+                    .build(),
+            )
+            .await
+            .unwrap();
+
+        let mut modified = stored.clone();
+        modified.sync_status = SyncStatus::Modified as i32;
+        modified.qrz_logid = Some("999".into());
+        assert!(storage.logbook().update_qso(&modified).await.unwrap());
+
+        let mut edit = modified.clone();
+        edit.notes = Some("second edit before sync".into());
+        let updated = engine.update_qso(edit).await.unwrap();
+
+        assert_eq!(updated.sync_status, SyncStatus::Modified as i32);
+        assert_eq!(updated.qrz_logid.as_deref(), Some("999"));
+    }
+
+    /// A client that round-trips a stale `Synced` value on a row that the
+    /// engine considers `LocalOnly` (e.g., a freshly logged but never-synced
+    /// row) must not be able to claim the row is synced. The engine is the
+    /// authority on `sync_status` and `qrz_logid`.
+    #[tokio::test]
+    async fn update_qso_ignores_client_supplied_sync_status_for_local_only_row() {
+        let storage: Arc<dyn EngineStorage> = Arc::new(MemoryStorage::new());
+        let engine = LogbookEngine::new(storage.clone());
+
+        let stored = engine
+            .log_qso(
+                QsoRecordBuilder::new("KC7AVA", "K7NEW")
+                    .band(Band::Band20m)
+                    .mode(Mode::Cw)
+                    .timestamp(Timestamp {
+                        seconds: 1_700_000_000,
+                        nanos: 0,
+                    })
+                    .build(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(stored.sync_status, SyncStatus::LocalOnly as i32);
+
+        let mut edit = stored.clone();
+        edit.sync_status = SyncStatus::Synced as i32;
+        edit.qrz_logid = Some("fake-logid".into());
+        edit.notes = Some("client tried to claim synced".into());
+
+        let updated = engine.update_qso(edit).await.unwrap();
+        assert_eq!(updated.sync_status, SyncStatus::LocalOnly as i32);
+        assert!(updated.qrz_logid.as_deref().unwrap_or("").is_empty());
     }
 }

@@ -1,0 +1,401 @@
+//! Spawn detached child processes and remember their PIDs so we can stop them.
+
+use std::collections::BTreeMap;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+
+use anyhow::{bail, Context, Result};
+use sysinfo::{Pid, ProcessRefreshKind, Signal, System};
+
+use crate::catalog::{ComponentId, ComponentSpec};
+
+/// A child the launcher started, tracked by OS PID so it survives the launcher
+/// exiting and so a later "stop" can find it again.
+#[derive(Debug, Clone)]
+pub(crate) struct LaunchedProcess {
+    pub(crate) component: ComponentId,
+    pub(crate) pid: u32,
+    #[allow(dead_code)]
+    pub(crate) executable: PathBuf,
+}
+
+/// Records launched-process PIDs by component id.
+#[derive(Debug, Default)]
+pub(crate) struct ProcessRegistry {
+    inner: BTreeMap<ComponentId, LaunchedProcess>,
+}
+
+impl ProcessRegistry {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn insert(&mut self, p: LaunchedProcess) {
+        self.inner.insert(p.component, p);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn get(&self, id: ComponentId) -> Option<&LaunchedProcess> {
+        self.inner.get(&id)
+    }
+
+    pub(crate) fn remove(&mut self, id: ComponentId) -> Option<LaunchedProcess> {
+        self.inner.remove(&id)
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &LaunchedProcess> {
+        self.inner.values()
+    }
+}
+
+/// Build the [`Command`] used to launch `spec` from its published artifact.
+///
+/// `env` entries are applied after the parent environment so callers can
+/// inject `QSORIPPER_ENGINE` and `QSORIPPER_ENDPOINT` per-UI.
+pub(crate) fn build_command<I, K, V>(
+    spec: &ComponentSpec,
+    exe: &Path,
+    args: &[&OsStr],
+    env: I,
+) -> Command
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
+    if spec.wants_console {
+        return build_console_command(spec, exe, args, env);
+    }
+
+    let mut cmd = Command::new(exe);
+    cmd.args(args);
+    if let Some(dir) = exe.parent() {
+        cmd.current_dir(dir);
+    }
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    // Don't let child stdio inherit the launcher's raw-mode terminal.
+    cmd.stdin(Stdio::null());
+    cmd.stdout(Stdio::null());
+    cmd.stderr(Stdio::null());
+
+    apply_detach_flags(&mut cmd);
+
+    // Touch `spec` so unused-warning lints don't fire on platforms where we
+    // don't otherwise read from it; in practice this also keeps the signature
+    // open for future per-component spawn tweaks.
+    let _ = spec.id;
+    cmd
+}
+
+/// Spawn a terminal app into its own visible terminal window so its TUI has
+/// somewhere to render. On Windows that means `CREATE_NEW_CONSOLE` and
+/// inherited stdio; on Unix we wrap with the user's terminal emulator.
+fn build_console_command<I, K, V>(
+    spec: &ComponentSpec,
+    exe: &Path,
+    args: &[&OsStr],
+    env: I,
+) -> Command
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<OsStr>,
+    V: AsRef<OsStr>,
+{
+    let _ = spec.id;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+        let mut cmd = if let Some(wt) = find_on_path("wt.exe") {
+            // Open in a new Windows Terminal window so the TUI gets a real,
+            // visible terminal with proper input handling. `-w new` forces a
+            // fresh window; `-d` sets the new tab's working directory; the
+            // double dash separates wt's args from the child invocation.
+            let mut c = Command::new(wt);
+            c.arg("-w").arg("new");
+            if let Some(dir) = exe.parent() {
+                c.arg("-d").arg(dir);
+            }
+            let title = format!("QsoRipper - {}", spec.display_name);
+            c.arg("--title").arg(title);
+            c.arg("--").arg(exe);
+            c.args(args);
+            c
+        } else {
+            // Fallback for systems without Windows Terminal: classic conhost
+            // window via CREATE_NEW_CONSOLE.
+            let mut c = Command::new(exe);
+            c.args(args);
+            c.creation_flags(CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP);
+            c
+        };
+        if let Some(dir) = exe.parent() {
+            cmd.current_dir(dir);
+        }
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd
+    }
+
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::process::CommandExt;
+        let (terminal, terminal_args) = pick_terminal();
+
+        let mut cmd = Command::new(terminal);
+        for a in terminal_args {
+            cmd.arg(a);
+        }
+        cmd.arg(exe);
+        cmd.args(args);
+        if let Some(dir) = exe.parent() {
+            cmd.current_dir(dir);
+        }
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd.process_group(0);
+        cmd
+    }
+}
+
+#[cfg(windows)]
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn pick_terminal() -> (&'static str, Vec<&'static str>) {
+    // Probe a short list of well-known terminal emulators. We pick the first
+    // one on PATH; user can override by symlinking `x-terminal-emulator`.
+    const CANDIDATES: &[(&str, &[&str])] = &[
+        ("x-terminal-emulator", &["-e"]),
+        ("gnome-terminal", &["--"]),
+        ("konsole", &["-e"]),
+        ("xfce4-terminal", &["-e"]),
+        ("alacritty", &["-e"]),
+        ("kitty", &["--"]),
+        ("xterm", &["-e"]),
+    ];
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    for (cmd, args) in CANDIDATES {
+        for dir in std::env::split_paths(&path) {
+            if dir.join(cmd).is_file() {
+                return ((*cmd), args.to_vec());
+            }
+        }
+    }
+    // Last resort: `xterm -e <cmd>` will surface a clear "not found" error if
+    // none of the candidates are installed, instead of silently launching a
+    // headless TUI.
+    ("xterm", vec!["-e"])
+}
+
+#[cfg(windows)]
+fn apply_detach_flags(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+}
+
+#[cfg(not(windows))]
+fn apply_detach_flags(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    // Put the child in its own process group so a SIGINT delivered to the
+    // launcher's foreground group does not propagate to UIs we launched.
+    // `process_group(0)` is enough for cleanly-exiting launches; we do not
+    // need a full new session for the TUI launcher use case.
+    cmd.process_group(0);
+}
+
+/// Open `url` in the user's default browser. Returns an error if the OS
+/// reports the open command failed to start; success of the launch is
+/// best-effort beyond that.
+pub(crate) fn open_url(url: &str) -> Result<()> {
+    #[cfg(windows)]
+    {
+        // `cmd /C start "" "<url>"` honors the user's default browser and
+        // does not require shell escaping the URL beyond the surrounding
+        // quotes. The empty "" is start's window title argument.
+        Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("failed to launch browser for {url}"))?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("failed to launch browser for {url}"))?;
+        Ok(())
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("failed to launch browser for {url}"))?;
+        Ok(())
+    }
+}
+
+/// Spawn the executable behind `spec` and record its PID in `registry`.
+pub(crate) fn spawn(
+    spec: &ComponentSpec,
+    exe: &Path,
+    args: &[&OsStr],
+    env: &[(String, String)],
+    registry: &mut ProcessRegistry,
+) -> Result<LaunchedProcess> {
+    if !exe.exists() {
+        bail!(
+            "missing artifact for {}: {} (was the build run?)",
+            spec.display_name,
+            exe.display()
+        );
+    }
+    let mut cmd = build_command(
+        spec,
+        exe,
+        args,
+        env.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+    );
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("spawning {}", exe.display()))?;
+    let entry = LaunchedProcess {
+        component: spec.id,
+        pid: child.id(),
+        executable: exe.to_path_buf(),
+    };
+    // Drop the Child handle so the launcher does not block on waitpid; the
+    // OS reaps via the new session/process group. Tracking is by PID from here.
+    drop(child);
+    registry.insert(entry.clone());
+    Ok(entry)
+}
+
+/// Ask the OS to terminate the given PID. Uses SIGTERM-equivalent semantics.
+pub(crate) fn stop_pid(pid: u32) -> bool {
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+        true,
+        ProcessRefreshKind::nothing(),
+    );
+    let Some(proc_handle) = sys.process(Pid::from_u32(pid)) else {
+        return false;
+    };
+    proc_handle
+        .kill_with(Signal::Term)
+        .unwrap_or_else(|| proc_handle.kill())
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::needless_pass_by_value
+)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    use crate::catalog::{find, ENGINE_RUST, UI_TUI};
+
+    #[test]
+    fn build_command_sets_args_and_env() {
+        let spec = find(ENGINE_RUST).expect("rust engine");
+        let exe = PathBuf::from("/no/such/path/qsoripper-server");
+        let arg1: OsString = "--listen".into();
+        let arg2: OsString = "127.0.0.1:50051".into();
+        let args = [arg1.as_os_str(), arg2.as_os_str()];
+        let cmd = build_command(&spec, &exe, &args, [("FOO", "bar")]);
+        let argv: Vec<&OsStr> = cmd.get_args().collect();
+        assert_eq!(argv, vec![arg1.as_os_str(), arg2.as_os_str()]);
+        let env_pairs: Vec<(&OsStr, Option<&OsStr>)> = cmd.get_envs().collect();
+        assert!(env_pairs
+            .iter()
+            .any(|(k, v)| *k == OsStr::new("FOO")
+                && v.map(OsStr::to_os_string) == Some("bar".into())));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn build_command_for_tui_targets_a_terminal_on_windows() {
+        let spec = find(UI_TUI).expect("tui");
+        assert!(spec.wants_console, "TUI must request a console");
+        let exe = PathBuf::from("C:/no/such/path/qsoripper-tui.exe");
+        let cmd = build_command(&spec, &exe, &[], std::iter::empty::<(&str, &str)>());
+        let program = cmd.get_program().to_string_lossy().to_lowercase();
+        let args: Vec<&OsStr> = cmd.get_args().collect();
+        if program.ends_with("wt.exe") {
+            assert!(
+                args.iter().any(|a| *a == exe.as_os_str()),
+                "wt wrapper must pass the TUI exe as an argument"
+            );
+        } else {
+            assert_eq!(cmd.get_program(), exe.as_os_str());
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn build_command_for_tui_wraps_with_terminal_on_unix() {
+        let spec = find(UI_TUI).expect("tui");
+        assert!(spec.wants_console, "TUI must request a console");
+        let exe = PathBuf::from("/no/such/path/qsoripper-tui");
+        let cmd = build_command(&spec, &exe, &[], std::iter::empty::<(&str, &str)>());
+        // The terminal program should be the first argv, and the exe should
+        // appear later in the argument list (after the emulator's separator).
+        assert_ne!(cmd.get_program(), exe.as_os_str());
+        let args: Vec<&OsStr> = cmd.get_args().collect();
+        assert!(args.iter().any(|a| *a == exe.as_os_str()));
+    }
+
+    #[test]
+    fn registry_round_trip() {
+        let mut reg = ProcessRegistry::new();
+        reg.insert(LaunchedProcess {
+            component: ENGINE_RUST,
+            pid: 1234,
+            executable: PathBuf::from("x"),
+        });
+        assert_eq!(reg.get(ENGINE_RUST).map(|p| p.pid), Some(1234));
+        assert!(reg.remove(ENGINE_RUST).is_some());
+        assert!(reg.get(ENGINE_RUST).is_none());
+    }
+}
