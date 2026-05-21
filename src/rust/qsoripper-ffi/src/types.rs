@@ -21,6 +21,9 @@ pub struct QsrRstReport {
 pub struct QsrLogQsoRequest {
     /// Worked station callsign (null-terminated UTF-8).
     pub callsign: [u8; 32],
+    /// Operator's own (logging) station callsign (null-terminated UTF-8). Optional:
+    /// if empty, the server materializes it from the active station profile.
+    pub station_callsign: [u8; 32],
     /// Band string, e.g. "20M" (null-terminated).
     pub band: [u8; 8],
     /// Mode string, e.g. "SSB" (null-terminated).

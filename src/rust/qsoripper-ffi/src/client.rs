@@ -329,9 +329,15 @@ impl QsrClient {
 /// Build a `QsoRecord` proto from the FFI request struct.
 fn build_qso_record(req: &QsrLogQsoRequest) -> Result<QsoRecord, String> {
     let callsign = buf_to_str(&req.callsign);
+    let station_callsign = buf_to_str(&req.station_callsign);
     let band_str = buf_to_str(&req.band);
     let mode_str = buf_to_str(&req.mode);
     let datetime_str = buf_to_str(&req.datetime);
+
+    if station_callsign.trim().is_empty() {
+        // Optional at the FFI layer: leave empty so the server can materialize
+        // it from the active station profile (legacy Win32 app behavior).
+    }
 
     let band = band_from_adif(&band_str.to_uppercase())
         .ok_or_else(|| format!("Unknown band: {band_str}"))?;
@@ -342,6 +348,7 @@ fn build_qso_record(req: &QsrLogQsoRequest) -> Result<QsoRecord, String> {
 
     let mut qso = QsoRecord {
         worked_callsign: callsign.to_uppercase(),
+        station_callsign: station_callsign.to_uppercase(),
         band: band.into(),
         mode: mode.into(),
         utc_timestamp: Some(timestamp),
@@ -891,9 +898,55 @@ fn populate_rig_status(
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::{buf_to_str, parse_datetime, qso_to_summary};
+    use super::{buf_to_str, build_qso_record, parse_datetime, qso_to_summary};
+    use crate::types::{str_to_buf, QsrLogQsoRequest, QsrRstReport};
     use qsoripper_core::proto::qsoripper::domain::{QsoRecord, StationSnapshot};
+
+    fn baseline_request() -> QsrLogQsoRequest {
+        let mut req: QsrLogQsoRequest = unsafe { std::mem::zeroed() };
+        str_to_buf("W1AW", &mut req.callsign);
+        str_to_buf("K7TST", &mut req.station_callsign);
+        str_to_buf("20M", &mut req.band);
+        str_to_buf("SSB", &mut req.mode);
+        str_to_buf("2025-01-15 14:30", &mut req.datetime);
+        req.rst_sent = QsrRstReport {
+            readability: 5,
+            strength: 9,
+            tone: 0,
+        };
+        req.rst_rcvd = QsrRstReport {
+            readability: 5,
+            strength: 9,
+            tone: 0,
+        };
+        req
+    }
+
+    #[test]
+    fn build_qso_record_populates_station_callsign() {
+        let req = baseline_request();
+        let qso = build_qso_record(&req).expect("build_qso_record should succeed");
+        assert_eq!(qso.station_callsign, "K7TST");
+        assert_eq!(qso.worked_callsign, "W1AW");
+        assert!(
+            !qso.station_callsign.trim().is_empty(),
+            "station_callsign must be populated so the server's persistence validator accepts the QSO"
+        );
+    }
+
+    #[test]
+    fn build_qso_record_leaves_station_callsign_empty_for_server_materialization() {
+        let mut req = baseline_request();
+        req.station_callsign = [0u8; 32];
+        let qso = build_qso_record(&req)
+            .expect("empty station_callsign is optional so the server can materialize it");
+        assert!(
+            qso.station_callsign.trim().is_empty(),
+            "empty FFI station_callsign must round-trip as empty so the server fills it"
+        );
+    }
 
     #[test]
     fn qso_to_summary_does_not_use_station_snapshot_country_when_worked_country_missing() {
