@@ -7,7 +7,15 @@ mod station_profile_support;
 mod sync;
 mod sync_scheduler;
 
-use std::{fs, future::Future, io, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{
+    fs,
+    future::Future,
+    io,
+    net::SocketAddr,
+    path::PathBuf,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use qsoripper_core::adif::{parse_adi_qsos, serialize_adi_qsos};
 use qsoripper_core::application::logbook::LogbookError;
@@ -21,8 +29,10 @@ use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
-use qsoripper_core::proto::qsoripper::domain::{Band, ConflictPolicy, Mode};
+use prost_types::Timestamp;
+use qsoripper_core::proto::qsoripper::domain::{Band, ConflictPolicy, ContestCalendarEntry, Mode};
 use qsoripper_core::proto::qsoripper::services::{
+    contest_calendar_service_server::{ContestCalendarService, ContestCalendarServiceServer},
     developer_control_service_server::{DeveloperControlService, DeveloperControlServiceServer},
     engine_service_server::{EngineService, EngineServiceServer},
     great_circle_service_server::{GreatCircleService, GreatCircleServiceServer},
@@ -35,18 +45,19 @@ use qsoripper_core::proto::qsoripper::services::{
     AdifChunk, ApplyRuntimeConfigRequest, ApplyRuntimeConfigResponse, BatchLookupRequest,
     BatchLookupResponse, ComputeGreatCircleRequest, ComputeGreatCircleResponse, DeleteQsoRequest,
     DeleteQsoResponse, DeletedRecordsFilter as ProtoDeletedRecordsFilter, EngineInfo,
-    ExportAdifRequest, ExportAdifResponse, GetCachedCallsignRequest, GetCachedCallsignResponse,
-    GetCurrentSpaceWeatherRequest, GetCurrentSpaceWeatherResponse, GetDxccEntityRequest,
-    GetDxccEntityResponse, GetEngineInfoRequest, GetEngineInfoResponse, GetQsoRequest,
-    GetQsoResponse, GetRigSnapshotRequest, GetRigSnapshotResponse, GetRigStatusRequest,
-    GetRigStatusResponse, GetRuntimeConfigRequest, GetRuntimeConfigResponse, GetSyncStatusRequest,
-    GetSyncStatusResponse, ImportAdifRequest, ImportAdifResponse, ListQsosRequest,
-    ListQsosResponse, LogQsoRequest, LogQsoResponse, LookupRequest, LookupResponse,
-    PurgeDeletedQsosRequest, PurgeDeletedQsosResponse, QsoSortOrder as ProtoQsoSortOrder,
-    RefreshSpaceWeatherRequest, RefreshSpaceWeatherResponse, ResetRuntimeConfigRequest,
-    ResetRuntimeConfigResponse, RestoreQsoRequest, RestoreQsoResponse, StreamLookupRequest,
-    StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse, TestRigConnectionRequest,
-    TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
+    ExportAdifRequest, ExportAdifResponse, GetActiveContestsRequest, GetActiveContestsResponse,
+    GetCachedCallsignRequest, GetCachedCallsignResponse, GetCurrentSpaceWeatherRequest,
+    GetCurrentSpaceWeatherResponse, GetDxccEntityRequest, GetDxccEntityResponse,
+    GetEngineInfoRequest, GetEngineInfoResponse, GetQsoRequest, GetQsoResponse,
+    GetRigSnapshotRequest, GetRigSnapshotResponse, GetRigStatusRequest, GetRigStatusResponse,
+    GetRuntimeConfigRequest, GetRuntimeConfigResponse, GetSyncStatusRequest, GetSyncStatusResponse,
+    ImportAdifRequest, ImportAdifResponse, ListQsosRequest, ListQsosResponse, LogQsoRequest,
+    LogQsoResponse, LookupRequest, LookupResponse, PurgeDeletedQsosRequest,
+    PurgeDeletedQsosResponse, QsoSortOrder as ProtoQsoSortOrder, RefreshContestCalendarRequest,
+    RefreshContestCalendarResponse, RefreshSpaceWeatherRequest, RefreshSpaceWeatherResponse,
+    ResetRuntimeConfigRequest, ResetRuntimeConfigResponse, RestoreQsoRequest, RestoreQsoResponse,
+    StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse,
+    TestRigConnectionRequest, TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
 };
 use qsoripper_core::rig_control::{
     RigControlProvider, RigctldConfig, RigctldProvider, DEFAULT_RIGCTLD_HOST, DEFAULT_RIGCTLD_PORT,
@@ -112,6 +123,7 @@ where
     let setup_service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
     let station_profile_service =
         StationProfileControlSurface::new(setup_state.clone(), runtime_config.clone());
+    let contest_calendar_service = ContestCalendarControlSurface::new(runtime_config.clone());
     let space_weather_service = SpaceWeatherControlSurface::new(runtime_config.clone());
     let rig_control_service = RigControlControlSurface::new(runtime_config.clone());
     let great_circle_service = GreatCircleControlSurface::new();
@@ -150,6 +162,7 @@ where
         .add_service(LookupServiceServer::new(lookup_service))
         .add_service(SetupServiceServer::new(setup_service))
         .add_service(StationProfileServiceServer::new(station_profile_service))
+        .add_service(ContestCalendarServiceServer::new(contest_calendar_service))
         .add_service(SpaceWeatherServiceServer::new(space_weather_service))
         .add_service(RigControlServiceServer::new(rig_control_service))
         .add_service(GreatCircleServiceServer::new(great_circle_service))
@@ -882,6 +895,7 @@ const RUST_ENGINE_CAPABILITIES: &[&str] = &[
     "station-profiles",
     "runtime-config",
     "rig-control",
+    "contest-calendar",
     "space-weather",
     "purge",
 ];
@@ -946,6 +960,117 @@ impl DeveloperControlService for DeveloperControlSurface {
         Ok(Response::new(ResetRuntimeConfigResponse {
             snapshot: Some(snapshot),
         }))
+    }
+}
+
+#[derive(Clone)]
+struct ContestCalendarControlSurface {
+    runtime_config: Arc<RuntimeConfigManager>,
+}
+
+impl ContestCalendarControlSurface {
+    fn new(runtime_config: Arc<RuntimeConfigManager>) -> Self {
+        Self { runtime_config }
+    }
+}
+
+#[tonic::async_trait]
+impl ContestCalendarService for ContestCalendarControlSurface {
+    async fn get_active_contests(
+        &self,
+        request: Request<GetActiveContestsRequest>,
+    ) -> Result<Response<GetActiveContestsResponse>, Status> {
+        let request = request.into_inner();
+        let snapshot = self
+            .runtime_config
+            .contest_calendar_monitor()
+            .await
+            .current_snapshot()
+            .await;
+        let contests = filter_active_contests(snapshot.contests, &request);
+        Ok(Response::new(GetActiveContestsResponse {
+            contests,
+            status: snapshot.status as i32,
+            fetched_at: snapshot.fetched_at,
+            valid_until: snapshot.valid_until,
+            error_message: snapshot.error_message,
+        }))
+    }
+
+    async fn refresh_contest_calendar(
+        &self,
+        _request: Request<RefreshContestCalendarRequest>,
+    ) -> Result<Response<RefreshContestCalendarResponse>, Status> {
+        let snapshot = self
+            .runtime_config
+            .contest_calendar_monitor()
+            .await
+            .refresh_snapshot()
+            .await;
+        Ok(Response::new(RefreshContestCalendarResponse {
+            contests: snapshot.contests,
+            status: snapshot.status as i32,
+            fetched_at: snapshot.fetched_at,
+            valid_until: snapshot.valid_until,
+            error_message: snapshot.error_message,
+        }))
+    }
+}
+
+fn filter_active_contests(
+    contests: Vec<ContestCalendarEntry>,
+    request: &GetActiveContestsRequest,
+) -> Vec<ContestCalendarEntry> {
+    let at = request.at_utc.unwrap_or_else(now_timestamp);
+    let lookahead_seconds = i64::from(request.lookahead_minutes).saturating_mul(60);
+    let through = at.seconds.saturating_add(lookahead_seconds);
+    contests
+        .into_iter()
+        .filter(|contest| contest_is_active(contest, at.seconds, through))
+        .filter(|contest| {
+            enum_filter_matches(
+                request.band,
+                &contest.bands,
+                request.include_partial_matches,
+            )
+        })
+        .filter(|contest| {
+            enum_filter_matches(
+                request.mode,
+                &contest.modes,
+                request.include_partial_matches,
+            )
+        })
+        .collect()
+}
+
+fn contest_is_active(
+    contest: &ContestCalendarEntry,
+    at_seconds: i64,
+    through_seconds: i64,
+) -> bool {
+    match (&contest.start_time_utc, &contest.end_time_utc) {
+        (Some(start), Some(end)) => start.seconds <= through_seconds && end.seconds >= at_seconds,
+        _ => false,
+    }
+}
+
+fn enum_filter_matches(filter: Option<i32>, values: &[i32], include_partial_matches: bool) -> bool {
+    match filter {
+        Some(value) if value > 0 => {
+            values.contains(&value) || values.is_empty() && include_partial_matches
+        }
+        _ => true,
+    }
+}
+
+fn now_timestamp() -> Timestamp {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    Timestamp {
+        seconds: i64::try_from(now.as_secs()).unwrap_or(i64::MAX),
+        nanos: i32::try_from(now.subsec_nanos()).unwrap_or(i32::MAX),
     }
 }
 

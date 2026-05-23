@@ -53,6 +53,20 @@ public sealed class EngineReachabilityTests
     }
 
     [Fact]
+    public void FormatUnimplementedServiceMessageExplainsStaleEngine()
+    {
+        var profile = EngineCatalog.RustProfile;
+        var endpoint = "http://127.0.0.1:50051";
+
+        var message = EngineReachability.FormatUnimplementedServiceMessage(profile, endpoint, "ContestCalendarService");
+
+        Assert.Contains(endpoint, message, StringComparison.Ordinal);
+        Assert.Contains("ContestCalendarService", message, StringComparison.Ordinal);
+        Assert.Contains("Restart the updated", message, StringComparison.Ordinal);
+        Assert.Contains(EngineReachability.SuggestedCommand(profile), message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ProbeAsyncReportsUnreachableForClosedPort()
     {
         using var channel = GrpcChannel.ForAddress("http://127.0.0.1:1");

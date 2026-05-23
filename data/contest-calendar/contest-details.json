@@ -1,0 +1,5805 @@
+{
+  "version": 1,
+  "generatedAtUtc": "2026-05-23T23:12:21.3978764+00:00",
+  "sourceName": "WA7BNM Contest Calendar",
+  "sourceUrl": "https://www.contestcalendar.com/contestcal.php",
+  "entries": [
+    {
+      "name": "10-10 Int. 10-10 Day Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=156",
+      "rulesUrl": "https://www.ten-ten.org/qso-party-rules/",
+      "bands": [
+        "10m"
+      ],
+      "modes": [
+        "am",
+        "cw",
+        "digital",
+        "fm",
+        "ft8",
+        "rtty",
+        "ssb"
+      ],
+      "exchange": "10-10 Member: Name \u002B 10-10 number \u002B (state/province/country); Non-Member: Name \u002B 0 \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "10-10 Int. Fall Contest, Digital",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=464",
+      "rulesUrl": "https://www.ten-ten.org/qso-party-rules/",
+      "bands": [
+        "10m"
+      ],
+      "modes": [
+        "digital"
+      ],
+      "exchange": "10-10 Member: Name \u002B 10-10 number \u002B (state/province/country); Non-Member: Name \u002B 0 \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "10-10 Int. Summer Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=81",
+      "rulesUrl": "https://www.ten-ten.org/qso-party-rules/",
+      "bands": [
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "10-10 Member: Name \u002B 10-10 number \u002B (state/province/country); Non-Member: Name \u002B 0 \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "10-10 Int. Winter Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=237",
+      "rulesUrl": "https://www.ten-ten.org/qso-party-rules/",
+      "bands": [
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "10-10 Member: Name \u002B 10-10 number \u002B (state/province/country); Non-Member: Name \u002B 0 \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "4 States QRP Group Second Sunday Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=611",
+      "rulesUrl": "http://www.4sqrp.com/SSS/sss_rules_revised_02_2026.pdf",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "Member: RS(T) \u002B (State/Province/Country) \u002B Member No.; Non-member: RS(T) \u002B (State/Province/Country) \u002B Power",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "50 MHz Spring Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=19",
+      "rulesUrl": "https://sites.google.com/site/springvhfupsprints/home/2026-information",
+      "bands": [
+        "6m"
+      ],
+      "modes": [
+        "digital"
+      ],
+      "exchange": "4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "7th Call Area QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=404",
+      "rulesUrl": "http://7qp.org/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ft8",
+        "ssb"
+      ],
+      "exchange": "7th Area: RS(T) \u002B 5-letter state/county code; non-7th Area: RS(T) \u002B (state/province/DX)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "A1Club AWT",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=715",
+      "rulesUrl": "https://a1club.org/contest/awt/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Member: RST \u002B Name",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Africa FT4 DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=752",
+      "rulesUrl": "https://mysarl.org.za/contest-resources/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "ft4"
+      ],
+      "exchange": "Signal report \u002B 4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "AGB NEMIGA Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=487",
+      "rulesUrl": "http://ev5agb.com/contest/contests.htm",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "AGB Member: RST \u002B QSO No. \u002B Member No.; non-Member: RST \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "AGB New Year Snowball Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=466",
+      "rulesUrl": "https://www.qsl.net/eu1eu/agb_nysb.htm",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "AGB Member: RST \u002B QSO No. \u002B Member No.; non-Member: RST \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "AGB-Party Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=445",
+      "rulesUrl": "http://www.ev5agb.com/contest/agb_party.htm",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "AGB Member: RST \u002B QSO No. \u002B Member No.; non-Member: RST \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "AGCW Happy New Year Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=212",
+      "rulesUrl": "https://www.agcw.de/contest/hnyc/hnyc-engl/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "AGCW: RST \u002B Serial No. \u002B \u0022/\u0022 \u002B Member No.; non-AGCW: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "AGCW QRP Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=288",
+      "rulesUrl": "https://www.agcw.de/contest/qrp/qrp-c-engl/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B QSO No. \u002B class(pwr) \u002B (AGCW Member No./\u0022NM\u0022 if not member)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "AGCW QRP/QRP Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=7",
+      "rulesUrl": "https://www.agcw.de/contest/qrp-qrp",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B QSO No. \u002B \u0022/\u0022 \u002B Class ID (A/B)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "AGCW Semi-Automatic Key Evening",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=255",
+      "rulesUrl": "https://www.agcw.de/contest/sta/",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No. \u002B \u0022/\u0022 \u002B 2-digit year first used a bug",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "AGCW Straight Key Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=109",
+      "rulesUrl": "https://www.agcw.de/contest/htp/htp-en/",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "AGCW: RST \u002B Serial No. \u002B \u0022/\u0022 \u002B Class \u002B \u0022/\u0022 \u002B Name \u002B \u0022/\u0022 \u002B Age",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "AGCW VHF/UHF Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=214",
+      "rulesUrl": "https://www.agcw.de/contest/vhf-uhf/",
+      "bands": [
+        "2m",
+        "70cm"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B \u0022/\u0022 \u002B Serial No. \u002B \u0022/\u0022 Power class \u002B \u0022/\u0022 \u002B 6-character grid locator",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "AGCW YL-CW Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=287",
+      "rulesUrl": "https://www.agcw.de/contest/yl-cw-party/",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "YL: RST \u002B Serial No. \u002B \u0022/YL/\u0022 \u002B name; OM: RST \u002B Serial No. \u002B \u0022/\u0022 \u002B name",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Alabama QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=134",
+      "rulesUrl": "http://alabamacontestgroup.org/aqp/rules/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "AL: RS(T) \u002B County; non-AL: RS(T) \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ALARA Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=95",
+      "rulesUrl": "http://www.alara.org.au/contests/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "ALARA: RS(T) \u002B Serial No. \u002B ALARA Member \u002B Name; non-ALARA: RS(T) \u002B Serial No. \u002B Name \u002B (whether YL/OM/club station)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "All Asian DX Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=47",
+      "rulesUrl": "https://www.jarl.org/English/4_Library/A-4-3_Contests/AA_rule_en.htm",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B 2-digit age",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "All Asian DX Contest, Phone",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=102",
+      "rulesUrl": "https://www.jarl.org/English/4_Library/A-4-3_Contests/AA_rule_en.htm",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS \u002B 2-digit age",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "All Austrian 160-Meter Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=188",
+      "rulesUrl": "https://www.oevsv.at/export/shared/.content/.galleries/Downloads_Referate/HF-Referat-Downloads/Rules_AOEC_160m.pdf",
+      "bands": [
+        "160m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "OE: RST \u002B Serial No. \u002B District Code; non-OE: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARAM 50 MHz Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=726",
+      "rulesUrl": "https://www.aram.pt/?pagina=eventos\u0026subpg=concurso50MHz\u0026lang=en",
+      "bands": [
+        "6m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B Serial number \u002B 6-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARI 40/80 Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=686",
+      "rulesUrl": "http://www.ari.it/en/contest-hf/contest-4080.html",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B 2-letter province car code",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARI International DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=9",
+      "rulesUrl": "https://www.ari.it/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "rtty",
+        "ssb"
+      ],
+      "exchange": "I: RS(T) \u002B 2-letter province; non-I: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Arizona QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=482",
+      "rulesUrl": "https://www.azqp.org/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "AZ: RS(T) \u002B county; non-AZ: RS(T) \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Arkansas QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=132",
+      "rulesUrl": "https://www.arkqp.com/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ft8",
+        "ssb"
+      ],
+      "exchange": "AR: RS(T) \u002B County; non-AR: RS(T) \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL 10 GHz and Up Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=88",
+      "rulesUrl": "https://www.arrl.org/10-ghz-up",
+      "bands": [
+        "10m"
+      ],
+      "modes": [
+        "digital",
+        "rtty"
+      ],
+      "exchange": "6-Character Maidenhead Locator",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL 10-Meter Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=199",
+      "rulesUrl": "http://www.arrl.org/10-meter",
+      "bands": [
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "W/VE: RST \u002B State/Province; XE: RST \u002B State; DX: RST \u002B Serial No.; MM: RST \u002B ITU Region",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL 160-Meter Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=194",
+      "rulesUrl": "http://www.arrl.org/160-meter",
+      "bands": [
+        "160m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "W/VE: RST \u002B ARRL/RAC Section; DX: RST",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL 222 MHz and Up Distance Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=615",
+      "rulesUrl": "https://www.arrl.org/222-mhz-and-up-distance-contest",
+      "bands": [
+        "160m",
+        "10m"
+      ],
+      "modes": [
+        "digital",
+        "rtty"
+      ],
+      "exchange": "6-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL Field Day",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=57",
+      "rulesUrl": "http://www.arrl.org/field-day",
+      "bands": [
+        "30m",
+        "17m",
+        "12m"
+      ],
+      "modes": [
+        "digital",
+        "rtty"
+      ],
+      "exchange": "W/VE: Number of transmitters (see rules) \u002B Operating class \u002B ARRL/RAC section; DX: Number of transmitters (see rules) \u002B Operating class \u002B \u0022DX\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL Inter. Digital Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=716",
+      "rulesUrl": "https://www.arrl.org/arrl-digital-contest",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "digital",
+        "rtty"
+      ],
+      "exchange": "4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL Inter. DX Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=256",
+      "rulesUrl": "https://www.arrl.org/arrl-dx",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "W/VE: RST \u002B (state/province); non-W/VE: RST \u002B power",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL Inter. DX Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=289",
+      "rulesUrl": "https://www.arrl.org/arrl-dx",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "W/VE: RS \u002B (state/province); non-W/VE: RS \u002B power",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL January VHF Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=231",
+      "rulesUrl": "https://www.arrl.org/january-vhf",
+      "bands": [
+        "160m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "fm",
+        "rtty",
+        "ssb"
+      ],
+      "exchange": "4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL June VHF Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=43",
+      "rulesUrl": "https://www.arrl.org/june-vhf",
+      "bands": [
+        "160m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "fm",
+        "rtty",
+        "ssb"
+      ],
+      "exchange": "4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL Kids Day",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=224",
+      "rulesUrl": "http://www.arrl.org/kids-day",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "17m",
+        "15m",
+        "12m",
+        "10m",
+        "2m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "name \u002B age \u002B QTH \u002B favorite color",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL Rookie Roundup, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=502",
+      "rulesUrl": "http://www.arrl.org/rookie-roundup",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "NA: Name \u002B 2-digit year first licensed \u002B (state/province/XE area/DX)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL Rookie Roundup, RTTY",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=501",
+      "rulesUrl": "https://www.arrl.org/rookie-roundup",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "NA: Name \u002B 2-digit year first licensed \u002B (state/province/XE area/DX)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL Rookie Roundup, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=500",
+      "rulesUrl": "http://www.arrl.org/rookie-roundup",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "Name \u002B 2-digit year first licensed \u002B (state/province/XE area/DX)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL RTTY Roundup",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=217",
+      "rulesUrl": "https://www.arrl.org/rtty-roundup",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "W/VE: RST \u002B (state/province); non-W/VE: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL School Club Roundup",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=254",
+      "rulesUrl": "https://www.arrl.org/school-club-roundup",
+      "bands": [
+        "30m",
+        "17m",
+        "12m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "rtty",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B Class (I/C/S) \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL September VHF Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=113",
+      "rulesUrl": "http://www.arrl.org/september-vhf",
+      "bands": [
+        "160m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "fm",
+        "rtty",
+        "ssb"
+      ],
+      "exchange": "4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL Sweepstakes Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=177",
+      "rulesUrl": "https://www.arrl.org/sweepstakes",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Serial No. \u002B Precedence (Q/A/B/U/M/S) \u002B [your call sign] \u002B Check \u002B ARRL/RAC Section",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARRL Sweepstakes Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=178",
+      "rulesUrl": "https://www.arrl.org/sweepstakes",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "Serial No. \u002B Precedence (Q/A/B/U/M/S) \u002B [your call sign] \u002B Check \u002B ARRL/RAC Section",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARS Flight of the Bumblebees",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=76",
+      "rulesUrl": "http://ars-qrp.com/FOBB/FOBB.html",
+      "bands": [
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Home: RST \u002B (state/province/country) \u002B Power; Bumblebee: RST \u002B (state/province/country) \u002B Bumblebee no.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ARS Spartan Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=283",
+      "rulesUrl": "http://ars-qrp.com/Spartan_Sprint/Spartan_Sprint.html",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B (state/province/country) \u002B Power",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Asia-Pacific Fall Sprint, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=164",
+      "rulesUrl": "http://jsfc.org/apsprint/aprule.txt",
+      "bands": [
+        "20m",
+        "15m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Asia-Pacific Spring Sprint, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=248",
+      "rulesUrl": "http://jsfc.org/apsprint/aprule.txt",
+      "bands": [
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Asia-Pacific Sprint, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=42",
+      "rulesUrl": "http://jsfc.org/apsprint/aprule.txt",
+      "bands": [
+        "20m",
+        "15m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Atlantic Canada QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=773",
+      "rulesUrl": "https://acqp.ca/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "VE1/9,VO1/2,VY2: RS(T) \u002B province \u002B county/division; Non-VE1/9,VO1/2,VY2: RS(T) \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "AWA Bruce Kelley 1929 QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=511",
+      "rulesUrl": "https://antiquewireless.org/homepage/bk-qso-party-details/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Name \u002B QTH \u002B Eqpt Year \u002B Transmitter Type (see rules for format) \u002B\r\n Input Power(W)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Balkan HF Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=599",
+      "rulesUrl": "https://bfra.bg/en/news/578",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Baltic Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=28",
+      "rulesUrl": "http://www.lrsf.lt/en/",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "BARTG HF RTTY Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=309",
+      "rulesUrl": "http://www.bartg.org.uk/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "RST \u002B Serial No. \u002B 4-digit time (UTC)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "BARTG RTTY Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=230",
+      "rulesUrl": "http://bartg.org.uk/wp/bartg-sprint-contest/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "Serial No. (no signal report)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "BARTG Sprint 75",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=513",
+      "rulesUrl": "http://bartg.org.uk/wp/bartg-sprint75-contests/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "BARTG Sprint PSK63 Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=703",
+      "rulesUrl": "http://bartg.org.uk/wp/bartg-sprint-psk63-contest/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ft8",
+        "rtty"
+      ],
+      "exchange": "Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Bill Windle QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=479",
+      "rulesUrl": "https://www.g4foc.org/bill-windle-qso-party/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "FOC-Member: RST \u002B Name \u002B Member No.; non-Members: RST \u002B Name",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "British Columbia QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=269",
+      "rulesUrl": "https://www.orcadxcc.org/bcqp_rules.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "BC: RS(T) \u002B District; non-BC: RS(T) \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Bucharest Digital Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=427",
+      "rulesUrl": "https://yo3test201x.blogspot.com/",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "ft4"
+      ],
+      "exchange": "RST \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "California QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=140",
+      "rulesUrl": "https://www.cqp.org/Rules.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "CA: Serial No. \u002B County; non-CA: Serial No. \u002B (state/VE province or territory/DX)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Canadian Prairies QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=717",
+      "rulesUrl": "https://cpqp.ve6hams.ca/",
+      "bands": [
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "VE4/5/6: RS(T) \u002B district code; Non-VE4/5/6: RST \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Colorado QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=431",
+      "rulesUrl": "https://coloradoqsoparty.org/",
+      "bands": [],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "CO: Name \u002B county; W/VE: Name \u002B (state/province); DX: Name \u002B DXCC prefix",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Commonwealth (BERU) Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=282",
+      "rulesUrl": "https://www.rsgbcc.org/hf/rules/2026/rcwc.shtml",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CQ 160-Meter Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=232",
+      "rulesUrl": "http://www.cq160.com/rules.htm",
+      "bands": [
+        "160m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "W/VE: RST \u002B (state/province); DX: RST \u002B CQ Zone",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CQ 160-Meter Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=259",
+      "rulesUrl": "http://www.cq160.com/rules.htm",
+      "bands": [
+        "160m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "W/VE: RS \u002B (state/province); DX: RS \u002B CQ Zone",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CQ Worldwide DX Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=192",
+      "rulesUrl": "https://www.cqww.com/rules.htm",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B CQ Zone No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CQ Worldwide DX Contest, RTTY",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=130",
+      "rulesUrl": "https://www.cqwwrtty.com/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "48 States/Canada: RST \u002B CQ Zone \u002B (state/VE area); All Others: RST \u002B CQ Zone",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CQ Worldwide DX Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=172",
+      "rulesUrl": "https://www.cqww.com/rules.htm",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS \u002B CQ Zone No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CQ Worldwide VHF Digital Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=768",
+      "rulesUrl": "https://www.cqww-vhf.com/",
+      "bands": [
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "digital"
+      ],
+      "exchange": "4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CQ Worldwide VHF SSB/CW Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=73",
+      "rulesUrl": "https://www.cqww-vhf.com/",
+      "bands": [
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "fm",
+        "ssb"
+      ],
+      "exchange": "4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CQ WW RTTY WPX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=245",
+      "rulesUrl": "https://www.cqwpxrtty.com/rules.htm",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CQ WW WPX Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=29",
+      "rulesUrl": "https://www.cqwpx.com/rules.htm",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CQ WW WPX Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=291",
+      "rulesUrl": "https://www.cqwpx.com/rules.htm",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CQ-M International DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=14",
+      "rulesUrl": "https://cqm.srr.ru/en/rules/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CQ-WE Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=402",
+      "rulesUrl": "https://w8zpf.com/cqwe/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "Name \u002B Location Code (see rules) \u002B Years of Service (see rules)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CQMM DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=21",
+      "rulesUrl": "http://www.cqmmdx.com/rules/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "All: RST\u002Bcontinent abbreviation; CWJF members: RST \u002B continent \u002B \u0022M\u0022; QRP: RST \u002B continent \u002B \u0022Q\u0022; YL: RST \u002B continent \u002B \u0022Y\u0022; Multi-Op,Clubs,Groups: RST \u002B continent \u002B \u0022C\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Croatian DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=206",
+      "rulesUrl": "https://www.hamradio.hr/9a-dx-contest/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "9A: RS(T) \u002B county; non-9A: RS(T) \u002B ITU Zone",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CVA DX Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=534",
+      "rulesUrl": "https://cvadx.org/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Brazil: RST \u002B state; Non-Brazil: RST \u002B continent; Military: RST \u002B \u0022MIL\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CVA DX Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=535",
+      "rulesUrl": "https://cvadx.org/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "Brazil: RST \u002B state; Non-Brazil: RST \u002B continent; Military: RST \u002B \u0022MIL\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CWOps CW Open",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=532",
+      "rulesUrl": "https://cwops.org/cwops-tests/cw-open/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Serial No. \u002B Name",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "CWops Test (CWT)",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=498",
+      "rulesUrl": "https://cwops.org/cwops-tests/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Member: Name \u002B Member No./\u0022CWA\u0022; non-Member: Name \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "DARC 10-Meter Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=223",
+      "rulesUrl": "https://www.darc.de/der-club/referate/conteste/darc-10m-contest/regeln/",
+      "bands": [
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "DL: RS(T) \u002B QSO No. \u002B DOK; non-DL: RS(T) \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "DARC Christmas Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=210",
+      "rulesUrl": "https://www.darc.de/der-club/referate/conteste/weihnachtswettbewerb/en/",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "DL: RS(T) \u002B DOK (or \u0022NM\u0022 if not a DARC member); non-DL: RS(T) \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "DARC CW-Training Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=776",
+      "rulesUrl": "https://www.darc.de/der-club/referate/conteste/cwa/darc-cw-training-rules/",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "DE: RST \u002B DOK/NM; non-DE: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "DARC FT4 Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=745",
+      "rulesUrl": "https://www.darc.de/der-club/referate/conteste/ft4-contest/ft4-rules/",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "ft4"
+      ],
+      "exchange": "Signal report \u002B 4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "DARC RTTY Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=744",
+      "rulesUrl": "https://www.darc.de/der-club/referate/conteste/rtty-kurz/darc-rtty-contest-english-version/darc-rtty-rules/",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "DL: RST \u002B (DOK/\u0022NM\u0022); non-DL: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Delaware QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=240",
+      "rulesUrl": "https://www.fsarc.org/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "rtty",
+        "ssb"
+      ],
+      "exchange": "DE: RS(T) \u002B County; non-DE: RS(T) \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "DIG QSO Party, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=691",
+      "rulesUrl": "https://dig-contest.de/rules",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "DIG Member: RST \u002B Member No.; non-Member: RST",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "DIG QSO Party, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=690",
+      "rulesUrl": "https://dig-contest.de/rules",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "DIG Member: RS \u002B Member No.; non-Member: RS",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Dutch PACC Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=249",
+      "rulesUrl": "https://pacc.veron.nl/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "PA: RS(T) \u002B province; non-PA: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Dutch PACCdigi Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=693",
+      "rulesUrl": "https://www.veron.nl/vereniging/commissies-en-werkgroepen/traffic-bureau/hf-contesten/paccdigi-rules/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ft4",
+        "rtty"
+      ],
+      "exchange": "PA: Signal report \u002B 2-character province; non-PA: Signal report \u002B serial number",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "EA PSK63 Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=403",
+      "rulesUrl": "https://concursos.ure.es/en/eapsk63/bases/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "EA: RSQ \u002B province code; non-EA: RSQ \u002B Serial no.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "EA RTTY Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=313",
+      "rulesUrl": "https://concursos.ure.es/en/eartty/bases/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "EA: RSQ \u002B province; non-EA: RSQ \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "EA-QRP CW Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=369",
+      "rulesUrl": "https://www.eaqrp.com/index.php/actividades/concurso?id=310",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B 1-letter category \u002B \u0022M\u0022 (if EA-QRP member)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ES Open HF Championship",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=321",
+      "rulesUrl": "https://erau.ee/images/LL/ES-Open_rules.pdf",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "EU PSK DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=27",
+      "rulesUrl": "https://eupsk.club/eupskdx/eupskdxrules.pdf",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "am",
+        "cw",
+        "fm"
+      ],
+      "exchange": "EU: RST \u002B EU area; non-EU: RST \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "EUCW 160m Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=219",
+      "rulesUrl": "https://www.uft.net/activites-et-concours/concours-eucw-uft-on5me/",
+      "bands": [
+        "160m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Affiliated Club Member: RST \u002B name \u002B club \u002B membership no.; Other: RST \u002B name \u002B \u0022NM\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "European HF Championship",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=82",
+      "rulesUrl": "https://euhf.s5cc.eu/euhfc_rules/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B 2-digit year first licensed",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "European Union DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=687",
+      "rulesUrl": "https://www.eudx-contest.com/rules/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "EU Union: RS(T) \u002B EU Union Region (4-characters); Non-EU Union: RS(T) \u002B ITU Zone No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "F9AA Cup, PSK",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=577",
+      "rulesUrl": "https://www.site.urc.asso.fr/index.php/om-yl/concours/trophee-f9aa",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Feld Hell Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=436",
+      "rulesUrl": "https://sites.google.com/site/feldhellclub/Home/contests/sprints/early-bird-sprint",
+      "bands": [
+        "10m"
+      ],
+      "modes": [],
+      "exchange": "(see rules)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Flemish Windmill Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=786",
+      "rulesUrl": "https://www.vlaamsemolencontest.be/contestreglement/",
+      "bands": [
+        "40m",
+        "2m"
+      ],
+      "modes": [
+        "fm",
+        "ssb"
+      ],
+      "exchange": "Activator: RST \u002B QSO No. \u002B Mill Reference; Hunter: RST \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Florida QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=325",
+      "rulesUrl": "http://floridaqsoparty.org/rules/",
+      "bands": [
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "FL: RS(T) \u002B county; W/VE: RS(T) \u002B (state/province); DX: RS(T) \u002B DXCC prefix",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "FOC Old School Classic 1960s QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=771",
+      "rulesUrl": "https://www.g4foc.org/foc-old-school-classic-1960s-qso-party/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Real RST \u002B 3-letter class \u002B year first licensed \u002B name",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "FRAPR 10M Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=762",
+      "rulesUrl": "https://www.frapr.org/concursos/",
+      "bands": [
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B power",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "FT Challenge",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=766",
+      "rulesUrl": "http://www.rttycontesting.com/ft-challenge",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ft4",
+        "ft8"
+      ],
+      "exchange": "signal report \u002B 4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "FYBO Winter QRP Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=356",
+      "rulesUrl": "https://azscqrpions.org/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B (state/province/country)\u002B name \u002B power out \u002B temperature(F)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "GACW WWSA CW DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=45",
+      "rulesUrl": "https://www.gacw.ar/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B CQ Zone No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Georgia QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=328",
+      "rulesUrl": "https://gaqsoparty.com/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "GA: RST \u002B county; non-GA: RST \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "German Telegraphy Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=146",
+      "rulesUrl": "https://www.agcw.de/contest/dtc/",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "DL: RST \u002B LDK; non-DL: RST",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "HA3NS Sprint Memorial Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=449",
+      "rulesUrl": "https://radioamator.honlapepites.hu/?p=1280",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "HACWG Members: RST \u002B Membership No.; non-Members: RST \u002B NM",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Hawaii QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=96",
+      "rulesUrl": "http://www.hawaiiqsoparty.org/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "HI: RS(T) \u002B HI district; non-HI W/VE: RS(T) \u002B (state/province); DX: RS(T)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Helvetia Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=326",
+      "rulesUrl": "https://uska.ch/wp-content/uploads/2026/03/2026-01-Rules-and-Regulations-for-Helvetia-Contest-issued-March-2026.pdf",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "HB: RS(T) \u002B 2-letter canton; non-HB: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Hemus VHF Contest - 144 MHz",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=750",
+      "rulesUrl": "https://radioclub-troyan.bg/activity-vhf.php",
+      "bands": [
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "fm",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B QSO No. \u002B 6-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "High Speed Club CW Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=264",
+      "rulesUrl": "http://www.highspeedclub.org/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Members: RST \u002B HSC No.; non-Members: RST \u002B \u0022NM\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "His Maj. King of Spain Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=23",
+      "rulesUrl": "https://concursos.ure.es/en/s-m-el-rey-de-espana-cw/bases/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "EA: RST \u002B province; non-EA: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "His Maj. King of Spain Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=59",
+      "rulesUrl": "https://concursos.ure.es/en/s-m-el-rey-de-espana-ssb/bases/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "EA: RST \u002B province; non-EA: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Homebrew and Oldtime Equipment Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=490",
+      "rulesUrl": "http://www.qrpcc.de/contestrules/hotr.html",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No. \u002B \u0022/\u0022 \u002B class",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Hungarian DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=228",
+      "rulesUrl": "https://ha-dx.com/en/contest-rules",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "HA: RS(T) \u002B 2-letter county; non-HA: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Hungarian Straight Key Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=512",
+      "rulesUrl": "https://hskc.ha8kux.com/",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No. \u002B Power Code",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "IARU HF World Championship",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=67",
+      "rulesUrl": "http://www.arrl.org/iaru-hf-world-championship",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "IARU HQ: RS(T) \u002B IARU Society; Non-HQ: RS(T) \u002B ITU Zone No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "IARU Region 1 145 MHz Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=654",
+      "rulesUrl": "https://www.iaru-r1.org/wp-content/uploads/2021/03/Rules-2021.pdf",
+      "bands": [
+        "2m"
+      ],
+      "modes": [
+        "am",
+        "cw",
+        "fm"
+      ],
+      "exchange": "RS(T) \u002B QSO No. \u002B 6-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "IARU Region 1 50 MHz Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=701",
+      "rulesUrl": "https://www.iaru-r1.org/wp-content/uploads/2024/02/Rules-IARU-R1-VHF-up-Contests.pdf",
+      "bands": [
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B QSO No. \u002B 6-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "IARU Region 1 70 MHz Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=702",
+      "rulesUrl": "https://www.iaru-r1.org/wp-content/uploads/2024/02/Rules-IARU-R1-VHF-up-Contests.pdf",
+      "bands": [
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B QSO No. \u002B 6-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "IARU Region 1 Field Day, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=35",
+      "rulesUrl": "https://www.darc.de/der-club/referate/conteste/iaru-region-1-fieldday/en/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "IARU Region 1 Field Day, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=105",
+      "rulesUrl": "https://www.darc.de/der-club/referate/conteste/iaru-region-1-fieldday/en/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "ICWC Medium Speed Test",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=720",
+      "rulesUrl": "https://internationalcwcouncil.org/mst-contest/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Name \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Idaho QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=305",
+      "rulesUrl": "https://www.idahoqsoparty.org/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ft8",
+        "ssb"
+      ],
+      "exchange": "ID: County; non-ID: (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "IG-RY World Wide RTTY Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=688",
+      "rulesUrl": "https://www.ig-ry.de/ig-ry-ww-contest",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "RST \u002B 4-digit year license first issued",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Illinois QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=167",
+      "rulesUrl": "https://w9awe.org/ilqp/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ft4",
+        "ssb"
+      ],
+      "exchange": "IL: RS(T) \u002B County; non-IL: RS(T) \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Indiana QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=8",
+      "rulesUrl": "http://www.hdxcc.org/inqp/rules.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "IN: RS(T) \u002B county; non-IN: W/VE: RS(T) \u002B (state/province); DX: RS(T) \u002B \u0022DX\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Iowa QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=484",
+      "rulesUrl": "http://www.w0yl.com/IAQP",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "30m",
+        "20m",
+        "17m",
+        "15m",
+        "12m",
+        "10m",
+        "6m",
+        "2m",
+        "70cm"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "IA: RS(T) \u002B County; non-IA: RS(T) \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "JARTS WW RTTY Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=161",
+      "rulesUrl": "http://jarts.jp/rules/2024_rule_en.htm",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "SO: RST \u002B age of operator; MO: RST \u002B callsign owner\u0027s age or zero zero; Club: RST \u002B 99",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "JIDX CW Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=314",
+      "rulesUrl": "http://www.jidx.org/jidxrule-e.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "JA: RST \u002B Prefecture No.; non-JA: RST \u002B CQ Zone No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "JIDX Phone Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=184",
+      "rulesUrl": "http://www.jidx.org/jidxrule-e.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "JA: RST \u002B Prefecture No.; non-JA: RST \u002B CQ Zone No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "K1USN Slow Speed Test",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=681",
+      "rulesUrl": "http://www.k1usn.com/sst.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Maximum 20 wpm; Name \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "K1USN SST Open",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=763",
+      "rulesUrl": "http://www.k1usn.com/sso_rules.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Name \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Kansas QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=483",
+      "rulesUrl": "https://ksqsoparty.org/rules/KSQPRules2025.pdf?1",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "rtty",
+        "ssb"
+      ],
+      "exchange": "KS: RS(T) \u002B county; non-KS: RS(T) \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "KCJ Topband Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=244",
+      "rulesUrl": "https://www.kcj-cw.com/",
+      "bands": [
+        "160m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "JA: RST \u002B Prefecture/District Code; non-JA: RST \u002B CQ Zone",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Kentucky QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=371",
+      "rulesUrl": "http://www.kyqsoparty.org/rules/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "rtty",
+        "ssb"
+      ],
+      "exchange": "KY: RS(T) \u002B county; non-KY: RS(T) \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Keyman\u0027s Club of Japan Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=89",
+      "rulesUrl": "https://kcj-cw.com/contest/rule/2025_46_kcj_dx_.pdf",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "JA: RST \u002B prefecture/district code; non-JA: RST \u002B CQ zone",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "LABRE DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=761",
+      "rulesUrl": "https://www.labre.org.br/contest/en/regulamento/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "Brazilian: RS(T) \u002B 2-letter state; Non-Brazilian: RS(T) \u002B 2-letter continent",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Louisiana QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=250",
+      "rulesUrl": "https://laqp.w5gad.org/rules",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "LA: RS(T) \u002B Parish; non-LA: RS(T) \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "LZ DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=187",
+      "rulesUrl": "http://lzdx.bfra.org/rulesen.html",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "LZ: RS(T) \u002B 2-letter district; non-LZ: RS(T) \u002B ITU Zone No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "LZ International 6-Meter Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=751",
+      "rulesUrl": "https://www.radioclub-troyan.bg/media/activities/6-meters/rules-en-2024.pdf",
+      "bands": [
+        "6m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B QSO No. \u002B 6-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Maine QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=592",
+      "rulesUrl": "http://www.ws1sm.com/MEQP.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "ME: RS(T) \u002B county; non-ME: RS(T) \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Makrothen RTTY Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=159",
+      "rulesUrl": "https://www.pl259.org/makrothen/makrothen-rules/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Marconi Club ARI Loano QSO Party Day",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=710",
+      "rulesUrl": "http://www.ariloano.it/marconiclub/mcd_reg/regolamentomcday_ENG.pdf",
+      "bands": [
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Marconi Club Member: RST \u002B \u0022MC\u0022 \u002B Member No.; non-Members: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Marconi Club ARI Loano Slow CW QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=769",
+      "rulesUrl": "https://www.marconiclub.it/contest1/slow-cw-qso-party/rules-slow-cw-qso-party",
+      "bands": [
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Marconi Club Member: RST \u002B \u0022MC\u0022 \u002B Member No.; non-Members: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Marconi Memorial HF Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=56",
+      "rulesUrl": "http://www.arifano.it/contest_marconi.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Maryland-DC QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=86",
+      "rulesUrl": "https://www.w3vpr.org/Maryland-DC_QSO_Party",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "MDC: county/city; non-MDC: (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Mexico RTTY International Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=241",
+      "rulesUrl": "https://rtty.fmre.mx/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "XE: RST \u002B State; non-XE: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "MI QRP Labor Day CW Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=108",
+      "rulesUrl": "https://www.miqrp.net/contest",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B (state/province/country) \u002B (member no./power output)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Michigan QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=323",
+      "rulesUrl": "https://miqp.org/index.php/rules/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "MI: RST \u002B county; non-MI: RST \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Microwave Spring Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=6",
+      "rulesUrl": "https://sites.google.com/site/springvhfupsprints/home/2026-information",
+      "bands": [],
+      "modes": [
+        "am",
+        "cw",
+        "digital",
+        "fm",
+        "ft4",
+        "ft8",
+        "ssb"
+      ],
+      "exchange": "6-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "MIE 33 Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=467",
+      "rulesUrl": "https://www.ztv.ne.jp/isoda/33/annual/49/49rule-e.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m",
+        "70cm"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "Mie: RS(T) \u002B age \u002B \u0022ME\u0022; non-Mie JA: RS(T) \u002B age \u002B \u0022MEJ\u0022; non-Mie non-JA: RS(T) \u002B age",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Mini-Test 40",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=711",
+      "rulesUrl": "http://minitest.narod.ru/",
+      "bands": [
+        "40m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Mini-Test 80",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=712",
+      "rulesUrl": "http://minitest.narod.ru/",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Minnesota QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=238",
+      "rulesUrl": "https://www.w0aa.org/mnqp-rules/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "am",
+        "cw",
+        "fm",
+        "ssb"
+      ],
+      "exchange": "MN: Name \u002B County; W/VE: Name \u002B (state/province); DX: Name",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Missouri QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=327",
+      "rulesUrl": "http://www.w0ma.org/index.php/missouri-qso-party",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "MO: RS(T) \u002B county; non-MO W/VE: RS(T) \u002B (state/province/territory); DX: RS(T) \u002B \u0022DX\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "NAQCC CW Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=358",
+      "rulesUrl": "http://naqcc.info/sprint_rules.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B (state/province/country) \u002B (NAQCC No./power)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "NCCC FT4 Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=741",
+      "rulesUrl": "https://www.ncccsprint.com/ft4ns.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "ft4"
+      ],
+      "exchange": "4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "NCCC Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=44",
+      "rulesUrl": "https://ncccsprint.com/rules.html",
+      "bands": [
+        "160m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Serial No. \u002B Name \u002B QTH",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "New England QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=10",
+      "rulesUrl": "https://neqp.org/rules/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "CT,ME,MA,NH,RI,VT: RS(T) \u002B state \u002B county; non-NE: RS(T) \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "New Hampshire QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=71",
+      "rulesUrl": "https://w1wqm.org/wp-content/uploads/2025/08/NHQP_Rules.pdf",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "NH: RS(T) \u002B county; non-NH W/VE: RS(T) \u002B (state/province); DX: RS(T) \u002B \u0022DX\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "New Jersey QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=92",
+      "rulesUrl": "http://www.k2td-bcrc.org/njqp/rules.html",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "NJ: RS(T) \u002B county; non-NJ: RS(T) \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "New Mexico QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=286",
+      "rulesUrl": "http://www.newmexicoqsoparty.org/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "NM: RS(T) \u002B county; non-NM: RS(T) \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "New York QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=473",
+      "rulesUrl": "https://www.nyqp.org/",
+      "bands": [],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "NY: RS(T) \u002B county; non-NY: RS(T) \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "NJQRP Skeeter Hunt",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=648",
+      "rulesUrl": "https://www.qsl.net/w2lj/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "Skeeter: RS(T) \u002B (state/province/country)\u002B Skeeter No.; Non-Skeeter: RS(T) \u002B (state/province/country)\u002B Power \u002B \u0022W\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "North American QSO Party, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=218",
+      "rulesUrl": "https://www.ncjweb.com/NAQP-Rules.pdf",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "NA: Name \u002B (state/DC/province/country); non-NA: Name",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "North American QSO Party, RTTY",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=263",
+      "rulesUrl": "https://www.ncjweb.com/NAQP-Rules.pdf",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "NA: Name \u002B (state/DC/province/country); non-NA: Name",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "North American QSO Party, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=229",
+      "rulesUrl": "https://www.ncjweb.com/NAQP-Rules.pdf",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "NA: Name \u002B (state/DC/province/country); non-NA: Name",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "North American Sprint, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=253",
+      "rulesUrl": "https://ncjweb.com/Sprint-Rules.pdf",
+      "bands": [
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "[other station\u0027s call] \u002B [your call] \u002B [serial no.] \u002B [your name] \u002B [your state/province/country]",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "North American Sprint, RTTY",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=155",
+      "rulesUrl": "http://ncjweb.com/Sprint-Rules.pdf",
+      "bands": [
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "[other station\u0027s call] \u002B [your call] \u002B [serial no.] \u002B [your name] \u002B [your state/DC/province/country]",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "North Carolina QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=265",
+      "rulesUrl": "http://ncqsoparty.org/rules/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ft4",
+        "ssb"
+      ],
+      "exchange": "NC: County; non-NC: (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Novice Rig Roundup",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=605",
+      "rulesUrl": "http://www.novicerigroundup.org/",
+      "bands": [
+        "80m",
+        "40m",
+        "15m",
+        "10m",
+        "2m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Name \u002B QTH \u002B Optional (Rig, NRR number)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "NRAU 10m Activity Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=562",
+      "rulesUrl": "https://nrau.net/nrau-contests-in-general/",
+      "bands": [
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "fm",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B 6-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "NRAU-Baltic Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=220",
+      "rulesUrl": "https://www.nraubaltic.eu/",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No. \u002B 2-letter Fylke/Lan/Province/Region",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "NRAU-Baltic Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=222",
+      "rulesUrl": "https://www.nraubaltic.eu/",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RST \u002B Serial No. \u002B 2-letter Fylke/Lan/Province/Region",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "NSARA Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=299",
+      "rulesUrl": "http://nsara.ca/",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "Nova Scotia: RS(T) \u002B county; non-NS: RS(T) \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "NTC QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=713",
+      "rulesUrl": "https://pi4ntc.nl/ntcqp/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "NTC Member: RST \u002B Member No.; non-Member: RST \u002B \u0022NM\u0022; Less than 25 wpm",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "NZART Memorial Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=721",
+      "rulesUrl": "https://www.nzart.org.nz/activities/contests/memorial-contest/",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "NZART Sangster Shield Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=589",
+      "rulesUrl": "https://www.nzart.org.nz/activities/contests/sangster-shield",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "ZL: RST \u002B Serial No. \u002B Branch No.; non-ZL: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Oceania DX Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=151",
+      "rulesUrl": "https://www.oceaniadxcontest.com/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Oceania DX Contest, Phone",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=142",
+      "rulesUrl": "https://www.oceaniadxcontest.com/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Ohio QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=100",
+      "rulesUrl": "http://www.ohqp.org/index.php/rules/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "OH: RS(T) \u002B county; non-OH: RS(T) \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "OK DX RTTY Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=204",
+      "rulesUrl": "http://okrtty.crk.cz/index.php?page=english",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "RST \u002B CQ Zone",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "OK/OM DX Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=185",
+      "rulesUrl": "http://okomdx.crk.cz/index.php?page=CW-rules-english",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "OK/OM: RST \u002B county; non-OK/OM: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "OK/OM DX Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=567",
+      "rulesUrl": "http://okomdx.crk.cz/index.php?page=SSB-rules-english",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "OK/OM: RS \u002B 3-letter county code; non-OK/OM: RS \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "OK1WC Memorial (MWC)",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=683",
+      "rulesUrl": "https://memorial-ok1wc.cz/index.php?page=rules2l",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Oklahoma QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=293",
+      "rulesUrl": "http://k5cm.com/okqp.htm",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ft8",
+        "ssb"
+      ],
+      "exchange": "OK: RS(T) \u002B County; non-OK: RS(T) \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Ontario QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=357",
+      "rulesUrl": "http://www.va3cco.com/oqp/rules.htm",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "ON: RS(T) \u002B county; non-ON: RST \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Open Ukraine RTTY Championship",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=334",
+      "rulesUrl": "http://krs.ho.ua/openrtty/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "2-letter regional abbrev. (state/province/canton, etc.) \u002B Serial No.(restart serial no. for high band)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Original QRP Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=213",
+      "rulesUrl": "http://www.qrpcc.de/contestrules/oqrpr.html",
+      "bands": [
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RST \u002B Serial No. \u002B \u0022/\u0022 \u002B Power category",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Pajajaran Bogor DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=722",
+      "rulesUrl": "http://www.pbdx-contest.id/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Peanut Power QRP Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=571",
+      "rulesUrl": "http://www.nogaqrp.org/PeanutPower/rules.pdf",
+      "bands": [
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B (state/province/country) \u002B (peanut no./power output)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Pennsylvania QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=153",
+      "rulesUrl": "http://paqso.org/pa-qso-party-rules.html",
+      "bands": [],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "PA: Serial No. \u002B County; non-PA: Serial No. \u002B ARRL/RAC Section",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Phone Weekly Test",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=593",
+      "rulesUrl": "http://www.perluma.com/Phone_Fray_Contest_Rules.pdf",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "NA: Name \u002B (state/province/country); non-NA: Name",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "PODXS 070 Club 160m Great Pumpkin Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=438",
+      "rulesUrl": "http://www.podxs070.com/o7o-club-sponsored-contests/160m-great-pumpkin-sprint",
+      "bands": [
+        "160m"
+      ],
+      "modes": [],
+      "exchange": "RST \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "PODXS 070 Club 40m Firecracker Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=439",
+      "rulesUrl": "http://www.podxs070.com/o7o-club-sponsored-contests/40m-firecracker-sprint",
+      "bands": [
+        "40m"
+      ],
+      "modes": [],
+      "exchange": "RST \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "PODXS 070 Club Jay Hudak Memorial 80m Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=437",
+      "rulesUrl": "http://www.podxs070.com/o7o-club-sponsored-contests/jay-hudak-memorial-80m-sprint",
+      "bands": [
+        "80m"
+      ],
+      "modes": [],
+      "exchange": "RST \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "PODXS 070 Club PSKFest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=267",
+      "rulesUrl": "http://www.podxs070.com/o7o-club-sponsored-contests/pskfest",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [],
+      "exchange": "RST \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "PODXS 070 Club St Patrick\u0027s Day Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=739",
+      "rulesUrl": "https://www.podxs070.com/o7o-club-sponsored-contests/saint-patrick-s-day-contest",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [],
+      "exchange": "(state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "PODXS 070 Club Three Day Weekend Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=646",
+      "rulesUrl": "http://www.podxs070.com/o7o-club-sponsored-contests/three-day-weekend",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [],
+      "exchange": "070 Members: Member No.; Non-Members: \u00220000\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "PODXS 070 Club Triple Play Low Band Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=622",
+      "rulesUrl": "http://www.podxs070.com/o7o-club-sponsored-contests/triple-play-low-band-sprint",
+      "bands": [
+        "160m",
+        "80m",
+        "40m"
+      ],
+      "modes": [],
+      "exchange": "RST \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "PODXS 070 Club Valentine Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=448",
+      "rulesUrl": "http://www.podxs070.com/o7o-club-sponsored-contests/valentine-sprint",
+      "bands": [
+        "160m",
+        "80m",
+        "40m"
+      ],
+      "modes": [],
+      "exchange": "Name \u002B (OM/YL) \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Portugal Day Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=41",
+      "rulesUrl": "https://portugaldaycontest.rep.pt/rules.php",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "CT: RS(T) \u002B District; non-CT: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "PRO CW Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=266",
+      "rulesUrl": "https://proradiocontestclub.com/PCC%20Rules.html",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "CW Club Member: RST \u002B Serial No. \u002B \u0022/M\u0022; non-Members: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "PRO Digi Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=657",
+      "rulesUrl": "https://proradiocontestclub.com/PDC%20Rules.html",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "digital",
+        "ft4",
+        "rtty"
+      ],
+      "exchange": "Digi Club Member: RST \u002B Serial No. \u002B \u0022M\u0022; non-Members: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "PVRC Reunion",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=454",
+      "rulesUrl": "http://pvrc.org/reunion/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "rtty",
+        "ssb"
+      ],
+      "exchange": "PVRC Member: 1st year of membership \u002B name \u002B (state/province/country) \u002B callsign when joined PVRC; non-Member: name \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "QCX Challenge",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=644",
+      "rulesUrl": "http://www.qrp-labs.com/party.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Name \u002B (state/province/country) \u002B Rig",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "QRP Afield",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=124",
+      "rulesUrl": "https://www.newenglandqrp.org/qrp-afield-2018/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "am",
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B (state/province/country) \u002B (power or NE QRP No.)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "QRP ARCI Fall QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=168",
+      "rulesUrl": "http://qrparci.org/contest/fall-qso-party",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "ARCI: RST \u002B (state/province/country) \u002B ARCI No.; non-ARCI: RST \u002B (state/province/country) \u002B power out",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "QRP ARCI Holiday Spirits Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=198",
+      "rulesUrl": "http://qrparci.org/contest/holiday-spirit-sprint",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B (state/province/country) \u002B (ARCI number/power)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "QRP ARCI Hootowl Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=31",
+      "rulesUrl": "http://qrparci.org/contest/hoot-owl-sprint",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B (state/province/country) \u002B (ARCI no./power)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "QRP ARCI Spring QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=315",
+      "rulesUrl": "http://qrparci.org/contest/spring-qso-party",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RS \u002B (state/province/country) \u002B (ARCI number/power)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "QRP ARCI Summer Homebrew Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=69",
+      "rulesUrl": "http://qrparci.org/contest/summer-homebrew-sprint-2020",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B (state/province/country) \u002B (ARCI no./power)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "QRP ARCI Topband Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=193",
+      "rulesUrl": "http://qrparci.org/contest/topband-sprint",
+      "bands": [
+        "160m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "ARCI: RST \u002B (state/province/country) \u002B ARCI No.; non-ARCI: RST \u002B (state/province/country) \u002B power out",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "QRP Fox Hunt",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=518",
+      "rulesUrl": "https://www.k4oaq.com/fox/",
+      "bands": [
+        "20m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B (state/province/country) \u002B name \u002B power output",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "QRP Minimal Art Session",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=406",
+      "rulesUrl": "http://qrpcc.de/contestrules/mas/index.html",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B \u0022/\u0022 \u002B class \u002B number of components",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "QRP to the Field",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=432",
+      "rulesUrl": "http://www.zianet.com/qrp/qrpttf/pg.html",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B (state/province/country) \u002B name",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Quebec QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=53",
+      "rulesUrl": "https://quebecqsoparty.org/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "QC: RS(T) \u002B QC zone; non-QC: RST \u002B (state/province/\u0027DX\u0027)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "RAC Canada Day Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=60",
+      "rulesUrl": "https://www.rac.ca/contesting-results/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "VE: RS(T) \u002B province/territory; non-VE: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "RAC Winter Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=205",
+      "rulesUrl": "https://www.rac.ca/contesting-results/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "VE: RS(T) \u002B (province/territory); non-VE and VE0: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "RAEM Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=209",
+      "rulesUrl": "https://raem.srr.ru/rules/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Serial No. \u002B latitude (degs only) \u002B hemisphere \u002B longitude (degs only) \u002B hemisphere (see rules); N=North, S=South, W=West, O=East (e.g. 57N 85O)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "RCC Cup",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=645",
+      "rulesUrl": "https://www.contest.ru/rcc-cup-rules/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RCC Members: RS(T) \u002B \u0022RCC\u0022 \u002B member number; Non-Members: RS(T) \u002B ITU Zone",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Real Time Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=782",
+      "rulesUrl": "https://blog.contestonlinescore.com/real-time-contest-rtc-rules/",
+      "bands": [
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "Serial No. \u002B 4-character grid",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "REF 160-Meter Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=606",
+      "rulesUrl": "https://concours.r-e-f.org/reglements/actuels/reg_ref160_en_20250312.pdf",
+      "bands": [
+        "160m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No. \u002B Department Code",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "REF Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=233",
+      "rulesUrl": "https://concours.r-e-f.org/reglements/actuels/reg_cdfhfdx_en_20250315.pdf",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "French: RST \u002B Department/Prefix; non-French: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "REF Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=260",
+      "rulesUrl": "https://concours.r-e-f.org/reglements/actuels/reg_cdfhfdx_en_20250315.pdf",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "French: RS \u002B Department/Prefix; non-French: RS \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "REF DDFM 6m Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=372",
+      "rulesUrl": "https://concours.r-e-f.org/reglements/actuels/reg_ddfm50_fr_20250312.pdf",
+      "bands": [
+        "6m"
+      ],
+      "modes": [
+        "cw",
+        "fm",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B Serial No. \u002B 4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Romanian Diaspora SSB Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=780",
+      "rulesUrl": "https://concursdiaspora.ro/en/regulament",
+      "bands": [
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "YO/ER: RS \u002B county/district; non-YO/ER: RS \u002B \u0022DX\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "RSGB 80m Club Championship, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=275",
+      "rulesUrl": "https://www.rsgbcc.org/hf/rules/2026/r80mcc.shtml",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "RSGB 80m Club Championship, Data",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=274",
+      "rulesUrl": "https://www.rsgbcc.org/hf/rules/2026/r80mcc.shtml",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "RSGB 80m Club Championship, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=273",
+      "rulesUrl": "https://www.rsgbcc.org/hf/rules/2026/r80mcc.shtml",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "RSGB FT4 Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=653",
+      "rulesUrl": "https://www.rsgbcc.org/hf/rules/2026/r80m_ft4.shtml",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ft4"
+      ],
+      "exchange": "Signal report",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "RSGB International Low Power Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=74",
+      "rulesUrl": "https://www.rsgbcc.org/hf/rules/2026/rqrp.shtml",
+      "bands": [
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No. \u002B Power",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "RSGB IOTA Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=75",
+      "rulesUrl": "https://www.rsgbcc.org/hf/rules/2026/riota.shtml",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B Serial No. \u002B IOTA No.(if applicable)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "RSGB National Field Day",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=37",
+      "rulesUrl": "https://www.rsgbcc.org/hf/rules/2026/rnfd.shtml",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Run for the Bacon QRP Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=385",
+      "rulesUrl": "http://qrpcontest.com/pigrun/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B (state/province/country) \u002B (Member No./power)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Russian DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=310",
+      "rulesUrl": "https://www.rdxc.org/rules_eng",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "Ru: RS(T) \u002B 2-character oblast; non-Ru: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Russian Radio Team Championship",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=456",
+      "rulesUrl": "http://srr.ru/chempionat-rossii-po-radiosvyazi-na-kv-rrtc/",
+      "bands": [
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RRTC: RS(T) \u002B 3-character code; Non-RRTC: RS(T) \u002B ITU Zone No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Russian WW MultiMode Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=574",
+      "rulesUrl": "http://www.rdrclub.ru/news-radio/russian-ww-mm-contest/159-rus-ww-multimode-contest",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "rtty",
+        "ssb"
+      ],
+      "exchange": "UA: RST(Q) \u002B 2-character oblast; non-UA: RST(Q) \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SARL 80m QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=158",
+      "rulesUrl": "https://mysarl.org.za/contest-resources/",
+      "bands": [
+        "80m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS \u002B Serial No. \u002B Grid Locator or QTH",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SARL Field Day Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=186",
+      "rulesUrl": "https://mysarl.org.za/contest-resources/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B Number of transmitters \u002B Category (see rules) \u002B Province (or \u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SARL Hamnet 40m Simulated Emerg Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=318",
+      "rulesUrl": "https://mysarl.org.za/contest-resources/",
+      "bands": [
+        "40m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "Class A: RS \u002B Serial No. (starting with 201); Class B: RS \u002B Serial No. (starting with 401); Class C: RS \u002B Serial No. (starting with 601); Class D: RS \u002B Serial No. (starting with 801); Non-participants: RS \u002B Serial No. (starting with 001)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SARL HF CW Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=101",
+      "rulesUrl": "https://mysarl.org.za/contest-resources/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SARL HF Digital Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=545",
+      "rulesUrl": "https://mysarl.org.za/contest-resources/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SARL HF Phone Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=78",
+      "rulesUrl": "https://mysarl.org.za/contest-resources/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SARL VHF/UHF FM Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=120",
+      "rulesUrl": "https://mysarl.org.za/contest-resources/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "6m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B 6-character grid locator",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SARL Youth QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=246",
+      "rulesUrl": "https://mysarl.org.za/contest-resources/",
+      "bands": [
+        "40m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS \u002B age",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SARTG New Year RTTY Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=211",
+      "rulesUrl": "http://www.sartg.com/contest/nyrules.htm",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "RST \u002B QSO No. \u002B name \u002B happy new year (native language)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SARTG WW RTTY Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=87",
+      "rulesUrl": "http://www.sartg.com/contest/wwrules.htm",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SBMS 2.3 GHz and Up Contest and Club Challenge",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=359",
+      "rulesUrl": "https://w6ife.com/Page/2GHzContest",
+      "bands": [
+        "2m"
+      ],
+      "modes": [
+        "am"
+      ],
+      "exchange": "6-character Maidenhead locator",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Scandinavian Activity Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=121",
+      "rulesUrl": "https://www.sactest.net/blog/scandinavian-activity-contest-2025-rules/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Scandinavian Activity Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=131",
+      "rulesUrl": "https://www.sactest.net/blog/scandinavian-activity-contest-2025-rules/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SEANET Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=90",
+      "rulesUrl": "https://dxindia.in/seanet-contest-2026.html",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SKCC QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=631",
+      "rulesUrl": "https://www.skccgroup.com/operating_activities/QSO_Party/",
+      "bands": [
+        "12m",
+        "6m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B (state/province/country) \u002B Name \u002B 4-Character Grid Square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SKCC Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=425",
+      "rulesUrl": "https://www.skccgroup.com/operating_activities/weekday_sprint/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B (state/province/country) \u002B Name \u002B (SKCC No./\u0022NONE\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SKCC Sprint Europe",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=629",
+      "rulesUrl": "https://www.skccgroup.com/operating_activities/skse/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B (state/province/country) \u002B Name \u002B (SKCC No./\u0022NONE\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SKCC Weekend Sprintathon",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=428",
+      "rulesUrl": "https://www.skccgroup.com/operating_activities/weekend_sprintathon/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B (state/province/country) \u002B Name \u002B (SKCC No./\u0022NONE\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SMIRK Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=48",
+      "rulesUrl": "http://smirk.info/contest.html",
+      "bands": [
+        "6m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "4-character grid square \u002B SMIRK No. (optional)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "South America 10 Meter Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=598",
+      "rulesUrl": "http://sa10m.com.ar/wp/rules/",
+      "bands": [
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B CQ zone",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "South American Integration Contest CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=728",
+      "rulesUrl": "https://sacw.cwsp.com.br/en/2021/09/21/pdf/",
+      "bands": [
+        "80m",
+        "40m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "CWSP Members: RST \u002B \u0022M\u0022; QRP: RST \u002B \u0022QRP\u0022; YL: RST \u002B \u0022YL\u0022; All Others: RST \u002B ITU Zone No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "South Carolina QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=123",
+      "rulesUrl": "http://scqso.com/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "SC: RS(T) \u002B County; non-SC: RS(T) \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "South Dakota QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=492",
+      "rulesUrl": "http://www.sdqsoparty.com/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "SD: RS(T) \u002B county; non-SD: RS(T) \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SP DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=312",
+      "rulesUrl": "https://spdxcontest.pzk.org.pl/2026/rules.php",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "SP: RS(T) \u002B 1-character province; non-SP: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "SP DX RTTY Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=324",
+      "rulesUrl": "https://pkrvg.org/strona,spdxrttyen.html",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "SP: RST \u002B 2-letter province; Non-SP: RST \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Stew Perry Topband Challenge",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=207",
+      "rulesUrl": "http://www.kkn.net/stew/",
+      "bands": [
+        "160m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "4-Character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "TA VHF/UHF Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=676",
+      "rulesUrl": "https://trac.org.tr/tr/ta-vhf-uhf-contest-2025",
+      "bands": [
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "cw",
+        "fm",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B Serial No. \u002B 6-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Tennessee QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=115",
+      "rulesUrl": "https://tnqp.org/rules/",
+      "bands": [],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "TN: RS(T) \u002B county; non-TN: RS(T) \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Texas QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=133",
+      "rulesUrl": "https://www.txqp.net/",
+      "bands": [],
+      "modes": [],
+      "exchange": "TX: RS(T) \u002B County; non-TX: RS(T) \u002B (state/province/country/MM region)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Tisza Cup CW Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=678",
+      "rulesUrl": "https://www.tiszacup.eu/index.php/en/contest-rules",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RST \u002B CQ Zone No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Trans-Tasman Low-Bands Challenge",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=588",
+      "rulesUrl": "https://www.wia.org.au/members/contests/transtasman/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "TRC Digi Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=637",
+      "rulesUrl": "https://trcdx.org/rules-trc-digi/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "TRC Members: RST \u002B Serial No. \u002B \u0022TRC\u0022; non-TRC Members: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "TRC DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=536",
+      "rulesUrl": "https://trcdx.org/rules-trc-dx/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "TRC Members: RST \u002B Serial No. \u002B \u0022TRC\u0022; non-TRC Members: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Tuesday\u0027s Telegraphy Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=788",
+      "rulesUrl": "https://spcwc.pl/ttc/rules/en",
+      "bands": [
+        "80m",
+        "40m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "U.S. Islands QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=169",
+      "rulesUrl": "http://usislands.org/qso-party-rules/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "Islands: RS(T) \u002B USI/CISA Island Designation (see rules for digital); Non-Islands: RS(T) \u002B (state/province/country)(see rules for digital)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "UBA DX Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=261",
+      "rulesUrl": "https://www.uba.be/en/hf/contest-rules/uba-dx-contest",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "ON: RST \u002B Serial No. \u002B section; non-ON: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "UBA DX Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=235",
+      "rulesUrl": "https://www.uba.be/en/hf/contest-rules/uba-dx-contest",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "ON: RST \u002B Serial No. \u002B section; non-ON: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "UBA PSK63 Prefix Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=576",
+      "rulesUrl": "https://www.uba.be/en/hf/contest-rules/uba-psk63-prefix-contest",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "digital"
+      ],
+      "exchange": "ON: RSQ \u002B UBA Section; non-ON: RSQ \u002B Serial No. (starting with 001)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "UFT QRP Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=603",
+      "rulesUrl": "https://www.uft.net/concours-qrp-uft/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Member: RST \u002B QRP/QRO \u002B UFT member no.; non-member: RST \u002B QRP/QRO \u002B \u0022NM\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "UK/EI DX Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=597",
+      "rulesUrl": "https://www.ukeicc.com/dx-contest-rules.php",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "UK/EI: RST \u002B Serial No. \u002B District Code; DX: RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "UK/EI DX Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=596",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "UK/EI: RS \u002B Serial No. \u002B District Code; DX: RS \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "UKSMG Summer Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=34",
+      "rulesUrl": "https://uksmg.org/summer-contest-rules.php",
+      "bands": [
+        "6m"
+      ],
+      "modes": [],
+      "exchange": "RST \u002B Serial No. \u002B 6-character grid square \u002B (optional UKSMG member no.)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "UN DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=480",
+      "rulesUrl": "http://undxc.kz/rules-eng/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "Kazakhstan: RS(T) \u002B District Code; non-Kazakhstan: RS(T) \u002B QSO No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "URC DX RTTY Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=765",
+      "rulesUrl": "https://unicomradio.com/urc-dx-rtty-contest/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "RST \u002B 3-letter territory code (see rules)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Venezuelan Ind. Day Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=61",
+      "rulesUrl": "https://radioclubvenezolano.org/independenciadevenezuela.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Vermont QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=236",
+      "rulesUrl": "http://www.ranv.org/vtqso.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ft8"
+      ],
+      "exchange": "VT: RS(T) \u002B County; non-VT W/VE: RS(T) \u002B (state/province); DX: RS(T)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "VHF-UHF FT8 Activity Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=674",
+      "rulesUrl": "https://ft8activity.eu/rules/",
+      "bands": [
+        "2m",
+        "70cm"
+      ],
+      "modes": [
+        "ft8"
+      ],
+      "exchange": "4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "VHF-UHF FT8 Activity Contest-NA",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=784",
+      "rulesUrl": "https://ft8activity-na.net/rules/",
+      "bands": [
+        "2m",
+        "70cm"
+      ],
+      "modes": [
+        "ft8"
+      ],
+      "exchange": "4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Virginia QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=302",
+      "rulesUrl": "https://www.qsl.net/sterling/VA_QSO_Party/2026_VQP/2026_VQP_Main.html",
+      "bands": [],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "VA: Serial No. \u002B county; non-VA: Serial No. \u002B (state/province/\u0022DX\u0022)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "VK Shires Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=481",
+      "rulesUrl": "https://www.wia.org.au/members/contests/wavks/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "VK: RS(T) \u002B Shire; non-VK: RS(T) \u002B CQ Zone",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "VOLTA WW RTTY Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=13",
+      "rulesUrl": "https://www.contestvolta.it/rules.pdf",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "RST \u002B QSO No. \u002B CQ Zone",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "WAB 50 MHz Phone",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=505",
+      "rulesUrl": "http://wab.intermip.net/Contest%20Rules.php#OtherRules",
+      "bands": [
+        "6m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "British Isles: RS \u002B serial no. \u002B WAB square; Other: RS \u002B serial no. \u002B country",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "WAB 7 MHz Phone",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=581",
+      "rulesUrl": "http://wab.intermip.net/Contests.php",
+      "bands": [
+        "40m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "British Isles: RS \u002B serial no. \u002B WAB square; Other: RS \u002B serial no. \u002B country",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "WAE DX Contest, CW",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=85",
+      "rulesUrl": "https://www.darc.de/der-club/referate/conteste/wae-dx-contest/en/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "WAE DX Contest, RTTY",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=183",
+      "rulesUrl": "https://www.darc.de/der-club/referate/conteste/wae-dx-contest/en/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "WAE DX Contest, SSB",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=111",
+      "rulesUrl": "https://www.darc.de/der-club/referate/referat-conteste/worked-all-europe-dx-contest/en/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Wake-Up! QRP Sprint",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=301",
+      "rulesUrl": "http://qrp.ru/contest/wakeup/333-wakeup-eng",
+      "bands": [
+        "40m",
+        "20m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "RST \u002B Serial No. \u002B suffix of previous QSO (\u0022QRP\u0022 for 1st QSO)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Walk for the Bacon QRP Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=699",
+      "rulesUrl": "https://qrpcontest.com/pigwalk20/",
+      "bands": [
+        "20m"
+      ],
+      "modes": [
+        "cw"
+      ],
+      "exchange": "Maximum 13 wpm; RST \u002B (state/province/country) \u002B Name \u002B (Member No./power)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Washington State Salmon Run",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=126",
+      "rulesUrl": "http://salmonrun.wwdxc.org/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "WA: RS(T) \u002B County; non-WA: RS(T) \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Weekly RTTY Test",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=753",
+      "rulesUrl": "https://radiosport.world/wrt.html",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "Name \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "West Virginia QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=49",
+      "rulesUrl": "https://www.qsl.net/wvqp/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "digital",
+        "ssb"
+      ],
+      "exchange": "WV: RS(T) \u002B county; non-WV: RS(T) \u002B (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Winter Field Day",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=421",
+      "rulesUrl": "https://www.winterfieldday.com/",
+      "bands": [],
+      "modes": [],
+      "exchange": "Category \u002B ARRL Section (or MX or DX)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Wisconsin Parks on the Air",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=656",
+      "rulesUrl": "http://wipota.com/files/WIPOTA_contest_rules.pdf",
+      "bands": [
+        "6m",
+        "2m"
+      ],
+      "modes": [
+        "am",
+        "cw",
+        "digital",
+        "fm"
+      ],
+      "exchange": "WI Park: K-POTA Park No.; Non-Park: (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Wisconsin QSO Party",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=330",
+      "rulesUrl": "http://www.warac.org/wqp/wqp.htm",
+      "bands": [],
+      "modes": [
+        "cw",
+        "digital",
+        "ft4",
+        "ssb"
+      ],
+      "exchange": "WI: county; non-WI: (state/province/country)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Worked All Germany Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=163",
+      "rulesUrl": "http://www.darc.de/der-club/referate/conteste/worked-all-germany-contest/en/rules/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "DL, DARC-Member: RS(T) \u002B DOK (chapter code); DL, non-DARC: RS(T) \u002B \u0022NM\u0022; non-DL: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Worked All Provinces of China DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=546",
+      "rulesUrl": "http://www.mulandxc.com/index/match_info?id=13",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "am",
+        "cw",
+        "ssb"
+      ],
+      "exchange": "BY: RS(T) \u002B 2-character province; non-BY: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "World Time Zone Challenge",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=783",
+      "rulesUrl": "https://wtzc-contest.com/rules",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "RS(T) \u002B TZ offset code",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "World Wide Digi DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=650",
+      "rulesUrl": "https://ww-digi.com/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ft4"
+      ],
+      "exchange": "4-character grid square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "World Wide Holyland Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=319",
+      "rulesUrl": "https://tools.iarc.org/wwhc/#/rules",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "4X: RS(T) \u002B area; non-4X: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "Worldwide Sideband Activity Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=672",
+      "rulesUrl": "https://wwsac.com/rules.html",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m",
+        "6m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS \u002B age group (OM, YL, Youth YL or Youth)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "WW PMC Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=471",
+      "rulesUrl": "http://www.s59dcd.si/index.php/sl/ww-pmc/ww-pmc-contest-rules",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "PMC: RS(T) \u002B PMC abbreviation; World: RS(T) \u002B CQ Zone",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "YB DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=621",
+      "rulesUrl": "https://ybdxcontest.com/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "RS \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "YB DX RTTY Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=642",
+      "rulesUrl": "https://rtty.ybdxcontest.com/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "rtty"
+      ],
+      "exchange": "RST \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "YB ORARI DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=772",
+      "rulesUrl": "https://www.oraricontest.id/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ssb"
+      ],
+      "exchange": "YB: RS \u002B \u0022ORARI\u0022; non-YB: RS \u002B \u0022DX\u0022",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "YBDXPI FT8 Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=707",
+      "rulesUrl": "https://contest.ybdxpi.net/rules/",
+      "bands": [
+        "160m",
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "ft8"
+      ],
+      "exchange": "4-Character Grid Square",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "YO DX HF Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=98",
+      "rulesUrl": "http://www.yodx.ro/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "YO: RS(T) \u002B county; non-YO: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "YOTA Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=696",
+      "rulesUrl": "https://yotacontest.mrasz.org/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "Single Op: RS(T) \u002B age (on Jan 1 of year of contest); Multi-Op: RS(T) \u002B average age of ops (on Jan 1 of year of contest)",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    },
+    {
+      "name": "YU DX Contest",
+      "sourceUrl": "https://www.contestcalendar.com/contestdetails.php?ref=322",
+      "rulesUrl": "http://www.yudx.yu1srs.org.rs/",
+      "bands": [
+        "80m",
+        "40m",
+        "20m",
+        "15m",
+        "10m"
+      ],
+      "modes": [
+        "cw",
+        "ssb"
+      ],
+      "exchange": "YU/YT: RS(T) \u002B County; non-YU/YT: RS(T) \u002B Serial No.",
+      "detailsStatus": "partial",
+      "reviewStatus": "generated"
+    }
+  ]
+}

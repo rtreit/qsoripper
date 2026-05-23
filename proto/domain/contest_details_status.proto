@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+enum ContestDetailsStatus {
+  CONTEST_DETAILS_STATUS_UNSPECIFIED = 0;
+  CONTEST_DETAILS_STATUS_METADATA_ONLY = 1;
+  CONTEST_DETAILS_STATUS_PARTIAL = 2;
+  CONTEST_DETAILS_STATUS_FULL = 3;
+}

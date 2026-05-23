@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/get_active_contests_request.proto";
+import "services/get_active_contests_response.proto";
+import "services/refresh_contest_calendar_request.proto";
+import "services/refresh_contest_calendar_response.proto";
+
+service ContestCalendarService {
+  rpc GetActiveContests(GetActiveContestsRequest) returns (GetActiveContestsResponse);
+  rpc RefreshContestCalendar(RefreshContestCalendarRequest) returns (RefreshContestCalendarResponse);
+}

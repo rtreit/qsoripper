@@ -5,6 +5,8 @@
 pub mod adif;
 /// Application services that coordinate engine workflows above storage ports.
 pub mod application;
+/// Contest calendar providers, caching, and filtering.
+pub mod contest_calendar;
 /// Domain helpers for QSO and lookup-related types.
 pub mod domain;
 /// FFI boundary for DSP helpers.

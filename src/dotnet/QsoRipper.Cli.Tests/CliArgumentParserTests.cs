@@ -176,6 +176,16 @@ public class CliArgumentParserTests
         Assert.Null(arguments.Callsign);
     }
 
+    [Fact]
+    public void Parse_contests_preserves_command_arguments()
+    {
+        var arguments = CliArgumentParser.Parse(["contests", "active", "--band", "20m", "--mode", "CW", "--lookahead-minutes", "30"]);
+
+        Assert.Equal("contests", arguments.Command);
+        Assert.Equal(["active", "--band", "20m", "--mode", "CW", "--lookahead-minutes", "30"], arguments.RemainingArgs);
+        Assert.Null(arguments.Callsign);
+    }
+
     [Theory]
     [InlineData("http://localhost:50051", true)]
     [InlineData("https://example.com:7443", true)]

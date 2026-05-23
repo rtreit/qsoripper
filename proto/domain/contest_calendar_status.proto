@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+enum ContestCalendarStatus {
+  CONTEST_CALENDAR_STATUS_UNSPECIFIED = 0;
+  CONTEST_CALENDAR_STATUS_CURRENT = 1;
+  CONTEST_CALENDAR_STATUS_STALE = 2;
+  CONTEST_CALENDAR_STATUS_ERROR = 3;
+  CONTEST_CALENDAR_STATUS_DISABLED = 4;
+}
