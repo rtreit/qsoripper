@@ -30,7 +30,7 @@ Source-of-truth references for parity checks:
 - Rust: [`src/rust/qsoripper-server/src/main.rs`](../../src/rust/qsoripper-server/src/main.rs) (`get_dxcc_entity`, `batch_lookup`)
 - .NET: [`src/dotnet/QsoRipper.Engine.DotNet/GrpcServices.cs`](../../src/dotnet/QsoRipper.Engine.DotNet/GrpcServices.cs) (`GetDxccEntity`, `BatchLookup`)
 
-When changing or adding RPCs, update this table and the matching capability list in the engine specification in the same change.
+When changing or adding RPCs, update this table and the matching capability list in the engine specification in the same change. A lightweight parity test lives at [`tests/Docs.LookupParity.Tests.ps1`](../../tests/Docs.LookupParity.Tests.ps1); run `Invoke-Pester -Path tests/Docs.LookupParity.Tests.ps1` to confirm the docs above still match both the Rust and .NET hosts.
 
 ## RPCs
 
