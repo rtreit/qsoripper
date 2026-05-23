@@ -229,6 +229,7 @@ internal static class ContestCalendarCommand
         Console.WriteLine();
         Console.WriteLine(contest.Name);
         Console.WriteLine($"  UTC window:     {FormatTimestamp(contest.StartTimeUtc)} to {FormatTimestamp(contest.EndTimeUtc)}");
+        Console.WriteLine($"  Local window:   {FormatLocalTimestamp(contest.StartTimeUtc)} to {FormatLocalTimestamp(contest.EndTimeUtc)}");
         Console.WriteLine($"  Bands:          {FormatBands(contest.Bands)}");
         Console.WriteLine($"  Modes:          {FormatModes(contest.Modes)}");
         Console.WriteLine($"  Exchange:       {FormatOptional(contest.HasExchange ? contest.Exchange : null)}");
@@ -277,6 +278,13 @@ internal static class ContestCalendarCommand
     private static string FormatTimestamp(Timestamp? timestamp)
     {
         return timestamp is null ? "(unavailable)" : timestamp.ToDateTime().ToString("u", CultureInfo.InvariantCulture);
+    }
+
+    private static string FormatLocalTimestamp(Timestamp? timestamp)
+    {
+        return timestamp is null
+            ? "(unavailable)"
+            : timestamp.ToDateTimeOffset().ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
     }
 
     private static string FormatBands(RepeatedField<Band> bands)

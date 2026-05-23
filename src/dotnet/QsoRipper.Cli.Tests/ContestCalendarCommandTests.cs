@@ -1,3 +1,4 @@
+using System.Globalization;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Cli.Commands;
 using QsoRipper.Domain;
@@ -35,6 +36,7 @@ public sealed class ContestCalendarCommandTests
         Assert.Contains("Status:           current", output, StringComparison.Ordinal);
         Assert.Contains("Example Sprint", output, StringComparison.Ordinal);
         Assert.Contains("UTC window:     2026-05-24 16:00:00Z to 2026-05-24 20:00:00Z", output, StringComparison.Ordinal);
+        Assert.Contains($"Local window:   {FormatExpectedLocalTimestamp(response.Contests[0].StartTimeUtc)} to {FormatExpectedLocalTimestamp(response.Contests[0].EndTimeUtc)}", output, StringComparison.Ordinal);
         Assert.Contains("Exchange:       RST + serial", output, StringComparison.Ordinal);
         Assert.Contains("Details:        metadata only", output, StringComparison.Ordinal);
         Assert.Contains("Source URL:     https://www.contestcalendar.com/", output, StringComparison.Ordinal);
@@ -102,6 +104,11 @@ public sealed class ContestCalendarCommandTests
     private static Timestamp UtcTimestamp(int year, int month, int day, int hour, int minute, int second)
     {
         return Timestamp.FromDateTime(DateTime.SpecifyKind(new DateTime(year, month, day, hour, minute, second), DateTimeKind.Utc));
+    }
+
+    private static string FormatExpectedLocalTimestamp(Timestamp timestamp)
+    {
+        return timestamp.ToDateTimeOffset().ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
     }
 }
 #pragma warning restore CA1707
