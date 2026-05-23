@@ -277,7 +277,7 @@ internal static class CliHelpText
                   --json             Output the snapshot as JSON
                 """,
             "contests" => """
-                Usage: contests active [--band 20m] [--mode CW] [--at <utc>] [--lookahead-minutes N]
+                Usage: contests active [--band 20m] [--mode CW] [--at <utc>] [--lookahead-hours N]
                        contests refresh
 
                 Show engine-backed active contests from the contest calendar cache.
@@ -287,7 +287,7 @@ internal static class CliHelpText
                   --band <band>             Filter by band, such as 20m
                   --mode <mode>             Filter by mode, such as CW or SSB
                   --at <utc>                Query time, default engine current UTC
-                  --lookahead-minutes <n>   Include contests starting soon
+                  --lookahead-hours <n>     Include contests starting soon
                   --exact-matches           Exclude metadata-only partial matches
                   --include-partial         Include metadata-only partial matches
                   --refresh                 Force an immediate refresh before printing

@@ -179,10 +179,10 @@ public class CliArgumentParserTests
     [Fact]
     public void Parse_contests_preserves_command_arguments()
     {
-        var arguments = CliArgumentParser.Parse(["contests", "active", "--band", "20m", "--mode", "CW", "--lookahead-minutes", "30"]);
+        var arguments = CliArgumentParser.Parse(["contests", "active", "--band", "20m", "--mode", "CW", "--lookahead-hours", "12"]);
 
         Assert.Equal("contests", arguments.Command);
-        Assert.Equal(["active", "--band", "20m", "--mode", "CW", "--lookahead-minutes", "30"], arguments.RemainingArgs);
+        Assert.Equal(["active", "--band", "20m", "--mode", "CW", "--lookahead-hours", "12"], arguments.RemainingArgs);
         Assert.Null(arguments.Callsign);
     }
 

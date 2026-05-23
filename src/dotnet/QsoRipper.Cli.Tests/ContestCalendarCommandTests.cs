@@ -83,6 +83,22 @@ public sealed class ContestCalendarCommandTests
         Assert.Contains("\"status\": \"CONTEST_CALENDAR_STATUS_STALE\"", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void TryParseLookaheadHours_converts_to_minutes()
+    {
+        Assert.True(ContestCalendarCommand.TryParseLookaheadHours("12", out var minutes));
+        Assert.Equal(720U, minutes);
+    }
+
+    [Theory]
+    [InlineData("-1")]
+    [InlineData("1.5")]
+    [InlineData("71582789")]
+    public void TryParseLookaheadHours_rejects_invalid_values(string value)
+    {
+        Assert.False(ContestCalendarCommand.TryParseLookaheadHours(value, out _));
+    }
+
     private static Timestamp UtcTimestamp(int year, int month, int day, int hour, int minute, int second)
     {
         return Timestamp.FromDateTime(DateTime.SpecifyKind(new DateTime(year, month, day, hour, minute, second), DateTimeKind.Utc));

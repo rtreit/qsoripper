@@ -156,15 +156,15 @@ internal static class ContestCalendarCommand
 
                     options = options with { AtUtc = atUtc.ToUniversalTime() };
                     break;
-                case "--lookahead-minutes":
+                case "--lookahead-hours":
                     if (!TryReadValue(args, ref i, arg, out var lookaheadValue, out error))
                     {
                         return false;
                     }
 
-                    if (!uint.TryParse(lookaheadValue, NumberStyles.None, CultureInfo.InvariantCulture, out var lookaheadMinutes))
+                    if (!TryParseLookaheadHours(lookaheadValue, out var lookaheadMinutes))
                     {
-                        error = $"Invalid --lookahead-minutes value: {lookaheadValue}.";
+                        error = $"Invalid --lookahead-hours value: {lookaheadValue}.";
                         return false;
                     }
 
@@ -182,6 +182,19 @@ internal static class ContestCalendarCommand
             }
         }
 
+        return true;
+    }
+
+    internal static bool TryParseLookaheadHours(string value, out uint lookaheadMinutes)
+    {
+        lookaheadMinutes = 0;
+        if (!uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var lookaheadHours)
+            || lookaheadHours > uint.MaxValue / 60)
+        {
+            return false;
+        }
+
+        lookaheadMinutes = lookaheadHours * 60;
         return true;
     }
 
