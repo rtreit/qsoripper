@@ -284,7 +284,7 @@ internal static class ContestCalendarCommand
     {
         return timestamp is null
             ? "(unavailable)"
-            : timestamp.ToDateTimeOffset().ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
+            : timestamp.ToDateTimeOffset().ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
     }
 
     private static string FormatBands(RepeatedField<Band> bands)

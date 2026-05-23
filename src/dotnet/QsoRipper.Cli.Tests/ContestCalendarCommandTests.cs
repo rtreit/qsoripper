@@ -108,7 +108,7 @@ public sealed class ContestCalendarCommandTests
 
     private static string FormatExpectedLocalTimestamp(Timestamp timestamp)
     {
-        return timestamp.ToDateTimeOffset().ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss zzz", CultureInfo.InvariantCulture);
+        return timestamp.ToDateTimeOffset().ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
     }
 }
 #pragma warning restore CA1707
