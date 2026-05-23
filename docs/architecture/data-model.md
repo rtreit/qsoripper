@@ -137,7 +137,7 @@ Key RPCs:
 - `GetDxccEntity` — DXCC entity lookup
 - `BatchLookup` — contest prefetch
 
-Each RPC returns a unique service envelope such as `LookupResponse`, `StreamLookupResponse`, or `GetCachedCallsignResponse`. Shared payloads like `LookupResult` stay nested inside those envelopes so each RPC can evolve independently. Current built-in engine hosts implement the unary/stream/cache lookup slice and advertise those capabilities explicitly; DXCC and batch lookup remain reserved for later expansion.
+Each RPC returns a unique service envelope such as `LookupResponse`, `StreamLookupResponse`, or `GetCachedCallsignResponse`. Shared payloads like `LookupResult` stay nested inside those envelopes so each RPC can evolve independently. Current built-in engine hosts implement the unary/stream/cache lookup slice and advertise those capabilities explicitly (`lookup-callsign`, `lookup-stream`, `lookup-cache`). `BatchLookup` and `GetDxccEntity` by numeric `dxcc_code` are also implemented in both the Rust and .NET hosts; `GetDxccEntity` by callsign `prefix` is the only remaining branch that still returns `UNIMPLEMENTED`. See [`docs/api/lookup-service.md`](../api/lookup-service.md) for the authoritative RPC support table.
 
 ### LogbookService
 
