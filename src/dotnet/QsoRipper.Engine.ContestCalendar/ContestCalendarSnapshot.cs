@@ -1,6 +1,6 @@
+using System.Collections.ObjectModel;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
-using System.Collections.ObjectModel;
 
 namespace QsoRipper.Engine.ContestCalendar;
 
