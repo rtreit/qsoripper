@@ -62,6 +62,18 @@ internal static class EngineReachability
         return $"Could not connect to {profile.DisplayName} at {endpoint}.\nMake sure the engine is running. Suggested start command:\n  {SuggestedCommand(profile)}";
     }
 
+    public static string FormatUnimplementedServiceMessage(
+        EngineTargetProfile profile,
+        string endpoint,
+        string serviceName)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ArgumentException.ThrowIfNullOrWhiteSpace(serviceName);
+
+        return $"The engine at {endpoint} does not implement {serviceName}.\nRestart the updated {profile.DisplayName}, or point --endpoint at an engine built from this branch.\nSuggested start command:\n  {SuggestedCommand(profile)}";
+    }
+
     public static string SuggestedCommand(EngineTargetProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);

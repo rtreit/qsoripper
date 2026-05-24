@@ -33,6 +33,8 @@ internal static class CliHelpText
               sync-status                      Detailed sync status and scheduling info
               test-logbook [--api-key <key>]   Test QRZ logbook API key
               space-weather [--refresh]        Show current NOAA space weather snapshot
+              contests active [filters]        Show active or upcoming contests
+              contests refresh                 Refresh contest calendar cache
               config [--set KEY=VALUE]         View or modify runtime config
               setup [--status | --from-env]    Interactive setup wizard or headless config
 
@@ -273,6 +275,23 @@ internal static class CliHelpText
 
                   --refresh          Force an immediate refresh before printing
                   --json             Output the snapshot as JSON
+                """,
+            "contests" => """
+                Usage: contests active [--band 20m] [--mode CW] [--at <utc>] [--lookahead-hours N]
+                       contests refresh
+
+                Show engine-backed active contests from the contest calendar cache.
+                Partial source matches are included by default because the initial
+                WA7BNM RSS source does not publish band, mode, or exchange details.
+
+                  --band <band>             Filter by band, such as 20m
+                  --mode <mode>             Filter by mode, such as CW or SSB
+                  --at <utc>                Query time, default engine current UTC
+                  --lookahead-hours <n>     Include contests starting soon
+                  --exact-matches           Exclude metadata-only partial matches
+                  --include-partial         Include metadata-only partial matches
+                  --refresh                 Force an immediate refresh before printing
+                  --json                    Output the response as JSON
                 """,
             _ => $"No help available for '{command}'."
         };

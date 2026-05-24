@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "domain/contest_calendar_entry.proto";
+import "domain/contest_calendar_status.proto";
+import "google/protobuf/timestamp.proto";
+
+message RefreshContestCalendarResponse {
+  repeated qsoripper.domain.ContestCalendarEntry contests = 1;
+  qsoripper.domain.ContestCalendarStatus status = 2;
+  google.protobuf.Timestamp fetched_at = 3;
+  google.protobuf.Timestamp valid_until = 4;
+  optional string error_message = 5;
+}

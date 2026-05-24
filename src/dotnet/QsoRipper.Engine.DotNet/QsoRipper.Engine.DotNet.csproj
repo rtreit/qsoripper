@@ -25,6 +25,7 @@
   <ItemGroup>
     <ProjectReference Include="..\QsoRipper.Engine.Lookup.Abstractions\QsoRipper.Engine.Lookup.Abstractions.csproj" />
     <ProjectReference Include="..\QsoRipper.Engine.Lookup.Qrz\QsoRipper.Engine.Lookup.Qrz.csproj" />
+    <ProjectReference Include="..\QsoRipper.Engine.ContestCalendar\QsoRipper.Engine.ContestCalendar.csproj" />
     <ProjectReference Include="..\QsoRipper.Engine.RigControl\QsoRipper.Engine.RigControl.csproj" />
     <ProjectReference Include="..\QsoRipper.Engine.SpaceWeather\QsoRipper.Engine.SpaceWeather.csproj" />
     <ProjectReference Include="..\QsoRipper.Engine.QrzLogbook\QsoRipper.Engine.QrzLogbook.csproj" />

@@ -1,5 +1,6 @@
 using System.Net;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
+using QsoRipper.Engine.ContestCalendar;
 using QsoRipper.Engine.DotNet;
 using QsoRipper.Engine.Lookup;
 using QsoRipper.Engine.Lookup.Qrz;
@@ -23,6 +24,7 @@ builder.Services.AddSingleton(resolvedStorage.Storage);
 var lookupCoordinator = CreateLookupCoordinator(resolvedStorage.Storage, persistedSetup.Config);
 builder.Services.AddSingleton(lookupCoordinator);
 
+var contestCalendarMonitor = CreateContestCalendarMonitor();
 var rigControlMonitor = CreateRigControlMonitor();
 var spaceWeatherMonitor = CreateSpaceWeatherMonitor();
 
@@ -30,6 +32,7 @@ builder.Services.AddSingleton(provider => new ManagedEngineState(
     options.ConfigPath,
     provider.GetRequiredService<IEngineStorage>(),
     provider.GetRequiredService<ILookupCoordinator>(),
+    contestCalendarMonitor,
     rigControlMonitor,
     spaceWeatherMonitor,
     null,
@@ -43,6 +46,7 @@ app.MapGrpcService<ManagedStationProfileGrpcService>();
 app.MapGrpcService<ManagedDeveloperControlGrpcService>();
 app.MapGrpcService<ManagedLogbookGrpcService>();
 app.MapGrpcService<ManagedLookupGrpcService>();
+app.MapGrpcService<ManagedContestCalendarGrpcService>();
 app.MapGrpcService<ManagedRigControlGrpcService>();
 app.MapGrpcService<ManagedSpaceWeatherGrpcService>();
 app.MapGrpcService<ManagedGreatCircleGrpcService>();
@@ -118,6 +122,34 @@ static ILookupCoordinator CreateLookupCoordinator(IEngineStorage storage, Shared
     }
 
     return new LookupCoordinator(provider, storage.LookupSnapshots, logbookStore: storage.Logbook);
+}
+
+static ContestCalendarMonitor? CreateContestCalendarMonitor()
+{
+    var config = Wa7bnmContestCalendarConfig.FromEnvironment();
+    if (!config.Enabled)
+    {
+        Console.WriteLine("Contest calendar: disabled");
+        return null;
+    }
+
+    // HttpClient is intentionally not disposed — it is a singleton owned by the provider for the app lifetime.
+#pragma warning disable CA2000 // Dispose objects before losing scope
+    var httpClient = new HttpClient { Timeout = config.HttpTimeout };
+#pragma warning restore CA2000
+    IContestCalendarProvider provider = new Wa7bnmContestCalendarProvider(httpClient, config);
+    if (File.Exists(config.DetailsPath))
+    {
+        provider = new CatalogEnrichingContestCalendarProvider(provider, ContestDetailsCatalog.Load(config.DetailsPath));
+        Console.WriteLine($"Contest calendar: local details catalog enabled ({config.DetailsPath})");
+    }
+    else if (config.DetailsPathIsExplicit)
+    {
+        throw ContestCalendarProviderException.Parse($"Contest calendar details catalog does not exist: {config.DetailsPath}");
+    }
+
+    Console.WriteLine($"Contest calendar: enabled (refresh every {config.RefreshInterval.TotalSeconds}s, stale after {config.StaleAfter.TotalSeconds}s)");
+    return new ContestCalendarMonitor(provider, config.RefreshInterval, config.StaleAfter);
 }
 
 static RigControlMonitor? CreateRigControlMonitor()

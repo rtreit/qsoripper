@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
+using QsoRipper.Engine.ContestCalendar;
 using QsoRipper.Engine.Lookup;
 using QsoRipper.Engine.QrzLogbook;
 using QsoRipper.Engine.RigControl;
@@ -63,6 +64,7 @@ internal sealed class ManagedEngineState
     private readonly Lock _gate = new();
     private readonly IEngineStorage _storage;
     private ILookupCoordinator _lookupCoordinator;
+    private readonly ContestCalendarMonitor? _contestCalendarMonitor;
     private readonly RigControlMonitor? _rigControlMonitor;
     private readonly SpaceWeatherMonitor? _spaceWeatherMonitor;
     private readonly string _configPath;
@@ -104,16 +106,16 @@ internal sealed class ManagedEngineState
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor)
-        : this(configPath, storage, lookupCoordinator, rigControlMonitor, spaceWeatherMonitor, null, null, null)
+        : this(configPath, storage, lookupCoordinator, null, rigControlMonitor, spaceWeatherMonitor, null, null, null)
     {
     }
 
     public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor, QrzSyncEngine? syncEngine)
-        : this(configPath, storage, lookupCoordinator, rigControlMonitor, spaceWeatherMonitor, syncEngine, null, null)
+        : this(configPath, storage, lookupCoordinator, null, rigControlMonitor, spaceWeatherMonitor, syncEngine, null, null)
     {
     }
 
-    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor, QrzSyncEngine? syncEngine, string? currentPersistenceLocation, LoadedSharedSetupConfig? loadedPersistedSetup)
+    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, ContestCalendarMonitor? contestCalendarMonitor, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor, QrzSyncEngine? syncEngine, string? currentPersistenceLocation, LoadedSharedSetupConfig? loadedPersistedSetup)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
         ArgumentNullException.ThrowIfNull(storage);
@@ -121,6 +123,7 @@ internal sealed class ManagedEngineState
         _configPath = Path.GetFullPath(configPath.Trim());
         _storage = storage;
         _lookupCoordinator = lookupCoordinator ?? CreateDefaultCoordinator(storage);
+        _contestCalendarMonitor = contestCalendarMonitor;
         _rigControlMonitor = rigControlMonitor;
         _spaceWeatherMonitor = spaceWeatherMonitor;
         _ownsSyncEngine = syncEngine is null;
@@ -184,6 +187,7 @@ internal sealed class ManagedEngineState
                 "station-profiles",
                 "runtime-config",
                 "rig-control",
+                "contest-calendar",
                 "space-weather",
                 "purge",
             }
@@ -1084,6 +1088,22 @@ internal sealed class ManagedEngineState
         return refreshed
             ? _spaceWeatherMonitor.RefreshSnapshot()
             : _spaceWeatherMonitor.CurrentSnapshot();
+    }
+
+    public ContestCalendarSnapshot BuildContestCalendarSnapshot(bool refreshed)
+    {
+        if (_contestCalendarMonitor is null)
+        {
+            return new ContestCalendarSnapshot
+            {
+                Status = ContestCalendarStatus.Disabled,
+                ErrorMessage = "Contest calendar not configured",
+            };
+        }
+
+        return refreshed
+            ? _contestCalendarMonitor.RefreshSnapshot()
+            : _contestCalendarMonitor.CurrentSnapshot();
     }
 
     public RuntimeConfigSnapshot GetRuntimeConfigSnapshot()

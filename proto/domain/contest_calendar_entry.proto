@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+import "domain/band.proto";
+import "domain/contest_details_status.proto";
+import "domain/mode.proto";
+import "google/protobuf/timestamp.proto";
+
+message ContestCalendarEntry {
+  string contest_id = 1;
+  string name = 2;
+  google.protobuf.Timestamp start_time_utc = 3;
+  google.protobuf.Timestamp end_time_utc = 4;
+  repeated Band bands = 5;
+  repeated Mode modes = 6;
+  optional string exchange = 7;
+  optional string rules_url = 8;
+  optional string source_url = 9;
+  string source_name = 10;
+  ContestDetailsStatus details_status = 11;
+}

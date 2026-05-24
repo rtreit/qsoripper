@@ -83,7 +83,10 @@ stress-report.html
 
 
 # Syncthing-managed local data, captures, corpora, and runtime databases.
-data/
+data/*
+!data/contest-calendar/
+data/contest-calendar/*
+!data/contest-calendar/contest-details.json
 
 # cw-decoder stress-test generated audio (large, regenerable via stress-gen.ps1)
 experiments/cw-decoder/bench-runs/

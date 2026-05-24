@@ -15,6 +15,7 @@ QsoRipper is **contract-first**. `proto/` is the stable seam. Engine hosts imple
 | **LogbookService** | QSO CRUD, QRZ logbook sync, ADIF import/export | [logbook-service.md](logbook-service.md) |
 | **DeveloperControlService** | Developer-only runtime config overrides and diagnostics | [`proto/services/developer_control_service.proto`](../../proto/services/developer_control_service.proto) |
 | **SpaceWeatherService** | Current space-weather snapshot plus explicit refresh | [`proto/services/space_weather_service.proto`](../../proto/services/space_weather_service.proto) |
+| **ContestCalendarService** | Active contest lookup plus explicit calendar refresh | [`proto/services/contest_calendar_service.proto`](../../proto/services/contest_calendar_service.proto) |
 
 ## Contract Source of Truth
 
@@ -72,7 +73,7 @@ Not every contract entry is implemented by every current engine host. The refere
 
 In general:
 
-- Both built-in engine hosts implement the common first slice used by the conformance harness: engine info, setup, station profiles, runtime config, logbook CRUD, sync status, ADIF import/export, rig status, space weather, and callsign lookup via unary/stream/cache RPCs.
+- Both built-in engine hosts implement the common first slice used by the conformance harness: engine info, setup, station profiles, runtime config, logbook CRUD, sync status, ADIF import/export, rig status, space weather, contest calendar lookup, and callsign lookup via unary/stream/cache RPCs.
 - Both built-in hosts also implement `LookupService.BatchLookup` and `LookupService.GetDxccEntity` for the `dxcc_code` query case. The `prefix` query case of `GetDxccEntity` still returns `UNIMPLEMENTED` in both hosts.
 - The built-in engine hosts report fine-grained lookup capabilities (`lookup-callsign`, `lookup-stream`, `lookup-cache`) instead of a broad `lookup` bucket so discovery matches the actually implemented surface.
 

@@ -6,6 +6,8 @@
   <Project Path="QsoRipper.DebugHost.Tests/QsoRipper.DebugHost.Tests.csproj" />
   <Project Path="QsoRipper.Engine.DotNet/QsoRipper.Engine.DotNet.csproj" />
   <Project Path="QsoRipper.Engine.DotNet.Tests/QsoRipper.Engine.DotNet.Tests.csproj" />
+  <Project Path="QsoRipper.Engine.ContestCalendar/QsoRipper.Engine.ContestCalendar.csproj" />
+  <Project Path="QsoRipper.Engine.ContestCalendar.Tests/QsoRipper.Engine.ContestCalendar.Tests.csproj" />
   <Project Path="QsoRipper.Engine.RigControl/QsoRipper.Engine.RigControl.csproj" />
   <Project Path="QsoRipper.Engine.RigControl.Tests/QsoRipper.Engine.RigControl.Tests.csproj" />
   <Project Path="QsoRipper.Engine.Lookup.Abstractions/QsoRipper.Engine.Lookup.Abstractions.csproj" />
@@ -21,6 +23,8 @@
   <Project Path="QsoRipper.Engine.QrzLogbook/QsoRipper.Engine.QrzLogbook.csproj" />
   <Project Path="QsoRipper.Engine.QrzLogbook.Tests/QsoRipper.Engine.QrzLogbook.Tests.csproj" />
   <Project Path="QsoRipper.EngineSelection/QsoRipper.EngineSelection.csproj" />
+  <Project Path="QsoRipper.Tools.ContestCatalog/QsoRipper.Tools.ContestCatalog.csproj" />
+  <Project Path="QsoRipper.Tools.ContestCatalog.Tests/QsoRipper.Tools.ContestCatalog.Tests.csproj" />
   <Project Path="QsoRipper.Gui/QsoRipper.Gui.csproj" />
   <Project Path="QsoRipper.Gui.Tests/QsoRipper.Gui.Tests.csproj" />
 </Solution>

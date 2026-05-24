@@ -4,7 +4,7 @@
 >
 > This is a living document. When proto files, services, or behavioral contracts change, update this specification in the same change.
 
-A QsoRipper engine is the core runtime that owns QSO logging, callsign lookup, rig control, space weather, station profiles, and external sync. Engines expose a gRPC API over HTTP/2 that any client — TUI, GUI, CLI, or web — can consume. The architecture is explicitly multi-engine: any conformant implementation, regardless of language, can serve as the engine behind any QsoRipper client.
+A QsoRipper engine is the core runtime that owns QSO logging, callsign lookup, rig control, space weather, contest calendar lookup, station profiles, and external sync. Engines expose a gRPC API over HTTP/2 that any client — TUI, GUI, CLI, or web — can consume. The architecture is explicitly multi-engine: any conformant implementation, regardless of language, can serve as the engine behind any QsoRipper client.
 
 This document is self-contained. A developer should be able to implement a fully conformant engine using only this specification and the `.proto` files under `proto/`.
 
@@ -37,6 +37,7 @@ The engine is a long-running server process responsible for:
 | QRZ logbook sync | Bidirectional synchronization with the QRZ logbook API |
 | Rig control | Polling a rigctld daemon for frequency and mode |
 | Space weather | Fetching and caching NOAA space weather indices |
+| Contest calendar | Fetching and caching active contest metadata |
 | Station profiles | Managing station identity and per-session overrides |
 | Setup/bootstrap | First-run wizard state, credential validation, and configuration persistence |
 | Runtime config | Live developer-facing configuration overrides |
@@ -684,6 +685,50 @@ Temporarily overrides the active station profile for the current session.
 
 Removes the session override, reverting to the base active profile.
 
+### 3.8 ContestCalendarService
+
+**Proto file:** `proto/services/contest_calendar_service.proto`
+
+Cached contest calendar metadata for operator "what contest is active?" queries.
+
+#### RPCs
+
+| RPC | Request | Response | Mode |
+|---|---|---|---|
+| `GetActiveContests` | `GetActiveContestsRequest` | `GetActiveContestsResponse` | Unary |
+| `RefreshContestCalendar` | `RefreshContestCalendarRequest` | `RefreshContestCalendarResponse` | Unary |
+
+#### GetActiveContests
+
+Returns contests whose UTC window overlaps the requested time and lookahead window. If `at_utc` is omitted, the engine uses its current UTC time. `band` and `mode` filters are optional. If a contest entry does not include band or mode metadata, it only matches a band or mode filter when `include_partial_matches=true`.
+
+**Behavior:**
+- Use cached calendar data when it is fresh.
+- Refresh the provider cache when there is no cache or the refresh interval has elapsed.
+- Return stale cached data with `ContestCalendarStatus.CONTEST_CALENDAR_STATUS_STALE` if refresh fails after a previous successful fetch.
+- Separate provider/cache status from data completeness. `ContestCalendarStatus` describes current/stale/error/disabled state, while `ContestDetailsStatus` describes whether a contest has metadata-only, partial, or full details.
+- Preserve source attribution through `source_name` and `source_url`.
+
+**Source limitation:**
+The built-in WA7BNM provider uses the public RSS calendar feed and treats it as a metadata source. RSS-derived entries include name, UTC start/end, source link, and metadata-only status. The runtime engine must not scrape WA7BNM HTML detail pages for exchange, band, mode, or rules data. Richer details require an authorized data source, a user-configured source, a curated local catalog, or a reviewed catalog generated offline.
+
+**Local details catalog:**
+The engine loads a reviewed JSON catalog from `QSORIPPER_CONTEST_CALENDAR_DETAILS_PATH`, or from `data\contest-calendar\contest-details.json` when the variable is unset and that file exists. It uses the catalog to enrich RSS entries with known bands, modes, exchange text, rules URL, and `ContestDetailsStatus`. Catalog entries may match by `contestId`, `sourceUrl`, or normalized contest `name`. This catalog is offline input to the engine. Generated catalog candidates must be reviewed before they become authoritative engine input, and tools that produce them must respect rules-site terms.
+
+**Error semantics:**
+- This RPC should usually succeed. Data unavailability is reported through `ContestCalendarStatus` and `error_message`.
+- Invalid band or mode enum values are rejected by protobuf validation before service logic.
+
+#### RefreshContestCalendar
+
+Forces an immediate provider refresh and returns the resulting contest entries plus status metadata.
+
+**Behavior:**
+1. Fetch fresh data from the configured contest calendar provider.
+2. Parse and normalize contest entries into `ContestCalendarEntry`.
+3. Update the cache on success.
+4. On provider failure, return stale cached data when available; otherwise return `CONTEST_CALENDAR_STATUS_ERROR` or `CONTEST_CALENDAR_STATUS_DISABLED`.
+
 ### 3.9 GreatCircleService
 
 **Proto file:** `proto/services/great_circle_service.proto`
@@ -999,6 +1044,47 @@ All backends must implement the `EngineStorage` trait, which decomposes into:
 
 **Parsed fields:** K-index, A-index, solar flux (SFI), sunspot number, geomagnetic storm scale.
 
+### 5.5 Contest Calendar (WA7BNM RSS)
+
+**Data source:** `https://www.contestcalendar.com/calendar.rss`
+
+**Usage policy:** The built-in runtime provider is limited to the public RSS metadata feed. It must not automate access to WA7BNM HTML detail pages or copy detail-page content while serving engine requests. Exchange, band, mode, and rules details are only populated from authorized, curated, or reviewed offline-generated sources.
+
+**Refresh model:**
+- Background refresh at `QSORIPPER_CONTEST_CALENDAR_REFRESH_INTERVAL_SECONDS` (default: 3600 seconds / 1 hour).
+- Cached data becomes stale after `QSORIPPER_CONTEST_CALENDAR_STALE_AFTER_SECONDS` (default: 86400 seconds / 24 hours).
+- HTTP timeout controlled by `QSORIPPER_CONTEST_CALENDAR_HTTP_TIMEOUT_SECONDS`.
+- If refresh fails, the engine retains the last known good calendar and reports the error in the response status.
+
+**Parsed fields:** contest name, UTC start time, UTC end time, source URL, source name, and deterministic `contest_id`.
+
+**Optional enrichment:** `QSORIPPER_CONTEST_CALENDAR_DETAILS_PATH` may point to a reviewed JSON file. If unset, the engine uses `data\contest-calendar\contest-details.json` when the file exists:
+
+```json
+{
+  "entries": [
+    {
+      "name": "Example Contest",
+      "sourceUrl": "https://www.contestcalendar.com/weeklycontdetails.php?ref=example",
+      "bands": [ "160m", "80m", "40m", "20m", "15m", "10m" ],
+      "modes": [ "cw", "ssb" ],
+      "exchange": "RST + serial",
+      "rulesUrl": "https://example.test/rules",
+      "detailsStatus": "full"
+    }
+  ]
+}
+```
+
+The standalone generator creates a review file from the WA7BNM 12-month calendar by default. It follows calendar detail links as an offline build step, extracts factual fields such as mode, bands, exchange, and the official rules URL, then optionally fetches official rules pages to fill gaps. It can also consume RSS metadata or an optional seed catalog of known official rules URLs:
+
+```powershell
+dotnet run --project src\dotnet\QsoRipper.Tools.ContestCatalog -- --output artifacts\contest-calendar\contest-details.generated.json
+dotnet run --project src\dotnet\QsoRipper.Tools.ContestCatalog -- --promote-candidates --output data\contest-calendar\contest-details.json
+```
+
+The default output is `artifacts\contest-calendar\contest-details.generated.json`. It is not loaded by the engine. By default, extracted facts are written as `candidateBands`, `candidateModes`, and `candidateExchange` so a maintainer can verify facts and copy only factual fields into `data\contest-calendar\contest-details.json`. `--promote-candidates` writes those factual candidates into canonical catalog fields for a reviewed local database and omits the review-only candidate fields. The generator may read WA7BNM detail pages only as offline calendar metadata, but it refuses to treat WA7BNM or ContestCalendar URLs as official rules pages and should not copy rules prose into the catalog.
+
 ---
 
 ## 6. Configuration
@@ -1037,6 +1123,17 @@ All configuration is driven by environment variables prefixed with `QSORIPPER_`.
 |---|---|---|---|
 | `QSORIPPER_QRZ_LOGBOOK_API_KEY` | String | | QRZ logbook API key (secret) |
 | `QSORIPPER_QRZ_LOGBOOK_BASE_URL` | URL | `https://logbook.qrz.com/api` | QRZ logbook API base URL |
+
+#### Contest Calendar
+
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `QSORIPPER_CONTEST_CALENDAR_ENABLED` | Bool | `true` | Enable engine-backed contest calendar lookup |
+| `QSORIPPER_CONTEST_CALENDAR_RSS_URL` | URL | `https://www.contestcalendar.com/calendar.rss` | Contest calendar RSS source URL |
+| `QSORIPPER_CONTEST_CALENDAR_HTTP_TIMEOUT_SECONDS` | Integer | `8` | Contest calendar HTTP timeout |
+| `QSORIPPER_CONTEST_CALENDAR_REFRESH_INTERVAL_SECONDS` | Integer | `3600` | Provider refresh interval |
+| `QSORIPPER_CONTEST_CALENDAR_STALE_AFTER_SECONDS` | Integer | `86400` | Age after which cached contest data is stale |
+| `QSORIPPER_CONTEST_CALENDAR_DETAILS_PATH` | Path | `data\contest-calendar\contest-details.json` | Optional reviewed local JSON catalog for bands, modes, exchange, and rules URL |
 
 #### Sync
 
@@ -1083,6 +1180,7 @@ The engine must start and function even when external integrations are unavailab
 | QRZ logbook API key | Logbook sync disabled. `SyncWithQrz` returns `FAILED_PRECONDITION`. |
 | rigctld host/port | Rig control disabled. `GetRigStatus` returns `RIG_CONNECTION_STATUS_DISABLED`. |
 | NOAA weather disabled | Space weather disabled. `GetCurrentSpaceWeather` returns `SPACE_WEATHER_STATUS_DISABLED`. |
+| Contest calendar disabled | Contest lookup disabled. `GetActiveContests` returns `CONTEST_CALENDAR_STATUS_DISABLED`. |
 | No station profile | QSO logging requires a profile. `LogQso` returns `FAILED_PRECONDITION` until a profile is set. |
 
 **Core invariant:** Local QSO storage and CRUD always work, regardless of external integration state. The engine must never fail to start because an external service is unavailable.
@@ -1476,6 +1574,7 @@ Both engines currently report the following capabilities:
 | `runtime-config` | Runtime configuration updates |
 | `rig-control` | rigctld integration |
 | `space-weather` | NOAA space weather data |
+| `contest-calendar` | Contest calendar lookup |
 | `purge` | Permanent removal of soft-deleted QSOs (§7.9) |
 
 > **Note:** Earlier drafts listed aspirational names (`sync`, `rig_control`, `stress`, `adif_import`, `adif_export`) that were never adopted. The canonical names above use kebab-case and match what both engines actually report. New capabilities should follow this convention.
@@ -1596,6 +1695,7 @@ A conformant engine must pass all of the following scenarios:
 | `proto/domain/station_snapshot.proto` | `StationSnapshot` | Immutable per-QSO station capture |
 | `proto/domain/rig_snapshot.proto` | `RigSnapshot` | Rig frequency/mode snapshot |
 | `proto/domain/space_weather_snapshot.proto` | `SpaceWeatherSnapshot` | Space weather indices |
+| `proto/domain/contest_calendar_entry.proto` | `ContestCalendarEntry` | Normalized contest calendar entry |
 | `proto/domain/sync_config.proto` | `SyncConfig` | Sync policy configuration |
 | `proto/domain/band.proto` | `Band` | Band enumeration (ADIF-aligned) |
 | `proto/domain/mode.proto` | `Mode` | Mode enumeration (ADIF-aligned) |
@@ -1605,6 +1705,8 @@ A conformant engine must pass all of the following scenarios:
 | `proto/domain/qso_completion.proto` | `QsoCompletion` | ADIF `QSO_COMPLETE` enum (Y/N/NIL/?) |
 | `proto/domain/rig_connection_status.proto` | `RigConnectionStatus` | Rig connection state |
 | `proto/domain/space_weather_status.proto` | `SpaceWeatherStatus` | Space weather data state |
+| `proto/domain/contest_calendar_status.proto` | `ContestCalendarStatus` | Contest calendar cache/provider state |
+| `proto/domain/contest_details_status.proto` | `ContestDetailsStatus` | Contest entry detail completeness |
 
 ## Appendix B: Proto File Conventions
 

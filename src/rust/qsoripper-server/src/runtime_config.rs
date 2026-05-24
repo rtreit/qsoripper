@@ -2,6 +2,16 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use qsoripper_core::application::logbook::LogbookEngine;
+use qsoripper_core::contest_calendar::{
+    CatalogEnrichingContestCalendarProvider, ContestCalendarMonitor, ContestCalendarProvider,
+    ContestDetailsCatalog, DisabledContestCalendarProvider, Wa7bnmContestCalendarConfig,
+    Wa7bnmContestCalendarProvider, CONTEST_CALENDAR_DETAILS_PATH_ENV_VAR,
+    CONTEST_CALENDAR_ENABLED_ENV_VAR, CONTEST_CALENDAR_HTTP_TIMEOUT_SECONDS_ENV_VAR,
+    CONTEST_CALENDAR_REFRESH_INTERVAL_SECONDS_ENV_VAR, CONTEST_CALENDAR_RSS_URL_ENV_VAR,
+    CONTEST_CALENDAR_STALE_AFTER_SECONDS_ENV_VAR, DEFAULT_CONTEST_CALENDAR_DETAILS_PATH,
+    DEFAULT_CONTEST_CALENDAR_REFRESH_INTERVAL_SECONDS, DEFAULT_CONTEST_CALENDAR_RSS_URL,
+    DEFAULT_CONTEST_CALENDAR_STALE_AFTER_SECONDS,
+};
 use qsoripper_core::domain::lookup::normalize_callsign;
 use qsoripper_core::domain::station::station_profile_has_values;
 use qsoripper_core::lookup::{
@@ -74,6 +84,7 @@ const CONFLICT_POLICY_ALLOWED_VALUES: &[&str] = &["last_write_wins", "flag_for_r
 struct RuntimeBindings {
     logbook_engine: LogbookEngine,
     lookup_coordinator: Arc<LookupCoordinator>,
+    contest_calendar_monitor: Arc<ContestCalendarMonitor>,
     space_weather_monitor: Arc<SpaceWeatherMonitor>,
     rig_control_monitor: Arc<RigControlMonitor>,
     active_storage_backend: String,
@@ -181,6 +192,10 @@ impl RuntimeConfigManager {
 
     pub(crate) async fn lookup_coordinator(&self) -> Arc<LookupCoordinator> {
         self.bindings.read().await.lookup_coordinator.clone()
+    }
+
+    pub(crate) async fn contest_calendar_monitor(&self) -> Arc<ContestCalendarMonitor> {
+        self.bindings.read().await.contest_calendar_monitor.clone()
     }
 
     pub(crate) async fn space_weather_monitor(&self) -> Arc<SpaceWeatherMonitor> {
@@ -584,6 +599,60 @@ const SUPPORTED_FIELDS: &[ConfigFieldSpec] = &[
         default_value: Some(DEFAULT_SYNC_CONFLICT_POLICY),
     },
     ConfigFieldSpec {
+        key: CONTEST_CALENDAR_ENABLED_ENV_VAR,
+        label: "Contest calendar enabled",
+        description: "Enable live contest calendar fetching.",
+        kind: RuntimeConfigValueKind::Boolean,
+        secret: false,
+        allowed_values: BOOLEAN_ALLOWED_VALUES,
+        default_value: Some("true"),
+    },
+    ConfigFieldSpec {
+        key: CONTEST_CALENDAR_RSS_URL_ENV_VAR,
+        label: "Contest calendar RSS URL",
+        description: "RSS endpoint used for contest calendar metadata.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(DEFAULT_CONTEST_CALENDAR_RSS_URL),
+    },
+    ConfigFieldSpec {
+        key: CONTEST_CALENDAR_HTTP_TIMEOUT_SECONDS_ENV_VAR,
+        label: "Contest calendar HTTP timeout seconds",
+        description: "HTTP timeout used by contest calendar requests.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some("8"),
+    },
+    ConfigFieldSpec {
+        key: CONTEST_CALENDAR_REFRESH_INTERVAL_SECONDS_ENV_VAR,
+        label: "Contest calendar refresh interval seconds",
+        description: "How long the engine caches contest calendar metadata before refreshing.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some("3600"),
+    },
+    ConfigFieldSpec {
+        key: CONTEST_CALENDAR_STALE_AFTER_SECONDS_ENV_VAR,
+        label: "Contest calendar stale after seconds",
+        description: "When cached contest calendar metadata should be marked stale.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some("86400"),
+    },
+    ConfigFieldSpec {
+        key: CONTEST_CALENDAR_DETAILS_PATH_ENV_VAR,
+        label: "Contest calendar details path",
+        description: "Optional reviewed local JSON catalog that enriches contest calendar entries.",
+        kind: RuntimeConfigValueKind::Path,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(DEFAULT_CONTEST_CALENDAR_DETAILS_PATH),
+    },
+    ConfigFieldSpec {
         key: NOAA_SPACE_WEATHER_ENABLED_ENV_VAR,
         label: "NOAA space weather enabled",
         description: "Enable live NOAA SWPC current space weather fetching.",
@@ -920,6 +989,7 @@ fn build_runtime_bindings(values: &BTreeMap<String, String>) -> Result<RuntimeBi
         LookupCoordinatorConfig::default(),
         storage,
     ));
+    let contest_calendar_monitor = build_contest_calendar_monitor(values);
     let space_weather_monitor = build_space_weather_monitor(values);
     let rig_control_monitor = build_rig_control_monitor(values);
     let active_station_profile = build_active_station_profile(values)?;
@@ -927,6 +997,7 @@ fn build_runtime_bindings(values: &BTreeMap<String, String>) -> Result<RuntimeBi
     Ok(RuntimeBindings {
         logbook_engine,
         lookup_coordinator,
+        contest_calendar_monitor,
         space_weather_monitor,
         rig_control_monitor,
         active_storage_backend,
@@ -1044,6 +1115,56 @@ fn build_lookup_provider(values: &BTreeMap<String, String>) -> (Arc<dyn Callsign
                 format!("Disabled: {reason}"),
             )
         }
+    }
+}
+
+fn build_contest_calendar_monitor(
+    values: &BTreeMap<String, String>,
+) -> Arc<ContestCalendarMonitor> {
+    match Wa7bnmContestCalendarConfig::from_value_provider(|name| values.get(name).cloned()) {
+        Ok(config) => {
+            let provider: Arc<dyn ContestCalendarProvider> = if config.enabled() {
+                match Wa7bnmContestCalendarProvider::new(config.clone()) {
+                    Ok(provider) => {
+                        let provider: Arc<dyn ContestCalendarProvider> = Arc::new(provider);
+                        if let Some(path) = config.details_path().filter(|path| path.exists()) {
+                            match ContestDetailsCatalog::load(path) {
+                                Ok(catalog) => Arc::new(
+                                    CatalogEnrichingContestCalendarProvider::new(provider, catalog),
+                                ),
+                                Err(error) => Arc::new(DisabledContestCalendarProvider::new(
+                                    error.to_string(),
+                                )),
+                            }
+                        } else if config.details_path_is_explicit() {
+                            Arc::new(DisabledContestCalendarProvider::new(format!(
+                                "Contest calendar details catalog does not exist: {}",
+                                config
+                                    .details_path()
+                                    .map_or_else(String::new, |path| path.display().to_string())
+                            )))
+                        } else {
+                            provider
+                        }
+                    }
+                    Err(error) => Arc::new(DisabledContestCalendarProvider::new(error.to_string())),
+                }
+            } else {
+                Arc::new(DisabledContestCalendarProvider::new(
+                    "Contest calendar fetching is disabled.",
+                ))
+            };
+            Arc::new(ContestCalendarMonitor::new(
+                provider,
+                config.refresh_interval(),
+                config.stale_after(),
+            ))
+        }
+        Err(error) => Arc::new(ContestCalendarMonitor::new(
+            Arc::new(DisabledContestCalendarProvider::new(error)),
+            std::time::Duration::from_secs(DEFAULT_CONTEST_CALENDAR_REFRESH_INTERVAL_SECONDS),
+            std::time::Duration::from_secs(DEFAULT_CONTEST_CALENDAR_STALE_AFTER_SECONDS),
+        )),
     }
 }
 

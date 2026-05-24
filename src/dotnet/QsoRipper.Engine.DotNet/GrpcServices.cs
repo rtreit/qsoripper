@@ -559,6 +559,73 @@ internal sealed class ManagedSpaceWeatherGrpcService(ManagedEngineState state)
 }
 
 [SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes", Justification = "Activated by ASP.NET Core gRPC.")]
+internal sealed class ManagedContestCalendarGrpcService(ManagedEngineState state)
+    : ContestCalendarService.ContestCalendarServiceBase
+{
+    public override Task<GetActiveContestsResponse> GetActiveContests(
+        GetActiveContestsRequest request,
+        ServerCallContext context)
+    {
+        var snapshot = state.BuildContestCalendarSnapshot(refreshed: false);
+        var response = new GetActiveContestsResponse
+        {
+            Status = snapshot.Status,
+            FetchedAt = snapshot.FetchedAt,
+            ValidUntil = snapshot.ValidUntil,
+            ErrorMessage = snapshot.ErrorMessage,
+        };
+        response.Contests.AddRange(snapshot.Contests.Where(contest => IsActiveMatch(contest, request)));
+        return Task.FromResult(response);
+    }
+
+    public override Task<RefreshContestCalendarResponse> RefreshContestCalendar(
+        RefreshContestCalendarRequest request,
+        ServerCallContext context)
+    {
+        var snapshot = state.BuildContestCalendarSnapshot(refreshed: true);
+        var response = new RefreshContestCalendarResponse
+        {
+            Status = snapshot.Status,
+            FetchedAt = snapshot.FetchedAt,
+            ValidUntil = snapshot.ValidUntil,
+            ErrorMessage = snapshot.ErrorMessage,
+        };
+        response.Contests.AddRange(snapshot.Contests);
+        return Task.FromResult(response);
+    }
+
+    private static bool IsActiveMatch(ContestCalendarEntry contest, GetActiveContestsRequest request)
+    {
+        var at = request.AtUtc?.ToDateTimeOffset() ?? DateTimeOffset.UtcNow;
+        var through = at.AddMinutes(request.LookaheadMinutes);
+        if (contest.StartTimeUtc is null || contest.EndTimeUtc is null)
+        {
+            return false;
+        }
+
+        var start = contest.StartTimeUtc.ToDateTimeOffset();
+        var end = contest.EndTimeUtc.ToDateTimeOffset();
+        return start <= through
+            && end >= at
+            && EnumFilterMatches(request.HasBand, request.Band, contest.Bands, request.IncludePartialMatches)
+            && EnumFilterMatches(request.HasMode, request.Mode, contest.Modes, request.IncludePartialMatches);
+    }
+
+    private static bool EnumFilterMatches<TEnum>(
+        bool hasFilter,
+        TEnum filter,
+        Google.Protobuf.Collections.RepeatedField<TEnum> values,
+        bool includePartialMatches)
+        where TEnum : struct, Enum
+    {
+        return !hasFilter
+            || EqualityComparer<TEnum>.Default.Equals(filter, default)
+            || values.Contains(filter)
+            || values.Count == 0 && includePartialMatches;
+    }
+}
+
+[SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes", Justification = "Activated by ASP.NET Core gRPC.")]
 internal sealed class ManagedGreatCircleGrpcService
     : GreatCircleService.GreatCircleServiceBase
 {

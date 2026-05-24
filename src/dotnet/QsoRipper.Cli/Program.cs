@@ -49,6 +49,7 @@ try
                 arguments.EngineProfile,
                 arguments.JsonOutput),
             "space-weather" => await SpaceWeatherCommand.RunAsync(channel, arguments.Refresh, arguments.JsonOutput),
+            "contests" => await ContestCalendarCommand.RunAsync(channel, arguments.RemainingArgs, arguments.Refresh, arguments.JsonOutput),
             "lookup" => await LookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache, arguments.JsonOutput),
             "stream-lookup" => await StreamLookupCommand.RunAsync(channel, arguments.Callsign!, arguments.SkipCache, cancellationSource.Token),
             "cache-check" => await CacheCheckCommand.RunAsync(channel, arguments.Callsign!, arguments.JsonOutput),
@@ -78,6 +79,14 @@ try
 catch (RpcException ex) when (ex.StatusCode == StatusCode.Unavailable)
 {
     Console.Error.WriteLine(EngineReachability.FormatUnreachableMessage(arguments.EngineProfile, arguments.Endpoint));
+    return 1;
+}
+catch (RpcException ex) when (ex.StatusCode == StatusCode.Unimplemented && arguments.Command is "contests")
+{
+    Console.Error.WriteLine(EngineReachability.FormatUnimplementedServiceMessage(
+        arguments.EngineProfile,
+        arguments.Endpoint,
+        "ContestCalendarService"));
     return 1;
 }
 catch (RpcException ex)

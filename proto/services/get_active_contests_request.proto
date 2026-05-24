@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "domain/band.proto";
+import "domain/mode.proto";
+import "google/protobuf/timestamp.proto";
+
+message GetActiveContestsRequest {
+  google.protobuf.Timestamp at_utc = 1;
+  optional qsoripper.domain.Band band = 2;
+  optional qsoripper.domain.Mode mode = 3;
+  uint32 lookahead_minutes = 4;
+  bool include_partial_matches = 5;
+}
