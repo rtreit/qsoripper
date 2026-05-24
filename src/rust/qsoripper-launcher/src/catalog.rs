@@ -67,6 +67,7 @@ pub(crate) const UI_GUI: ComponentId = "gui";
 pub(crate) const UI_DEBUGHOST: ComponentId = "debughost";
 pub(crate) const UI_TUI: ComponentId = "tui";
 pub(crate) const UI_CWSCOPE: ComponentId = "cwscope";
+pub(crate) const UI_WIN32: ComponentId = "win32";
 
 /// Static list of every component the launcher manages.
 pub(crate) fn catalog() -> Vec<ComponentSpec> {
@@ -143,6 +144,20 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
                 executable_stem: "CwDecoderGui",
             },
         },
+        ComponentSpec {
+            id: UI_WIN32,
+            display_name: "Win32 GUI (qsoripper-win32)",
+            kind: ComponentKind::Ui,
+            engine_port: None,
+            // The Win32 client does not yet honor QSORIPPER_ENGINE /
+            // QSORIPPER_ENDPOINT; engine selection is its own follow-up.
+            engine_bindable: false,
+            wants_console: false,
+            artifact: ArtifactSpec {
+                publish_subdir: "qsoripper-win32",
+                executable_stem: "qsoripper-win32",
+            },
+        },
     ]
 }
 
@@ -157,4 +172,29 @@ pub(crate) fn engine_endpoint(id: &str) -> Option<String> {
         .filter(|c| c.kind == ComponentKind::Engine)
         .and_then(|c| c.engine_port)
         .map(|p| format!("http://127.0.0.1:{p}"))
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn win32_ui_is_in_catalog() {
+        let spec = find(UI_WIN32).expect("win32 ui in catalog");
+        assert_eq!(spec.kind, ComponentKind::Ui);
+        assert!(!spec.wants_console);
+        assert!(!spec.engine_bindable);
+        assert_eq!(spec.artifact.publish_subdir, "qsoripper-win32");
+        assert_eq!(spec.artifact.executable_stem, "qsoripper-win32");
+    }
+
+    #[test]
+    fn catalog_has_unique_component_ids() {
+        let ids: Vec<&'static str> = catalog().into_iter().map(|c| c.id).collect();
+        let mut sorted = ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), ids.len(), "duplicate component id in catalog");
+    }
 }
