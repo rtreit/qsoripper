@@ -104,6 +104,18 @@ mod tests {
     }
 
     #[test]
+    fn win32_plan_has_no_engine_env() {
+        use crate::catalog::UI_WIN32;
+        let sel = Selection::default_preset();
+        let plan = ui_plan(UI_WIN32, &sel).expect("plan");
+        assert!(
+            plan.env.is_empty(),
+            "win32 client does not yet honor QSORIPPER_ENGINE/QSORIPPER_ENDPOINT",
+        );
+        assert!(plan.args.is_empty());
+    }
+
+    #[test]
     fn debughost_plan_forces_the_runall_url() {
         let sel = Selection::default_preset();
         let plan = ui_plan(UI_DEBUGHOST, &sel).expect("plan");
