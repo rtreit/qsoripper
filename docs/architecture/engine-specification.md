@@ -729,7 +729,67 @@ Forces an immediate provider refresh and returns the resulting contest entries p
 3. Update the cache on success.
 4. On provider failure, return stale cached data when available; otherwise return `CONTEST_CALENDAR_STATUS_ERROR` or `CONTEST_CALENDAR_STATUS_DISABLED`.
 
-### 3.9 GreatCircleService
+### 3.9 CwService
+
+**Proto file:** `proto/services/cw_service.proto`
+
+Engine-owned CW macro expansion and keyer dispatch for contest workflows. The service is intentionally independent from UI key bindings: clients may map F-keys, buttons, or CLI commands to named macros, but the engine owns expansion and backend dispatch.
+
+#### RPCs
+
+| RPC | Request | Response | Mode |
+|---|---|---|---|
+| `ListCwMacros` | `ListCwMacrosRequest` | `ListCwMacrosResponse` | Unary |
+| `SendCwMacro` | `SendCwMacroRequest` | `SendCwMacroResponse` | Unary |
+| `SendCwText` | `SendCwTextRequest` | `SendCwTextResponse` | Unary |
+| `AbortCw` | `AbortCwRequest` | `AbortCwResponse` | Unary |
+| `SetCwSpeed` | `SetCwSpeedRequest` | `SetCwSpeedResponse` | Unary |
+| `GetCwKeyerStatus` | `GetCwKeyerStatusRequest` | `GetCwKeyerStatusResponse` | Unary |
+
+#### Built-in macros
+
+The first conformant implementation exposes built-in named macros. Persisted user macro profiles are a future additive feature. The default macro names are stable identifiers, not keyboard bindings:
+
+| Name | Template | Purpose |
+|---|---|---|
+| `cq` | `CQ TEST {MYCALL} {MYCALL}` | Call CQ |
+| `exchange` | `{HISCALL} {RST} {EXCH}` | Send current exchange |
+| `tu` | `TU {MYCALL}` | Complete QSO |
+| `repeat` | `{HISCALL} {RST} {EXCH}` | Repeat exchange |
+
+#### Macro grammar
+
+CW macro templates are ASCII text with braced tokens. Token names are case-insensitive. Unknown tokens are rejected with `INVALID_ARGUMENT`; they are not passed through literally. Literal braces are escaped by doubling them: `{{` emits `{` and `}}` emits `}`. Unmatched braces are rejected with `INVALID_ARGUMENT`. Expansion preserves all other whitespace and punctuation.
+
+Defined tokens:
+
+| Token | Source |
+|---|---|
+| `{MYCALL}` | Active station context station callsign. If no active station callsign exists, reject with `FAILED_PRECONDITION`. |
+| `{HISCALL}` | `CwSendContext.worked_callsign`, normalized to uppercase. |
+| `{RST}` | `CwSendContext.rst`; default `599` when omitted. |
+| `{EXCH}` | `CwSendContext.exchange`. |
+| `{NR}` | `CwSendContext.serial`, formatted as decimal with no padding for the first slice. Future contest sessions may assign this engine-side. |
+
+#### Backend semantics
+
+| Backend | Semantics |
+|---|---|
+| `CW_KEYER_BACKEND_NULL` | Always accepts valid expanded text and performs no hardware I/O. This backend exists for CI, development, and CLI smoke tests. |
+| `CW_KEYER_BACKEND_WINKEYER` | Sends expanded text and control commands to a serial-connected WinKeyer-compatible hardware keyer. The engine reports serial connection errors explicitly and never silently falls back to null when WinKeyer is selected. |
+| `CW_KEYER_BACKEND_CWDAEMON` | Reserved for future UDP cwdaemon support. cwdaemon is a mostly Linux-oriented background daemon that accepts CW text over UDP and performs keying through hardware it controls. UDP is best-effort, so completion cannot be proven by the engine. |
+
+`SendCwMacro` and `SendCwText` return the expanded text and a `CwSendState`. `ACCEPTED` means the configured backend accepted the command for dispatch. `COMPLETED` may only be returned by a backend that can prove completion. `AbortCw` sends the backend's abort or clear-buffer command when supported and returns `ABORT_REQUESTED`.
+
+#### Error semantics
+
+- `NOT_FOUND` — unknown macro name.
+- `INVALID_ARGUMENT` — invalid speed, malformed macro text, unknown token, or missing token context.
+- `FAILED_PRECONDITION` — no active station context for `{MYCALL}`, or the configured backend is unavailable.
+- `UNAVAILABLE` — keyer I/O failure where retrying may help.
+- `INTERNAL` — unexpected backend failure.
+
+### 3.10 GreatCircleService
 
 **Proto file:** `proto/services/great_circle_service.proto`
 
@@ -1134,6 +1194,15 @@ All configuration is driven by environment variables prefixed with `QSORIPPER_`.
 | `QSORIPPER_CONTEST_CALENDAR_REFRESH_INTERVAL_SECONDS` | Integer | `3600` | Provider refresh interval |
 | `QSORIPPER_CONTEST_CALENDAR_STALE_AFTER_SECONDS` | Integer | `86400` | Age after which cached contest data is stale |
 | `QSORIPPER_CONTEST_CALENDAR_DETAILS_PATH` | Path | `data\contest-calendar\contest-details.json` | Optional reviewed local JSON catalog for bands, modes, exchange, and rules URL |
+
+#### CW Keying
+
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `QSORIPPER_CW_KEYER_BACKEND` | Enum | `null` | CW keying backend: `null` or `winkeyer`. `cwdaemon` is reserved for a future backend. |
+| `QSORIPPER_CW_WINKEYER_PORT` | String | | Serial port for WinKeyer, such as `COM3` on Windows or `/dev/ttyUSB0` on Linux. Required when backend is `winkeyer`. |
+| `QSORIPPER_CW_WINKEYER_BAUD` | Integer | `1200` | WinKeyer serial baud rate. Most WinKeyer devices use 1200 baud. |
+| `QSORIPPER_CW_SPEED_WPM` | Integer | `25` | Default CW speed in words per minute. Valid range is 5 through 99. |
 
 #### Sync
 
@@ -1575,6 +1644,7 @@ Both engines currently report the following capabilities:
 | `rig-control` | rigctld integration |
 | `space-weather` | NOAA space weather data |
 | `contest-calendar` | Contest calendar lookup |
+| `cw-keying` | CW macro expansion and keyer dispatch |
 | `purge` | Permanent removal of soft-deleted QSOs (§7.9) |
 
 > **Note:** Earlier drafts listed aspirational names (`sync`, `rig_control`, `stress`, `adif_import`, `adif_export`) that were never adopted. The canonical names above use kebab-case and match what both engines actually report. New capabilities should follow this convention.

@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/cw_keyer_status.proto";
+
+message SetCwSpeedResponse {
+  CwKeyerStatus status = 1;
+}

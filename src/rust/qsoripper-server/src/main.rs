@@ -19,6 +19,7 @@ use std::{
 
 use qsoripper_core::adif::{parse_adi_qsos, serialize_adi_qsos};
 use qsoripper_core::application::logbook::LogbookError;
+use qsoripper_core::cw::{CwController, CwError, CwKeyerConfig};
 use qsoripper_core::lookup::QRZ_USER_AGENT_ENV_VAR;
 use qsoripper_core::storage::{
     DeletedRecordsFilter, EngineStorage, QsoListQuery, QsoSortOrder, StorageError,
@@ -30,9 +31,12 @@ use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
 use prost_types::Timestamp;
-use qsoripper_core::proto::qsoripper::domain::{Band, ConflictPolicy, ContestCalendarEntry, Mode};
+use qsoripper_core::proto::qsoripper::domain::{
+    Band, ConflictPolicy, ContestCalendarEntry, Mode, StationProfile,
+};
 use qsoripper_core::proto::qsoripper::services::{
     contest_calendar_service_server::{ContestCalendarService, ContestCalendarServiceServer},
+    cw_service_server::{CwService, CwServiceServer},
     developer_control_service_server::{DeveloperControlService, DeveloperControlServiceServer},
     engine_service_server::{EngineService, EngineServiceServer},
     great_circle_service_server::{GreatCircleService, GreatCircleServiceServer},
@@ -42,22 +46,26 @@ use qsoripper_core::proto::qsoripper::services::{
     setup_service_server::SetupServiceServer,
     space_weather_service_server::{SpaceWeatherService, SpaceWeatherServiceServer},
     station_profile_service_server::StationProfileServiceServer,
-    AdifChunk, ApplyRuntimeConfigRequest, ApplyRuntimeConfigResponse, BatchLookupRequest,
-    BatchLookupResponse, ComputeGreatCircleRequest, ComputeGreatCircleResponse, DeleteQsoRequest,
-    DeleteQsoResponse, DeletedRecordsFilter as ProtoDeletedRecordsFilter, EngineInfo,
-    ExportAdifRequest, ExportAdifResponse, GetActiveContestsRequest, GetActiveContestsResponse,
+    AbortCwRequest, AbortCwResponse, AdifChunk, ApplyRuntimeConfigRequest,
+    ApplyRuntimeConfigResponse, BatchLookupRequest, BatchLookupResponse, ComputeGreatCircleRequest,
+    ComputeGreatCircleResponse, CwSendState, DeleteQsoRequest, DeleteQsoResponse,
+    DeletedRecordsFilter as ProtoDeletedRecordsFilter, EngineInfo, ExportAdifRequest,
+    ExportAdifResponse, GetActiveContestsRequest, GetActiveContestsResponse,
     GetCachedCallsignRequest, GetCachedCallsignResponse, GetCurrentSpaceWeatherRequest,
-    GetCurrentSpaceWeatherResponse, GetDxccEntityRequest, GetDxccEntityResponse,
-    GetEngineInfoRequest, GetEngineInfoResponse, GetQsoRequest, GetQsoResponse,
-    GetRigSnapshotRequest, GetRigSnapshotResponse, GetRigStatusRequest, GetRigStatusResponse,
-    GetRuntimeConfigRequest, GetRuntimeConfigResponse, GetSyncStatusRequest, GetSyncStatusResponse,
-    ImportAdifRequest, ImportAdifResponse, ListQsosRequest, ListQsosResponse, LogQsoRequest,
+    GetCurrentSpaceWeatherResponse, GetCwKeyerStatusRequest, GetCwKeyerStatusResponse,
+    GetDxccEntityRequest, GetDxccEntityResponse, GetEngineInfoRequest, GetEngineInfoResponse,
+    GetQsoRequest, GetQsoResponse, GetRigSnapshotRequest, GetRigSnapshotResponse,
+    GetRigStatusRequest, GetRigStatusResponse, GetRuntimeConfigRequest, GetRuntimeConfigResponse,
+    GetSyncStatusRequest, GetSyncStatusResponse, ImportAdifRequest, ImportAdifResponse,
+    ListCwMacrosRequest, ListCwMacrosResponse, ListQsosRequest, ListQsosResponse, LogQsoRequest,
     LogQsoResponse, LookupRequest, LookupResponse, PurgeDeletedQsosRequest,
     PurgeDeletedQsosResponse, QsoSortOrder as ProtoQsoSortOrder, RefreshContestCalendarRequest,
     RefreshContestCalendarResponse, RefreshSpaceWeatherRequest, RefreshSpaceWeatherResponse,
     ResetRuntimeConfigRequest, ResetRuntimeConfigResponse, RestoreQsoRequest, RestoreQsoResponse,
-    StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse,
-    TestRigConnectionRequest, TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
+    SendCwMacroRequest, SendCwMacroResponse, SendCwTextRequest, SendCwTextResponse,
+    SetCwSpeedRequest, SetCwSpeedResponse, StreamLookupRequest, StreamLookupResponse,
+    SyncWithQrzRequest, SyncWithQrzResponse, TestRigConnectionRequest, TestRigConnectionResponse,
+    UpdateQsoRequest, UpdateQsoResponse,
 };
 use qsoripper_core::rig_control::{
     RigControlProvider, RigctldConfig, RigctldProvider, DEFAULT_RIGCTLD_HOST, DEFAULT_RIGCTLD_PORT,
@@ -95,26 +103,7 @@ where
     let sync_scheduler = Arc::new(sync_scheduler::SyncScheduler::new());
     sync_scheduler.start(runtime_config.clone());
 
-    // One-shot QRZ logid backfill + duplicate collapse. Older builds never
-    // mapped APP_QRZLOG_LOGID into qrz_logid, so QRZ pulls produced rows
-    // that subsequent syncs duplicated whenever fuzzy matching missed.
-    // Repair is idempotent — clean stores are a no-op.
-    {
-        let logbook_engine = runtime_config.logbook_engine().await;
-        match repair::backfill_qrz_logids(logbook_engine.logbook_store()).await {
-            Ok(report) => {
-                if !report.is_no_op() {
-                    eprintln!(
-                        "[repair] QRZ logid backfill: backfilled={}, duplicates_removed={}, merged_groups={}",
-                        report.backfilled, report.duplicates_removed, report.merged_groups,
-                    );
-                }
-            }
-            Err(err) => {
-                eprintln!("[repair] QRZ logid backfill failed (continuing startup): {err}");
-            }
-        }
-    }
+    run_startup_repair(&runtime_config).await;
     let logbook_service =
         DeveloperLogbookService::new(runtime_config.clone(), sync_scheduler.clone());
     let lookup_service = DeveloperLookupService::new(runtime_config.clone());
@@ -127,6 +116,10 @@ where
     let space_weather_service = SpaceWeatherControlSurface::new(runtime_config.clone());
     let rig_control_service = RigControlControlSurface::new(runtime_config.clone());
     let great_circle_service = GreatCircleControlSurface::new();
+    let cw_service = CwControlSurface::new(
+        runtime_config.clone(),
+        CwController::new(CwKeyerConfig::from_env()?),
+    );
     let active_storage_backend = runtime_config.active_storage_backend().await;
     let setup_status = setup_state.status().await;
     let setup_completion = setup_completion_label(setup_status.setup_complete);
@@ -166,6 +159,7 @@ where
         .add_service(SpaceWeatherServiceServer::new(space_weather_service))
         .add_service(RigControlServiceServer::new(rig_control_service))
         .add_service(GreatCircleServiceServer::new(great_circle_service))
+        .add_service(CwServiceServer::new(cw_service))
         .add_service(DeveloperControlServiceServer::new(
             developer_control_service,
         ))
@@ -189,6 +183,23 @@ where
     }
 
     Ok(())
+}
+
+async fn run_startup_repair(runtime_config: &RuntimeConfigManager) {
+    let logbook_engine = runtime_config.logbook_engine().await;
+    match repair::backfill_qrz_logids(logbook_engine.logbook_store()).await {
+        Ok(report) => {
+            if !report.is_no_op() {
+                eprintln!(
+                    "[repair] QRZ logid backfill: backfilled={}, duplicates_removed={}, merged_groups={}",
+                    report.backfilled, report.duplicates_removed, report.merged_groups,
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!("[repair] QRZ logid backfill failed (continuing startup): {err}");
+        }
+    }
 }
 
 fn setup_completion_label(setup_complete: bool) -> &'static str {
@@ -897,8 +908,144 @@ const RUST_ENGINE_CAPABILITIES: &[&str] = &[
     "rig-control",
     "contest-calendar",
     "space-weather",
+    "cw-keying",
     "purge",
 ];
+
+#[derive(Clone)]
+struct CwControlSurface {
+    runtime_config: Arc<RuntimeConfigManager>,
+    controller: CwController,
+}
+
+impl CwControlSurface {
+    fn new(runtime_config: Arc<RuntimeConfigManager>, controller: CwController) -> Self {
+        Self {
+            runtime_config,
+            controller,
+        }
+    }
+
+    async fn active_station_profile(&self) -> Option<StationProfile> {
+        self.runtime_config.effective_station_profile().await
+    }
+}
+
+#[tonic::async_trait]
+impl CwService for CwControlSurface {
+    async fn list_cw_macros(
+        &self,
+        _request: Request<ListCwMacrosRequest>,
+    ) -> Result<Response<ListCwMacrosResponse>, Status> {
+        Ok(Response::new(ListCwMacrosResponse {
+            macros: self.controller.built_in_macros(),
+        }))
+    }
+
+    async fn send_cw_macro(
+        &self,
+        request: Request<SendCwMacroRequest>,
+    ) -> Result<Response<SendCwMacroResponse>, Status> {
+        let request = request.into_inner();
+        let station_profile = self.active_station_profile().await;
+        let expanded_text = self
+            .controller
+            .expand_macro(
+                request.name.as_str(),
+                request.context.as_ref(),
+                station_profile.as_ref(),
+            )
+            .map_err(cw_status)?;
+        self.controller
+            .send_text(
+                &expanded_text,
+                request
+                    .context
+                    .as_ref()
+                    .and_then(|context| context.speed_wpm),
+            )
+            .map_err(cw_status)?;
+        Ok(Response::new(SendCwMacroResponse {
+            state: CwSendState::Accepted as i32,
+            expanded_text,
+            error_message: None,
+        }))
+    }
+
+    async fn send_cw_text(
+        &self,
+        request: Request<SendCwTextRequest>,
+    ) -> Result<Response<SendCwTextResponse>, Status> {
+        let request = request.into_inner();
+        let station_profile = self.active_station_profile().await;
+        let expanded_text = self
+            .controller
+            .expand_text(
+                request.text.as_str(),
+                request.context.as_ref(),
+                station_profile.as_ref(),
+            )
+            .map_err(cw_status)?;
+        self.controller
+            .send_text(
+                &expanded_text,
+                request
+                    .context
+                    .as_ref()
+                    .and_then(|context| context.speed_wpm),
+            )
+            .map_err(cw_status)?;
+        Ok(Response::new(SendCwTextResponse {
+            state: CwSendState::Accepted as i32,
+            expanded_text,
+            error_message: None,
+        }))
+    }
+
+    async fn abort_cw(
+        &self,
+        _request: Request<AbortCwRequest>,
+    ) -> Result<Response<AbortCwResponse>, Status> {
+        self.controller.abort().map_err(cw_status)?;
+        Ok(Response::new(AbortCwResponse {
+            state: CwSendState::AbortRequested as i32,
+            error_message: None,
+        }))
+    }
+
+    async fn set_cw_speed(
+        &self,
+        request: Request<SetCwSpeedRequest>,
+    ) -> Result<Response<SetCwSpeedResponse>, Status> {
+        self.controller
+            .set_speed(request.into_inner().speed_wpm)
+            .map_err(cw_status)?;
+        Ok(Response::new(SetCwSpeedResponse {
+            status: Some(self.controller.status()),
+        }))
+    }
+
+    async fn get_cw_keyer_status(
+        &self,
+        _request: Request<GetCwKeyerStatusRequest>,
+    ) -> Result<Response<GetCwKeyerStatusResponse>, Status> {
+        Ok(Response::new(GetCwKeyerStatusResponse {
+            status: Some(self.controller.status()),
+        }))
+    }
+}
+
+fn cw_status(error: CwError) -> Status {
+    match error {
+        CwError::UnknownMacro(message) => Status::not_found(message),
+        CwError::UnknownToken(_)
+        | CwError::UnmatchedOpenBrace
+        | CwError::UnmatchedCloseBrace
+        | CwError::MissingTokenValue(_, _) => Status::invalid_argument(error.to_string()),
+        CwError::BackendUnavailable(_) => Status::failed_precondition(error.to_string()),
+        CwError::Io(_) => Status::unavailable(error.to_string()),
+    }
+}
 
 #[derive(Debug, Default)]
 struct EngineControlSurface;

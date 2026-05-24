@@ -40,6 +40,7 @@ internal static class CliHelpText
 
             Rig Control:
               rig-status                       Show rig connection and current state
+              cw <subcommand>                  Exercise engine-backed CW keying
 
             Options:
               --engine <profile>               Engine profile (for example: rust, dotnet, local-rust)
@@ -131,6 +132,23 @@ internal static class CliHelpText
                 Soft-delete a QSO by its local ID. The QSO is moved to trash and hidden from
                 normal list output, but remains recoverable via the restore command until purged.
                 Use --show-id on the list command to find local IDs.
+                """,
+            "cw" => """
+                Usage: cw <subcommand> [options]
+
+                Exercise engine-backed CW macro keying.
+
+                  cw status
+                  cw list
+                  cw send <text> [--his-call <call>] [--rst <rst>] [--exchange <text>] [--nr <n>] [--speed <wpm>]
+                  cw macro <name> [--his-call <call>] [--rst <rst>] [--exchange <text>] [--nr <n>] [--speed <wpm>]
+                  cw speed <wpm>
+                  cw abort
+
+                Examples:
+                  cw status
+                  cw send "CQ TEST {MYCALL}"
+                  cw macro exchange --his-call W1AW --exchange WA --nr 12
                 """,
             "restore" => """
                 Usage: restore <local-id>

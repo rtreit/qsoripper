@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+message CwSendContext {
+  optional string worked_callsign = 1;
+  optional string rst = 2;
+  optional string exchange = 3;
+  optional uint32 serial = 4;
+  optional uint32 speed_wpm = 5;
+}

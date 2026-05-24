@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+enum CwKeyerBackend {
+  CW_KEYER_BACKEND_UNSPECIFIED = 0;
+  CW_KEYER_BACKEND_NULL = 1;
+  CW_KEYER_BACKEND_WINKEYER = 2;
+  CW_KEYER_BACKEND_CWDAEMON = 3;
+}

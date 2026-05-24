@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/cw_send_context.proto";
+
+message SendCwTextRequest {
+  string text = 1;
+  CwSendContext context = 2;
+}
