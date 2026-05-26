@@ -76,6 +76,30 @@ typedef struct QsrLogQsoRequest {
    */
   uint8_t worked_name[64];
   /**
+   * Worked grid square (null-terminated).
+   */
+  uint8_t worked_grid[16];
+  /**
+   * Worked country (null-terminated).
+   */
+  uint8_t worked_country[64];
+  /**
+   * Worked DXCC entity code as decimal text (null-terminated).
+   */
+  uint8_t worked_dxcc[16];
+  /**
+   * Worked CQ zone as decimal text (null-terminated).
+   */
+  uint8_t worked_cq_zone[16];
+  /**
+   * Worked ITU zone as decimal text (null-terminated).
+   */
+  uint8_t worked_itu_zone[16];
+  /**
+   * Worked continent code (null-terminated).
+   */
+  uint8_t worked_continent[8];
+  /**
    * TX power (null-terminated).
    */
   uint8_t tx_power[16];
@@ -221,6 +245,30 @@ typedef struct QsrQsoDetail {
    * Worked name (null-terminated).
    */
   uint8_t worked_name[64];
+  /**
+   * Worked grid square (null-terminated).
+   */
+  uint8_t worked_grid[16];
+  /**
+   * Worked country (null-terminated).
+   */
+  uint8_t worked_country[64];
+  /**
+   * Worked DXCC entity code as decimal text (null-terminated).
+   */
+  uint8_t worked_dxcc[16];
+  /**
+   * Worked CQ zone as decimal text (null-terminated).
+   */
+  uint8_t worked_cq_zone[16];
+  /**
+   * Worked ITU zone as decimal text (null-terminated).
+   */
+  uint8_t worked_itu_zone[16];
+  /**
+   * Worked continent code (null-terminated).
+   */
+  uint8_t worked_continent[8];
   /**
    * TX power (null-terminated).
    */

@@ -102,6 +102,8 @@ enum Field {
     FIELD_FREQ,     FIELD_DATE, FIELD_TIME,
     /* Advanced fields */
     FIELD_TIME_OFF, FIELD_QTH, FIELD_WORKED_NAME,
+    FIELD_WORKED_GRID, FIELD_WORKED_COUNTRY, FIELD_WORKED_DXCC,
+    FIELD_WORKED_CQ_ZONE, FIELD_WORKED_ITU_ZONE, FIELD_WORKED_CONTINENT,
     FIELD_TX_POWER, FIELD_SUBMODE, FIELD_CONTEST_ID,
     FIELD_SERIAL_SENT, FIELD_SERIAL_RCVD,
     FIELD_EXCHANGE_SENT, FIELD_EXCHANGE_RCVD,
@@ -118,6 +120,8 @@ static const char *FIELD_LABELS[] = {
     "Freq MHz", "Date", "Time",
     /* Advanced labels */
     "Time Off", "QTH", "Name",
+    "Grid", "Country", "DXCC",
+    "CQ Zone", "ITU Zone", "Continent",
     "TX Power", "Submode", "Contest ID",
     "Serial Sent", "Serial Rcvd",
     "Exch Sent", "Exch Rcvd",
@@ -132,6 +136,8 @@ static const int FIELD_MAX_LEN[] = {
     14, 14, 14, /* freq, date, time */
     /* Advanced max lengths */
     14, 60, 60,         /* time_off, qth, worked_name */
+    14, 60, 14,         /* worked_grid, worked_country, worked_dxcc */
+    14, 14, 8,          /* worked_cq_zone, worked_itu_zone, worked_continent */
     14, 14, 30,         /* tx_power, submode, contest_id */
     14, 14,             /* serial_sent, serial_rcvd */
     60, 60,             /* exchange_sent, exchange_rcvd */
@@ -256,6 +262,12 @@ typedef struct {
     char time_off[16];
     char qth[64];
     char worked_name[64];
+    char worked_grid[16];
+    char worked_country[64];
+    char worked_dxcc[16];
+    char worked_cq_zone[16];
+    char worked_itu_zone[16];
+    char worked_continent[8];
     char tx_power[16];
     char submode[16];
     char contest_id[32];
@@ -911,6 +923,12 @@ static char *FieldBuffer(enum Field f)
     case FIELD_TIME_OFF:      return g_state.time_off;
     case FIELD_QTH:           return g_state.qth;
     case FIELD_WORKED_NAME:   return g_state.worked_name;
+    case FIELD_WORKED_GRID:   return g_state.worked_grid;
+    case FIELD_WORKED_COUNTRY:return g_state.worked_country;
+    case FIELD_WORKED_DXCC:   return g_state.worked_dxcc;
+    case FIELD_WORKED_CQ_ZONE:return g_state.worked_cq_zone;
+    case FIELD_WORKED_ITU_ZONE:return g_state.worked_itu_zone;
+    case FIELD_WORKED_CONTINENT:return g_state.worked_continent;
     case FIELD_TX_POWER:      return g_state.tx_power;
     case FIELD_SUBMODE:       return g_state.submode;
     case FIELD_CONTEST_ID:    return g_state.contest_id;
@@ -1010,6 +1028,12 @@ static char FieldHotkey(enum Field f)
     case FIELD_DATE:          return 'D';
     case FIELD_TIME:          return 'T';
     case FIELD_WORKED_NAME:   return 'A';
+    case FIELD_WORKED_GRID:   return 'G';
+    case FIELD_WORKED_COUNTRY:return 'Y';
+    case FIELD_WORKED_DXCC:   return 'X';
+    case FIELD_WORKED_CQ_ZONE:return 'Z';
+    case FIELD_WORKED_ITU_ZONE:return 'V';
+    case FIELD_WORKED_CONTINENT:return 'H';
     case FIELD_TIME_OFF:      return 'I';
     case FIELD_QTH:           return 'Q';
     case FIELD_TX_POWER:      return 'W';
@@ -1205,6 +1229,12 @@ static void ClearForm(void)
     g_state.time_off[0] = 0;
     g_state.qth[0] = 0;
     g_state.worked_name[0] = 0;
+    g_state.worked_grid[0] = 0;
+    g_state.worked_country[0] = 0;
+    g_state.worked_dxcc[0] = 0;
+    g_state.worked_cq_zone[0] = 0;
+    g_state.worked_itu_zone[0] = 0;
+    g_state.worked_continent[0] = 0;
     g_state.tx_power[0] = 0;
     g_state.submode[0] = 0;
     g_state.contest_id[0] = 0;
@@ -1277,6 +1307,12 @@ static void fill_log_request(QsrLogQsoRequest *req)
     safe_strcpy((char *)req->comment,       sizeof(req->comment),       g_state.comment);
     safe_strcpy((char *)req->notes,          sizeof(req->notes),          g_state.notes);
     safe_strcpy((char *)req->worked_name,    sizeof(req->worked_name),    g_state.worked_name);
+    safe_strcpy((char *)req->worked_grid,    sizeof(req->worked_grid),    g_state.worked_grid);
+    safe_strcpy((char *)req->worked_country, sizeof(req->worked_country), g_state.worked_country);
+    safe_strcpy((char *)req->worked_dxcc,    sizeof(req->worked_dxcc),    g_state.worked_dxcc);
+    safe_strcpy((char *)req->worked_cq_zone, sizeof(req->worked_cq_zone), g_state.worked_cq_zone);
+     safe_strcpy((char *)req->worked_itu_zone,sizeof(req->worked_itu_zone),g_state.worked_itu_zone);
+    safe_strcpy((char *)req->worked_continent,sizeof(req->worked_continent),g_state.worked_continent);
     safe_strcpy((char *)req->tx_power,       sizeof(req->tx_power),       g_state.tx_power);
     safe_strcpy((char *)req->submode,        sizeof(req->submode),        g_state.submode);
     safe_strcpy((char *)req->contest_id,     sizeof(req->contest_id),     g_state.contest_id);
@@ -1630,6 +1666,12 @@ static void ClearLookupDisplay(void)
     /* Clear form fields that were auto-populated from lookup */
     g_state.worked_name[0] = 0;
     g_state.cursor_pos[FIELD_WORKED_NAME] = 0;
+    g_state.worked_grid[0] = 0;
+    g_state.cursor_pos[FIELD_WORKED_GRID] = 0;
+    g_state.worked_country[0] = 0;
+    g_state.cursor_pos[FIELD_WORKED_COUNTRY] = 0;
+    g_state.worked_cq_zone[0] = 0;
+    g_state.cursor_pos[FIELD_WORKED_CQ_ZONE] = 0;
     g_state.qth[0] = 0;
     g_state.cursor_pos[FIELD_QTH] = 0;
 }
@@ -1658,6 +1700,15 @@ static void ApplyLookupResult(LookupResultMsg *res)
             g_state.lookup_error[0] = 0;
             safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), res->name);
             g_state.cursor_pos[FIELD_WORKED_NAME] = (int)strlen(g_state.worked_name);
+            safe_strcpy(g_state.worked_grid, sizeof(g_state.worked_grid), res->grid);
+            g_state.cursor_pos[FIELD_WORKED_GRID] = (int)strlen(g_state.worked_grid);
+            safe_strcpy(g_state.worked_country, sizeof(g_state.worked_country), res->country);
+            g_state.cursor_pos[FIELD_WORKED_COUNTRY] = (int)strlen(g_state.worked_country);
+            if (res->cq_zone > 0)
+                snprintf(g_state.worked_cq_zone, sizeof(g_state.worked_cq_zone), "%d", res->cq_zone);
+            else
+                g_state.worked_cq_zone[0] = 0;
+            g_state.cursor_pos[FIELD_WORKED_CQ_ZONE] = (int)strlen(g_state.worked_cq_zone);
             safe_strcpy(g_state.qth, sizeof(g_state.qth), res->qth);
             g_state.cursor_pos[FIELD_QTH] = (int)strlen(g_state.qth);
         } else if (res->not_found) {
@@ -1964,9 +2015,15 @@ static void ApplyLoadedQsoDetail(const char *local_id, const QsrQsoDetail *detai
     safe_strcpy(g_state.comment,       sizeof(g_state.comment),       (const char *)detail->comment);
     safe_strcpy(g_state.notes,          sizeof(g_state.notes),          (const char *)detail->notes);
     safe_strcpy(g_state.worked_name,    sizeof(g_state.worked_name),    (const char *)detail->worked_name);
+    safe_strcpy(g_state.worked_grid,    sizeof(g_state.worked_grid),    (const char *)detail->worked_grid);
+    safe_strcpy(g_state.worked_country, sizeof(g_state.worked_country), (const char *)detail->worked_country);
+    safe_strcpy(g_state.worked_dxcc,    sizeof(g_state.worked_dxcc),    (const char *)detail->worked_dxcc);
+    safe_strcpy(g_state.worked_cq_zone, sizeof(g_state.worked_cq_zone), (const char *)detail->worked_cq_zone);
+      safe_strcpy(g_state.worked_itu_zone,sizeof(g_state.worked_itu_zone),(const char *)detail->worked_itu_zone);
+      safe_strcpy(g_state.worked_continent,sizeof(g_state.worked_continent),(const char *)detail->worked_continent);
     safe_strcpy(g_state.tx_power,       sizeof(g_state.tx_power),       (const char *)detail->tx_power);
     safe_strcpy(g_state.submode,        sizeof(g_state.submode),        (const char *)detail->submode);
-    safe_strcpy(g_state.contest_id,     sizeof(g_state.contest_id),     (const char *)detail->contest_id);
+      safe_strcpy(g_state.contest_id,     sizeof(g_state.contest_id),     (const char *)detail->contest_id);
     safe_strcpy(g_state.serial_sent,    sizeof(g_state.serial_sent),    (const char *)detail->serial_sent);
     safe_strcpy(g_state.serial_rcvd,    sizeof(g_state.serial_rcvd),    (const char *)detail->serial_rcvd);
     safe_strcpy(g_state.exchange_sent,  sizeof(g_state.exchange_sent),  (const char *)detail->exchange_sent);
@@ -2439,8 +2496,13 @@ static const enum Field ADV_TAB_CORE_FIELDS[] = {
 };
 
 static const enum Field ADV_TAB_LOOKUP_FIELDS[] = {
-    FIELD_WORKED_NAME, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY,
-    FIELD_ARRL_SECTION, FIELD_IOTA, FIELD_SKCC
+    FIELD_CALLSIGN, FIELD_WORKED_NAME,
+    FIELD_WORKED_GRID, FIELD_WORKED_COUNTRY,
+    FIELD_WORKED_DXCC, FIELD_WORKED_STATE,
+    FIELD_WORKED_CQ_ZONE, FIELD_WORKED_ITU_ZONE,
+    FIELD_WORKED_COUNTY, FIELD_IOTA,
+    FIELD_WORKED_CONTINENT, FIELD_ARRL_SECTION,
+    FIELD_SKCC
 };
 
 static const enum Field ADV_TAB_QSL_FIELDS[] = { FIELD_CALLSIGN };
@@ -2480,7 +2542,7 @@ static const char *ADV_TAB_NAMES[] = {
 
 static const char *ADV_TAB_DESCRIPTIONS[] = {
     "Identity, UTC timing, band/mode, reports, comments and notes",
-    "Worked operator and currently persisted lookup/award fields",
+    "Worked operator lookup, location, DXCC, zone and award fields",
     "QSL workflow fields are not editable here yet",
     "Contest identifiers, serial numbers, exchange text, propagation and satellite details",
     "Station profile fields preserved from the engine plus logged QTH",
@@ -2588,7 +2650,9 @@ static int AdvancedFormHeight(void)
     int ch = g_state.char_h;
     int row_h = ch + 8;
 
-    /* Title + tabs + section header + rows + action hint, with compact padding. */
+    if (g_state.advanced_tab == ADV_TAB_LOOKUP && rows < 10) rows = 10;
+    if (cnt == 0 && rows < 3) rows = 3;
+
     return ch * 3 + row_h * (rows + 3) + 42;
 }
 
@@ -2702,10 +2766,6 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
                       card_title, card_subtitle, CLR_FORM_BORDER, cw, ch);
         y = card_y + ch * 2 + 10;
 
-        if (field_count == 0) {
-            DrawText_A(hdc, card_x + cw * 2, y, CLR_DARKGRAY, card_subtitle);
-        }
-
         for (i = 0; i < field_count; ) {
             enum Field f1 = fields[i];
             int full_w = (f1 == FIELD_COMMENT || f1 == FIELD_NOTES);
@@ -2729,6 +2789,27 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
             }
 
             y += row_h;
+        }
+
+        if (tab == ADV_TAB_LOOKUP) {
+            int summary_y = y + 4;
+            int summary_h = ch * 4 + 12;
+            char line[192];
+            DrawBox(hdc, card_x + cw * 2, summary_y, card_w - cw * 4,
+                    summary_h, CLR_DARKGRAY);
+            SelectObject(hdc, g_state.hFontSmallBold);
+            DrawText_A(hdc, card_x + cw * 3, summary_y + 4,
+                       CLR_TEXT, "Lookup Summary");
+            SelectObject(hdc, g_state.hFont);
+            snprintf(line, sizeof(line), "%s", g_state.worked_name);
+            DrawText_A(hdc, card_x + cw * 3, summary_y + ch + 6,
+                       CLR_TEXT, line);
+            snprintf(line, sizeof(line), "%s", g_state.worked_country);
+            DrawText_A(hdc, card_x + cw * 3, summary_y + ch * 2 + 8,
+                       CLR_GRAY, line);
+            snprintf(line, sizeof(line), "%s", g_state.worked_grid);
+            DrawText_A(hdc, card_x + cw * 3, summary_y + ch * 3 + 10,
+                       CLR_GRAY, line);
         }
 
         y = card_y + card_h - ch - 6;

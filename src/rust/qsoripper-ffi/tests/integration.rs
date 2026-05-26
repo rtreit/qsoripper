@@ -210,10 +210,28 @@ fn log_list_get_delete_round_trip() {
     let rc = unsafe { qsr_delete_qso(client, c_id.as_ptr()) };
     assert_eq!(rc, 0, "qsr_delete_qso failed: {}", last_error());
 
-    // 5. Verify it's gone
+    // 5. Verify soft-deleted rows are hidden from the default list but loadable by ID
     let mut detail2: QsrQsoDetail = unsafe { std::mem::zeroed() };
     let rc = unsafe { qsr_get_qso(client, c_id.as_ptr(), &mut detail2) };
-    assert_ne!(rc, 0, "qsr_get_qso should fail for deleted QSO");
+    assert_eq!(
+        rc,
+        0,
+        "qsr_get_qso failed after soft-delete: {}",
+        last_error()
+    );
+
+    let mut list_after_delete: QsrQsoList = unsafe { std::mem::zeroed() };
+    let rc = unsafe { qsr_list_qsos(client, &mut list_after_delete) };
+    assert_eq!(rc, 0, "qsr_list_qsos failed: {}", last_error());
+    let found_after_delete = (0..list_after_delete.count).any(|i| {
+        let item = unsafe { &*list_after_delete.items.add(i as usize) };
+        buf_as_str(&item.local_id) == local_id
+    });
+    assert!(
+        !found_after_delete,
+        "soft-deleted QSO should be hidden from default list"
+    );
+    unsafe { qsr_free_qso_list(&mut list_after_delete) };
 
     unsafe { qsr_disconnect(client) };
 }

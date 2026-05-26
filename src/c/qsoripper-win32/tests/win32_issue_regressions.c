@@ -19,6 +19,8 @@ enum Field {
     FIELD_COMMENT, FIELD_NOTES,
     FIELD_FREQ, FIELD_DATE, FIELD_TIME,
     FIELD_TIME_OFF, FIELD_QTH, FIELD_WORKED_NAME,
+    FIELD_WORKED_GRID, FIELD_WORKED_COUNTRY, FIELD_WORKED_DXCC,
+    FIELD_WORKED_CQ_ZONE, FIELD_WORKED_ITU_ZONE, FIELD_WORKED_CONTINENT,
     FIELD_TX_POWER, FIELD_SUBMODE, FIELD_CONTEST_ID,
     FIELD_SERIAL_SENT, FIELD_SERIAL_RCVD,
     FIELD_EXCHANGE_SENT, FIELD_EXCHANGE_RCVD,
@@ -428,6 +430,12 @@ static int test_win32_advanced_editor_uses_card_pages(void)
     }
 
     if (qsr_test_advanced_tab_for_field(FIELD_WORKED_NAME) != 1 ||
+        qsr_test_advanced_tab_for_field(FIELD_WORKED_GRID) != 1 ||
+        qsr_test_advanced_tab_for_field(FIELD_WORKED_COUNTRY) != 1 ||
+        qsr_test_advanced_tab_for_field(FIELD_WORKED_DXCC) != 1 ||
+        qsr_test_advanced_tab_for_field(FIELD_WORKED_CQ_ZONE) != 1 ||
+        qsr_test_advanced_tab_for_field(FIELD_WORKED_ITU_ZONE) != 1 ||
+        qsr_test_advanced_tab_for_field(FIELD_WORKED_CONTINENT) != 1 ||
         qsr_test_advanced_tab_for_field(FIELD_WORKED_COUNTY) != 1 ||
         qsr_test_advanced_tab_for_field(FIELD_SKCC) != 1) {
         return fail("lookup fields are not grouped on the Lookup card page");
