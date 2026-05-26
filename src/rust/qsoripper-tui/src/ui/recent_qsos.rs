@@ -32,7 +32,7 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     };
 
     let title = if app.qso_list_focused {
-        format!(" QSOs  {count_str}  \u{2191}\u{2193} navigate  Enter load  D delete  Esc exit ")
+        format!(" QSOs  {count_str}  \u{2191}\u{2193} navigate  Enter load  F2 card  D delete  Esc exit ")
     } else if app.search_focused {
         format!(" QSOs  {count_str}  Esc clear  \u{2193}/Enter\u{2192}list ")
     } else if !app.search_text.is_empty() {

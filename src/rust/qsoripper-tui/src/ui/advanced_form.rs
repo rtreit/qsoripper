@@ -128,7 +128,7 @@ fn render_tab_bar(frame: &mut Frame, area: Rect, active: AdvancedTab) {
         spans.push(Span::raw(" "));
     }
     spans.push(Span::styled(
-        "  Alt+1-7 / Ctrl+Tab / F5-F6",
+        "  Alt+1-7 / F5-F6",
         Style::default().fg(Color::DarkGray),
     ));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
