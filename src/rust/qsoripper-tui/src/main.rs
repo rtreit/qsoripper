@@ -378,6 +378,14 @@ fn handle_key_with_channel(
         return;
     }
 
+    if matches!(key.code, KeyCode::Char('l' | 'L')) && key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        clear_current_qso(app);
+        let _ = lookup_tx.send(app.form.callsign.clone());
+        app.set_status("Current QSO cleared");
+        return;
+    }
+
     // F8 toggles rig control from any state.
     if matches!(key.code, KeyCode::F(8)) {
         app.toggle_rig_control();
@@ -561,6 +569,18 @@ fn handle_search_key(app: &mut App, key: crossterm::event::KeyEvent) {
     }
 }
 
+fn clear_current_qso(app: &mut App) {
+    let band_idx = app.form.band_idx;
+    let mode_idx = app.form.mode_idx;
+    app.form = LogForm::new();
+    app.form.band_idx = band_idx;
+    app.form.mode_idx = mode_idx;
+    app.form.on_band_change();
+    app.lookup_result = None;
+    app.editing_local_id = None;
+    app.reset_timer();
+}
+
 /// Navigate the QSO list with keyboard (active when `app.qso_list_focused` is true).
 fn handle_qso_list_key(
     app: &mut App,
@@ -586,6 +606,7 @@ fn handle_qso_list_key(
                 _ => 0,
             });
         }
+
         KeyCode::Down => {
             app.qso_selected = Some(match app.qso_selected {
                 Some(i) => (i + 1).min(max),
@@ -2348,6 +2369,35 @@ mod tests {
         assert!(matches!(app.view, View::Advanced));
         assert!(app.form.comment.is_empty());
         assert_eq!(app.form.callsign, "K7ABC");
+    }
+
+    #[tokio::test]
+    async fn handle_key_ctrl_l_clears_current_qso() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.form.callsign = "K7ABC".to_string();
+        app.form.comment = "clear me".to_string();
+        app.form.band_idx = 5;
+        app.form.mode_idx = 1;
+        app.editing_local_id = Some("q1".to_string());
+        app.qso_timer_active = true;
+        handle_key(
+            &mut app,
+            make_key_with_mod(KeyCode::Char('l'), KeyModifiers::CONTROL),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert!(app.form.callsign.is_empty());
+        assert!(app.form.comment.is_empty());
+        assert_eq!(app.form.band_idx, 5);
+        assert_eq!(app.form.mode_idx, 1);
+        assert_eq!(app.editing_local_id, None);
+        assert!(!app.qso_timer_active);
+        assert_eq!(lookup_rx.borrow().as_str(), "");
     }
 
     #[tokio::test]
