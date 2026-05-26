@@ -407,10 +407,13 @@ static int test_issue_329_qso_duration_uses_time_off(void)
 static int test_win32_advanced_editor_uses_card_pages(void)
 {
     if (strcmp(qsr_test_advanced_tab_name(0), "Core") != 0 ||
-        strcmp(qsr_test_advanced_tab_name(1), "Signal") != 0 ||
-        strcmp(qsr_test_advanced_tab_name(2), "Station/Location") != 0 ||
-        strcmp(qsr_test_advanced_tab_name(3), "Notes/Metadata") != 0) {
-        return fail("advanced editor tab names are not the expected card pages");
+        strcmp(qsr_test_advanced_tab_name(1), "Lookup") != 0 ||
+        strcmp(qsr_test_advanced_tab_name(2), "QSL") != 0 ||
+        strcmp(qsr_test_advanced_tab_name(3), "Contest") != 0 ||
+        strcmp(qsr_test_advanced_tab_name(4), "Station") != 0 ||
+        strcmp(qsr_test_advanced_tab_name(5), "Transcript") != 0 ||
+        strcmp(qsr_test_advanced_tab_name(6), "Metadata") != 0) {
+        return fail("advanced editor tab names do not match the Avalonia card sections");
     }
 
     if (qsr_test_advanced_tab_for_field(FIELD_CALLSIGN) != 0 ||
@@ -418,25 +421,38 @@ static int test_win32_advanced_editor_uses_card_pages(void)
         return fail("core QSO fields are not grouped on the Core card page");
     }
 
-    if (qsr_test_advanced_tab_for_field(FIELD_RST_SENT) != 1 ||
-        qsr_test_advanced_tab_for_field(FIELD_TX_POWER) != 1 ||
-        qsr_test_advanced_tab_for_field(FIELD_SAT_NAME) != 1) {
-        return fail("signal and propagation fields are not grouped on the Signal card page");
+    if (qsr_test_advanced_tab_for_field(FIELD_RST_SENT) != 0 ||
+        qsr_test_advanced_tab_for_field(FIELD_TX_POWER) != 0 ||
+        qsr_test_advanced_tab_for_field(FIELD_COMMENT) != 0) {
+        return fail("core QSO fields are not grouped on the Core card page");
     }
 
-    if (qsr_test_advanced_tab_for_field(FIELD_WORKED_NAME) != 2 ||
-        qsr_test_advanced_tab_for_field(FIELD_QTH) != 2 ||
-        qsr_test_advanced_tab_for_field(FIELD_SKCC) != 2) {
-        return fail("station/location fields are not grouped on the Station/Location card page");
+    if (qsr_test_advanced_tab_for_field(FIELD_WORKED_NAME) != 1 ||
+        qsr_test_advanced_tab_for_field(FIELD_WORKED_COUNTY) != 1 ||
+        qsr_test_advanced_tab_for_field(FIELD_SKCC) != 1) {
+        return fail("lookup fields are not grouped on the Lookup card page");
     }
 
-    if (qsr_test_advanced_tab_for_field(FIELD_COMMENT) != 3 ||
-        qsr_test_advanced_tab_for_field(FIELD_NOTES) != 3 ||
-        qsr_test_advanced_tab_for_field(FIELD_EXCHANGE_RCVD) != 3) {
-        return fail("notes and metadata fields are not grouped on the Notes/Metadata card page");
+    if (qsr_test_advanced_tab_for_field(FIELD_EXCHANGE_RCVD) != 3 ||
+        qsr_test_advanced_tab_for_field(FIELD_CONTEST_ID) != 3 ||
+        qsr_test_advanced_tab_for_field(FIELD_SAT_NAME) != 3) {
+        return fail("contest fields are not grouped on the Contest card page");
     }
 
-    for (int tab = 0; tab < 4; tab++) {
+    if (qsr_test_advanced_tab_for_field(FIELD_QTH) != 4) {
+        return fail("station fields are not grouped on the Station card page");
+    }
+
+    for (int tab = 0; tab < 7; tab++) {
+        if (qsr_test_advanced_tab_name(tab) == NULL) {
+            return fail("advanced editor card page is missing");
+        }
+    }
+
+    for (int tab = 0; tab < 5; tab++) {
+        if (tab == 2) {
+            continue;
+        }
         if (qsr_test_advanced_tab_field_count(tab) <= 0) {
             return fail("advanced editor card page has no editable fields");
         }
@@ -461,7 +477,7 @@ static int test_win32_advanced_editor_cycles_card_pages(void)
     }
 
     qsr_test_cycle_advanced_tab(-1);
-    if (qsr_test_get_advanced_tab() != 3) {
+    if (qsr_test_get_advanced_tab() != 6) {
         return fail("advanced editor previous page shortcut did not wrap");
     }
 
