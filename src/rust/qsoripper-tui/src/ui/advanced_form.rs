@@ -12,7 +12,7 @@ use crate::app::App;
 use crate::form::{AdvancedTab, Field, LogForm};
 use crate::ui::log_form::styled_field;
 
-const LABEL_WIDTH: usize = 13;
+const LABEL_WIDTH: usize = 16;
 
 struct FieldSpec {
     field: Field,
@@ -138,26 +138,11 @@ fn render_tab_content(frame: &mut Frame, area: Rect, form: &LogForm, tab: Advanc
     match tab {
         AdvancedTab::Core => render_core_tab(frame, area, form),
         AdvancedTab::Lookup => render_lookup_tab(frame, area, form),
-        AdvancedTab::Qsl => render_read_only_tab(
-            frame,
-            area,
-            " QSL ",
-            "QSL workflow fields are not editable here yet.",
-        ),
+        AdvancedTab::Qsl => render_qsl_tab(frame, area, form),
         AdvancedTab::Contest => render_contest_tab(frame, area, form),
         AdvancedTab::Station => render_station_tab(frame, area, form),
-        AdvancedTab::Transcript => render_read_only_tab(
-            frame,
-            area,
-            " Transcript ",
-            "CW transcript fields are preserved from the engine.",
-        ),
-        AdvancedTab::Metadata => render_read_only_tab(
-            frame,
-            area,
-            " Metadata ",
-            "Engine metadata and custom fields are preserved during edits.",
-        ),
+        AdvancedTab::Transcript => render_transcript_tab(frame, area, form),
+        AdvancedTab::Metadata => render_metadata_tab(frame, area, form),
     }
 }
 
@@ -172,7 +157,7 @@ fn render_core_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
             FieldSpec {
                 field: Field::Callsign,
                 key: 'C',
-                label: "Callsign",
+                label: "Worked call",
             },
             FieldSpec {
                 field: Field::Date,
@@ -223,6 +208,11 @@ fn render_core_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
                 label: "RST rcvd",
             },
             FieldSpec {
+                field: Field::StationCallsign,
+                key: 'A',
+                label: "Station call",
+            },
+            FieldSpec {
                 field: Field::TxPower,
                 key: 'W',
                 label: "TX power",
@@ -231,6 +221,11 @@ fn render_core_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
                 field: Field::Submode,
                 key: 'U',
                 label: "Submode",
+            },
+            FieldSpec {
+                field: Field::CwDecodeRxWpm,
+                key: 'Y',
+                label: "CW RX WPM",
             },
             FieldSpec {
                 field: Field::Comment,
@@ -254,6 +249,11 @@ fn render_lookup_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
         " Worked operator ",
         form,
         &[
+            FieldSpec {
+                field: Field::WorkedOperatorCallsign,
+                key: 'C',
+                label: "Operator call",
+            },
             FieldSpec {
                 field: Field::WorkedName,
                 key: 'A',
@@ -326,24 +326,163 @@ fn render_lookup_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
     );
 }
 
+fn render_qsl_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
+    let cols = two_columns(area);
+    render_group(
+        frame,
+        cols[0],
+        " Paper QSL ",
+        form,
+        &[
+            FieldSpec {
+                field: Field::QslSentStatus,
+                key: 'S',
+                label: "Sent status",
+            },
+            FieldSpec {
+                field: Field::QslSentDate,
+                key: 'D',
+                label: "Sent date",
+            },
+            FieldSpec {
+                field: Field::QslReceivedStatus,
+                key: 'R',
+                label: "Rcvd status",
+            },
+            FieldSpec {
+                field: Field::QslReceivedDate,
+                key: 'E',
+                label: "Rcvd date",
+            },
+            FieldSpec {
+                field: Field::QrzLogId,
+                key: 'L',
+                label: "QRZ log ID",
+            },
+            FieldSpec {
+                field: Field::QrzBookId,
+                key: 'B',
+                label: "QRZ book ID",
+            },
+        ],
+    );
+    render_group(
+        frame,
+        cols[1],
+        " Electronic QSL ",
+        form,
+        &[
+            FieldSpec {
+                field: Field::LotwSent,
+                key: 'T',
+                label: "LoTW sent",
+            },
+            FieldSpec {
+                field: Field::LotwReceived,
+                key: 'W',
+                label: "LoTW rcvd",
+            },
+            FieldSpec {
+                field: Field::EqslSent,
+                key: 'Q',
+                label: "eQSL sent",
+            },
+            FieldSpec {
+                field: Field::EqslReceived,
+                key: 'V',
+                label: "eQSL rcvd",
+            },
+        ],
+    );
+}
+
 fn render_station_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
     let cols = two_columns(area);
     render_group(
         frame,
         cols[0],
-        " Station ",
+        " Local station ",
         form,
-        &[FieldSpec {
-            field: Field::Qth,
-            key: 'Q',
-            label: "QTH",
-        }],
+        &[
+            FieldSpec {
+                field: Field::SnapshotStationCallsign,
+                key: 'S',
+                label: "Station call",
+            },
+            FieldSpec {
+                field: Field::SnapshotOperatorCallsign,
+                key: 'C',
+                label: "Operator call",
+            },
+            FieldSpec {
+                field: Field::SnapshotOperatorName,
+                key: 'N',
+                label: "Operator name",
+            },
+            FieldSpec {
+                field: Field::SnapshotGrid,
+                key: 'G',
+                label: "Grid",
+            },
+            FieldSpec {
+                field: Field::SnapshotCountry,
+                key: 'Y',
+                label: "Country",
+            },
+            FieldSpec {
+                field: Field::SnapshotState,
+                key: 'T',
+                label: "State",
+            },
+            FieldSpec {
+                field: Field::SnapshotCounty,
+                key: 'O',
+                label: "County",
+            },
+        ],
     );
-    render_read_only_tab(
+    render_group(
         frame,
         cols[1],
-        " Local station snapshot ",
-        "Station profile fields are preserved from the engine.",
+        " Station details ",
+        form,
+        &[
+            FieldSpec {
+                field: Field::SnapshotProfileName,
+                key: 'P',
+                label: "Profile",
+            },
+            FieldSpec {
+                field: Field::SnapshotArrlSection,
+                key: 'A',
+                label: "ARRL section",
+            },
+            FieldSpec {
+                field: Field::SnapshotDxcc,
+                key: 'D',
+                label: "DXCC",
+            },
+            FieldSpec {
+                field: Field::SnapshotCqZone,
+                key: 'Q',
+                label: "CQ zone",
+            },
+            FieldSpec {
+                field: Field::SnapshotItuZone,
+                key: 'I',
+                label: "ITU zone",
+            },
+            FieldSpec {
+                field: Field::SnapshotLatitude,
+                key: 'L',
+                label: "Latitude",
+            },
+            FieldSpec {
+                field: Field::SnapshotLongitude,
+                key: 'V',
+                label: "Longitude",
+            },
+        ],
     );
 }
 
@@ -404,6 +543,75 @@ fn render_contest_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
                 label: "Sat mode",
             },
         ],
+    );
+}
+
+fn render_transcript_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
+    let rows = Layout::vertical([Constraint::Length(4), Constraint::Fill(1)]).split(area);
+    render_group(
+        frame,
+        rows.first().copied().unwrap_or(area),
+        " CW summary ",
+        form,
+        &[FieldSpec {
+            field: Field::CwDecodeRxWpm,
+            key: 'W',
+            label: "RX WPM",
+        }],
+    );
+    render_group(
+        frame,
+        rows.get(1).copied().unwrap_or(area),
+        " CW transcript ",
+        form,
+        &[FieldSpec {
+            field: Field::CwDecodeTranscript,
+            key: 'T',
+            label: "Transcript",
+        }],
+    );
+}
+
+fn render_metadata_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
+    let cols = two_columns(area);
+    render_group(
+        frame,
+        cols[0],
+        " Engine metadata ",
+        form,
+        &[
+            FieldSpec {
+                field: Field::LocalId,
+                key: 'L',
+                label: "Local ID",
+            },
+            FieldSpec {
+                field: Field::SyncStatus,
+                key: 'S',
+                label: "Sync status",
+            },
+            FieldSpec {
+                field: Field::CreatedAt,
+                key: 'C',
+                label: "Created",
+            },
+            FieldSpec {
+                field: Field::UpdatedAt,
+                key: 'U',
+                label: "Updated",
+            },
+        ],
+    );
+    render_group(
+        frame,
+        cols[1],
+        " Extra ADIF fields ",
+        form,
+        &[FieldSpec {
+            field: Field::ExtraFields,
+            key: 'E',
+            label: "KEY=value",
+        }],
     );
 }
 
@@ -470,6 +678,7 @@ fn field_text(form: &LogForm, field: Field) -> &str {
         Field::Time => &form.time,
         Field::TimeOff => &form.time_off,
         Field::Qth => &form.qth,
+        Field::StationCallsign => &form.station_callsign,
         Field::TxPower => &form.tx_power,
         Field::Submode => &form.submode_override,
         Field::ContestId => &form.contest_id,
@@ -484,6 +693,7 @@ fn field_text(form: &LogForm, field: Field) -> &str {
         Field::ArrlSection => &form.arrl_section,
         Field::WorkedState => &form.worked_state,
         Field::WorkedCounty => &form.worked_county,
+        Field::WorkedOperatorCallsign => &form.worked_operator_callsign,
         Field::WorkedName => &form.worked_name,
         Field::WorkedGrid => &form.worked_grid,
         Field::WorkedCountry => &form.worked_country,
@@ -492,22 +702,38 @@ fn field_text(form: &LogForm, field: Field) -> &str {
         Field::WorkedItuZone => &form.worked_itu_zone,
         Field::WorkedContinent => &form.worked_continent,
         Field::Skcc => &form.skcc,
+        Field::QslSentStatus => &form.qsl_sent_status,
+        Field::QslSentDate => &form.qsl_sent_date,
+        Field::QslReceivedStatus => &form.qsl_received_status,
+        Field::QslReceivedDate => &form.qsl_received_date,
+        Field::LotwSent => &form.lotw_sent,
+        Field::LotwReceived => &form.lotw_received,
+        Field::EqslSent => &form.eqsl_sent,
+        Field::EqslReceived => &form.eqsl_received,
+        Field::QrzLogId => &form.qrz_log_id,
+        Field::QrzBookId => &form.qrz_book_id,
+        Field::SnapshotProfileName => &form.snapshot_profile_name,
+        Field::SnapshotStationCallsign => &form.snapshot_station_callsign,
+        Field::SnapshotOperatorCallsign => &form.snapshot_operator_callsign,
+        Field::SnapshotOperatorName => &form.snapshot_operator_name,
+        Field::SnapshotGrid => &form.snapshot_grid,
+        Field::SnapshotCountry => &form.snapshot_country,
+        Field::SnapshotState => &form.snapshot_state,
+        Field::SnapshotCounty => &form.snapshot_county,
+        Field::SnapshotArrlSection => &form.snapshot_arrl_section,
+        Field::SnapshotDxcc => &form.snapshot_dxcc,
+        Field::SnapshotCqZone => &form.snapshot_cq_zone,
+        Field::SnapshotItuZone => &form.snapshot_itu_zone,
+        Field::SnapshotLatitude => &form.snapshot_latitude,
+        Field::SnapshotLongitude => &form.snapshot_longitude,
+        Field::CwDecodeRxWpm => &form.cw_decode_rx_wpm,
+        Field::CwDecodeTranscript => &form.cw_decode_transcript,
+        Field::LocalId => &form.local_id,
+        Field::SyncStatus => &form.sync_status,
+        Field::CreatedAt => &form.created_at,
+        Field::UpdatedAt => &form.updated_at,
+        Field::ExtraFields => &form.extra_fields,
     }
-}
-
-fn render_read_only_tab(frame: &mut Frame, area: Rect, title: &'static str, message: &'static str) {
-    let block = Block::bordered()
-        .title(title)
-        .border_style(Style::default().fg(Color::DarkGray));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            message,
-            Style::default().fg(Color::DarkGray),
-        ))),
-        inner,
-    );
 }
 
 fn two_columns(area: Rect) -> [Rect; 2] {

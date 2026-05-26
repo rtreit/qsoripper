@@ -1,12 +1,17 @@
 //! gRPC client helpers: channel creation, QSO logging, listing, lookup, and space weather.
 
-use anyhow::Context;
+use std::collections::HashMap;
+
+use anyhow::{bail, Context};
 use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use tonic::transport::{Channel, Endpoint};
 
 use qsoripper_core::domain::band::{band_from_adif, band_to_adif};
 use qsoripper_core::domain::mode::{mode_from_adif, mode_to_adif};
-use qsoripper_core::proto::qsoripper::domain::{Band, LookupState, Mode, RstReport};
+use qsoripper_core::domain::qso::{qsl_status_from_adif, qsl_status_to_adif};
+use qsoripper_core::proto::qsoripper::domain::{
+    Band, LookupState, Mode, QslStatus, QsoRecord, RstReport, StationSnapshot,
+};
 use qsoripper_core::proto::qsoripper::services::{
     logbook_service_client::LogbookServiceClient, lookup_service_client::LookupServiceClient,
     rig_control_service_client::RigControlServiceClient,
@@ -57,8 +62,9 @@ pub(crate) async fn log_qso(
     let (lookup_grid, lookup_country, lookup_cq_zone, lookup_dxcc) =
         lookup.unwrap_or((None, None, None, None));
 
-    let qso = qsoripper_core::proto::qsoripper::domain::QsoRecord {
+    let qso = QsoRecord {
         worked_callsign: form.callsign.to_uppercase(),
+        station_callsign: form.station_callsign.to_uppercase(),
         band: i32::from(band),
         mode: i32::from(mode),
         utc_timestamp,
@@ -74,6 +80,16 @@ pub(crate) async fn log_qso(
         comment: opt_string(&form.comment),
         notes: opt_string(&form.notes),
         tx_power: opt_string(&form.tx_power),
+        qsl_sent_status: i32::from(parse_qsl_status(&form.qsl_sent_status)?),
+        qsl_received_status: i32::from(parse_qsl_status(&form.qsl_received_status)?),
+        lotw_sent: parse_optional_bool(&form.lotw_sent)?,
+        lotw_received: parse_optional_bool(&form.lotw_received)?,
+        eqsl_sent: parse_optional_bool(&form.eqsl_sent)?,
+        eqsl_received: parse_optional_bool(&form.eqsl_received)?,
+        qsl_sent_date: parse_optional_date(&form.qsl_sent_date)?,
+        qsl_received_date: parse_optional_date(&form.qsl_received_date)?,
+        qrz_logid: opt_string(&form.qrz_log_id),
+        qrz_bookid: opt_string(&form.qrz_book_id),
         contest_id: opt_string(&form.contest_id),
         serial_sent: opt_string(&form.serial_sent),
         serial_received: opt_string(&form.serial_rcvd),
@@ -85,6 +101,7 @@ pub(crate) async fn log_qso(
         worked_dxcc: opt_u32(&form.worked_dxcc).or(lookup_dxcc),
         worked_itu_zone: opt_u32(&form.worked_itu_zone),
         worked_continent: opt_string(&form.worked_continent),
+        worked_operator_callsign: opt_string(&form.worked_operator_callsign.to_uppercase()),
         worked_operator_name: opt_string(&form.worked_name),
         worked_iota: opt_string(&form.iota),
         worked_arrl_section: opt_string(&form.arrl_section),
@@ -94,6 +111,10 @@ pub(crate) async fn log_qso(
         prop_mode: opt_string(&form.prop_mode),
         sat_name: opt_string(&form.sat_name),
         sat_mode: opt_string(&form.sat_mode),
+        station_snapshot: station_snapshot_from_form(form)?,
+        extra_fields: parse_extra_fields(&form.extra_fields)?,
+        cw_decode_rx_wpm: opt_u32(&form.cw_decode_rx_wpm),
+        cw_decode_transcript: opt_string(&form.cw_decode_transcript),
         ..Default::default()
     };
 
@@ -316,7 +337,7 @@ pub(crate) async fn update_qso(
     local_id: &str,
     form: &LogForm,
     lookup: LookupEnrichment,
-    base: Option<qsoripper_core::proto::qsoripper::domain::QsoRecord>,
+    base: Option<QsoRecord>,
 ) -> anyhow::Result<()> {
     let mut client = LogbookServiceClient::new(channel);
 
@@ -344,6 +365,7 @@ pub(crate) async fn update_qso(
     let mut qso = base.unwrap_or_default();
     qso.local_id = local_id.to_string();
     qso.worked_callsign = form.callsign.to_uppercase();
+    qso.station_callsign = form.station_callsign.to_uppercase();
     qso.band = i32::from(band);
     qso.mode = i32::from(mode);
     qso.utc_timestamp = utc_timestamp;
@@ -359,6 +381,16 @@ pub(crate) async fn update_qso(
     qso.comment = opt_string(&form.comment);
     qso.notes = opt_string(&form.notes);
     qso.tx_power = opt_string(&form.tx_power);
+    qso.qsl_sent_status = i32::from(parse_qsl_status(&form.qsl_sent_status)?);
+    qso.qsl_received_status = i32::from(parse_qsl_status(&form.qsl_received_status)?);
+    qso.lotw_sent = parse_optional_bool(&form.lotw_sent)?;
+    qso.lotw_received = parse_optional_bool(&form.lotw_received)?;
+    qso.eqsl_sent = parse_optional_bool(&form.eqsl_sent)?;
+    qso.eqsl_received = parse_optional_bool(&form.eqsl_received)?;
+    qso.qsl_sent_date = parse_optional_date(&form.qsl_sent_date)?;
+    qso.qsl_received_date = parse_optional_date(&form.qsl_received_date)?;
+    qso.qrz_logid = opt_string(&form.qrz_log_id);
+    qso.qrz_bookid = opt_string(&form.qrz_book_id);
     qso.contest_id = opt_string(&form.contest_id);
     qso.serial_sent = opt_string(&form.serial_sent);
     qso.serial_received = opt_string(&form.serial_rcvd);
@@ -370,6 +402,7 @@ pub(crate) async fn update_qso(
     qso.worked_dxcc = opt_u32(&form.worked_dxcc).or(lookup_dxcc);
     qso.worked_itu_zone = opt_u32(&form.worked_itu_zone);
     qso.worked_continent = opt_string(&form.worked_continent);
+    qso.worked_operator_callsign = opt_string(&form.worked_operator_callsign.to_uppercase());
     qso.worked_operator_name = opt_string(&form.worked_name);
     qso.worked_iota = opt_string(&form.iota);
     qso.worked_arrl_section = opt_string(&form.arrl_section);
@@ -379,6 +412,10 @@ pub(crate) async fn update_qso(
     qso.prop_mode = opt_string(&form.prop_mode);
     qso.sat_name = opt_string(&form.sat_name);
     qso.sat_mode = opt_string(&form.sat_mode);
+    qso.station_snapshot = station_snapshot_from_form(form)?;
+    qso.extra_fields = parse_extra_fields(&form.extra_fields)?;
+    qso.cw_decode_rx_wpm = opt_u32(&form.cw_decode_rx_wpm);
+    qso.cw_decode_transcript = opt_string(&form.cw_decode_transcript);
 
     client
         .update_qso(UpdateQsoRequest {
@@ -439,6 +476,157 @@ fn opt_u32(s: &str) -> Option<u32> {
     s.trim().parse().ok()
 }
 
+fn opt_f64(s: &str) -> anyhow::Result<Option<f64>> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse()
+        .map(Some)
+        .with_context(|| format!("invalid number: {trimmed}"))
+}
+
+fn parse_qsl_status(s: &str) -> anyhow::Result<QslStatus> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Ok(QslStatus::Unspecified);
+    }
+    let status = qsl_status_from_adif(trimmed);
+    if matches!(status, QslStatus::Unspecified) {
+        bail!("invalid QSL status: {trimmed}; use N, Y, R, Q, I, or blank");
+    }
+    Ok(status)
+}
+
+fn parse_optional_bool(s: &str) -> anyhow::Result<Option<bool>> {
+    match s.trim().to_ascii_uppercase().as_str() {
+        "" => Ok(None),
+        "Y" | "YES" | "TRUE" | "1" => Ok(Some(true)),
+        "N" | "NO" | "FALSE" | "0" => Ok(Some(false)),
+        other => bail!("invalid boolean value: {other}; use Y, N, or blank"),
+    }
+}
+
+pub(crate) fn format_optional_bool(value: Option<bool>) -> String {
+    match value {
+        Some(true) => "Y".to_string(),
+        Some(false) => "N".to_string(),
+        None => String::new(),
+    }
+}
+
+fn parse_optional_date(s: &str) -> anyhow::Result<Option<prost_types::Timestamp>> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let naive_date = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d").context("invalid QSL date")?;
+    let naive = naive_date
+        .and_hms_opt(0, 0, 0)
+        .context("invalid QSL date")?;
+    Ok(Some(prost_types::Timestamp {
+        seconds: naive.and_utc().timestamp(),
+        nanos: 0,
+    }))
+}
+
+pub(crate) fn format_qsl_status(status: i32) -> String {
+    QslStatus::try_from(status)
+        .ok()
+        .and_then(qsl_status_to_adif)
+        .unwrap_or_default()
+        .to_string()
+}
+
+pub(crate) fn format_optional_date(ts: Option<&prost_types::Timestamp>) -> String {
+    ts.and_then(|ts| chrono::DateTime::from_timestamp(ts.seconds, 0))
+        .map(|dt| dt.format("%Y-%m-%d").to_string())
+        .unwrap_or_default()
+}
+
+pub(crate) fn format_optional_timestamp(ts: Option<&prost_types::Timestamp>) -> String {
+    ts.and_then(|ts| chrono::DateTime::from_timestamp(ts.seconds, 0))
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%SZ").to_string())
+        .unwrap_or_default()
+}
+
+pub(crate) fn format_extra_fields(extra_fields: &HashMap<String, String>) -> String {
+    let mut entries = extra_fields.iter().collect::<Vec<_>>();
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    entries
+        .into_iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_extra_fields(text: &str) -> anyhow::Result<HashMap<String, String>> {
+    let mut fields = HashMap::new();
+    for (idx, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once('=') else {
+            bail!(
+                "invalid extra ADIF field on line {}: use KEY=value",
+                idx + 1
+            );
+        };
+        let key = key.trim().to_ascii_uppercase();
+        if key.is_empty() {
+            bail!("invalid extra ADIF field on line {}: key is empty", idx + 1);
+        }
+        fields.insert(key, value.trim().to_string());
+    }
+    Ok(fields)
+}
+
+fn station_snapshot_from_form(form: &LogForm) -> anyhow::Result<Option<StationSnapshot>> {
+    let has_snapshot = [
+        form.snapshot_profile_name.as_str(),
+        form.snapshot_station_callsign.as_str(),
+        form.snapshot_operator_callsign.as_str(),
+        form.snapshot_operator_name.as_str(),
+        form.snapshot_grid.as_str(),
+        form.snapshot_country.as_str(),
+        form.snapshot_state.as_str(),
+        form.snapshot_county.as_str(),
+        form.snapshot_arrl_section.as_str(),
+        form.snapshot_dxcc.as_str(),
+        form.snapshot_cq_zone.as_str(),
+        form.snapshot_itu_zone.as_str(),
+        form.snapshot_latitude.as_str(),
+        form.snapshot_longitude.as_str(),
+    ]
+    .iter()
+    .any(|value| !value.trim().is_empty());
+
+    if !has_snapshot {
+        return Ok(None);
+    }
+
+    Ok(Some(StationSnapshot {
+        profile_name: opt_string(&form.snapshot_profile_name),
+        station_callsign: form.snapshot_station_callsign.to_uppercase(),
+        operator_callsign: opt_string(&form.snapshot_operator_callsign.to_uppercase()),
+        operator_name: opt_string(&form.snapshot_operator_name),
+        grid: opt_string(&form.snapshot_grid),
+        county: opt_string(&form.snapshot_county),
+        state: opt_string(&form.snapshot_state),
+        country: opt_string(&form.snapshot_country),
+        dxcc: opt_u32(&form.snapshot_dxcc),
+        cq_zone: opt_u32(&form.snapshot_cq_zone),
+        itu_zone: opt_u32(&form.snapshot_itu_zone),
+        latitude: opt_f64(&form.snapshot_latitude)?,
+        longitude: opt_f64(&form.snapshot_longitude)?,
+        arrl_section: opt_string(&form.snapshot_arrl_section),
+        altitude_meters: None,
+        gridsquare_ext: None,
+    }))
+}
+
 /// Parse a date string (`YYYY-MM-DD`) and time string (`HH:MM`) into a protobuf timestamp.
 fn parse_timestamp(date: &str, time: &str) -> anyhow::Result<prost_types::Timestamp> {
     let naive_date = NaiveDate::parse_from_str(date, "%Y-%m-%d").context("invalid date")?;
@@ -491,11 +679,54 @@ fn resolve_mode(mode_str: &str) -> (Mode, Option<&'static str>) {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::create_channel;
+    use super::*;
 
     #[tokio::test]
     async fn create_channel_does_not_require_server_to_be_online() {
         let channel_result = create_channel("http://127.0.0.1:9");
         assert!(channel_result.is_ok());
+    }
+
+    #[test]
+    fn qsl_status_parser_accepts_adif_codes() {
+        assert_eq!(parse_qsl_status("").unwrap(), QslStatus::Unspecified);
+        assert_eq!(parse_qsl_status("n").unwrap(), QslStatus::No);
+        assert_eq!(parse_qsl_status("Y").unwrap(), QslStatus::Yes);
+        assert_eq!(parse_qsl_status("R").unwrap(), QslStatus::Requested);
+        assert_eq!(parse_qsl_status("Q").unwrap(), QslStatus::Queued);
+        assert_eq!(parse_qsl_status("I").unwrap(), QslStatus::Ignore);
+        assert!(parse_qsl_status("maybe").is_err());
+    }
+
+    #[test]
+    fn optional_bool_parser_accepts_common_values() {
+        assert_eq!(parse_optional_bool("").unwrap(), None);
+        assert_eq!(parse_optional_bool("Y").unwrap(), Some(true));
+        assert_eq!(parse_optional_bool("no").unwrap(), Some(false));
+        assert!(parse_optional_bool("sometimes").is_err());
+    }
+
+    #[test]
+    fn extra_fields_are_sorted_and_parsed_as_uppercase_keys() {
+        let parsed = parse_extra_fields("app_test=value\ncall=K7ABC").unwrap();
+        assert_eq!(parsed.get("APP_TEST"), Some(&"value".to_string()));
+        assert_eq!(parsed.get("CALL"), Some(&"K7ABC".to_string()));
+        assert_eq!(format_extra_fields(&parsed), "APP_TEST=value\nCALL=K7ABC");
+        assert!(parse_extra_fields("BROKEN").is_err());
+    }
+
+    #[test]
+    fn station_snapshot_from_form_uses_snapshot_fields() {
+        let mut form = LogForm::new();
+        form.snapshot_station_callsign = "k7abc".to_string();
+        form.snapshot_operator_callsign = "n0op".to_string();
+        form.snapshot_latitude = "47.6".to_string();
+        form.snapshot_longitude = "-122.3".to_string();
+
+        let snapshot = station_snapshot_from_form(&form).unwrap().unwrap();
+        assert_eq!(snapshot.station_callsign, "K7ABC");
+        assert_eq!(snapshot.operator_callsign, Some("N0OP".to_string()));
+        assert_eq!(snapshot.latitude, Some(47.6));
+        assert_eq!(snapshot.longitude, Some(-122.3));
     }
 }

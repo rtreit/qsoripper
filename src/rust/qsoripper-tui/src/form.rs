@@ -127,6 +127,8 @@ pub(crate) enum Field {
     Time,
     /// UTC time off / end (`HH:MM`).
     TimeOff,
+    /// Local station callsign.
+    StationCallsign,
     /// Worked station QTH (city/location).
     Qth,
     // Advanced fields shown in the advanced view.
@@ -158,6 +160,8 @@ pub(crate) enum Field {
     WorkedState,
     /// Worked county.
     WorkedCounty,
+    /// Worked operator callsign.
+    WorkedOperatorCallsign,
     /// Worked operator name.
     WorkedName,
     /// Worked grid square.
@@ -174,6 +178,68 @@ pub(crate) enum Field {
     WorkedContinent,
     /// SKCC membership number of the worked station.
     Skcc,
+    /// Paper QSL sent status.
+    QslSentStatus,
+    /// Paper QSL sent date.
+    QslSentDate,
+    /// Paper QSL received status.
+    QslReceivedStatus,
+    /// Paper QSL received date.
+    QslReceivedDate,
+    /// `LoTW` sent state.
+    LotwSent,
+    /// `LoTW` received state.
+    LotwReceived,
+    /// eQSL sent state.
+    EqslSent,
+    /// eQSL received state.
+    EqslReceived,
+    /// QRZ log record ID.
+    QrzLogId,
+    /// QRZ book ID.
+    QrzBookId,
+    /// Station profile name captured at save time.
+    SnapshotProfileName,
+    /// Local station callsign captured at save time.
+    SnapshotStationCallsign,
+    /// Local operator callsign captured at save time.
+    SnapshotOperatorCallsign,
+    /// Local operator name captured at save time.
+    SnapshotOperatorName,
+    /// Local station grid captured at save time.
+    SnapshotGrid,
+    /// Local station country captured at save time.
+    SnapshotCountry,
+    /// Local station state captured at save time.
+    SnapshotState,
+    /// Local station county captured at save time.
+    SnapshotCounty,
+    /// Local station ARRL section captured at save time.
+    SnapshotArrlSection,
+    /// Local station DXCC captured at save time.
+    SnapshotDxcc,
+    /// Local station CQ zone captured at save time.
+    SnapshotCqZone,
+    /// Local station ITU zone captured at save time.
+    SnapshotItuZone,
+    /// Local station latitude captured at save time.
+    SnapshotLatitude,
+    /// Local station longitude captured at save time.
+    SnapshotLongitude,
+    /// Captured CW receive speed.
+    CwDecodeRxWpm,
+    /// Captured CW transcript.
+    CwDecodeTranscript,
+    /// Engine-assigned local ID.
+    LocalId,
+    /// Engine sync status.
+    SyncStatus,
+    /// Engine created timestamp.
+    CreatedAt,
+    /// Engine updated timestamp.
+    UpdatedAt,
+    /// Extra ADIF fields.
+    ExtraFields,
 }
 
 /// Primary navigation order for Tab/Shift-Tab in the log entry view.
@@ -198,6 +264,7 @@ const ADV_CORE_FIELDS: &[Field] = &[
     Field::Date,
     Field::Time,
     Field::TimeOff,
+    Field::StationCallsign,
     Field::Band,
     Field::Mode,
     Field::FrequencyMhz,
@@ -207,10 +274,12 @@ const ADV_CORE_FIELDS: &[Field] = &[
     Field::Submode,
     Field::Comment,
     Field::Notes,
+    Field::CwDecodeRxWpm,
 ];
 
 /// Fields for the Advanced "Lookup" tab.
 const ADV_LOOKUP_FIELDS: &[Field] = &[
+    Field::WorkedOperatorCallsign,
     Field::WorkedName,
     Field::WorkedGrid,
     Field::WorkedCountry,
@@ -226,7 +295,18 @@ const ADV_LOOKUP_FIELDS: &[Field] = &[
 ];
 
 /// Fields for the Advanced "QSL" tab.
-const ADV_QSL_FIELDS: &[Field] = &[];
+const ADV_QSL_FIELDS: &[Field] = &[
+    Field::QslSentStatus,
+    Field::QslSentDate,
+    Field::QslReceivedStatus,
+    Field::QslReceivedDate,
+    Field::LotwSent,
+    Field::LotwReceived,
+    Field::EqslSent,
+    Field::EqslReceived,
+    Field::QrzLogId,
+    Field::QrzBookId,
+];
 
 /// Fields for the Advanced "Contest" tab.
 const ADV_CONTEST_FIELDS: &[Field] = &[
@@ -241,13 +321,34 @@ const ADV_CONTEST_FIELDS: &[Field] = &[
 ];
 
 /// Fields for the Advanced "Station" tab.
-const ADV_STATION_FIELDS: &[Field] = &[Field::Qth];
+const ADV_STATION_FIELDS: &[Field] = &[
+    Field::SnapshotStationCallsign,
+    Field::SnapshotOperatorCallsign,
+    Field::SnapshotOperatorName,
+    Field::SnapshotGrid,
+    Field::SnapshotCountry,
+    Field::SnapshotState,
+    Field::SnapshotCounty,
+    Field::SnapshotProfileName,
+    Field::SnapshotArrlSection,
+    Field::SnapshotDxcc,
+    Field::SnapshotCqZone,
+    Field::SnapshotItuZone,
+    Field::SnapshotLatitude,
+    Field::SnapshotLongitude,
+];
 
 /// Fields for the Advanced "Transcript" tab.
-const ADV_TRANSCRIPT_FIELDS: &[Field] = &[];
+const ADV_TRANSCRIPT_FIELDS: &[Field] = &[Field::CwDecodeRxWpm, Field::CwDecodeTranscript];
 
 /// Fields for the Advanced "Metadata" tab.
-const ADV_METADATA_FIELDS: &[Field] = &[];
+const ADV_METADATA_FIELDS: &[Field] = &[
+    Field::LocalId,
+    Field::SyncStatus,
+    Field::CreatedAt,
+    Field::UpdatedAt,
+    Field::ExtraFields,
+];
 
 /// State of the QSO entry form (basic + advanced fields).
 #[derive(Clone)]
@@ -274,6 +375,8 @@ pub(crate) struct LogForm {
     pub(crate) time_off: String,
     /// Worked station QTH (city/location).
     pub(crate) qth: String,
+    /// Local station callsign.
+    pub(crate) station_callsign: String,
     /// RST sent report string.
     pub(crate) rst_sent: String,
     /// RST received report string.
@@ -313,6 +416,8 @@ pub(crate) struct LogForm {
     pub(crate) worked_state: String,
     /// Worked county name.
     pub(crate) worked_county: String,
+    /// Worked operator callsign.
+    pub(crate) worked_operator_callsign: String,
     /// Worked operator name (from lookup or manual entry).
     pub(crate) worked_name: String,
     /// Worked grid square.
@@ -329,6 +434,68 @@ pub(crate) struct LogForm {
     pub(crate) worked_continent: String,
     /// SKCC membership number of the worked station.
     pub(crate) skcc: String,
+    /// Paper QSL sent status as ADIF code.
+    pub(crate) qsl_sent_status: String,
+    /// Paper QSL sent date as `YYYY-MM-DD`.
+    pub(crate) qsl_sent_date: String,
+    /// Paper QSL received status as ADIF code.
+    pub(crate) qsl_received_status: String,
+    /// Paper QSL received date as `YYYY-MM-DD`.
+    pub(crate) qsl_received_date: String,
+    /// `LoTW` sent state (`Y`, `N`, or empty).
+    pub(crate) lotw_sent: String,
+    /// `LoTW` received state (`Y`, `N`, or empty).
+    pub(crate) lotw_received: String,
+    /// eQSL sent state (`Y`, `N`, or empty).
+    pub(crate) eqsl_sent: String,
+    /// eQSL received state (`Y`, `N`, or empty).
+    pub(crate) eqsl_received: String,
+    /// QRZ log record ID.
+    pub(crate) qrz_log_id: String,
+    /// QRZ logbook ID.
+    pub(crate) qrz_book_id: String,
+    /// Captured station profile name.
+    pub(crate) snapshot_profile_name: String,
+    /// Captured station callsign.
+    pub(crate) snapshot_station_callsign: String,
+    /// Captured operator callsign.
+    pub(crate) snapshot_operator_callsign: String,
+    /// Captured operator name.
+    pub(crate) snapshot_operator_name: String,
+    /// Captured station grid.
+    pub(crate) snapshot_grid: String,
+    /// Captured station country.
+    pub(crate) snapshot_country: String,
+    /// Captured station state.
+    pub(crate) snapshot_state: String,
+    /// Captured station county.
+    pub(crate) snapshot_county: String,
+    /// Captured station ARRL section.
+    pub(crate) snapshot_arrl_section: String,
+    /// Captured station DXCC.
+    pub(crate) snapshot_dxcc: String,
+    /// Captured station CQ zone.
+    pub(crate) snapshot_cq_zone: String,
+    /// Captured station ITU zone.
+    pub(crate) snapshot_itu_zone: String,
+    /// Captured station latitude.
+    pub(crate) snapshot_latitude: String,
+    /// Captured station longitude.
+    pub(crate) snapshot_longitude: String,
+    /// Captured CW receive speed.
+    pub(crate) cw_decode_rx_wpm: String,
+    /// Captured CW transcript.
+    pub(crate) cw_decode_transcript: String,
+    /// Engine-assigned local ID.
+    pub(crate) local_id: String,
+    /// Engine sync status display.
+    pub(crate) sync_status: String,
+    /// Engine created timestamp display.
+    pub(crate) created_at: String,
+    /// Engine updated timestamp display.
+    pub(crate) updated_at: String,
+    /// Extra ADIF fields as `KEY=value` lines.
+    pub(crate) extra_fields: String,
 }
 
 impl Default for LogForm {
@@ -353,6 +520,7 @@ impl LogForm {
             time: now.format("%H:%M").to_string(),
             time_off: String::new(),
             qth: String::new(),
+            station_callsign: String::new(),
             rst_sent: String::new(),
             rst_rcvd: String::new(),
             comment: String::new(),
@@ -371,6 +539,7 @@ impl LogForm {
             arrl_section: String::new(),
             worked_state: String::new(),
             worked_county: String::new(),
+            worked_operator_callsign: String::new(),
             worked_name: String::new(),
             worked_grid: String::new(),
             worked_country: String::new(),
@@ -379,6 +548,37 @@ impl LogForm {
             worked_itu_zone: String::new(),
             worked_continent: String::new(),
             skcc: String::new(),
+            qsl_sent_status: String::new(),
+            qsl_sent_date: String::new(),
+            qsl_received_status: String::new(),
+            qsl_received_date: String::new(),
+            lotw_sent: String::new(),
+            lotw_received: String::new(),
+            eqsl_sent: String::new(),
+            eqsl_received: String::new(),
+            qrz_log_id: String::new(),
+            qrz_book_id: String::new(),
+            snapshot_profile_name: String::new(),
+            snapshot_station_callsign: String::new(),
+            snapshot_operator_callsign: String::new(),
+            snapshot_operator_name: String::new(),
+            snapshot_grid: String::new(),
+            snapshot_country: String::new(),
+            snapshot_state: String::new(),
+            snapshot_county: String::new(),
+            snapshot_arrl_section: String::new(),
+            snapshot_dxcc: String::new(),
+            snapshot_cq_zone: String::new(),
+            snapshot_itu_zone: String::new(),
+            snapshot_latitude: String::new(),
+            snapshot_longitude: String::new(),
+            cw_decode_rx_wpm: String::new(),
+            cw_decode_transcript: String::new(),
+            local_id: String::new(),
+            sync_status: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            extra_fields: String::new(),
         };
         form.on_band_change();
         form
@@ -507,6 +707,7 @@ impl LogForm {
             Field::Time => Some(&mut self.time),
             Field::TimeOff => Some(&mut self.time_off),
             Field::Qth => Some(&mut self.qth),
+            Field::StationCallsign => Some(&mut self.station_callsign),
             Field::RstSent => Some(&mut self.rst_sent),
             Field::RstRcvd => Some(&mut self.rst_rcvd),
             Field::Comment => Some(&mut self.comment),
@@ -525,6 +726,7 @@ impl LogForm {
             Field::ArrlSection => Some(&mut self.arrl_section),
             Field::WorkedState => Some(&mut self.worked_state),
             Field::WorkedCounty => Some(&mut self.worked_county),
+            Field::WorkedOperatorCallsign => Some(&mut self.worked_operator_callsign),
             Field::WorkedName => Some(&mut self.worked_name),
             Field::WorkedGrid => Some(&mut self.worked_grid),
             Field::WorkedCountry => Some(&mut self.worked_country),
@@ -533,7 +735,39 @@ impl LogForm {
             Field::WorkedItuZone => Some(&mut self.worked_itu_zone),
             Field::WorkedContinent => Some(&mut self.worked_continent),
             Field::Skcc => Some(&mut self.skcc),
-            Field::Band | Field::Mode => None,
+            Field::QslSentStatus => Some(&mut self.qsl_sent_status),
+            Field::QslSentDate => Some(&mut self.qsl_sent_date),
+            Field::QslReceivedStatus => Some(&mut self.qsl_received_status),
+            Field::QslReceivedDate => Some(&mut self.qsl_received_date),
+            Field::LotwSent => Some(&mut self.lotw_sent),
+            Field::LotwReceived => Some(&mut self.lotw_received),
+            Field::EqslSent => Some(&mut self.eqsl_sent),
+            Field::EqslReceived => Some(&mut self.eqsl_received),
+            Field::QrzLogId => Some(&mut self.qrz_log_id),
+            Field::QrzBookId => Some(&mut self.qrz_book_id),
+            Field::SnapshotProfileName => Some(&mut self.snapshot_profile_name),
+            Field::SnapshotStationCallsign => Some(&mut self.snapshot_station_callsign),
+            Field::SnapshotOperatorCallsign => Some(&mut self.snapshot_operator_callsign),
+            Field::SnapshotOperatorName => Some(&mut self.snapshot_operator_name),
+            Field::SnapshotGrid => Some(&mut self.snapshot_grid),
+            Field::SnapshotCountry => Some(&mut self.snapshot_country),
+            Field::SnapshotState => Some(&mut self.snapshot_state),
+            Field::SnapshotCounty => Some(&mut self.snapshot_county),
+            Field::SnapshotArrlSection => Some(&mut self.snapshot_arrl_section),
+            Field::SnapshotDxcc => Some(&mut self.snapshot_dxcc),
+            Field::SnapshotCqZone => Some(&mut self.snapshot_cq_zone),
+            Field::SnapshotItuZone => Some(&mut self.snapshot_itu_zone),
+            Field::SnapshotLatitude => Some(&mut self.snapshot_latitude),
+            Field::SnapshotLongitude => Some(&mut self.snapshot_longitude),
+            Field::CwDecodeRxWpm => Some(&mut self.cw_decode_rx_wpm),
+            Field::CwDecodeTranscript => Some(&mut self.cw_decode_transcript),
+            Field::ExtraFields => Some(&mut self.extra_fields),
+            Field::Band
+            | Field::Mode
+            | Field::LocalId
+            | Field::SyncStatus
+            | Field::CreatedAt
+            | Field::UpdatedAt => None,
         }
     }
 
@@ -956,12 +1190,18 @@ mod tests {
     #[test]
     fn advanced_tab_first_fields() {
         assert_eq!(AdvancedTab::Core.first_field(), Field::Callsign);
-        assert_eq!(AdvancedTab::Lookup.first_field(), Field::WorkedName);
-        assert_eq!(AdvancedTab::Qsl.first_field(), Field::Callsign);
+        assert_eq!(
+            AdvancedTab::Lookup.first_field(),
+            Field::WorkedOperatorCallsign
+        );
+        assert_eq!(AdvancedTab::Qsl.first_field(), Field::QslSentStatus);
         assert_eq!(AdvancedTab::Contest.first_field(), Field::ContestId);
-        assert_eq!(AdvancedTab::Station.first_field(), Field::Qth);
-        assert_eq!(AdvancedTab::Transcript.first_field(), Field::Callsign);
-        assert_eq!(AdvancedTab::Metadata.first_field(), Field::Callsign);
+        assert_eq!(
+            AdvancedTab::Station.first_field(),
+            Field::SnapshotStationCallsign
+        );
+        assert_eq!(AdvancedTab::Transcript.first_field(), Field::CwDecodeRxWpm);
+        assert_eq!(AdvancedTab::Metadata.first_field(), Field::LocalId);
     }
 
     #[test]
@@ -1077,7 +1317,8 @@ mod tests {
         let mut form = LogForm::new();
         form.advanced_tab = AdvancedTab::Station;
         let fields = form.current_advanced_fields();
-        assert!(fields.contains(&Field::Qth));
+        assert!(fields.contains(&Field::SnapshotStationCallsign));
+        assert!(fields.contains(&Field::SnapshotGrid));
     }
 
     #[test]
@@ -1090,14 +1331,18 @@ mod tests {
     }
 
     #[test]
-    fn current_advanced_fields_read_only_tabs_are_empty() {
+    fn current_advanced_fields_avalonia_parity_tabs_are_populated() {
         let mut form = LogForm::new();
         form.advanced_tab = AdvancedTab::Qsl;
-        assert!(form.current_advanced_fields().is_empty());
+        assert!(form
+            .current_advanced_fields()
+            .contains(&Field::QslSentStatus));
         form.advanced_tab = AdvancedTab::Transcript;
-        assert!(form.current_advanced_fields().is_empty());
+        assert!(form
+            .current_advanced_fields()
+            .contains(&Field::CwDecodeTranscript));
         form.advanced_tab = AdvancedTab::Metadata;
-        assert!(form.current_advanced_fields().is_empty());
+        assert!(form.current_advanced_fields().contains(&Field::ExtraFields));
     }
 
     #[test]
