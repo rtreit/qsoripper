@@ -1149,7 +1149,6 @@ mod tests {
             country: None,
             grid: None,
             name: None,
-            duration: None,
             source_record: QsoRecord {
                 local_id: id.to_string(),
                 worked_callsign: callsign.to_string(),
@@ -1720,7 +1719,6 @@ mod tests {
             country: None,
             grid: None,
             name: Some("John".to_string()),
-            duration: None,
             source_record: QsoRecord {
                 local_id: "q1".to_string(),
                 worked_callsign: "K7ABC".to_string(),
@@ -1777,7 +1775,6 @@ mod tests {
             country: Some("United States".to_string()),
             grid: Some("FN31pr".to_string()),
             name: Some("Hiram".to_string()),
-            duration: None,
             source_record: QsoRecord {
                 local_id: "adv1".to_string(),
                 worked_callsign: "W1AW".to_string(),
