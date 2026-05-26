@@ -71,6 +71,7 @@ int qsr_test_qso_duration_seconds(const char *time_on, const char *time_off);
 int qsr_test_advanced_tab_for_field(enum Field field);
 const char *qsr_test_advanced_tab_name(int tab);
 int qsr_test_advanced_tab_field_count(int tab);
+const char *qsr_test_advanced_field_label(enum Field field);
 int qsr_test_get_advanced_tab(void);
 void qsr_test_set_advanced_tab(int tab);
 void qsr_test_cycle_advanced_tab(int delta);
@@ -449,6 +450,10 @@ static int test_win32_advanced_editor_uses_card_pages(void)
         return fail("core QSO fields are not grouped on the Core card page");
     }
 
+    if (strcmp(qsr_test_advanced_field_label(FIELD_CALLSIGN), "Worked Call") != 0) {
+        return fail("Core page does not label the primary callsign as the worked callsign");
+    }
+
     if (qsr_test_advanced_tab_for_field(FIELD_WORKED_OPERATOR_CALLSIGN) != 1 ||
         qsr_test_advanced_tab_for_field(FIELD_WORKED_NAME) != 1 ||
         qsr_test_advanced_tab_for_field(FIELD_WORKED_GRID) != 1 ||
@@ -460,6 +465,10 @@ static int test_win32_advanced_editor_uses_card_pages(void)
         qsr_test_advanced_tab_for_field(FIELD_WORKED_COUNTY) != 1 ||
         qsr_test_advanced_tab_for_field(FIELD_SKCC) != 1) {
         return fail("lookup fields are not grouped on the Lookup card page");
+    }
+
+    if (strcmp(qsr_test_advanced_field_label(FIELD_WORKED_OPERATOR_CALLSIGN), "Operator Call") != 0) {
+        return fail("Lookup page still labels the operator callsign like the worked callsign");
     }
 
     if (qsr_test_advanced_tab_for_field(FIELD_QSL_SENT_STATUS) != 2 ||
