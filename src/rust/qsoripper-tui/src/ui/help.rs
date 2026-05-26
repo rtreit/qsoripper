@@ -50,7 +50,7 @@ pub(super) fn render(frame: &mut Frame, area: Rect) {
         "Toggle advanced fields (F2 or Esc to close)",
     ));
     lines.push(binding(
-        "Alt+1..5 / F5/F6 ",
+        "Alt+1..7 / F5/F6 ",
         "Switch advanced card sections",
     ));
     lines.push(binding("F10 / Alt+Enter  ", "Log the QSO"));

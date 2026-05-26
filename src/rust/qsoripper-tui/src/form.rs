@@ -23,59 +23,63 @@ const DEFAULT_BAND_IDX: usize = 5;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AdvancedTab {
     Core,
-    Signal,
-    Station,
+    Lookup,
+    Qsl,
     Contest,
-    Notes,
+    Station,
+    Transcript,
+    Metadata,
 }
 
 impl AdvancedTab {
     pub(crate) const ALL: &'static [AdvancedTab] = &[
         AdvancedTab::Core,
-        AdvancedTab::Signal,
-        AdvancedTab::Station,
+        AdvancedTab::Lookup,
+        AdvancedTab::Qsl,
         AdvancedTab::Contest,
-        AdvancedTab::Notes,
+        AdvancedTab::Station,
+        AdvancedTab::Transcript,
+        AdvancedTab::Metadata,
     ];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             AdvancedTab::Core => "Core",
-            AdvancedTab::Signal => "Signal",
-            AdvancedTab::Station => "Station",
+            AdvancedTab::Lookup => "Lookup",
+            AdvancedTab::Qsl => "QSL",
             AdvancedTab::Contest => "Contest",
-            AdvancedTab::Notes => "Notes",
+            AdvancedTab::Station => "Station",
+            AdvancedTab::Transcript => "Transcript",
+            AdvancedTab::Metadata => "Metadata",
         }
     }
 
     pub(crate) fn next(self) -> Self {
-        match self {
-            AdvancedTab::Core => AdvancedTab::Signal,
-            AdvancedTab::Signal => AdvancedTab::Station,
-            AdvancedTab::Station => AdvancedTab::Contest,
-            AdvancedTab::Contest => AdvancedTab::Notes,
-            AdvancedTab::Notes => AdvancedTab::Core,
-        }
+        let idx = Self::ALL.iter().position(|tab| *tab == self).unwrap_or(0);
+        Self::ALL
+            .get((idx + 1) % Self::ALL.len())
+            .copied()
+            .unwrap_or(Self::Core)
     }
 
     pub(crate) fn prev(self) -> Self {
-        match self {
-            AdvancedTab::Core => AdvancedTab::Notes,
-            AdvancedTab::Signal => AdvancedTab::Core,
-            AdvancedTab::Station => AdvancedTab::Signal,
-            AdvancedTab::Contest => AdvancedTab::Station,
-            AdvancedTab::Notes => AdvancedTab::Contest,
-        }
+        let idx = Self::ALL.iter().position(|tab| *tab == self).unwrap_or(0);
+        Self::ALL
+            .get((idx + Self::ALL.len() - 1) % Self::ALL.len())
+            .copied()
+            .unwrap_or(Self::Core)
     }
 
     /// Return the static slice of fields belonging to this tab.
     pub(crate) fn fields(self) -> &'static [Field] {
         match self {
             AdvancedTab::Core => ADV_CORE_FIELDS,
-            AdvancedTab::Signal => ADV_SIGNAL_FIELDS,
-            AdvancedTab::Station => ADV_STATION_FIELDS,
+            AdvancedTab::Lookup => ADV_LOOKUP_FIELDS,
+            AdvancedTab::Qsl => ADV_QSL_FIELDS,
             AdvancedTab::Contest => ADV_CONTEST_FIELDS,
-            AdvancedTab::Notes => ADV_NOTES_FIELDS,
+            AdvancedTab::Station => ADV_STATION_FIELDS,
+            AdvancedTab::Transcript => ADV_TRANSCRIPT_FIELDS,
+            AdvancedTab::Metadata => ADV_METADATA_FIELDS,
         }
     }
 
@@ -83,10 +87,12 @@ impl AdvancedTab {
     pub(crate) fn shortcut_digit(self) -> char {
         match self {
             AdvancedTab::Core => '1',
-            AdvancedTab::Signal => '2',
-            AdvancedTab::Station => '3',
+            AdvancedTab::Lookup => '2',
+            AdvancedTab::Qsl => '3',
             AdvancedTab::Contest => '4',
-            AdvancedTab::Notes => '5',
+            AdvancedTab::Station => '5',
+            AdvancedTab::Transcript => '6',
+            AdvancedTab::Metadata => '7',
         }
     }
 
@@ -154,6 +160,18 @@ pub(crate) enum Field {
     WorkedCounty,
     /// Worked operator name.
     WorkedName,
+    /// Worked grid square.
+    WorkedGrid,
+    /// Worked country.
+    WorkedCountry,
+    /// Worked DXCC entity number.
+    WorkedDxcc,
+    /// Worked CQ zone.
+    WorkedCqZone,
+    /// Worked ITU zone.
+    WorkedItuZone,
+    /// Worked continent.
+    WorkedContinent,
     /// SKCC membership number of the worked station.
     Skcc,
 }
@@ -177,35 +195,38 @@ const FIELD_ORDER: &[Field] = &[
 /// Fields for the Advanced "Core" tab — identity and time/frequency basics.
 const ADV_CORE_FIELDS: &[Field] = &[
     Field::Callsign,
-    Field::Band,
-    Field::Mode,
-    Field::FrequencyMhz,
     Field::Date,
     Field::Time,
     Field::TimeOff,
-];
-
-/// Fields for the Advanced "Signal" tab.
-const ADV_SIGNAL_FIELDS: &[Field] = &[
+    Field::Band,
+    Field::Mode,
+    Field::FrequencyMhz,
     Field::RstSent,
     Field::RstRcvd,
     Field::TxPower,
     Field::Submode,
-    Field::PropMode,
-    Field::SatName,
-    Field::SatMode,
+    Field::Comment,
+    Field::Notes,
 ];
 
-/// Fields for the Advanced "Station" tab.
-const ADV_STATION_FIELDS: &[Field] = &[
-    Field::Qth,
+/// Fields for the Advanced "Lookup" tab.
+const ADV_LOOKUP_FIELDS: &[Field] = &[
     Field::WorkedName,
+    Field::WorkedGrid,
+    Field::WorkedCountry,
+    Field::WorkedDxcc,
     Field::WorkedState,
+    Field::WorkedCqZone,
+    Field::WorkedItuZone,
     Field::WorkedCounty,
     Field::Iota,
+    Field::WorkedContinent,
     Field::ArrlSection,
     Field::Skcc,
 ];
+
+/// Fields for the Advanced "QSL" tab.
+const ADV_QSL_FIELDS: &[Field] = &[];
 
 /// Fields for the Advanced "Contest" tab.
 const ADV_CONTEST_FIELDS: &[Field] = &[
@@ -214,10 +235,19 @@ const ADV_CONTEST_FIELDS: &[Field] = &[
     Field::SerialRcvd,
     Field::ExchangeSent,
     Field::ExchangeRcvd,
+    Field::PropMode,
+    Field::SatName,
+    Field::SatMode,
 ];
 
-/// Fields for the Advanced "Notes" tab.
-const ADV_NOTES_FIELDS: &[Field] = &[Field::Comment, Field::Notes];
+/// Fields for the Advanced "Station" tab.
+const ADV_STATION_FIELDS: &[Field] = &[Field::Qth];
+
+/// Fields for the Advanced "Transcript" tab.
+const ADV_TRANSCRIPT_FIELDS: &[Field] = &[];
+
+/// Fields for the Advanced "Metadata" tab.
+const ADV_METADATA_FIELDS: &[Field] = &[];
 
 /// State of the QSO entry form (basic + advanced fields).
 #[derive(Clone)]
@@ -267,7 +297,7 @@ pub(crate) struct LogForm {
     pub(crate) exchange_sent: String,
     /// Full exchange received string.
     pub(crate) exchange_rcvd: String,
-    // Advanced — Signal tab
+    // Advanced card lookup and station details
     /// Propagation mode (ADIF `PROP_MODE` value, e.g., "ES", "TEP", "SAT").
     pub(crate) prop_mode: String,
     /// Satellite name (e.g., "AO-7").
@@ -285,6 +315,18 @@ pub(crate) struct LogForm {
     pub(crate) worked_county: String,
     /// Worked operator name (from lookup or manual entry).
     pub(crate) worked_name: String,
+    /// Worked grid square.
+    pub(crate) worked_grid: String,
+    /// Worked country.
+    pub(crate) worked_country: String,
+    /// Worked DXCC entity number.
+    pub(crate) worked_dxcc: String,
+    /// Worked CQ zone.
+    pub(crate) worked_cq_zone: String,
+    /// Worked ITU zone.
+    pub(crate) worked_itu_zone: String,
+    /// Worked continent.
+    pub(crate) worked_continent: String,
     /// SKCC membership number of the worked station.
     pub(crate) skcc: String,
 }
@@ -330,6 +372,12 @@ impl LogForm {
             worked_state: String::new(),
             worked_county: String::new(),
             worked_name: String::new(),
+            worked_grid: String::new(),
+            worked_country: String::new(),
+            worked_dxcc: String::new(),
+            worked_cq_zone: String::new(),
+            worked_itu_zone: String::new(),
+            worked_continent: String::new(),
             skcc: String::new(),
         };
         form.on_band_change();
@@ -368,16 +416,22 @@ impl LogForm {
     pub(crate) fn current_advanced_fields(&self) -> &'static [Field] {
         match self.advanced_tab {
             AdvancedTab::Core => ADV_CORE_FIELDS,
-            AdvancedTab::Signal => ADV_SIGNAL_FIELDS,
-            AdvancedTab::Station => ADV_STATION_FIELDS,
+            AdvancedTab::Lookup => ADV_LOOKUP_FIELDS,
+            AdvancedTab::Qsl => ADV_QSL_FIELDS,
             AdvancedTab::Contest => ADV_CONTEST_FIELDS,
-            AdvancedTab::Notes => ADV_NOTES_FIELDS,
+            AdvancedTab::Station => ADV_STATION_FIELDS,
+            AdvancedTab::Transcript => ADV_TRANSCRIPT_FIELDS,
+            AdvancedTab::Metadata => ADV_METADATA_FIELDS,
         }
     }
 
     /// Move focus to the next field in the current advanced tab, and select its text.
     pub(crate) fn next_advanced_field(&mut self) {
         let fields = self.current_advanced_fields();
+        if fields.is_empty() {
+            self.field_selected = true;
+            return;
+        }
         let idx = fields.iter().position(|f| f == &self.focused).unwrap_or(0);
         self.focused = fields
             .get((idx + 1) % fields.len())
@@ -389,6 +443,10 @@ impl LogForm {
     /// Move focus to the previous field in the current advanced tab, and select its text.
     pub(crate) fn prev_advanced_field(&mut self) {
         let fields = self.current_advanced_fields();
+        if fields.is_empty() {
+            self.field_selected = true;
+            return;
+        }
         let idx = fields.iter().position(|f| f == &self.focused).unwrap_or(0);
         let new_idx = if idx == 0 {
             fields.len().saturating_sub(1)
@@ -468,6 +526,12 @@ impl LogForm {
             Field::WorkedState => Some(&mut self.worked_state),
             Field::WorkedCounty => Some(&mut self.worked_county),
             Field::WorkedName => Some(&mut self.worked_name),
+            Field::WorkedGrid => Some(&mut self.worked_grid),
+            Field::WorkedCountry => Some(&mut self.worked_country),
+            Field::WorkedDxcc => Some(&mut self.worked_dxcc),
+            Field::WorkedCqZone => Some(&mut self.worked_cq_zone),
+            Field::WorkedItuZone => Some(&mut self.worked_itu_zone),
+            Field::WorkedContinent => Some(&mut self.worked_continent),
             Field::Skcc => Some(&mut self.skcc),
             Field::Band | Field::Mode => None,
         }
@@ -784,6 +848,30 @@ mod tests {
                 Field::WorkedName,
                 Box::new(|f: &LogForm| f.worked_name.as_str()),
             ),
+            (
+                Field::WorkedGrid,
+                Box::new(|f: &LogForm| f.worked_grid.as_str()),
+            ),
+            (
+                Field::WorkedCountry,
+                Box::new(|f: &LogForm| f.worked_country.as_str()),
+            ),
+            (
+                Field::WorkedDxcc,
+                Box::new(|f: &LogForm| f.worked_dxcc.as_str()),
+            ),
+            (
+                Field::WorkedCqZone,
+                Box::new(|f: &LogForm| f.worked_cq_zone.as_str()),
+            ),
+            (
+                Field::WorkedItuZone,
+                Box::new(|f: &LogForm| f.worked_itu_zone.as_str()),
+            ),
+            (
+                Field::WorkedContinent,
+                Box::new(|f: &LogForm| f.worked_continent.as_str()),
+            ),
             (Field::Skcc, Box::new(|f: &LogForm| f.skcc.as_str())),
         ];
         for (field, _getter) in &fields_and_setters {
@@ -857,60 +945,72 @@ mod tests {
     #[test]
     fn advanced_tab_shortcut_digits() {
         assert_eq!(AdvancedTab::Core.shortcut_digit(), '1');
-        assert_eq!(AdvancedTab::Signal.shortcut_digit(), '2');
-        assert_eq!(AdvancedTab::Station.shortcut_digit(), '3');
+        assert_eq!(AdvancedTab::Lookup.shortcut_digit(), '2');
+        assert_eq!(AdvancedTab::Qsl.shortcut_digit(), '3');
         assert_eq!(AdvancedTab::Contest.shortcut_digit(), '4');
-        assert_eq!(AdvancedTab::Notes.shortcut_digit(), '5');
+        assert_eq!(AdvancedTab::Station.shortcut_digit(), '5');
+        assert_eq!(AdvancedTab::Transcript.shortcut_digit(), '6');
+        assert_eq!(AdvancedTab::Metadata.shortcut_digit(), '7');
     }
 
     #[test]
     fn advanced_tab_first_fields() {
         assert_eq!(AdvancedTab::Core.first_field(), Field::Callsign);
-        assert_eq!(AdvancedTab::Signal.first_field(), Field::RstSent);
-        assert_eq!(AdvancedTab::Station.first_field(), Field::Qth);
+        assert_eq!(AdvancedTab::Lookup.first_field(), Field::WorkedName);
+        assert_eq!(AdvancedTab::Qsl.first_field(), Field::Callsign);
         assert_eq!(AdvancedTab::Contest.first_field(), Field::ContestId);
-        assert_eq!(AdvancedTab::Notes.first_field(), Field::Comment);
+        assert_eq!(AdvancedTab::Station.first_field(), Field::Qth);
+        assert_eq!(AdvancedTab::Transcript.first_field(), Field::Callsign);
+        assert_eq!(AdvancedTab::Metadata.first_field(), Field::Callsign);
     }
 
     #[test]
     fn advanced_tab_fields_consistent_with_adv_slices() {
         assert_eq!(AdvancedTab::Core.fields(), ADV_CORE_FIELDS);
-        assert_eq!(AdvancedTab::Signal.fields(), ADV_SIGNAL_FIELDS);
-        assert_eq!(AdvancedTab::Station.fields(), ADV_STATION_FIELDS);
+        assert_eq!(AdvancedTab::Lookup.fields(), ADV_LOOKUP_FIELDS);
+        assert_eq!(AdvancedTab::Qsl.fields(), ADV_QSL_FIELDS);
         assert_eq!(AdvancedTab::Contest.fields(), ADV_CONTEST_FIELDS);
-        assert_eq!(AdvancedTab::Notes.fields(), ADV_NOTES_FIELDS);
+        assert_eq!(AdvancedTab::Station.fields(), ADV_STATION_FIELDS);
+        assert_eq!(AdvancedTab::Transcript.fields(), ADV_TRANSCRIPT_FIELDS);
+        assert_eq!(AdvancedTab::Metadata.fields(), ADV_METADATA_FIELDS);
     }
 
     #[test]
     fn advanced_tab_labels() {
         assert_eq!(AdvancedTab::Core.label(), "Core");
-        assert_eq!(AdvancedTab::Signal.label(), "Signal");
-        assert_eq!(AdvancedTab::Station.label(), "Station");
+        assert_eq!(AdvancedTab::Lookup.label(), "Lookup");
+        assert_eq!(AdvancedTab::Qsl.label(), "QSL");
         assert_eq!(AdvancedTab::Contest.label(), "Contest");
-        assert_eq!(AdvancedTab::Notes.label(), "Notes");
+        assert_eq!(AdvancedTab::Station.label(), "Station");
+        assert_eq!(AdvancedTab::Transcript.label(), "Transcript");
+        assert_eq!(AdvancedTab::Metadata.label(), "Metadata");
     }
 
     #[test]
     fn advanced_tab_next_cycles_all() {
-        assert_eq!(AdvancedTab::Core.next(), AdvancedTab::Signal);
-        assert_eq!(AdvancedTab::Signal.next(), AdvancedTab::Station);
-        assert_eq!(AdvancedTab::Station.next(), AdvancedTab::Contest);
-        assert_eq!(AdvancedTab::Contest.next(), AdvancedTab::Notes);
-        assert_eq!(AdvancedTab::Notes.next(), AdvancedTab::Core);
+        assert_eq!(AdvancedTab::Core.next(), AdvancedTab::Lookup);
+        assert_eq!(AdvancedTab::Lookup.next(), AdvancedTab::Qsl);
+        assert_eq!(AdvancedTab::Qsl.next(), AdvancedTab::Contest);
+        assert_eq!(AdvancedTab::Contest.next(), AdvancedTab::Station);
+        assert_eq!(AdvancedTab::Station.next(), AdvancedTab::Transcript);
+        assert_eq!(AdvancedTab::Transcript.next(), AdvancedTab::Metadata);
+        assert_eq!(AdvancedTab::Metadata.next(), AdvancedTab::Core);
     }
 
     #[test]
     fn advanced_tab_prev_cycles_all() {
-        assert_eq!(AdvancedTab::Core.prev(), AdvancedTab::Notes);
-        assert_eq!(AdvancedTab::Notes.prev(), AdvancedTab::Contest);
-        assert_eq!(AdvancedTab::Contest.prev(), AdvancedTab::Station);
-        assert_eq!(AdvancedTab::Station.prev(), AdvancedTab::Signal);
-        assert_eq!(AdvancedTab::Signal.prev(), AdvancedTab::Core);
+        assert_eq!(AdvancedTab::Core.prev(), AdvancedTab::Metadata);
+        assert_eq!(AdvancedTab::Metadata.prev(), AdvancedTab::Transcript);
+        assert_eq!(AdvancedTab::Transcript.prev(), AdvancedTab::Station);
+        assert_eq!(AdvancedTab::Station.prev(), AdvancedTab::Contest);
+        assert_eq!(AdvancedTab::Contest.prev(), AdvancedTab::Qsl);
+        assert_eq!(AdvancedTab::Qsl.prev(), AdvancedTab::Lookup);
+        assert_eq!(AdvancedTab::Lookup.prev(), AdvancedTab::Core);
     }
 
     #[test]
     fn all_advanced_tabs_count() {
-        assert_eq!(AdvancedTab::ALL.len(), 5);
+        assert_eq!(AdvancedTab::ALL.len(), 7);
     }
 
     #[test]
@@ -918,7 +1018,7 @@ mod tests {
         let mut form = LogForm::new();
         form.advanced_tab = AdvancedTab::Core;
         form.next_advanced_tab();
-        assert_eq!(form.advanced_tab, AdvancedTab::Signal);
+        assert_eq!(form.advanced_tab, AdvancedTab::Lookup);
         assert!(form.field_selected);
     }
 
@@ -927,7 +1027,7 @@ mod tests {
         let mut form = LogForm::new();
         form.advanced_tab = AdvancedTab::Core;
         form.prev_advanced_tab();
-        assert_eq!(form.advanced_tab, AdvancedTab::Notes);
+        assert_eq!(form.advanced_tab, AdvancedTab::Metadata);
         assert!(form.field_selected);
     }
 
@@ -946,7 +1046,7 @@ mod tests {
     #[test]
     fn prev_advanced_field_from_first_wraps_to_last() {
         let mut form = LogForm::new();
-        form.advanced_tab = AdvancedTab::Signal;
+        form.advanced_tab = AdvancedTab::Lookup;
         let fields = form.current_advanced_fields();
         form.focused = fields[0];
         form.prev_advanced_field();
@@ -963,13 +1063,13 @@ mod tests {
     }
 
     #[test]
-    fn current_advanced_fields_signal_tab() {
+    fn current_advanced_fields_lookup_tab() {
         let mut form = LogForm::new();
-        form.advanced_tab = AdvancedTab::Signal;
+        form.advanced_tab = AdvancedTab::Lookup;
         let fields = form.current_advanced_fields();
-        assert!(fields.contains(&Field::RstSent));
-        assert!(fields.contains(&Field::PropMode));
-        assert!(fields.contains(&Field::TxPower));
+        assert!(fields.contains(&Field::WorkedName));
+        assert!(fields.contains(&Field::WorkedGrid));
+        assert!(fields.contains(&Field::Skcc));
     }
 
     #[test]
@@ -977,9 +1077,7 @@ mod tests {
         let mut form = LogForm::new();
         form.advanced_tab = AdvancedTab::Station;
         let fields = form.current_advanced_fields();
-        assert!(fields.contains(&Field::WorkedName));
-        assert!(fields.contains(&Field::Iota));
-        assert!(fields.contains(&Field::Skcc));
+        assert!(fields.contains(&Field::Qth));
     }
 
     #[test]
@@ -992,12 +1090,14 @@ mod tests {
     }
 
     #[test]
-    fn current_advanced_fields_notes_tab() {
+    fn current_advanced_fields_read_only_tabs_are_empty() {
         let mut form = LogForm::new();
-        form.advanced_tab = AdvancedTab::Notes;
-        let fields = form.current_advanced_fields();
-        assert!(fields.contains(&Field::Comment));
-        assert!(fields.contains(&Field::Notes));
+        form.advanced_tab = AdvancedTab::Qsl;
+        assert!(form.current_advanced_fields().is_empty());
+        form.advanced_tab = AdvancedTab::Transcript;
+        assert!(form.current_advanced_fields().is_empty());
+        form.advanced_tab = AdvancedTab::Metadata;
+        assert!(form.current_advanced_fields().is_empty());
     }
 
     #[test]

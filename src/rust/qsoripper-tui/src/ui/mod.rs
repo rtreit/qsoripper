@@ -156,11 +156,11 @@ mod tests {
     }
 
     #[test]
-    fn render_advanced_signal_tab() {
+    fn render_advanced_lookup_tab() {
         let mut terminal = make_terminal();
         let mut app = make_app();
         app.view = View::Advanced;
-        app.form.advanced_tab = AdvancedTab::Signal;
+        app.form.advanced_tab = AdvancedTab::Lookup;
         terminal.draw(|f| super::render_ui(&app, f)).unwrap();
     }
 
@@ -183,11 +183,11 @@ mod tests {
     }
 
     #[test]
-    fn render_advanced_notes_tab() {
+    fn render_advanced_metadata_tab() {
         let mut terminal = make_terminal();
         let mut app = make_app();
         app.view = View::Advanced;
-        app.form.advanced_tab = AdvancedTab::Notes;
+        app.form.advanced_tab = AdvancedTab::Metadata;
         terminal.draw(|f| super::render_ui(&app, f)).unwrap();
     }
 
