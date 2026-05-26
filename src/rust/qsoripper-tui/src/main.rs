@@ -436,6 +436,18 @@ fn handle_key_with_channel(
     }
 
     match key.code {
+        KeyCode::Tab
+            if matches!(app.view, app::View::Advanced)
+                && key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            app.form.next_advanced_tab();
+        }
+        KeyCode::BackTab
+            if matches!(app.view, app::View::Advanced)
+                && key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            app.form.prev_advanced_tab();
+        }
         KeyCode::Tab => match app.view {
             app::View::Advanced => app.form.next_advanced_field(),
             _ => app.form.next_field(),
@@ -587,16 +599,16 @@ fn handle_qso_list_key(
     lookup_tx: &watch::Sender<String>,
 ) {
     use crossterm::event::KeyCode;
-    let (max, enter_id, delete_id) = {
+    let (max, selected_id, delete_id) = {
         let filtered = app.filtered_qsos();
         let max = filtered.len().saturating_sub(1);
-        let enter_id = app
+        let selected_id = app
             .qso_selected
             .and_then(|i| filtered.get(i).map(|q| q.local_id.clone()));
         let delete_id = app
             .qso_selected
             .and_then(|i| filtered.get(i).map(|q| q.local_id.clone()));
-        (max, enter_id, delete_id)
+        (max, selected_id, delete_id)
     };
     match key.code {
         KeyCode::Up => {
@@ -626,8 +638,16 @@ fn handle_qso_list_key(
             app.qso_selected = Some(max);
         }
         KeyCode::Enter => {
-            if let Some(id) = enter_id {
+            if let Some(id) = selected_id {
                 load_qso_into_form(app, &id, lookup_tx);
+            } else {
+                app.qso_list_focused = false;
+            }
+        }
+        KeyCode::F(2) => {
+            if let Some(id) = selected_id {
+                load_qso_into_form(app, &id, lookup_tx);
+                switch_to_tab(app, AdvancedTab::Core);
             } else {
                 app.qso_list_focused = false;
             }
@@ -2894,6 +2914,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_key_ctrl_tab_in_advanced_switches_tab_when_terminal_sends_it() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.view = View::Advanced;
+        use crate::form::AdvancedTab;
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Core);
+        handle_key(
+            &mut app,
+            make_key_with_mod(KeyCode::Tab, KeyModifiers::CONTROL),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Lookup);
+    }
+
+    #[tokio::test]
     async fn handle_key_f6_in_advanced_switches_tab_back() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
@@ -2947,6 +2987,42 @@ mod tests {
             "",
         );
         assert!(!app.qso_list_focused);
+    }
+
+    #[tokio::test]
+    async fn handle_key_f2_from_qso_list_loads_selected_qso_into_advanced() {
+        use crate::form::AdvancedTab;
+
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.recent_qsos.push(make_qso("q1", "K7ABC"));
+
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(3)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert!(app.qso_list_focused);
+
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(2)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+
+        assert!(matches!(app.view, View::Advanced));
+        assert!(!app.qso_list_focused);
+        assert_eq!(app.editing_local_id.as_deref(), Some("q1"));
+        assert_eq!(app.form.callsign, "K7ABC");
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Core);
     }
 
     #[tokio::test]
