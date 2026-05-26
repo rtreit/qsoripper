@@ -1,4 +1,4 @@
-//! Advanced QSO field entry form rendering — tabbed layout.
+//! Advanced QSO card editor rendering — compact, tabbed, keyboard-first layout.
 
 use ratatui::{
     layout::{Constraint, Layout, Rect},
@@ -9,43 +9,100 @@ use ratatui::{
 };
 
 use crate::app::App;
-use crate::form::{AdvancedTab, Field};
+use crate::form::{AdvancedTab, Field, LogForm};
 use crate::ui::log_form::styled_field;
 
-/// Render the advanced field entry form into `area`.
+const LABEL_WIDTH: usize = 13;
+
+struct FieldSpec {
+    field: Field,
+    key: char,
+    label: &'static str,
+}
+
+/// Render the advanced QSO card editor into `area`.
 pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
+    let title = if app.editing_local_id.is_some() {
+        " QSO Card - Edit "
+    } else {
+        " QSO Card - New "
+    };
     let block = Block::bordered()
-        .title(" Advanced Fields  (F2/Esc return | Alt+1-4 tabs | F5/F6 cycle) ")
+        .title(title)
         .border_style(Style::default().fg(Color::Magenta));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.height < 3 {
+    if inner.height < 6 {
         return;
     }
 
     let layout = Layout::vertical([
-        Constraint::Length(1), // tab bar
-        Constraint::Length(1), // separator line
-        Constraint::Fill(1),   // field rows
+        Constraint::Length(2), // card summary
+        Constraint::Length(1), // section tabs
+        Constraint::Fill(1),   // selected section
+        Constraint::Length(1), // action hints
     ])
     .split(inner);
 
-    let tab_area = layout.first().copied().unwrap_or(inner);
-    let fields_area = layout.get(2).copied().unwrap_or(inner);
+    render_header(app, frame, layout.first().copied().unwrap_or(inner));
+    render_tab_bar(
+        frame,
+        layout.get(1).copied().unwrap_or(inner),
+        app.form.advanced_tab,
+    );
+    render_tab_content(
+        frame,
+        layout.get(2).copied().unwrap_or(inner),
+        &app.form,
+        app.form.advanced_tab,
+    );
+    render_footer(frame, layout.get(3).copied().unwrap_or(inner));
+}
 
-    render_tab_bar(frame, tab_area, app.form.advanced_tab);
-
-    let form = &app.form;
-    let wide = (inner.width as usize).saturating_sub(13).max(10);
-
-    match form.advanced_tab {
-        AdvancedTab::Main => render_main_tab(frame, fields_area, form, wide),
-        AdvancedTab::Contest => render_contest_tab(frame, fields_area, form, wide),
-        AdvancedTab::Technical => render_technical_tab(frame, fields_area, form, wide),
-        AdvancedTab::Awards => render_awards_tab(frame, fields_area, form, wide),
-    }
+fn render_header(app: &App, frame: &mut Frame, area: Rect) {
+    let call = if app.form.callsign.is_empty() {
+        "new contact"
+    } else {
+        app.form.callsign.as_str()
+    };
+    let mode = if app.editing_local_id.is_some() {
+        "Edit existing"
+    } else {
+        "New contact"
+    };
+    let subtitle = if app.editing_local_id.is_some() {
+        "F10 updates, Esc/F2 returns to normal entry"
+    } else {
+        "Advanced entry: grouped fields, low-churn tab switching"
+    };
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(vec![
+                Span::styled(
+                    call.to_string(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("  "),
+                Span::styled(mode, Style::default().fg(Color::Black).bg(Color::DarkGray)),
+                Span::raw("  "),
+                Span::styled(
+                    app.form.band_str().to_string(),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::raw(" / "),
+                Span::styled(
+                    app.form.mode_str().to_string(),
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]),
+            Line::from(Span::styled(subtitle, Style::default().fg(Color::DarkGray))),
+        ]),
+        area,
+    );
 }
 
 fn render_tab_bar(frame: &mut Frame, area: Rect, active: AdvancedTab) {
@@ -63,421 +120,352 @@ fn render_tab_bar(frame: &mut Frame, area: Rect, active: AdvancedTab) {
             spans.push(Span::styled(digit, base.add_modifier(Modifier::UNDERLINED)));
             spans.push(Span::styled(label_text, base));
         } else {
-            let base = Style::default().fg(Color::Magenta).bg(Color::Reset);
+            let base = Style::default().fg(Color::Magenta);
             spans.push(Span::styled(" ", base));
             spans.push(Span::styled(digit, base.add_modifier(Modifier::UNDERLINED)));
             spans.push(Span::styled(label_text, base));
         }
         spans.push(Span::raw(" "));
     }
+    spans.push(Span::styled(
+        "  Alt+1-5 / F5-F6",
+        Style::default().fg(Color::DarkGray),
+    ));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "renders seven content rows plus a hint line for the main tab"
-)]
-fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, _wide: usize) {
-    if area.height == 0 {
+fn render_tab_content(frame: &mut Frame, area: Rect, form: &LogForm, tab: AdvancedTab) {
+    match tab {
+        AdvancedTab::Core => render_core_tab(frame, area, form),
+        AdvancedTab::Signal => render_signal_tab(frame, area, form),
+        AdvancedTab::Station => render_station_tab(frame, area, form),
+        AdvancedTab::Contest => render_contest_tab(frame, area, form),
+        AdvancedTab::Notes => render_notes_tab(frame, area, form),
+    }
+}
+
+fn render_core_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
+    let cols = two_columns(area);
+    render_group(
+        frame,
+        cols[0],
+        " Contact ",
+        form,
+        &[
+            FieldSpec {
+                field: Field::Callsign,
+                key: 'C',
+                label: "Callsign",
+            },
+            FieldSpec {
+                field: Field::Band,
+                key: 'B',
+                label: "Band",
+            },
+            FieldSpec {
+                field: Field::Mode,
+                key: 'M',
+                label: "Mode",
+            },
+            FieldSpec {
+                field: Field::FrequencyMhz,
+                key: 'F',
+                label: "Freq MHz",
+            },
+        ],
+    );
+    render_group(
+        frame,
+        cols[1],
+        " UTC ",
+        form,
+        &[
+            FieldSpec {
+                field: Field::Date,
+                key: 'D',
+                label: "Date",
+            },
+            FieldSpec {
+                field: Field::Time,
+                key: 'T',
+                label: "Start",
+            },
+            FieldSpec {
+                field: Field::TimeOff,
+                key: 'E',
+                label: "End",
+            },
+        ],
+    );
+}
+
+fn render_signal_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
+    let cols = two_columns(area);
+    render_group(
+        frame,
+        cols[0],
+        " Reports ",
+        form,
+        &[
+            FieldSpec {
+                field: Field::RstSent,
+                key: 'S',
+                label: "RST sent",
+            },
+            FieldSpec {
+                field: Field::RstRcvd,
+                key: 'R',
+                label: "RST rcvd",
+            },
+            FieldSpec {
+                field: Field::TxPower,
+                key: 'W',
+                label: "TX power",
+            },
+            FieldSpec {
+                field: Field::Submode,
+                key: 'U',
+                label: "Submode",
+            },
+        ],
+    );
+    render_group(
+        frame,
+        cols[1],
+        " Propagation ",
+        form,
+        &[
+            FieldSpec {
+                field: Field::PropMode,
+                key: 'P',
+                label: "Prop mode",
+            },
+            FieldSpec {
+                field: Field::SatName,
+                key: 'L',
+                label: "Satellite",
+            },
+            FieldSpec {
+                field: Field::SatMode,
+                key: 'V',
+                label: "Sat mode",
+            },
+        ],
+    );
+}
+
+fn render_station_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
+    let cols = two_columns(area);
+    render_group(
+        frame,
+        cols[0],
+        " Worked station ",
+        form,
+        &[
+            FieldSpec {
+                field: Field::WorkedName,
+                key: 'A',
+                label: "Name",
+            },
+            FieldSpec {
+                field: Field::Qth,
+                key: 'Q',
+                label: "QTH",
+            },
+            FieldSpec {
+                field: Field::WorkedState,
+                key: 'H',
+                label: "State",
+            },
+            FieldSpec {
+                field: Field::WorkedCounty,
+                key: 'Y',
+                label: "County",
+            },
+        ],
+    );
+    render_group(
+        frame,
+        cols[1],
+        " Location / awards ",
+        form,
+        &[
+            FieldSpec {
+                field: Field::Iota,
+                key: 'I',
+                label: "IOTA",
+            },
+            FieldSpec {
+                field: Field::ArrlSection,
+                key: 'X',
+                label: "ARRL sec",
+            },
+            FieldSpec {
+                field: Field::Skcc,
+                key: 'K',
+                label: "SKCC",
+            },
+        ],
+    );
+}
+
+fn render_contest_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
+    let cols = two_columns(area);
+    render_group(
+        frame,
+        cols[0],
+        " Contest ",
+        form,
+        &[
+            FieldSpec {
+                field: Field::ContestId,
+                key: 'G',
+                label: "Contest ID",
+            },
+            FieldSpec {
+                field: Field::SerialSent,
+                key: 'J',
+                label: "Serial sent",
+            },
+            FieldSpec {
+                field: Field::SerialRcvd,
+                key: 'Z',
+                label: "Serial rcvd",
+            },
+        ],
+    );
+    render_group(
+        frame,
+        cols[1],
+        " Exchange ",
+        form,
+        &[
+            FieldSpec {
+                field: Field::ExchangeSent,
+                key: 'O',
+                label: "Exch sent",
+            },
+            FieldSpec {
+                field: Field::ExchangeRcvd,
+                key: 'N',
+                label: "Exch rcvd",
+            },
+        ],
+    );
+}
+
+fn render_notes_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
+    let cols = two_columns(area);
+    render_group(
+        frame,
+        cols[0],
+        " Comments ",
+        form,
+        &[FieldSpec {
+            field: Field::Comment,
+            key: 'O',
+            label: "Comment",
+        }],
+    );
+    render_group(
+        frame,
+        cols[1],
+        " Operator notes ",
+        form,
+        &[FieldSpec {
+            field: Field::Notes,
+            key: 'N',
+            label: "Notes",
+        }],
+    );
+}
+
+fn render_group(
+    frame: &mut Frame,
+    area: Rect,
+    title: &'static str,
+    form: &LogForm,
+    fields: &[FieldSpec],
+) {
+    let block = Block::bordered()
+        .title(title)
+        .border_style(Style::default().fg(Color::DarkGray));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 {
         return;
     }
-    let rows = Layout::vertical([
-        Constraint::Length(1), // callsign / band / mode
-        Constraint::Length(1), // freq / date
-        Constraint::Length(1), // time / time-off
-        Constraint::Length(1), // qth / name
-        Constraint::Length(1), // rst sent / rst rcvd
-        Constraint::Length(1), // comment
-        Constraint::Length(1), // notes
-        Constraint::Fill(1),   // hint
-    ])
-    .split(area);
 
-    // Row 0: [C]allsign  [B]and  [M]ode
-    if let Some(row) = rows.first().copied() {
-        let cs_focused = form.focused == Field::Callsign;
-        let cs_selected = cs_focused && form.field_selected;
-        let band_focused = form.focused == Field::Band;
-        let mode_focused = form.focused == Field::Mode;
-        let cs_val = adv_field(&form.callsign, cs_focused, cs_selected, 12);
-        let band_val = cycle_adv(form.band_str(), band_focused);
-        let mode_val = cycle_adv(form.mode_str(), mode_focused);
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.extend(kl("", 'c', "allsign  "));
-        spans.push(styled_field(cs_val, cs_focused, cs_selected));
-        spans.push(Span::raw("  "));
-        spans.extend(kl("", 'b', "and "));
-        spans.push(Span::styled(
-            band_val,
-            Style::default()
-                .fg(if band_focused {
-                    Color::Yellow
-                } else {
-                    Color::Gray
-                })
-                .add_modifier(if band_focused {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        ));
-        spans.push(Span::raw("  "));
-        spans.extend(kl("", 'm', "ode "));
-        spans.push(Span::styled(
-            mode_val,
-            Style::default()
-                .fg(if mode_focused {
-                    Color::Yellow
-                } else {
-                    Color::Gray
-                })
-                .add_modifier(if mode_focused {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        ));
-        frame.render_widget(Paragraph::new(Line::from(spans)), row);
-    }
-
-    // Row 1: [F]req MHz (left half) | [D]ate (right half)
-    if let Some(row) = rows.get(1).copied() {
-        let cols =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(row);
-        let ff = form.focused == Field::FrequencyMhz;
-        let fs = ff && form.field_selected;
-        let df = form.focused == Field::Date;
-        let ds = df && form.field_selected;
-        if let Some(&left) = cols.first() {
-            let fw = (left.width as usize).saturating_sub(10).max(5);
-            let fv = adv_field(&form.frequency_mhz, ff, fs, fw);
-            let mut s: Vec<Span<'static>> = Vec::new();
-            s.extend(kl("", 'f', "req MHz  "));
-            s.push(styled_field(fv, ff, fs));
-            frame.render_widget(Paragraph::new(Line::from(s)), left);
+    let constraints: Vec<Constraint> = fields.iter().map(|_| Constraint::Length(1)).collect();
+    let rows = Layout::vertical(constraints).split(inner);
+    for (idx, spec) in fields.iter().enumerate() {
+        if let Some(row) = rows.get(idx).copied() {
+            render_field(frame, row, form, spec);
         }
-        if let Some(&right) = cols.get(1) {
-            let dw = (right.width as usize).saturating_sub(10).max(5);
-            let dv = adv_field(&form.date, df, ds, dw);
-            let mut s: Vec<Span<'static>> = Vec::new();
-            s.extend(kl("", 'd', "ate      "));
-            s.push(styled_field(dv, df, ds));
-            frame.render_widget(Paragraph::new(Line::from(s)), right);
-        }
-    }
-
-    // Row 2: [T]ime (left half) | T[e]nd / time-off (right half)
-    if let Some(row) = rows.get(2).copied() {
-        let cols =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(row);
-        let tf = form.focused == Field::Time;
-        let ts = tf && form.field_selected;
-        let ef = form.focused == Field::TimeOff;
-        let es = ef && form.field_selected;
-        if let Some(&left) = cols.first() {
-            let tw = (left.width as usize).saturating_sub(10).max(5);
-            let tv = adv_field(&form.time, tf, ts, tw);
-            let mut s: Vec<Span<'static>> = Vec::new();
-            s.extend(kl("", 't', "ime      "));
-            s.push(styled_field(tv, tf, ts));
-            frame.render_widget(Paragraph::new(Line::from(s)), left);
-        }
-        if let Some(&right) = cols.get(1) {
-            let ew = (right.width as usize).saturating_sub(10).max(5);
-            let ev = adv_field(&form.time_off, ef, es, ew);
-            let mut s: Vec<Span<'static>> = Vec::new();
-            s.extend(kl("T", 'e', "nd      "));
-            s.push(styled_field(ev, ef, es));
-            frame.render_widget(Paragraph::new(Line::from(s)), right);
-        }
-    }
-
-    // Row 3: [Q]th (left half) | N[a]me (right half)
-    if let Some(row) = rows.get(3).copied() {
-        let cols =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(row);
-        let qf = form.focused == Field::Qth;
-        let qs = qf && form.field_selected;
-        let nf = form.focused == Field::WorkedName;
-        let ns = nf && form.field_selected;
-        if let Some(&left) = cols.first() {
-            let qw = (left.width as usize).saturating_sub(10).max(5);
-            let qv = adv_field(&form.qth, qf, qs, qw);
-            let mut s: Vec<Span<'static>> = Vec::new();
-            s.extend(kl("", 'q', "th       "));
-            s.push(styled_field(qv, qf, qs));
-            frame.render_widget(Paragraph::new(Line::from(s)), left);
-        }
-        if let Some(&right) = cols.get(1) {
-            let nw = (right.width as usize).saturating_sub(10).max(5);
-            let nv = adv_field(&form.worked_name, nf, ns, nw);
-            let mut s: Vec<Span<'static>> = Vec::new();
-            s.extend(kl("N", 'a', "me      "));
-            s.push(styled_field(nv, nf, ns));
-            frame.render_widget(Paragraph::new(Line::from(s)), right);
-        }
-    }
-
-    // Row 4: RST [S]ent (left half) | RST [R]cvd (right half)
-    if let Some(row) = rows.get(4).copied() {
-        let cols =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(row);
-        let sf = form.focused == Field::RstSent;
-        let ss = sf && form.field_selected;
-        let rf = form.focused == Field::RstRcvd;
-        let rs = rf && form.field_selected;
-        if let Some(&left) = cols.first() {
-            let sv = adv_field(&form.rst_sent, sf, ss, 5);
-            let mut s: Vec<Span<'static>> = Vec::new();
-            s.extend(kl("RST ", 's', "ent  "));
-            s.push(styled_field(sv, sf, ss));
-            frame.render_widget(Paragraph::new(Line::from(s)), left);
-        }
-        if let Some(&right) = cols.get(1) {
-            let rv = adv_field(&form.rst_rcvd, rf, rs, 5);
-            let mut s: Vec<Span<'static>> = Vec::new();
-            s.extend(kl("RST ", 'r', "cvd  "));
-            s.push(styled_field(rv, rf, rs));
-            frame.render_widget(Paragraph::new(Line::from(s)), right);
-        }
-    }
-
-    // Row 5: C[o]mment
-    if let Some(row) = rows.get(5).copied() {
-        let focused = form.focused == Field::Comment;
-        let selected = focused && form.field_selected;
-        let val = adv_field(
-            &form.comment,
-            focused,
-            selected,
-            (row.width as usize).saturating_sub(10).max(10),
-        );
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.extend(kl("C", 'o', "mment   "));
-        spans.push(styled_field(val, focused, selected));
-        frame.render_widget(Paragraph::new(Line::from(spans)), row);
-    }
-
-    // Row 6: [N]otes
-    if let Some(row) = rows.get(6).copied() {
-        let focused = form.focused == Field::Notes;
-        let selected = focused && form.field_selected;
-        let val = adv_field(
-            &form.notes,
-            focused,
-            selected,
-            (row.width as usize).saturating_sub(10).max(10),
-        );
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.extend(kl("", 'n', "otes     "));
-        spans.push(styled_field(val, focused, selected));
-        frame.render_widget(Paragraph::new(Line::from(spans)), row);
-    }
-
-    // Hint row
-    if let Some(row) = rows.get(7).copied() {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                "Alt+key to jump  |  Alt+1-4 for tabs  |  Tab/ShiftTab to navigate",
-                Style::default().fg(Color::DarkGray),
-            )),
-            row,
-        );
     }
 }
 
-fn render_contest_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, wide: usize) {
-    let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Fill(1),
-    ])
-    .split(area);
+fn render_field(frame: &mut Frame, area: Rect, form: &LogForm, spec: &FieldSpec) {
+    let focused = form.focused == spec.field;
+    let selected = focused && form.field_selected;
+    let value_width = (area.width as usize).saturating_sub(LABEL_WIDTH + 2).max(5);
+    let value = if matches!(spec.field, Field::Band | Field::Mode) {
+        cycle_value(field_text(form, spec.field), focused)
+    } else {
+        adv_field(field_text(form, spec.field), focused, selected, value_width)
+    };
 
-    let short = 20_usize;
+    let mut spans = Vec::new();
+    spans.extend(shortcut_label(spec.key, spec.label));
+    spans.push(Span::raw(" "));
+    if matches!(spec.field, Field::Band | Field::Mode) {
+        spans.push(styled_cycle(value, focused));
+    } else {
+        spans.push(styled_field(value, focused, selected));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
 
-    if let Some(row) = rows.first().copied() {
-        let pf = form.focused == Field::TxPower;
-        let ps = pf && form.field_selected;
-        let sf = form.focused == Field::Submode;
-        let ss = sf && form.field_selected;
-        let pv = adv_field(&form.tx_power, pf, ps, short);
-        let sv = adv_field(&form.submode_override, sf, ss, short);
-        let mut row0_spans: Vec<Span<'static>> = Vec::new();
-        row0_spans.extend(kl("TX Po", 'w', "er "));
-        row0_spans.push(styled_field(pv, pf, ps));
-        row0_spans.push(Span::raw("   "));
-        row0_spans.push(label("Submode  "));
-        row0_spans.push(styled_field(sv, sf, ss));
-        frame.render_widget(Paragraph::new(Line::from(row0_spans)), row);
-    }
-    if let Some(row) = rows.get(1).copied() {
-        let focused = form.focused == Field::ContestId;
-        let selected = focused && form.field_selected;
-        let val = adv_field(&form.contest_id, focused, selected, wide);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("Contest  "),
-                styled_field(val, focused, selected),
-            ])),
-            row,
-        );
-    }
-    if let Some(row) = rows.get(2).copied() {
-        let sf = form.focused == Field::SerialSent;
-        let ss = sf && form.field_selected;
-        let rf = form.focused == Field::SerialRcvd;
-        let rs = rf && form.field_selected;
-        let sv = adv_field(&form.serial_sent, sf, ss, short);
-        let rv = adv_field(&form.serial_rcvd, rf, rs, short);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("Ser Sent "),
-                styled_field(sv, sf, ss),
-                Span::raw("   "),
-                label("Ser Rcvd "),
-                styled_field(rv, rf, rs),
-            ])),
-            row,
-        );
-    }
-    if let Some(row) = rows.get(3).copied() {
-        let focused = form.focused == Field::ExchangeSent;
-        let selected = focused && form.field_selected;
-        let val = adv_field(&form.exchange_sent, focused, selected, wide);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("Exch Snt "),
-                styled_field(val, focused, selected),
-            ])),
-            row,
-        );
-    }
-    if let Some(row) = rows.get(4).copied() {
-        let focused = form.focused == Field::ExchangeRcvd;
-        let selected = focused && form.field_selected;
-        let val = adv_field(&form.exchange_rcvd, focused, selected, wide);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("Exch Rcvd"),
-                styled_field(val, focused, selected),
-            ])),
-            row,
-        );
+fn field_text(form: &LogForm, field: Field) -> &str {
+    match field {
+        Field::Callsign => &form.callsign,
+        Field::Band => form.band_str(),
+        Field::Mode => form.mode_str(),
+        Field::RstSent => &form.rst_sent,
+        Field::RstRcvd => &form.rst_rcvd,
+        Field::Comment => &form.comment,
+        Field::Notes => &form.notes,
+        Field::FrequencyMhz => &form.frequency_mhz,
+        Field::Date => &form.date,
+        Field::Time => &form.time,
+        Field::TimeOff => &form.time_off,
+        Field::Qth => &form.qth,
+        Field::TxPower => &form.tx_power,
+        Field::Submode => &form.submode_override,
+        Field::ContestId => &form.contest_id,
+        Field::SerialSent => &form.serial_sent,
+        Field::SerialRcvd => &form.serial_rcvd,
+        Field::ExchangeSent => &form.exchange_sent,
+        Field::ExchangeRcvd => &form.exchange_rcvd,
+        Field::PropMode => &form.prop_mode,
+        Field::SatName => &form.sat_name,
+        Field::SatMode => &form.sat_mode,
+        Field::Iota => &form.iota,
+        Field::ArrlSection => &form.arrl_section,
+        Field::WorkedState => &form.worked_state,
+        Field::WorkedCounty => &form.worked_county,
+        Field::WorkedName => &form.worked_name,
+        Field::Skcc => &form.skcc,
     }
 }
 
-fn render_technical_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, wide: usize) {
-    let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Fill(1),
-    ])
-    .split(area);
-
-    if let Some(row) = rows.first().copied() {
-        let focused = form.focused == Field::PropMode;
-        let selected = focused && form.field_selected;
-        let val = adv_field(&form.prop_mode, focused, selected, wide);
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.extend(kl("", 'p', "rop Mode"));
-        spans.push(styled_field(val, focused, selected));
-        frame.render_widget(Paragraph::new(Line::from(spans)), row);
-    }
-    if let Some(row) = rows.get(1).copied() {
-        let focused = form.focused == Field::SatName;
-        let selected = focused && form.field_selected;
-        let val = adv_field(&form.sat_name, focused, selected, wide);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("Sat Name "),
-                styled_field(val, focused, selected),
-            ])),
-            row,
-        );
-    }
-    if let Some(row) = rows.get(2).copied() {
-        let focused = form.focused == Field::SatMode;
-        let selected = focused && form.field_selected;
-        let val = adv_field(&form.sat_mode, focused, selected, wide);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("Sat Mode "),
-                styled_field(val, focused, selected),
-            ])),
-            row,
-        );
-    }
-}
-
-fn render_awards_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, wide: usize) {
-    let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Fill(1),
-    ])
-    .split(area);
-
-    let short = 20_usize;
-
-    if let Some(row) = rows.first().copied() {
-        let focused = form.focused == Field::Iota;
-        let selected = focused && form.field_selected;
-        let val = adv_field(&form.iota, focused, selected, short);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("IOTA     "),
-                styled_field(val, focused, selected),
-            ])),
-            row,
-        );
-    }
-    if let Some(row) = rows.get(1).copied() {
-        let focused = form.focused == Field::ArrlSection;
-        let selected = focused && form.field_selected;
-        let val = adv_field(&form.arrl_section, focused, selected, short);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("ARRL Sec "),
-                styled_field(val, focused, selected),
-            ])),
-            row,
-        );
-    }
-    if let Some(row) = rows.get(2).copied() {
-        let wf = form.focused == Field::WorkedState;
-        let ws = wf && form.field_selected;
-        let cf = form.focused == Field::WorkedCounty;
-        let cs = cf && form.field_selected;
-        let wv = adv_field(&form.worked_state, wf, ws, short);
-        let cv = adv_field(&form.worked_county, cf, cs, wide);
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                label("State    "),
-                styled_field(wv, wf, ws),
-                Span::raw("   "),
-                label("County   "),
-                styled_field(cv, cf, cs),
-            ])),
-            row,
-        );
-    }
-    if let Some(row) = rows.get(3).copied() {
-        let focused = form.focused == Field::Skcc;
-        let selected = focused && form.field_selected;
-        let val = adv_field(&form.skcc, focused, selected, short);
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        spans.extend(kl("S", 'k', "CC     "));
-        spans.push(styled_field(val, focused, selected));
-        frame.render_widget(Paragraph::new(Line::from(spans)), row);
-    }
+fn two_columns(area: Rect) -> [Rect; 2] {
+    let cols =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
+    [
+        cols.first().copied().unwrap_or(area),
+        cols.get(1).copied().unwrap_or(area),
+    ]
 }
 
 /// Format an advanced field value with a fixed display width and optional cursor.
@@ -503,30 +491,68 @@ fn adv_field(text: &str, focused: bool, selected: bool, width: usize) -> String 
     }
 }
 
-fn label(text: &str) -> Span<'static> {
-    Span::styled(text.to_string(), Style::default().fg(Color::Cyan))
-}
-
-/// Build a label with one underlined shortcut key character.
-///
-/// `prefix` appears before the key, `suffix` after it. The key renders in yellow+underlined;
-/// prefix and suffix render in cyan. All three together form the complete label.
-fn kl(prefix: &'static str, key: char, suffix: &'static str) -> [Span<'static>; 3] {
+fn shortcut_label(key: char, label: &'static str) -> [Span<'static>; 3] {
     let label_style = Style::default().fg(Color::Cyan);
     [
-        Span::styled(prefix, label_style),
         Span::styled(
             key.to_ascii_uppercase().to_string(),
             label_style.add_modifier(Modifier::UNDERLINED),
         ),
-        Span::styled(suffix, label_style),
+        Span::styled(" ", label_style),
+        Span::styled(
+            format!("{label:<width$}", width = LABEL_WIDTH - 2),
+            label_style,
+        ),
     ]
 }
 
-fn cycle_adv(text: &str, focused: bool) -> String {
+fn cycle_value(text: &str, focused: bool) -> String {
     if focused {
         format!("< {text} >")
     } else {
         format!("  {text}  ")
     }
+}
+
+fn styled_cycle(value: String, focused: bool) -> Span<'static> {
+    Span::styled(
+        value,
+        Style::default()
+            .fg(if focused { Color::Yellow } else { Color::Gray })
+            .add_modifier(if focused {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
+    )
+}
+
+fn render_footer(frame: &mut Frame, area: Rect) {
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                " F2/Esc Return ",
+                Style::default().fg(Color::Black).bg(Color::DarkGray),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                " Tab/Shift+Tab Field ",
+                Style::default().fg(Color::Black).bg(Color::DarkGray),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                " Alt+key Jump ",
+                Style::default().fg(Color::Black).bg(Color::DarkGray),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                " F10 Log/Save ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])),
+        area,
+    );
 }
