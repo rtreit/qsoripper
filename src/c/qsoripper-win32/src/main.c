@@ -2497,6 +2497,21 @@ static int AdvTabForField(enum Field f)
     return -1;
 }
 
+static void SetAdvancedTab(int tab)
+{
+    int cnt;
+    const enum Field *fields;
+    if (tab < 0 || tab >= ADV_TAB_COUNT) return;
+    g_state.advanced_tab = tab;
+    fields = AdvTabFields(g_state.advanced_tab, &cnt);
+    SetFocusField(fields[0]);
+}
+
+static void CycleAdvancedTab(int delta)
+{
+    SetAdvancedTab((g_state.advanced_tab + ADV_TAB_COUNT + delta) % ADV_TAB_COUNT);
+}
+
 #ifdef QSORIPPER_WIN32_TESTING
 int qsr_test_advanced_tab_for_field(enum Field f)
 {
@@ -2513,6 +2528,21 @@ int qsr_test_advanced_tab_field_count(int tab)
 {
     if (tab < 0 || tab >= ADV_TAB_COUNT) return 0;
     return ADV_TAB_COUNTS[tab];
+}
+
+int qsr_test_get_advanced_tab(void)
+{
+    return g_state.advanced_tab;
+}
+
+void qsr_test_set_advanced_tab(int tab)
+{
+    SetAdvancedTab(tab);
+}
+
+void qsr_test_cycle_advanced_tab(int delta)
+{
+    CycleAdvancedTab(delta);
 }
 #endif
 
@@ -2550,13 +2580,13 @@ static void DrawCardPanel(HDC hdc, int x, int y, int w, int h,
                           const char *title, const char *subtitle,
                           COLORREF border, int cw, int ch)
 {
-    FillRect_Color(hdc, x, y, w, h, RGB(20, 24, 29));
+    FillRect_Color(hdc, x, y, w, h, CLR_BG);
     DrawBox(hdc, x, y, w, h, border);
     SelectObject(hdc, g_state.hFontSmallBold);
-    DrawText_A_BG(hdc, x + cw, y, border, RGB(20, 24, 29), title);
+    DrawText_A_BG(hdc, x + cw, y, border, CLR_BG, title);
     SelectObject(hdc, g_state.hFont);
     if (subtitle && subtitle[0])
-        DrawText_A(hdc, x + cw, y + ch + 6, CLR_DARKGRAY, subtitle);
+        DrawText_A(hdc, x + cw, y + ch + 6, CLR_GRAY, subtitle);
 }
 
 static void DrawAdvancedEditorField(HDC hdc, enum Field f, int x, int y,
@@ -2616,8 +2646,8 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
         SelectObject(hdc, g_state.hFont);
     }
 
-    DrawText_A(hdc, pad + cw * 28, y_start + 1, CLR_DARKGRAY,
-               "F5/F6 or Alt+1..4 pages - F10/Alt+Enter saves - Esc closes card");
+    DrawText_A(hdc, pad + cw * 22, y_start + 1, CLR_DARKGRAY,
+               "Ctrl+Tab or F5/F6 pages - Alt+1..4 jumps - F10 saves - Esc closes card");
 
     y = y_start + ch + 6;
 
@@ -2653,7 +2683,7 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
         if (field_w < 8) field_w = 8;
 
         DrawCardPanel(hdc, card_x, card_y, card_w, card_h,
-                      card_title, card_subtitle, CLR_DARKGRAY, cw, ch);
+                      card_title, card_subtitle, CLR_FORM_BORDER, cw, ch);
         y = card_y + ch * 2 + 10;
 
         for (i = 0; i < field_count; ) {
@@ -2682,8 +2712,8 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
         }
 
         y = card_y + card_h - ch - 6;
-        DrawText_A(hdc, card_x + cw * 2, y, CLR_DARKGRAY,
-                   "Tab/Shift+Tab cycles fields on this page; Alt+underlined letter jumps directly to a field.");
+        DrawText_A(hdc, card_x + cw * 2, y, CLR_GRAY,
+                   "Tab/Shift+Tab cycles fields; Ctrl+Tab/Ctrl+Shift+Tab cycles pages.");
     }
 
     return y_start + form_h;
@@ -2962,7 +2992,9 @@ static void PaintHelp(HDC hdc, int w, int h)
         "F4              Toggle search",
         "F7              Start QSO timer",
         "F8              Toggle rig control",
-        "F5 / F6         Advanced page next/prev",
+        "Ctrl+Tab        Advanced page next",
+        "Ctrl+Shift+Tab  Advanced page previous",
+        "F5 / F6         Advanced page next/previous",
         "Alt+1..4        Advanced page direct",
         "F10 / Alt+Enter Log QSO (or update)",
         "Tab / Shift+Tab Navigate fields",
@@ -3233,23 +3265,20 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
 
     /* F5: next advanced tab */
     if (vk == VK_F5 && g_state.advanced_view) {
-        int cnt;
-        const enum Field *flds;
-        g_state.advanced_tab = (g_state.advanced_tab + 1) % ADV_TAB_COUNT;
-        flds = AdvTabFields(g_state.advanced_tab, &cnt);
-        SetFocusField(flds[0]);
+        CycleAdvancedTab(1);
         InvalidateRect(hwnd, NULL, FALSE);
         return;
     }
 
     /* F6: previous advanced tab */
     if (vk == VK_F6 && g_state.advanced_view) {
-        int cnt;
-        const enum Field *flds;
-        g_state.advanced_tab =
-            (g_state.advanced_tab + ADV_TAB_COUNT - 1) % ADV_TAB_COUNT;
-        flds = AdvTabFields(g_state.advanced_tab, &cnt);
-        SetFocusField(flds[0]);
+        CycleAdvancedTab(-1);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return;
+    }
+
+    if (ctrl_down && vk == VK_TAB && g_state.advanced_view) {
+        CycleAdvancedTab(shift_down ? -1 : 1);
         InvalidateRect(hwnd, NULL, FALSE);
         return;
     }
@@ -3314,11 +3343,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
     if (alt_down && !ctrl_down) {
         enum Field target = FIELD_COUNT;
         if (g_state.advanced_view && vk >= '1' && vk <= '4') {
-            int cnt;
-            const enum Field *flds;
-            g_state.advanced_tab = (int)(vk - '1');
-            flds = AdvTabFields(g_state.advanced_tab, &cnt);
-            SetFocusField(flds[0]);
+            SetAdvancedTab((int)(vk - '1'));
             g_state.qso_list_focused = 0;
             g_state.search_focused = 0;
             InvalidateRect(hwnd, NULL, FALSE);

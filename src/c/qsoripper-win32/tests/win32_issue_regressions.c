@@ -53,6 +53,9 @@ int qsr_test_qso_duration_seconds(const char *time_on, const char *time_off);
 int qsr_test_advanced_tab_for_field(enum Field field);
 const char *qsr_test_advanced_tab_name(int tab);
 int qsr_test_advanced_tab_field_count(int tab);
+int qsr_test_get_advanced_tab(void);
+void qsr_test_set_advanced_tab(int tab);
+void qsr_test_cycle_advanced_tab(int delta);
 
 static HANDLE g_log_entered = NULL;
 static HANDLE g_release_log = NULL;
@@ -442,6 +445,34 @@ static int test_win32_advanced_editor_uses_card_pages(void)
     return 0;
 }
 
+static int test_win32_advanced_editor_cycles_card_pages(void)
+{
+    qsr_test_reset_state();
+
+    qsr_test_set_advanced_tab(0);
+    qsr_test_cycle_advanced_tab(1);
+    if (qsr_test_get_advanced_tab() != 1) {
+        return fail("advanced editor next page shortcut did not advance");
+    }
+
+    qsr_test_cycle_advanced_tab(-1);
+    if (qsr_test_get_advanced_tab() != 0) {
+        return fail("advanced editor previous page shortcut did not go back");
+    }
+
+    qsr_test_cycle_advanced_tab(-1);
+    if (qsr_test_get_advanced_tab() != 3) {
+        return fail("advanced editor previous page shortcut did not wrap");
+    }
+
+    qsr_test_cycle_advanced_tab(1);
+    if (qsr_test_get_advanced_tab() != 0) {
+        return fail("advanced editor next page shortcut did not wrap");
+    }
+
+    return 0;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -454,6 +485,7 @@ int main(void)
     if (test_issue_330_lookup_re_fires_after_esc_clear() != 0) failures++;
     if (test_issue_329_qso_duration_uses_time_off() != 0) failures++;
     if (test_win32_advanced_editor_uses_card_pages() != 0) failures++;
+    if (test_win32_advanced_editor_cycles_card_pages() != 0) failures++;
     if (failures != 0) {
         fprintf(stderr, "FAIL: %d regression test(s) failed\n", failures);
         return 1;
