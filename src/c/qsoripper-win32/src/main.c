@@ -160,6 +160,22 @@ static const char *FIELD_LABELS[] = {
     "Updated", "Extra ADIF"
 };
 
+static const char *AdvancedFieldLabel(enum Field f)
+{
+    switch (f) {
+    case FIELD_CALLSIGN:
+        return "Worked Call";
+    case FIELD_WORKED_OPERATOR_CALLSIGN:
+        return "Operator Call";
+    case FIELD_SNAPSHOT_STATION_CALLSIGN:
+        return "Profile Stn Call";
+    case FIELD_SNAPSHOT_OPERATOR_CALLSIGN:
+        return "Profile Op Call";
+    default:
+        return FIELD_LABELS[f];
+    }
+}
+
 static const int FIELD_MAX_LEN[] = {
     30, 0, 0,  /* callsign, band(cycle), mode(cycle) */
     6,  6,      /* rst sent, rst rcvd */
@@ -2830,6 +2846,12 @@ int qsr_test_advanced_tab_field_count(int tab)
     return ADV_TAB_COUNTS[tab];
 }
 
+const char *qsr_test_advanced_field_label(enum Field f)
+{
+    if (f < 0 || f >= FIELD_COUNT) return NULL;
+    return AdvancedFieldLabel(f);
+}
+
 int qsr_test_get_advanced_tab(void)
 {
     return g_state.advanced_tab;
@@ -2916,7 +2938,7 @@ static void DrawAdvancedEditorField(HDC hdc, enum Field f, int x, int y,
     int box_w = field_chars * cw + 6;
     int box_h = ch + 4;
 
-    DrawLabelWithHotkey(hdc, x, y + 3, CLR_LABEL, FIELD_LABELS[f],
+    DrawLabelWithHotkey(hdc, x, y + 3, CLR_LABEL, AdvancedFieldLabel(f),
                         FieldHotkey(f), cw, ch);
     if (f == FIELD_BAND) {
         DrawCycleField(hdc, field_x, y, field_chars, BANDS[g_state.band_idx],
