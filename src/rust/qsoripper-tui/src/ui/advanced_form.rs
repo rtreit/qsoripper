@@ -128,7 +128,7 @@ fn render_tab_bar(frame: &mut Frame, area: Rect, active: AdvancedTab) {
         spans.push(Span::raw(" "));
     }
     spans.push(Span::styled(
-        "  Alt+1-5 / F5-F6",
+        "  Alt+1-7 / Ctrl+Tab / F5-F6",
         Style::default().fg(Color::DarkGray),
     ));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -137,10 +137,27 @@ fn render_tab_bar(frame: &mut Frame, area: Rect, active: AdvancedTab) {
 fn render_tab_content(frame: &mut Frame, area: Rect, form: &LogForm, tab: AdvancedTab) {
     match tab {
         AdvancedTab::Core => render_core_tab(frame, area, form),
-        AdvancedTab::Signal => render_signal_tab(frame, area, form),
-        AdvancedTab::Station => render_station_tab(frame, area, form),
+        AdvancedTab::Lookup => render_lookup_tab(frame, area, form),
+        AdvancedTab::Qsl => render_read_only_tab(
+            frame,
+            area,
+            " QSL ",
+            "QSL workflow fields are not editable here yet.",
+        ),
         AdvancedTab::Contest => render_contest_tab(frame, area, form),
-        AdvancedTab::Notes => render_notes_tab(frame, area, form),
+        AdvancedTab::Station => render_station_tab(frame, area, form),
+        AdvancedTab::Transcript => render_read_only_tab(
+            frame,
+            area,
+            " Transcript ",
+            "CW transcript fields are preserved from the engine.",
+        ),
+        AdvancedTab::Metadata => render_read_only_tab(
+            frame,
+            area,
+            " Metadata ",
+            "Engine metadata and custom fields are preserved during edits.",
+        ),
     }
 }
 
@@ -158,29 +175,6 @@ fn render_core_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
                 label: "Callsign",
             },
             FieldSpec {
-                field: Field::Band,
-                key: 'B',
-                label: "Band",
-            },
-            FieldSpec {
-                field: Field::Mode,
-                key: 'M',
-                label: "Mode",
-            },
-            FieldSpec {
-                field: Field::FrequencyMhz,
-                key: 'F',
-                label: "Freq MHz",
-            },
-        ],
-    );
-    render_group(
-        frame,
-        cols[1],
-        " UTC ",
-        form,
-        &[
-            FieldSpec {
                 field: Field::Date,
                 key: 'D',
                 label: "Date",
@@ -197,16 +191,27 @@ fn render_core_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
             },
         ],
     );
-}
-
-fn render_signal_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
-    let cols = two_columns(area);
     render_group(
         frame,
-        cols[0],
-        " Reports ",
+        cols[1],
+        " Band / signal ",
         form,
         &[
+            FieldSpec {
+                field: Field::Band,
+                key: 'B',
+                label: "Band",
+            },
+            FieldSpec {
+                field: Field::Mode,
+                key: 'M',
+                label: "Mode",
+            },
+            FieldSpec {
+                field: Field::FrequencyMhz,
+                key: 'F',
+                label: "Freq MHz",
+            },
             FieldSpec {
                 field: Field::RstSent,
                 key: 'S',
@@ -227,39 +232,26 @@ fn render_signal_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
                 key: 'U',
                 label: "Submode",
             },
-        ],
-    );
-    render_group(
-        frame,
-        cols[1],
-        " Propagation ",
-        form,
-        &[
             FieldSpec {
-                field: Field::PropMode,
-                key: 'P',
-                label: "Prop mode",
+                field: Field::Comment,
+                key: 'O',
+                label: "Comment",
             },
             FieldSpec {
-                field: Field::SatName,
-                key: 'L',
-                label: "Satellite",
-            },
-            FieldSpec {
-                field: Field::SatMode,
-                key: 'V',
-                label: "Sat mode",
+                field: Field::Notes,
+                key: 'N',
+                label: "Notes",
             },
         ],
     );
 }
 
-fn render_station_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
+fn render_lookup_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
     let cols = two_columns(area);
     render_group(
         frame,
         cols[0],
-        " Worked station ",
+        " Worked operator ",
         form,
         &[
             FieldSpec {
@@ -268,9 +260,19 @@ fn render_station_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
                 label: "Name",
             },
             FieldSpec {
-                field: Field::Qth,
-                key: 'Q',
-                label: "QTH",
+                field: Field::WorkedGrid,
+                key: 'L',
+                label: "Grid",
+            },
+            FieldSpec {
+                field: Field::WorkedCountry,
+                key: 'C',
+                label: "Country",
+            },
+            FieldSpec {
+                field: Field::WorkedDxcc,
+                key: 'D',
+                label: "DXCC",
             },
             FieldSpec {
                 field: Field::WorkedState,
@@ -278,22 +280,37 @@ fn render_station_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
                 label: "State",
             },
             FieldSpec {
-                field: Field::WorkedCounty,
-                key: 'Y',
-                label: "County",
+                field: Field::WorkedCqZone,
+                key: 'Z',
+                label: "CQ zone",
             },
         ],
     );
     render_group(
         frame,
         cols[1],
-        " Location / awards ",
+        " Lookup details ",
         form,
         &[
+            FieldSpec {
+                field: Field::WorkedItuZone,
+                key: 'T',
+                label: "ITU zone",
+            },
+            FieldSpec {
+                field: Field::WorkedCounty,
+                key: 'Y',
+                label: "County",
+            },
             FieldSpec {
                 field: Field::Iota,
                 key: 'I',
                 label: "IOTA",
+            },
+            FieldSpec {
+                field: Field::WorkedContinent,
+                key: 'V',
+                label: "Continent",
             },
             FieldSpec {
                 field: Field::ArrlSection,
@@ -306,6 +323,27 @@ fn render_station_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
                 label: "SKCC",
             },
         ],
+    );
+}
+
+fn render_station_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
+    let cols = two_columns(area);
+    render_group(
+        frame,
+        cols[0],
+        " Station ",
+        form,
+        &[FieldSpec {
+            field: Field::Qth,
+            key: 'Q',
+            label: "QTH",
+        }],
+    );
+    render_read_only_tab(
+        frame,
+        cols[1],
+        " Local station snapshot ",
+        "Station profile fields are preserved from the engine.",
     );
 }
 
@@ -350,33 +388,22 @@ fn render_contest_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
                 key: 'N',
                 label: "Exch rcvd",
             },
+            FieldSpec {
+                field: Field::PropMode,
+                key: 'P',
+                label: "Prop mode",
+            },
+            FieldSpec {
+                field: Field::SatName,
+                key: 'L',
+                label: "Satellite",
+            },
+            FieldSpec {
+                field: Field::SatMode,
+                key: 'V',
+                label: "Sat mode",
+            },
         ],
-    );
-}
-
-fn render_notes_tab(frame: &mut Frame, area: Rect, form: &LogForm) {
-    let cols = two_columns(area);
-    render_group(
-        frame,
-        cols[0],
-        " Comments ",
-        form,
-        &[FieldSpec {
-            field: Field::Comment,
-            key: 'O',
-            label: "Comment",
-        }],
-    );
-    render_group(
-        frame,
-        cols[1],
-        " Operator notes ",
-        form,
-        &[FieldSpec {
-            field: Field::Notes,
-            key: 'N',
-            label: "Notes",
-        }],
     );
 }
 
@@ -393,6 +420,9 @@ fn render_group(
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.height == 0 {
+        return;
+    }
+    if fields.is_empty() {
         return;
     }
 
@@ -455,8 +485,29 @@ fn field_text(form: &LogForm, field: Field) -> &str {
         Field::WorkedState => &form.worked_state,
         Field::WorkedCounty => &form.worked_county,
         Field::WorkedName => &form.worked_name,
+        Field::WorkedGrid => &form.worked_grid,
+        Field::WorkedCountry => &form.worked_country,
+        Field::WorkedDxcc => &form.worked_dxcc,
+        Field::WorkedCqZone => &form.worked_cq_zone,
+        Field::WorkedItuZone => &form.worked_itu_zone,
+        Field::WorkedContinent => &form.worked_continent,
         Field::Skcc => &form.skcc,
     }
+}
+
+fn render_read_only_tab(frame: &mut Frame, area: Rect, title: &'static str, message: &'static str) {
+    let block = Block::bordered()
+        .title(title)
+        .border_style(Style::default().fg(Color::DarkGray));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            message,
+            Style::default().fg(Color::DarkGray),
+        ))),
+        inner,
+    );
 }
 
 fn two_columns(area: Rect) -> [Rect; 2] {

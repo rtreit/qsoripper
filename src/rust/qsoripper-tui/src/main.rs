@@ -352,6 +352,26 @@ fn apply_lookup_result(app: &mut App, result: Option<app::CallsignInfo>) {
                 app.form.worked_name.clone_from(name);
             }
         }
+        if app.form.worked_grid.is_empty() {
+            if let Some(ref grid) = info.grid {
+                app.form.worked_grid.clone_from(grid);
+            }
+        }
+        if app.form.worked_country.is_empty() {
+            if let Some(ref country) = info.country {
+                app.form.worked_country.clone_from(country);
+            }
+        }
+        if app.form.worked_cq_zone.is_empty() {
+            if let Some(cq_zone) = info.cq_zone {
+                app.form.worked_cq_zone = cq_zone.to_string();
+            }
+        }
+        if app.form.worked_dxcc.is_empty() {
+            if let Some(dxcc) = info.dxcc {
+                app.form.worked_dxcc = dxcc.to_string();
+            }
+        }
     }
     app.lookup_result = result;
 }
@@ -741,10 +761,12 @@ fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
 fn digit_to_tab(ch: char) -> Option<AdvancedTab> {
     match ch {
         '1' => Some(AdvancedTab::Core),
-        '2' => Some(AdvancedTab::Signal),
-        '3' => Some(AdvancedTab::Station),
+        '2' => Some(AdvancedTab::Lookup),
+        '3' => Some(AdvancedTab::Qsl),
         '4' => Some(AdvancedTab::Contest),
-        '5' => Some(AdvancedTab::Notes),
+        '5' => Some(AdvancedTab::Station),
+        '6' => Some(AdvancedTab::Transcript),
+        '7' => Some(AdvancedTab::Metadata),
         _ => None,
     }
 }
@@ -793,17 +815,17 @@ fn jump_to_field(app: &mut App, ch: char) {
         't' => (Field::Time, None),
         'e' => (Field::TimeOff, None),
         'q' => (Field::Qth, None),
-        'a' => (Field::WorkedName, Some(AdvancedTab::Station)),
-        'k' => (Field::Skcc, Some(AdvancedTab::Station)),
-        'w' => (Field::TxPower, Some(AdvancedTab::Signal)),
-        'p' => (Field::PropMode, Some(AdvancedTab::Signal)),
-        'u' => (Field::Submode, Some(AdvancedTab::Signal)),
-        'l' => (Field::SatName, Some(AdvancedTab::Signal)),
-        'v' => (Field::SatMode, Some(AdvancedTab::Signal)),
-        'i' => (Field::Iota, Some(AdvancedTab::Station)),
-        'h' => (Field::WorkedState, Some(AdvancedTab::Station)),
-        'y' => (Field::WorkedCounty, Some(AdvancedTab::Station)),
-        'x' => (Field::ArrlSection, Some(AdvancedTab::Station)),
+        'a' => (Field::WorkedName, Some(AdvancedTab::Lookup)),
+        'k' => (Field::Skcc, Some(AdvancedTab::Lookup)),
+        'w' => (Field::TxPower, Some(AdvancedTab::Core)),
+        'p' => (Field::PropMode, Some(AdvancedTab::Contest)),
+        'u' => (Field::Submode, Some(AdvancedTab::Core)),
+        'l' => (Field::WorkedGrid, Some(AdvancedTab::Lookup)),
+        'v' => (Field::WorkedContinent, Some(AdvancedTab::Lookup)),
+        'i' => (Field::Iota, Some(AdvancedTab::Lookup)),
+        'h' => (Field::WorkedState, Some(AdvancedTab::Lookup)),
+        'y' => (Field::WorkedCounty, Some(AdvancedTab::Lookup)),
+        'x' => (Field::ArrlSection, Some(AdvancedTab::Lookup)),
         'g' => (Field::ContestId, Some(AdvancedTab::Contest)),
         'j' => (Field::SerialSent, Some(AdvancedTab::Contest)),
         'z' => (Field::SerialRcvd, Some(AdvancedTab::Contest)),
@@ -828,27 +850,34 @@ fn advanced_tab_for_field(field: Field) -> AdvancedTab {
         | Field::FrequencyMhz
         | Field::Date
         | Field::Time
-        | Field::TimeOff => AdvancedTab::Core,
-        Field::RstSent
+        | Field::TimeOff
+        | Field::RstSent
         | Field::RstRcvd
         | Field::TxPower
         | Field::Submode
-        | Field::PropMode
-        | Field::SatName
-        | Field::SatMode => AdvancedTab::Signal,
-        Field::Qth
-        | Field::WorkedName
+        | Field::Comment
+        | Field::Notes => AdvancedTab::Core,
+        Field::Qth => AdvancedTab::Station,
+        Field::WorkedName
+        | Field::WorkedGrid
+        | Field::WorkedCountry
+        | Field::WorkedDxcc
         | Field::WorkedState
+        | Field::WorkedCqZone
+        | Field::WorkedItuZone
         | Field::WorkedCounty
         | Field::Iota
+        | Field::WorkedContinent
         | Field::ArrlSection
-        | Field::Skcc => AdvancedTab::Station,
+        | Field::Skcc => AdvancedTab::Lookup,
         Field::ContestId
         | Field::SerialSent
         | Field::SerialRcvd
         | Field::ExchangeSent
-        | Field::ExchangeRcvd => AdvancedTab::Contest,
-        Field::Comment | Field::Notes => AdvancedTab::Notes,
+        | Field::ExchangeRcvd
+        | Field::PropMode
+        | Field::SatName
+        | Field::SatMode => AdvancedTab::Contest,
     }
 }
 
@@ -942,6 +971,18 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
     app.form.arrl_section = src.worked_arrl_section.clone().unwrap_or_default();
     app.form.worked_state = src.worked_state.clone().unwrap_or_default();
     app.form.worked_county = src.worked_county.clone().unwrap_or_default();
+    app.form.worked_grid = src.worked_grid.clone().unwrap_or_default();
+    app.form.worked_country = src.worked_country.clone().unwrap_or_default();
+    app.form.worked_dxcc = src.worked_dxcc.map(|v| v.to_string()).unwrap_or_default();
+    app.form.worked_cq_zone = src
+        .worked_cq_zone
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+    app.form.worked_itu_zone = src
+        .worked_itu_zone
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+    app.form.worked_continent = src.worked_continent.clone().unwrap_or_default();
     app.form.skcc = src.skcc.clone().unwrap_or_default();
 
     app.form.focused = Field::Callsign;
@@ -1408,7 +1449,7 @@ mod tests {
         assert!(matches!(app.view, View::LogEntry));
         jump_to_field(&mut app, 'a');
         assert_eq!(app.form.focused, Field::WorkedName);
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Station);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Lookup);
         assert!(matches!(app.view, View::Advanced));
     }
 
@@ -1418,7 +1459,7 @@ mod tests {
         app.view = View::Advanced;
         jump_to_field(&mut app, 'a');
         assert_eq!(app.form.focused, Field::WorkedName);
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Station);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Lookup);
         assert!(matches!(app.view, View::Advanced));
     }
 
@@ -1442,22 +1483,22 @@ mod tests {
     }
 
     #[test]
-    fn jump_to_tab_2_switches_to_signal() {
+    fn jump_to_tab_2_switches_to_lookup() {
         let mut app = make_app();
         jump_to_field(&mut app, '2');
         assert!(matches!(app.view, View::Advanced));
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Signal);
-        assert_eq!(app.form.focused, Field::RstSent);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Lookup);
+        assert_eq!(app.form.focused, Field::WorkedName);
         assert!(app.form.field_selected);
     }
 
     #[test]
-    fn jump_to_tab_3_switches_to_station() {
+    fn jump_to_tab_3_switches_to_qsl() {
         let mut app = make_app();
         jump_to_field(&mut app, '3');
         assert!(matches!(app.view, View::Advanced));
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Station);
-        assert_eq!(app.form.focused, Field::Qth);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Qsl);
+        assert_eq!(app.form.focused, Field::Callsign);
         assert!(app.form.field_selected);
     }
 
@@ -1472,12 +1513,12 @@ mod tests {
     }
 
     #[test]
-    fn jump_to_tab_5_switches_to_notes() {
+    fn jump_to_tab_5_switches_to_station() {
         let mut app = make_app();
         jump_to_field(&mut app, '5');
         assert!(matches!(app.view, View::Advanced));
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Notes);
-        assert_eq!(app.form.focused, Field::Comment);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Station);
+        assert_eq!(app.form.focused, Field::Qth);
         assert!(app.form.field_selected);
     }
 
@@ -1493,31 +1534,31 @@ mod tests {
     }
 
     #[test]
-    fn jump_to_field_skcc_opens_station_tab() {
+    fn jump_to_field_skcc_opens_lookup_tab() {
         let mut app = make_app();
         jump_to_field(&mut app, 'k');
         assert!(matches!(app.view, View::Advanced));
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Station);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Lookup);
         assert_eq!(app.form.focused, Field::Skcc);
         assert!(app.form.field_selected);
     }
 
     #[test]
-    fn jump_to_field_tx_power_opens_signal_tab() {
+    fn jump_to_field_tx_power_opens_core_tab() {
         let mut app = make_app();
         jump_to_field(&mut app, 'w');
         assert!(matches!(app.view, View::Advanced));
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Signal);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Core);
         assert_eq!(app.form.focused, Field::TxPower);
         assert!(app.form.field_selected);
     }
 
     #[test]
-    fn jump_to_field_prop_mode_opens_signal_tab() {
+    fn jump_to_field_prop_mode_opens_contest_tab() {
         let mut app = make_app();
         jump_to_field(&mut app, 'p');
         assert!(matches!(app.view, View::Advanced));
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Signal);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Contest);
         assert_eq!(app.form.focused, Field::PropMode);
         assert!(app.form.field_selected);
     }
@@ -2666,7 +2707,7 @@ mod tests {
             &rig_tx,
             "",
         );
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Signal);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Lookup);
     }
 
     #[tokio::test]
@@ -2685,7 +2726,7 @@ mod tests {
             "",
         );
         use crate::form::AdvancedTab;
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Notes);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Metadata);
     }
 
     #[tokio::test]

@@ -54,7 +54,7 @@ pub(crate) async fn log_qso(
 
     let frequency_hz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_hz);
 
-    let (worked_grid, worked_country, worked_cq_zone, worked_dxcc) =
+    let (lookup_grid, lookup_country, lookup_cq_zone, lookup_dxcc) =
         lookup.unwrap_or((None, None, None, None));
 
     let qso = qsoripper_core::proto::qsoripper::domain::QsoRecord {
@@ -79,12 +79,21 @@ pub(crate) async fn log_qso(
         serial_received: opt_string(&form.serial_rcvd),
         exchange_sent: opt_string(&form.exchange_sent),
         exchange_received: opt_string(&form.exchange_rcvd),
-        worked_grid,
-        worked_country,
-        worked_cq_zone,
-        worked_dxcc,
+        worked_grid: opt_string(&form.worked_grid).or(lookup_grid),
+        worked_country: opt_string(&form.worked_country).or(lookup_country),
+        worked_cq_zone: opt_u32(&form.worked_cq_zone).or(lookup_cq_zone),
+        worked_dxcc: opt_u32(&form.worked_dxcc).or(lookup_dxcc),
+        worked_itu_zone: opt_u32(&form.worked_itu_zone),
+        worked_continent: opt_string(&form.worked_continent),
         worked_operator_name: opt_string(&form.worked_name),
+        worked_iota: opt_string(&form.iota),
+        worked_arrl_section: opt_string(&form.arrl_section),
+        worked_state: opt_string(&form.worked_state),
+        worked_county: opt_string(&form.worked_county),
         skcc: opt_string(&form.skcc),
+        prop_mode: opt_string(&form.prop_mode),
+        sat_name: opt_string(&form.sat_name),
+        sat_mode: opt_string(&form.sat_mode),
         ..Default::default()
     };
 
@@ -327,7 +336,7 @@ pub(crate) async fn update_qso(
     };
     let frequency_hz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_hz);
 
-    let (worked_grid, worked_country, worked_cq_zone, worked_dxcc) =
+    let (lookup_grid, lookup_country, lookup_cq_zone, lookup_dxcc) =
         lookup.unwrap_or((None, None, None, None));
 
     // Start from the original record to preserve non-form fields, then overlay
@@ -355,10 +364,12 @@ pub(crate) async fn update_qso(
     qso.serial_received = opt_string(&form.serial_rcvd);
     qso.exchange_sent = opt_string(&form.exchange_sent);
     qso.exchange_received = opt_string(&form.exchange_rcvd);
-    qso.worked_grid = worked_grid;
-    qso.worked_country = worked_country;
-    qso.worked_cq_zone = worked_cq_zone;
-    qso.worked_dxcc = worked_dxcc;
+    qso.worked_grid = opt_string(&form.worked_grid).or(lookup_grid);
+    qso.worked_country = opt_string(&form.worked_country).or(lookup_country);
+    qso.worked_cq_zone = opt_u32(&form.worked_cq_zone).or(lookup_cq_zone);
+    qso.worked_dxcc = opt_u32(&form.worked_dxcc).or(lookup_dxcc);
+    qso.worked_itu_zone = opt_u32(&form.worked_itu_zone);
+    qso.worked_continent = opt_string(&form.worked_continent);
     qso.worked_operator_name = opt_string(&form.worked_name);
     qso.worked_iota = opt_string(&form.iota);
     qso.worked_arrl_section = opt_string(&form.arrl_section);
@@ -422,6 +433,10 @@ fn opt_string(s: &str) -> Option<String> {
     } else {
         Some(s.to_string())
     }
+}
+
+fn opt_u32(s: &str) -> Option<u32> {
+    s.trim().parse().ok()
 }
 
 /// Parse a date string (`YYYY-MM-DD`) and time string (`HH:MM`) into a protobuf timestamp.
