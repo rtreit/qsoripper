@@ -250,7 +250,7 @@ typedef struct {
 
     /* Advanced view state */
     int advanced_view;        /* 0 = basic, 1 = advanced */
-    int advanced_tab;         /* 0=Core, 1=Signal, 2=Station/Location, 3=Notes/Metadata */
+    int advanced_tab;         /* 0=Core, 1=Lookup, 2=QSL, 3=Contest, 4=Station, 5=Transcript, 6=Metadata */
 
     /* Advanced field buffers */
     char time_off[16];
@@ -277,7 +277,7 @@ typedef struct {
 
     /* Hit-test rectangles for click-to-focus (populated during paint) */
     RECT field_rects[FIELD_COUNT];
-    RECT advanced_tab_rects[4];
+    RECT advanced_tab_rects[7];
     int  field_rects_valid;
     int  qso_list_y;  /* top of QSO list panel for click detection */
     int  qso_list_row_h; /* row height in QSO list */
@@ -2422,54 +2422,70 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
 
 /* ── Advanced card editor tab field definitions ─────────────────────────── */
 
-#define ADV_TAB_COUNT 4
+#define ADV_TAB_COUNT 7
 #define ADV_TAB_CORE 0
-#define ADV_TAB_SIGNAL 1
-#define ADV_TAB_STATION 2
-#define ADV_TAB_NOTES 3
+#define ADV_TAB_LOOKUP 1
+#define ADV_TAB_QSL 2
+#define ADV_TAB_CONTEST 3
+#define ADV_TAB_STATION 4
+#define ADV_TAB_TRANSCRIPT 5
+#define ADV_TAB_METADATA 6
 
 static const enum Field ADV_TAB_CORE_FIELDS[] = {
-    FIELD_CALLSIGN, FIELD_BAND, FIELD_MODE, FIELD_FREQ,
-    FIELD_DATE, FIELD_TIME, FIELD_TIME_OFF
+    FIELD_CALLSIGN, FIELD_DATE, FIELD_TIME, FIELD_TIME_OFF,
+    FIELD_BAND, FIELD_MODE, FIELD_FREQ, FIELD_RST_SENT,
+    FIELD_RST_RCVD, FIELD_TX_POWER, FIELD_SUBMODE,
+    FIELD_COMMENT, FIELD_NOTES
 };
 
-static const enum Field ADV_TAB_SIGNAL_FIELDS[] = {
-    FIELD_RST_SENT, FIELD_RST_RCVD, FIELD_TX_POWER, FIELD_SUBMODE,
+static const enum Field ADV_TAB_LOOKUP_FIELDS[] = {
+    FIELD_WORKED_NAME, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY,
+    FIELD_ARRL_SECTION, FIELD_IOTA, FIELD_SKCC
+};
+
+static const enum Field ADV_TAB_QSL_FIELDS[] = { FIELD_CALLSIGN };
+
+static const enum Field ADV_TAB_CONTEST_FIELDS[] = {
+    FIELD_CONTEST_ID, FIELD_SERIAL_SENT, FIELD_SERIAL_RCVD,
+    FIELD_EXCHANGE_SENT, FIELD_EXCHANGE_RCVD,
     FIELD_PROP_MODE, FIELD_SAT_NAME, FIELD_SAT_MODE
 };
 
 static const enum Field ADV_TAB_STATION_FIELDS[] = {
-    FIELD_WORKED_NAME, FIELD_QTH, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY,
-    FIELD_ARRL_SECTION, FIELD_IOTA, FIELD_SKCC
+    FIELD_QTH
 };
 
-static const enum Field ADV_TAB_NOTES_FIELDS[] = {
-    FIELD_COMMENT, FIELD_NOTES, FIELD_CONTEST_ID,
-    FIELD_SERIAL_SENT, FIELD_SERIAL_RCVD,
-    FIELD_EXCHANGE_SENT, FIELD_EXCHANGE_RCVD
-};
+static const enum Field ADV_TAB_TRANSCRIPT_FIELDS[] = { FIELD_CALLSIGN };
+static const enum Field ADV_TAB_METADATA_FIELDS[] = { FIELD_CALLSIGN };
 
 static const enum Field *ADV_TABS[] = {
-    ADV_TAB_CORE_FIELDS, ADV_TAB_SIGNAL_FIELDS,
-    ADV_TAB_STATION_FIELDS, ADV_TAB_NOTES_FIELDS
+    ADV_TAB_CORE_FIELDS, ADV_TAB_LOOKUP_FIELDS, ADV_TAB_QSL_FIELDS,
+    ADV_TAB_CONTEST_FIELDS, ADV_TAB_STATION_FIELDS,
+    ADV_TAB_TRANSCRIPT_FIELDS, ADV_TAB_METADATA_FIELDS
 };
 
 static const int ADV_TAB_COUNTS[] = {
     sizeof(ADV_TAB_CORE_FIELDS) / sizeof(ADV_TAB_CORE_FIELDS[0]),
-    sizeof(ADV_TAB_SIGNAL_FIELDS) / sizeof(ADV_TAB_SIGNAL_FIELDS[0]),
+    sizeof(ADV_TAB_LOOKUP_FIELDS) / sizeof(ADV_TAB_LOOKUP_FIELDS[0]),
+    0,
+    sizeof(ADV_TAB_CONTEST_FIELDS) / sizeof(ADV_TAB_CONTEST_FIELDS[0]),
     sizeof(ADV_TAB_STATION_FIELDS) / sizeof(ADV_TAB_STATION_FIELDS[0]),
-    sizeof(ADV_TAB_NOTES_FIELDS) / sizeof(ADV_TAB_NOTES_FIELDS[0])
+    0,
+    0
 };
 
 static const char *ADV_TAB_NAMES[] = {
-    "Core", "Signal", "Station/Location", "Notes/Metadata"
+    "Core", "Lookup", "QSL", "Contest", "Station", "Transcript", "Metadata"
 };
 
 static const char *ADV_TAB_DESCRIPTIONS[] = {
-    "Identity, band/mode, frequency and UTC timing",
-    "Reports, power, submode and propagation details",
-    "Worked operator name, QTH and location/award fields",
-    "Operator notes plus contest exchange metadata"
+    "Identity, UTC timing, band/mode, reports, comments and notes",
+    "Worked operator and currently persisted lookup/award fields",
+    "QSL workflow fields are not editable here yet",
+    "Contest identifiers, serial numbers, exchange text, propagation and satellite details",
+    "Station profile fields preserved from the engine plus logged QTH",
+    "CW transcript fields are preserved from the engine",
+    "Engine metadata and custom fields are preserved during edits"
 };
 
 static const enum Field *AdvTabFields(int tab, int *count)
@@ -2504,7 +2520,7 @@ static void SetAdvancedTab(int tab)
     if (tab < 0 || tab >= ADV_TAB_COUNT) return;
     g_state.advanced_tab = tab;
     fields = AdvTabFields(g_state.advanced_tab, &cnt);
-    SetFocusField(fields[0]);
+    if (cnt > 0) SetFocusField(fields[0]);
 }
 
 static void CycleAdvancedTab(int delta)
@@ -2646,10 +2662,10 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
         SelectObject(hdc, g_state.hFont);
     }
 
-    DrawText_A(hdc, pad + cw * 22, y_start + 1, CLR_DARKGRAY,
-               "Ctrl+Tab or F5/F6 pages - Alt+1..4 jumps - F10 saves - Esc closes card");
+    DrawText_A(hdc, pad, y_start + ch + 2, CLR_DARKGRAY,
+               "Ctrl+Tab or F5/F6 pages - Alt+1..7 jumps - F10 saves - Esc closes card");
 
-    y = y_start + ch + 6;
+    y = y_start + ch * 2 + 8;
 
     /* Tab bar */
     {
@@ -2685,6 +2701,10 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
         DrawCardPanel(hdc, card_x, card_y, card_w, card_h,
                       card_title, card_subtitle, CLR_FORM_BORDER, cw, ch);
         y = card_y + ch * 2 + 10;
+
+        if (field_count == 0) {
+            DrawText_A(hdc, card_x + cw * 2, y, CLR_DARKGRAY, card_subtitle);
+        }
 
         for (i = 0; i < field_count; ) {
             enum Field f1 = fields[i];
@@ -2995,7 +3015,7 @@ static void PaintHelp(HDC hdc, int w, int h)
         "Ctrl+Tab        Advanced page next",
         "Ctrl+Shift+Tab  Advanced page previous",
         "F5 / F6         Advanced page next/previous",
-        "Alt+1..4        Advanced page direct",
+        "Alt+1..7        Advanced page direct",
         "F10 / Alt+Enter Log QSO (or update)",
         "Tab / Shift+Tab Navigate fields",
         "Left / Right    Cycle Band/Mode",
@@ -3342,7 +3362,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
     /* ── Alt+key: jump to field ──────────────────────────────────── */
     if (alt_down && !ctrl_down) {
         enum Field target = FIELD_COUNT;
-        if (g_state.advanced_view && vk >= '1' && vk <= '4') {
+        if (g_state.advanced_view && vk >= '1' && vk <= '7') {
             SetAdvancedTab((int)(vk - '1'));
             g_state.qso_list_focused = 0;
             g_state.search_focused = 0;
@@ -4078,11 +4098,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
             for (i = 0; i < ADV_TAB_COUNT; i++) {
                 if (PtInRect(&g_state.advanced_tab_rects[i], pt)) {
-                    int cnt;
-                    const enum Field *flds;
-                    g_state.advanced_tab = i;
-                    flds = AdvTabFields(g_state.advanced_tab, &cnt);
-                    SetFocusField(flds[0]);
+                    SetAdvancedTab(i);
                     g_state.qso_list_focused = 0;
                     g_state.search_focused = 0;
                     InvalidateRect(hwnd, NULL, FALSE);
