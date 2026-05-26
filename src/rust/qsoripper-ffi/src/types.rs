@@ -42,6 +42,18 @@ pub struct QsrLogQsoRequest {
     pub notes: [u8; 256],
     /// Operator name (null-terminated).
     pub worked_name: [u8; 64],
+    /// Worked grid square (null-terminated).
+    pub worked_grid: [u8; 16],
+    /// Worked country (null-terminated).
+    pub worked_country: [u8; 64],
+    /// Worked DXCC entity code as decimal text (null-terminated).
+    pub worked_dxcc: [u8; 16],
+    /// Worked CQ zone as decimal text (null-terminated).
+    pub worked_cq_zone: [u8; 16],
+    /// Worked ITU zone as decimal text (null-terminated).
+    pub worked_itu_zone: [u8; 16],
+    /// Worked continent code (null-terminated).
+    pub worked_continent: [u8; 8],
     /// TX power (null-terminated).
     pub tx_power: [u8; 16],
     /// Submode (null-terminated).
@@ -153,6 +165,18 @@ pub struct QsrQsoDetail {
     pub time_off: [u8; 16],
     /// Worked name (null-terminated).
     pub worked_name: [u8; 64],
+    /// Worked grid square (null-terminated).
+    pub worked_grid: [u8; 16],
+    /// Worked country (null-terminated).
+    pub worked_country: [u8; 64],
+    /// Worked DXCC entity code as decimal text (null-terminated).
+    pub worked_dxcc: [u8; 16],
+    /// Worked CQ zone as decimal text (null-terminated).
+    pub worked_cq_zone: [u8; 16],
+    /// Worked ITU zone as decimal text (null-terminated).
+    pub worked_itu_zone: [u8; 16],
+    /// Worked continent code (null-terminated).
+    pub worked_continent: [u8; 8],
     /// TX power (null-terminated).
     pub tx_power: [u8; 16],
     /// Submode (null-terminated).

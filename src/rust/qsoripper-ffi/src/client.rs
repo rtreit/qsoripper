@@ -182,8 +182,11 @@ impl QsrClient {
             Ok(resp) => {
                 if let Some(qso) = resp.into_inner().qso {
                     populate_qso_detail(&qso, out);
+                    0
+                } else {
+                    set_error(format!("QSO not found: {local_id}"));
+                    -1
                 }
-                0
             }
             Err(e) => {
                 set_error(format!("GetQso failed: {}", e.message()));
@@ -377,6 +380,22 @@ fn build_qso_record(req: &QsrLogQsoRequest) -> Result<QsoRecord, String> {
     set_optional_str(&req.worked_name, |s| {
         qso.worked_operator_name = Some(s.to_string());
     });
+    set_optional_str(&req.worked_grid, |s| qso.worked_grid = Some(s.to_string()));
+    set_optional_str(&req.worked_country, |s| {
+        qso.worked_country = Some(s.to_string());
+    });
+    set_optional_u32(&req.worked_dxcc, "worked DXCC", |v| {
+        qso.worked_dxcc = Some(v);
+    })?;
+    set_optional_u32(&req.worked_cq_zone, "worked CQ zone", |v| {
+        qso.worked_cq_zone = Some(v);
+    })?;
+    set_optional_u32(&req.worked_itu_zone, "worked ITU zone", |v| {
+        qso.worked_itu_zone = Some(v);
+    })?;
+    set_optional_str(&req.worked_continent, |s| {
+        qso.worked_continent = Some(s.to_string());
+    });
     set_optional_str(&req.tx_power, |s| qso.tx_power = Some(s.to_string()));
     set_optional_str(&req.submode, |s| qso.submode = Some(s.to_string()));
     set_optional_str(&req.contest_id, |s| qso.contest_id = Some(s.to_string()));
@@ -421,6 +440,17 @@ fn set_optional_str(buf: &[u8], setter: impl FnOnce(&str)) {
     if !s.is_empty() {
         setter(s);
     }
+}
+
+fn set_optional_u32(buf: &[u8], field_name: &str, setter: impl FnOnce(u32)) -> Result<(), String> {
+    let s = buf_to_str(buf);
+    if !s.is_empty() {
+        setter(
+            s.parse::<u32>()
+                .map_err(|_| format!("Invalid {field_name}: {s}"))?,
+        );
+    }
+    Ok(())
 }
 
 /// Build a proto `RstReport` from the FFI `QsrRstReport`.
@@ -642,6 +672,24 @@ fn populate_qso_optional_fields(qso: &QsoRecord, out: &mut QsrQsoDetail) {
     if let Some(v) = &qso.worked_operator_name {
         str_to_buf(v, &mut out.worked_name);
     }
+    if let Some(v) = &qso.worked_grid {
+        str_to_buf(v, &mut out.worked_grid);
+    }
+    if let Some(v) = &qso.worked_country {
+        str_to_buf(v, &mut out.worked_country);
+    }
+    if let Some(v) = qso.worked_dxcc {
+        str_to_buf(&v.to_string(), &mut out.worked_dxcc);
+    }
+    if let Some(v) = qso.worked_cq_zone {
+        str_to_buf(&v.to_string(), &mut out.worked_cq_zone);
+    }
+    if let Some(v) = qso.worked_itu_zone {
+        str_to_buf(&v.to_string(), &mut out.worked_itu_zone);
+    }
+    if let Some(v) = &qso.worked_continent {
+        str_to_buf(v, &mut out.worked_continent);
+    }
     if let Some(v) = &qso.tx_power {
         str_to_buf(v, &mut out.tx_power);
     }
@@ -705,6 +753,12 @@ fn populate_qso_detail(qso: &QsoRecord, out: &mut QsrQsoDetail) {
         local_id: [0; 64],
         time_off: [0; 16],
         worked_name: [0; 64],
+        worked_grid: [0; 16],
+        worked_country: [0; 64],
+        worked_dxcc: [0; 16],
+        worked_cq_zone: [0; 16],
+        worked_itu_zone: [0; 16],
+        worked_continent: [0; 8],
         tx_power: [0; 16],
         submode: [0; 16],
         contest_id: [0; 32],
