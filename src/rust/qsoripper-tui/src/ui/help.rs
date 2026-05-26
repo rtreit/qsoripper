@@ -55,8 +55,8 @@ pub(super) fn render(frame: &mut Frame, area: Rect) {
         "F8               ",
         "Toggle rig control (read freq/mode from radio)",
     ));
-    lines.push(binding("Esc              ", "Clear the focused field"));
-    lines.push(binding("Ctrl+L           ", "Clear the current QSO"));
+    lines.push(binding("Esc              ", "Clear the current QSO"));
+    lines.push(binding("Ctrl+Backspace   ", "Clear the focused field"));
     lines.push(binding("Ctrl+Q           ", "Quit"));
     lines.push(Line::raw(""));
 

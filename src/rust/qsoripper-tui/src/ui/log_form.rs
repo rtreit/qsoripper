@@ -244,7 +244,7 @@ fn render_hints_row(frame: &mut Frame, area: Rect) {
             ),
             Span::raw("  "),
             Span::styled(
-                " Esc Clear Field ",
+                " Esc Clear QSO ",
                 Style::default().fg(Color::Black).bg(Color::DarkGray),
             ),
             Span::raw("  "),

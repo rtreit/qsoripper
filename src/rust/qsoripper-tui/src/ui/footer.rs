@@ -20,8 +20,8 @@ pub(super) fn render(frame: &mut Frame, area: Rect) {
         ("F5/F6", "Adv tabs"),
         ("F8", "Rig ctrl"),
         ("F10", "Log QSO (Alt+Enter)"),
-        ("Esc", "Clear field"),
-        ("Ctrl+L", "Clear QSO"),
+        ("Esc", "Clear QSO"),
+        ("Ctrl+Bksp", "Clear field"),
         ("Ctrl+Q", "Quit"),
     ];
 

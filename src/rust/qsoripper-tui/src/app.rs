@@ -199,12 +199,12 @@ pub(crate) struct App {
     pub(crate) endpoint: String,
     /// When the current QSO started — used for the live duration display.
     ///
-    /// Reset by F7, by Ctrl+L (form clear), and after each QSO is successfully logged or updated.
+    /// Reset by F7, by Esc (form clear), and after each QSO is successfully logged or updated.
     pub(crate) qso_started_at: Instant,
     /// Set when the debounce fires and the duration timer is actively counting.
     ///
     /// Starts `false`; becomes `true` once a callsign has been stable for ~1.5 s.
-    /// Cleared on form reset, Ctrl+L, and after log/update.
+    /// Cleared on form reset, Esc, and after log/update.
     pub(crate) qso_timer_active: bool,
     /// Reachability of the gRPC engine — updated by a periodic background probe.
     pub(crate) engine_status: EngineStatus,

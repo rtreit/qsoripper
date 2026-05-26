@@ -15,7 +15,7 @@ use crate::ui::log_form::styled_field;
 /// Render the advanced field entry form into `area`.
 pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let block = Block::bordered()
-        .title(" Advanced Fields  (F2 return | Esc clear field | Alt+1-4 tabs | F5/F6 cycle) ")
+        .title(" Advanced Fields  (F2 return | Esc clear QSO | Ctrl+Bksp clear field | Alt+1-4 tabs | F5/F6 cycle) ")
         .border_style(Style::default().fg(Color::Magenta));
 
     let inner = block.inner(area);
