@@ -18,7 +18,8 @@ enum Field {
     FIELD_RST_SENT, FIELD_RST_RCVD,
     FIELD_COMMENT, FIELD_NOTES,
     FIELD_FREQ, FIELD_DATE, FIELD_TIME,
-    FIELD_TIME_OFF, FIELD_QTH, FIELD_WORKED_NAME,
+    FIELD_TIME_OFF, FIELD_STATION_CALLSIGN, FIELD_QTH,
+    FIELD_WORKED_OPERATOR_CALLSIGN, FIELD_WORKED_NAME,
     FIELD_WORKED_GRID, FIELD_WORKED_COUNTRY, FIELD_WORKED_DXCC,
     FIELD_WORKED_CQ_ZONE, FIELD_WORKED_ITU_ZONE, FIELD_WORKED_CONTINENT,
     FIELD_TX_POWER, FIELD_SUBMODE, FIELD_CONTEST_ID,
@@ -27,6 +28,21 @@ enum Field {
     FIELD_PROP_MODE, FIELD_SAT_NAME, FIELD_SAT_MODE,
     FIELD_IOTA, FIELD_ARRL_SECTION, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY,
     FIELD_SKCC,
+    FIELD_QSL_SENT_STATUS, FIELD_QSL_SENT_DATE,
+    FIELD_QSL_RCVD_STATUS, FIELD_QSL_RCVD_DATE,
+    FIELD_LOTW_SENT, FIELD_LOTW_RCVD,
+    FIELD_EQSL_SENT, FIELD_EQSL_RCVD,
+    FIELD_QRZ_LOG_ID, FIELD_QRZ_BOOK_ID,
+    FIELD_SNAPSHOT_STATION_CALLSIGN, FIELD_SNAPSHOT_OPERATOR_CALLSIGN,
+    FIELD_SNAPSHOT_PROFILE, FIELD_SNAPSHOT_OPERATOR_NAME,
+    FIELD_SNAPSHOT_GRID, FIELD_SNAPSHOT_COUNTRY,
+    FIELD_SNAPSHOT_STATE, FIELD_SNAPSHOT_COUNTY,
+    FIELD_SNAPSHOT_ARRL_SECTION, FIELD_SNAPSHOT_DXCC,
+    FIELD_SNAPSHOT_CQ_ZONE, FIELD_SNAPSHOT_ITU_ZONE,
+    FIELD_SNAPSHOT_LATITUDE, FIELD_SNAPSHOT_LONGITUDE,
+    FIELD_CW_RX_WPM, FIELD_CW_TRANSCRIPT,
+    FIELD_LOCAL_ID, FIELD_SYNC_STATUS, FIELD_CREATED_AT,
+    FIELD_UPDATED_AT, FIELD_EXTRA_FIELDS,
     FIELD_COUNT
 };
 
@@ -58,6 +74,9 @@ int qsr_test_advanced_tab_field_count(int tab);
 int qsr_test_get_advanced_tab(void);
 void qsr_test_set_advanced_tab(int tab);
 void qsr_test_cycle_advanced_tab(int delta);
+int qsr_test_advanced_view_enabled(void);
+void qsr_test_set_qso_list_focused(int focused);
+void qsr_test_toggle_advanced_view(void);
 
 static HANDLE g_log_entered = NULL;
 static HANDLE g_release_log = NULL;
@@ -425,11 +444,13 @@ static int test_win32_advanced_editor_uses_card_pages(void)
 
     if (qsr_test_advanced_tab_for_field(FIELD_RST_SENT) != 0 ||
         qsr_test_advanced_tab_for_field(FIELD_TX_POWER) != 0 ||
+        qsr_test_advanced_tab_for_field(FIELD_STATION_CALLSIGN) != 0 ||
         qsr_test_advanced_tab_for_field(FIELD_COMMENT) != 0) {
         return fail("core QSO fields are not grouped on the Core card page");
     }
 
-    if (qsr_test_advanced_tab_for_field(FIELD_WORKED_NAME) != 1 ||
+    if (qsr_test_advanced_tab_for_field(FIELD_WORKED_OPERATOR_CALLSIGN) != 1 ||
+        qsr_test_advanced_tab_for_field(FIELD_WORKED_NAME) != 1 ||
         qsr_test_advanced_tab_for_field(FIELD_WORKED_GRID) != 1 ||
         qsr_test_advanced_tab_for_field(FIELD_WORKED_COUNTRY) != 1 ||
         qsr_test_advanced_tab_for_field(FIELD_WORKED_DXCC) != 1 ||
@@ -441,14 +462,32 @@ static int test_win32_advanced_editor_uses_card_pages(void)
         return fail("lookup fields are not grouped on the Lookup card page");
     }
 
+    if (qsr_test_advanced_tab_for_field(FIELD_QSL_SENT_STATUS) != 2 ||
+        qsr_test_advanced_tab_for_field(FIELD_LOTW_SENT) != 2 ||
+        qsr_test_advanced_tab_for_field(FIELD_QRZ_LOG_ID) != 2) {
+        return fail("QSL fields are not grouped on the QSL card page");
+    }
+
     if (qsr_test_advanced_tab_for_field(FIELD_EXCHANGE_RCVD) != 3 ||
         qsr_test_advanced_tab_for_field(FIELD_CONTEST_ID) != 3 ||
         qsr_test_advanced_tab_for_field(FIELD_SAT_NAME) != 3) {
         return fail("contest fields are not grouped on the Contest card page");
     }
 
-    if (qsr_test_advanced_tab_for_field(FIELD_QTH) != 4) {
+    if (qsr_test_advanced_tab_for_field(FIELD_SNAPSHOT_GRID) != 4 ||
+        qsr_test_advanced_tab_for_field(FIELD_SNAPSHOT_OPERATOR_NAME) != 4 ||
+        qsr_test_advanced_tab_for_field(FIELD_SNAPSHOT_LATITUDE) != 4) {
         return fail("station fields are not grouped on the Station card page");
+    }
+
+    if (qsr_test_advanced_tab_for_field(FIELD_CW_RX_WPM) != 5 ||
+        qsr_test_advanced_tab_for_field(FIELD_CW_TRANSCRIPT) != 5) {
+        return fail("transcript fields are not grouped on the Transcript card page");
+    }
+
+    if (qsr_test_advanced_tab_for_field(FIELD_LOCAL_ID) != 6 ||
+        qsr_test_advanced_tab_for_field(FIELD_EXTRA_FIELDS) != 6) {
+        return fail("metadata fields are not grouped on the Metadata card page");
     }
 
     for (int tab = 0; tab < 7; tab++) {
@@ -457,10 +496,7 @@ static int test_win32_advanced_editor_uses_card_pages(void)
         }
     }
 
-    for (int tab = 0; tab < 5; tab++) {
-        if (tab == 2) {
-            continue;
-        }
+    for (int tab = 0; tab < 7; tab++) {
         if (qsr_test_advanced_tab_field_count(tab) <= 0) {
             return fail("advanced editor card page has no editable fields");
         }
@@ -497,6 +533,39 @@ static int test_win32_advanced_editor_cycles_card_pages(void)
     return 0;
 }
 
+static int test_win32_f2_loads_selected_qso_for_advanced_edit(void)
+{
+    qsr_test_reset_state();
+    qsr_test_set_selected_recent_qso("edit-1", "K1ABC");
+    qsr_test_set_qso_list_focused(1);
+    qsr_test_set_backend_ffi_get_delete_weather((struct QsrClient *)0x1, stub_get_qso, NULL, NULL);
+
+    g_load_entered = CreateEventW(NULL, TRUE, FALSE, NULL);
+    g_release_load = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!g_load_entered || !g_release_load) {
+        return fail("failed to create F2 load test events");
+    }
+
+    qsr_test_toggle_advanced_view();
+
+    if (!qsr_test_advanced_view_enabled()) {
+        return fail("F2 did not open the advanced editor");
+    }
+
+    if (WaitForSingleObject(g_load_entered, 3000) != WAIT_OBJECT_0) {
+        return fail("F2 from the QSO list did not load the selected QSO");
+    }
+
+    SetEvent(g_release_load);
+    Sleep(50);
+    CloseHandle(g_load_entered);
+    CloseHandle(g_release_load);
+    g_load_entered = NULL;
+    g_release_load = NULL;
+
+    return 0;
+}
+
 int main(void)
 {
     int failures = 0;
@@ -510,6 +579,7 @@ int main(void)
     if (test_issue_329_qso_duration_uses_time_off() != 0) failures++;
     if (test_win32_advanced_editor_uses_card_pages() != 0) failures++;
     if (test_win32_advanced_editor_cycles_card_pages() != 0) failures++;
+    if (test_win32_f2_loads_selected_qso_for_advanced_edit() != 0) failures++;
     if (failures != 0) {
         fprintf(stderr, "FAIL: %d regression test(s) failed\n", failures);
         return 1;

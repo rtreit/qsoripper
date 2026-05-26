@@ -174,6 +174,18 @@ fn log_list_get_delete_round_trip() {
     };
     req.freq_khz = 14225;
     fill_buf(&mut req.comment, "FFI integration test");
+    fill_buf(&mut req.worked_operator_callsign, "W1AW/OP");
+    fill_buf(&mut req.qsl_sent_status, "Y");
+    fill_buf(&mut req.qsl_sent_date, "2025-01-16");
+    fill_buf(&mut req.lotw_sent, "N");
+    fill_buf(&mut req.qrz_log_id, "qrz-123");
+    fill_buf(&mut req.snapshot_profile, "Home");
+    fill_buf(&mut req.snapshot_station_callsign, "K7TST");
+    fill_buf(&mut req.snapshot_grid, "CN87");
+    fill_buf(&mut req.snapshot_dxcc, "291");
+    fill_buf(&mut req.cw_rx_wpm, "34");
+    fill_buf(&mut req.cw_transcript, "CQ TEST");
+    fill_buf(&mut req.extra_fields, "APP_TEST=value");
 
     let mut result: QsrLogQsoResult = unsafe { std::mem::zeroed() };
     let rc = unsafe { qsr_log_qso(client, &req, &mut result) };
@@ -205,6 +217,18 @@ fn log_list_get_delete_round_trip() {
     assert_eq!(buf_as_str(&detail.band), "20M");
     assert_eq!(buf_as_str(&detail.mode), "SSB");
     assert_eq!(buf_as_str(&detail.comment), "FFI integration test");
+    assert_eq!(buf_as_str(&detail.worked_operator_callsign), "W1AW/OP");
+    assert_eq!(buf_as_str(&detail.qsl_sent_status), "Y");
+    assert_eq!(buf_as_str(&detail.qsl_sent_date), "2025-01-16");
+    assert_eq!(buf_as_str(&detail.lotw_sent), "N");
+    assert_eq!(buf_as_str(&detail.qrz_log_id), "qrz-123");
+    assert_eq!(buf_as_str(&detail.snapshot_profile), "Home");
+    assert_eq!(buf_as_str(&detail.snapshot_station_callsign), "K7TST");
+    assert_eq!(buf_as_str(&detail.snapshot_grid), "CN87");
+    assert_eq!(buf_as_str(&detail.snapshot_dxcc), "291");
+    assert_eq!(buf_as_str(&detail.cw_rx_wpm), "34");
+    assert_eq!(buf_as_str(&detail.cw_transcript), "CQ TEST");
+    assert!(buf_as_str(&detail.extra_fields).contains("APP_TEST=value"));
 
     // 4. Delete the QSO
     let rc = unsafe { qsr_delete_qso(client, c_id.as_ptr()) };

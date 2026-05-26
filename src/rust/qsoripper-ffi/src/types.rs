@@ -40,6 +40,8 @@ pub struct QsrLogQsoRequest {
     pub comment: [u8; 256],
     /// Notes (null-terminated).
     pub notes: [u8; 256],
+    /// Worked operator callsign (null-terminated).
+    pub worked_operator_callsign: [u8; 32],
     /// Operator name (null-terminated).
     pub worked_name: [u8; 64],
     /// Worked grid square (null-terminated).
@@ -84,6 +86,60 @@ pub struct QsrLogQsoRequest {
     pub worked_county: [u8; 32],
     /// SKCC membership number (null-terminated).
     pub skcc: [u8; 16],
+    /// QSL sent status text (null-terminated).
+    pub qsl_sent_status: [u8; 16],
+    /// QSL sent date "YYYY-MM-DD" (null-terminated).
+    pub qsl_sent_date: [u8; 16],
+    /// QSL received status text (null-terminated).
+    pub qsl_rcvd_status: [u8; 16],
+    /// QSL received date "YYYY-MM-DD" (null-terminated).
+    pub qsl_rcvd_date: [u8; 16],
+    /// LoTW sent tri-state text (Y/N/blank, null-terminated).
+    pub lotw_sent: [u8; 8],
+    /// LoTW received tri-state text (Y/N/blank, null-terminated).
+    pub lotw_rcvd: [u8; 8],
+    /// eQSL sent tri-state text (Y/N/blank, null-terminated).
+    pub eqsl_sent: [u8; 8],
+    /// eQSL received tri-state text (Y/N/blank, null-terminated).
+    pub eqsl_rcvd: [u8; 8],
+    /// QRZ log identifier (null-terminated).
+    pub qrz_log_id: [u8; 32],
+    /// QRZ book identifier (null-terminated).
+    pub qrz_book_id: [u8; 32],
+    /// Station snapshot station callsign (null-terminated).
+    pub snapshot_station_callsign: [u8; 32],
+    /// Station snapshot operator callsign (null-terminated).
+    pub snapshot_operator_callsign: [u8; 32],
+    /// Station snapshot profile name (null-terminated).
+    pub snapshot_profile: [u8; 64],
+    /// Station snapshot operator name (null-terminated).
+    pub snapshot_operator_name: [u8; 64],
+    /// Station snapshot grid square (null-terminated).
+    pub snapshot_grid: [u8; 16],
+    /// Station snapshot country (null-terminated).
+    pub snapshot_country: [u8; 64],
+    /// Station snapshot state (null-terminated).
+    pub snapshot_state: [u8; 16],
+    /// Station snapshot county (null-terminated).
+    pub snapshot_county: [u8; 32],
+    /// Station snapshot ARRL section (null-terminated).
+    pub snapshot_arrl_section: [u8; 16],
+    /// Station snapshot DXCC as decimal text (null-terminated).
+    pub snapshot_dxcc: [u8; 16],
+    /// Station snapshot CQ zone as decimal text (null-terminated).
+    pub snapshot_cq_zone: [u8; 16],
+    /// Station snapshot ITU zone as decimal text (null-terminated).
+    pub snapshot_itu_zone: [u8; 16],
+    /// Station snapshot latitude as decimal text (null-terminated).
+    pub snapshot_latitude: [u8; 24],
+    /// Station snapshot longitude as decimal text (null-terminated).
+    pub snapshot_longitude: [u8; 24],
+    /// CW receive WPM as decimal text (null-terminated).
+    pub cw_rx_wpm: [u8; 8],
+    /// CW transcript text (null-terminated).
+    pub cw_transcript: [u8; 256],
+    /// Extra ADIF fields as newline-delimited KEY=value text (null-terminated).
+    pub extra_fields: [u8; 256],
     /// Time off date+time string "YYYY-MM-DD HH:MM" (null-terminated, empty = not set).
     pub time_off: [u8; 32],
 }
@@ -102,6 +158,13 @@ pub struct QsrUpdateQsoRequest {
     pub local_id: [u8; 64],
     /// Same payload as log request.
     pub qso: QsrLogQsoRequest,
+}
+
+impl Default for QsrQsoDetail {
+    fn default() -> Self {
+        // SAFETY: QsrQsoDetail only contains integer byte arrays, so all-zero is valid.
+        unsafe { std::mem::zeroed() }
+    }
 }
 
 /// Summary of a QSO for list display.
@@ -163,6 +226,8 @@ pub struct QsrQsoDetail {
     pub local_id: [u8; 64],
     /// Time off string "HH:MM" (null-terminated, empty = not set).
     pub time_off: [u8; 16],
+    /// Worked operator callsign (null-terminated).
+    pub worked_operator_callsign: [u8; 32],
     /// Worked name (null-terminated).
     pub worked_name: [u8; 64],
     /// Worked grid square (null-terminated).
@@ -207,6 +272,68 @@ pub struct QsrQsoDetail {
     pub worked_county: [u8; 32],
     /// SKCC membership number (null-terminated).
     pub skcc: [u8; 16],
+    /// Station callsign (null-terminated).
+    pub station_callsign: [u8; 32],
+    /// QSL sent status text (null-terminated).
+    pub qsl_sent_status: [u8; 16],
+    /// QSL sent date "YYYY-MM-DD" (null-terminated).
+    pub qsl_sent_date: [u8; 16],
+    /// QSL received status text (null-terminated).
+    pub qsl_rcvd_status: [u8; 16],
+    /// QSL received date "YYYY-MM-DD" (null-terminated).
+    pub qsl_rcvd_date: [u8; 16],
+    /// LoTW sent tri-state text (Y/N/blank, null-terminated).
+    pub lotw_sent: [u8; 8],
+    /// LoTW received tri-state text (Y/N/blank, null-terminated).
+    pub lotw_rcvd: [u8; 8],
+    /// eQSL sent tri-state text (Y/N/blank, null-terminated).
+    pub eqsl_sent: [u8; 8],
+    /// eQSL received tri-state text (Y/N/blank, null-terminated).
+    pub eqsl_rcvd: [u8; 8],
+    /// QRZ log identifier (null-terminated).
+    pub qrz_log_id: [u8; 32],
+    /// QRZ book identifier (null-terminated).
+    pub qrz_book_id: [u8; 32],
+    /// Station snapshot station callsign (null-terminated).
+    pub snapshot_station_callsign: [u8; 32],
+    /// Station snapshot operator callsign (null-terminated).
+    pub snapshot_operator_callsign: [u8; 32],
+    /// Station snapshot profile name (null-terminated).
+    pub snapshot_profile: [u8; 64],
+    /// Station snapshot operator name (null-terminated).
+    pub snapshot_operator_name: [u8; 64],
+    /// Station snapshot grid square (null-terminated).
+    pub snapshot_grid: [u8; 16],
+    /// Station snapshot country (null-terminated).
+    pub snapshot_country: [u8; 64],
+    /// Station snapshot state (null-terminated).
+    pub snapshot_state: [u8; 16],
+    /// Station snapshot county (null-terminated).
+    pub snapshot_county: [u8; 32],
+    /// Station snapshot ARRL section (null-terminated).
+    pub snapshot_arrl_section: [u8; 16],
+    /// Station snapshot DXCC as decimal text (null-terminated).
+    pub snapshot_dxcc: [u8; 16],
+    /// Station snapshot CQ zone as decimal text (null-terminated).
+    pub snapshot_cq_zone: [u8; 16],
+    /// Station snapshot ITU zone as decimal text (null-terminated).
+    pub snapshot_itu_zone: [u8; 16],
+    /// Station snapshot latitude as decimal text (null-terminated).
+    pub snapshot_latitude: [u8; 24],
+    /// Station snapshot longitude as decimal text (null-terminated).
+    pub snapshot_longitude: [u8; 24],
+    /// CW receive WPM as decimal text (null-terminated).
+    pub cw_rx_wpm: [u8; 8],
+    /// CW transcript text (null-terminated).
+    pub cw_transcript: [u8; 256],
+    /// Sync status text (null-terminated).
+    pub sync_status: [u8; 24],
+    /// Created timestamp text (null-terminated).
+    pub created_at: [u8; 32],
+    /// Updated timestamp text (null-terminated).
+    pub updated_at: [u8; 32],
+    /// Extra ADIF fields as newline-delimited KEY=value text (null-terminated).
+    pub extra_fields: [u8; 256],
 }
 
 /// Result from a callsign lookup.
