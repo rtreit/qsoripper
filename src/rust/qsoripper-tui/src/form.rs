@@ -214,6 +214,8 @@ pub(crate) struct LogForm {
     pub(crate) focused: Field,
     /// When `true`, the focused field's text is fully selected; typing replaces it.
     pub(crate) field_selected: bool,
+    /// Cursor position within the focused text field, measured in Unicode scalar values.
+    pub(crate) field_cursor: usize,
     /// Active tab in the Advanced view.
     pub(crate) advanced_tab: AdvancedTab,
     /// Worked callsign text.
@@ -290,6 +292,7 @@ impl LogForm {
         let mut form = Self {
             focused: Field::Callsign,
             field_selected: false,
+            field_cursor: 0,
             advanced_tab: AdvancedTab::Main,
             callsign: String::new(),
             band_idx: DEFAULT_BAND_IDX,
@@ -335,6 +338,7 @@ impl LogForm {
             .cloned()
             .unwrap_or(Field::Callsign);
         self.field_selected = true;
+        self.field_cursor = self.focused_text_len();
     }
 
     /// Move focus to the previous basic field, wrapping around, and select its text.
@@ -350,6 +354,7 @@ impl LogForm {
         };
         self.focused = FIELD_ORDER.get(new_idx).cloned().unwrap_or(Field::Callsign);
         self.field_selected = true;
+        self.field_cursor = self.focused_text_len();
     }
 
     /// Return the field list for the current advanced tab.
@@ -371,6 +376,7 @@ impl LogForm {
             .cloned()
             .unwrap_or(Field::Callsign);
         self.field_selected = true;
+        self.field_cursor = self.focused_text_len();
     }
 
     /// Move focus to the previous field in the current advanced tab, and select its text.
@@ -384,6 +390,7 @@ impl LogForm {
         };
         self.focused = fields.get(new_idx).cloned().unwrap_or(Field::Callsign);
         self.field_selected = true;
+        self.field_cursor = self.focused_text_len();
     }
 
     /// Switch to the next advanced tab and focus its first field.
@@ -395,6 +402,7 @@ impl LogForm {
             .cloned()
             .unwrap_or(Field::Callsign);
         self.field_selected = true;
+        self.field_cursor = self.focused_text_len();
     }
 
     /// Switch to the previous advanced tab and focus its first field.
@@ -406,6 +414,7 @@ impl LogForm {
             .cloned()
             .unwrap_or(Field::Callsign);
         self.field_selected = true;
+        self.field_cursor = self.focused_text_len();
     }
 
     /// Update frequency and RST defaults after the band changes.
@@ -458,6 +467,155 @@ impl LogForm {
             Field::Skcc => Some(&mut self.skcc),
             Field::Band | Field::Mode => None,
         }
+    }
+
+    /// Return the focused field's text buffer.
+    ///
+    /// Returns `None` for cycle-only fields (`Band`, `Mode`).
+    pub(crate) fn current_field_text(&self) -> Option<&str> {
+        match self.focused {
+            Field::Callsign => Some(&self.callsign),
+            Field::FrequencyMhz => Some(&self.frequency_mhz),
+            Field::Date => Some(&self.date),
+            Field::Time => Some(&self.time),
+            Field::TimeOff => Some(&self.time_off),
+            Field::Qth => Some(&self.qth),
+            Field::RstSent => Some(&self.rst_sent),
+            Field::RstRcvd => Some(&self.rst_rcvd),
+            Field::Comment => Some(&self.comment),
+            Field::Notes => Some(&self.notes),
+            Field::TxPower => Some(&self.tx_power),
+            Field::Submode => Some(&self.submode_override),
+            Field::ContestId => Some(&self.contest_id),
+            Field::SerialSent => Some(&self.serial_sent),
+            Field::SerialRcvd => Some(&self.serial_rcvd),
+            Field::ExchangeSent => Some(&self.exchange_sent),
+            Field::ExchangeRcvd => Some(&self.exchange_rcvd),
+            Field::PropMode => Some(&self.prop_mode),
+            Field::SatName => Some(&self.sat_name),
+            Field::SatMode => Some(&self.sat_mode),
+            Field::Iota => Some(&self.iota),
+            Field::ArrlSection => Some(&self.arrl_section),
+            Field::WorkedState => Some(&self.worked_state),
+            Field::WorkedCounty => Some(&self.worked_county),
+            Field::WorkedName => Some(&self.worked_name),
+            Field::Skcc => Some(&self.skcc),
+            Field::Band | Field::Mode => None,
+        }
+    }
+
+    /// Move the focused text field cursor one character left, clamping at the start.
+    pub(crate) fn move_cursor_left(&mut self) {
+        if self.current_field_text().is_none() {
+            return;
+        }
+        if self.field_selected {
+            self.field_cursor = 0;
+        } else {
+            self.field_cursor = self.field_cursor.saturating_sub(1);
+        }
+        self.field_selected = false;
+    }
+
+    /// Move the focused text field cursor one character right, clamping at the end.
+    pub(crate) fn move_cursor_right(&mut self) {
+        let len = self.focused_text_len();
+        if self.current_field_text().is_none() {
+            return;
+        }
+        if self.field_selected {
+            self.field_cursor = len;
+        } else {
+            self.field_cursor = (self.field_cursor + 1).min(len);
+        }
+        self.field_selected = false;
+    }
+
+    /// Move the focused text field cursor to the beginning.
+    pub(crate) fn move_cursor_home(&mut self) {
+        if self.current_field_text().is_some() {
+            self.field_cursor = 0;
+            self.field_selected = false;
+        }
+    }
+
+    /// Move the focused text field cursor to the end.
+    pub(crate) fn move_cursor_end(&mut self) {
+        if self.current_field_text().is_some() {
+            self.field_cursor = self.focused_text_len();
+            self.field_selected = false;
+        }
+    }
+
+    /// Insert a character at the focused text field cursor.
+    pub(crate) fn insert_char_at_cursor(&mut self, ch: char) {
+        if self.field_selected {
+            if let Some(text) = self.current_field_text_mut() {
+                text.clear();
+            }
+            self.field_cursor = 0;
+            self.field_selected = false;
+        }
+        let cursor = self.field_cursor;
+        if let Some(text) = self.current_field_text_mut() {
+            insert_char(text, cursor, ch);
+        }
+        self.field_cursor = (cursor + 1).min(self.focused_text_len());
+    }
+
+    /// Delete the character before the focused text field cursor.
+    pub(crate) fn backspace_at_cursor(&mut self) {
+        if self.field_selected {
+            if let Some(text) = self.current_field_text_mut() {
+                text.clear();
+            }
+            self.field_cursor = 0;
+            self.field_selected = false;
+            return;
+        }
+        if self.field_cursor == 0 {
+            return;
+        }
+        let cursor = self.field_cursor;
+        if let Some(text) = self.current_field_text_mut() {
+            delete_char_before(text, cursor);
+        }
+        self.field_cursor = cursor.saturating_sub(1).min(self.focused_text_len());
+    }
+
+    /// Delete the character at the focused text field cursor.
+    pub(crate) fn delete_at_cursor(&mut self) {
+        if self.field_selected {
+            if let Some(text) = self.current_field_text_mut() {
+                text.clear();
+            }
+            self.field_cursor = 0;
+            self.field_selected = false;
+            return;
+        }
+        let cursor = self.field_cursor;
+        if cursor >= self.focused_text_len() {
+            return;
+        }
+        if let Some(text) = self.current_field_text_mut() {
+            delete_char_at(text, cursor);
+        }
+        self.field_cursor = cursor.min(self.focused_text_len());
+    }
+
+    /// Clear the focused text field and leave the rest of the QSO intact.
+    pub(crate) fn clear_focused_text_field(&mut self) {
+        if let Some(text) = self.current_field_text_mut() {
+            text.clear();
+            self.field_cursor = 0;
+            self.field_selected = false;
+        }
+    }
+
+    /// Return the focused text field length in Unicode scalar values.
+    pub(crate) fn focused_text_len(&self) -> usize {
+        self.current_field_text()
+            .map_or(0, |text| text.chars().count())
     }
 
     /// Current band name from the [`BANDS`] slice.
@@ -526,6 +684,35 @@ fn default_rst_for_mode(mode_idx: usize) -> &'static str {
         "SSB" | "AM" | "FM" => "59",
         _ => "599",
     }
+}
+
+fn insert_char(text: &mut String, cursor: usize, ch: char) {
+    let byte_idx = byte_index_for_cursor(text, cursor);
+    text.insert(byte_idx, ch);
+}
+
+fn delete_char_before(text: &mut String, cursor: usize) {
+    if cursor == 0 {
+        return;
+    }
+    let start = byte_index_for_cursor(text, cursor - 1);
+    let end = byte_index_for_cursor(text, cursor);
+    text.replace_range(start..end, "");
+}
+
+fn delete_char_at(text: &mut String, cursor: usize) {
+    let start = byte_index_for_cursor(text, cursor);
+    let end = byte_index_for_cursor(text, cursor + 1);
+    if start < end {
+        text.replace_range(start..end, "");
+    }
+}
+
+fn byte_index_for_cursor(text: &str, cursor: usize) -> usize {
+    text.char_indices()
+        .map(|(idx, _)| idx)
+        .nth(cursor)
+        .unwrap_or(text.len())
 }
 
 #[cfg(test)]
@@ -790,6 +977,153 @@ mod tests {
         assert!(form.current_field_text_mut().is_none());
         form.focused = Field::Mode;
         assert!(form.current_field_text_mut().is_none());
+    }
+
+    #[test]
+    fn cursor_left_and_right_clamp_to_text_boundaries() {
+        let mut form = LogForm::new();
+        form.focused = Field::Comment;
+        form.comment = "abc".to_string();
+        form.field_cursor = 1;
+
+        form.move_cursor_left();
+        assert_eq!(form.field_cursor, 0);
+        form.move_cursor_left();
+        assert_eq!(form.field_cursor, 0);
+
+        form.move_cursor_right();
+        assert_eq!(form.field_cursor, 1);
+        form.move_cursor_right();
+        form.move_cursor_right();
+        form.move_cursor_right();
+        assert_eq!(form.field_cursor, 3);
+    }
+
+    #[test]
+    fn cursor_home_and_end_move_to_boundaries() {
+        let mut form = LogForm::new();
+        form.focused = Field::Comment;
+        form.comment = "abc".to_string();
+        form.field_cursor = 1;
+
+        form.move_cursor_end();
+        assert_eq!(form.field_cursor, 3);
+
+        form.move_cursor_home();
+        assert_eq!(form.field_cursor, 0);
+    }
+
+    #[test]
+    fn cursor_left_and_right_clear_selection_predictably() {
+        let mut form = LogForm::new();
+        form.focused = Field::Comment;
+        form.comment = "abc".to_string();
+        form.field_selected = true;
+        form.field_cursor = 3;
+
+        form.move_cursor_left();
+        assert!(!form.field_selected);
+        assert_eq!(form.field_cursor, 0);
+
+        form.field_selected = true;
+        form.move_cursor_right();
+        assert!(!form.field_selected);
+        assert_eq!(form.field_cursor, 3);
+    }
+
+    #[test]
+    fn insert_char_at_cursor_inserts_without_appending() {
+        let mut form = LogForm::new();
+        form.focused = Field::Comment;
+        form.comment = "ac".to_string();
+        form.field_cursor = 1;
+
+        form.insert_char_at_cursor('b');
+
+        assert_eq!(form.comment, "abc");
+        assert_eq!(form.field_cursor, 2);
+    }
+
+    #[test]
+    fn insert_char_with_selected_field_replaces_text() {
+        let mut form = LogForm::new();
+        form.focused = Field::Comment;
+        form.comment = "old".to_string();
+        form.field_selected = true;
+        form.field_cursor = 3;
+
+        form.insert_char_at_cursor('n');
+
+        assert_eq!(form.comment, "n");
+        assert_eq!(form.field_cursor, 1);
+        assert!(!form.field_selected);
+    }
+
+    #[test]
+    fn backspace_at_cursor_deletes_previous_character() {
+        let mut form = LogForm::new();
+        form.focused = Field::Comment;
+        form.comment = "abc".to_string();
+        form.field_cursor = 2;
+
+        form.backspace_at_cursor();
+
+        assert_eq!(form.comment, "ac");
+        assert_eq!(form.field_cursor, 1);
+    }
+
+    #[test]
+    fn backspace_at_start_does_nothing() {
+        let mut form = LogForm::new();
+        form.focused = Field::Comment;
+        form.comment = "abc".to_string();
+        form.field_cursor = 0;
+
+        form.backspace_at_cursor();
+
+        assert_eq!(form.comment, "abc");
+        assert_eq!(form.field_cursor, 0);
+    }
+
+    #[test]
+    fn delete_at_cursor_deletes_current_character() {
+        let mut form = LogForm::new();
+        form.focused = Field::Comment;
+        form.comment = "abc".to_string();
+        form.field_cursor = 1;
+
+        form.delete_at_cursor();
+
+        assert_eq!(form.comment, "ac");
+        assert_eq!(form.field_cursor, 1);
+    }
+
+    #[test]
+    fn delete_at_end_does_nothing() {
+        let mut form = LogForm::new();
+        form.focused = Field::Comment;
+        form.comment = "abc".to_string();
+        form.field_cursor = 3;
+
+        form.delete_at_cursor();
+
+        assert_eq!(form.comment, "abc");
+        assert_eq!(form.field_cursor, 3);
+    }
+
+    #[test]
+    fn clear_focused_text_field_only_clears_active_field() {
+        let mut form = LogForm::new();
+        form.focused = Field::Comment;
+        form.callsign = "K7ABC".to_string();
+        form.comment = "clear me".to_string();
+        form.field_cursor = form.comment.chars().count();
+
+        form.clear_focused_text_field();
+
+        assert_eq!(form.callsign, "K7ABC");
+        assert!(form.comment.is_empty());
+        assert_eq!(form.field_cursor, 0);
     }
 
     #[test]

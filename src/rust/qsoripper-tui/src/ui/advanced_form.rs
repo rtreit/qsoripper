@@ -15,7 +15,7 @@ use crate::ui::log_form::styled_field;
 /// Render the advanced field entry form into `area`.
 pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let block = Block::bordered()
-        .title(" Advanced Fields  (F2/Esc return | Alt+1-4 tabs | F5/F6 cycle) ")
+        .title(" Advanced Fields  (F2 return | Esc clear field | Alt+1-4 tabs | F5/F6 cycle) ")
         .border_style(Style::default().fg(Color::Magenta));
 
     let inner = block.inner(area);
@@ -99,7 +99,13 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, _
         let cs_selected = cs_focused && form.field_selected;
         let band_focused = form.focused == Field::Band;
         let mode_focused = form.focused == Field::Mode;
-        let cs_val = adv_field(&form.callsign, cs_focused, cs_selected, 12);
+        let cs_val = adv_field(
+            &form.callsign,
+            cs_focused,
+            cs_selected,
+            form.field_cursor,
+            12,
+        );
         let band_val = cycle_adv(form.band_str(), band_focused);
         let mode_val = cycle_adv(form.mode_str(), mode_focused);
         let mut spans: Vec<Span<'static>> = Vec::new();
@@ -150,7 +156,7 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, _
         let ds = df && form.field_selected;
         if let Some(&left) = cols.first() {
             let fw = (left.width as usize).saturating_sub(10).max(5);
-            let fv = adv_field(&form.frequency_mhz, ff, fs, fw);
+            let fv = adv_field(&form.frequency_mhz, ff, fs, form.field_cursor, fw);
             let mut s: Vec<Span<'static>> = Vec::new();
             s.extend(kl("", 'f', "req MHz  "));
             s.push(styled_field(fv, ff, fs));
@@ -158,7 +164,7 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, _
         }
         if let Some(&right) = cols.get(1) {
             let dw = (right.width as usize).saturating_sub(10).max(5);
-            let dv = adv_field(&form.date, df, ds, dw);
+            let dv = adv_field(&form.date, df, ds, form.field_cursor, dw);
             let mut s: Vec<Span<'static>> = Vec::new();
             s.extend(kl("", 'd', "ate      "));
             s.push(styled_field(dv, df, ds));
@@ -176,7 +182,7 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, _
         let es = ef && form.field_selected;
         if let Some(&left) = cols.first() {
             let tw = (left.width as usize).saturating_sub(10).max(5);
-            let tv = adv_field(&form.time, tf, ts, tw);
+            let tv = adv_field(&form.time, tf, ts, form.field_cursor, tw);
             let mut s: Vec<Span<'static>> = Vec::new();
             s.extend(kl("", 't', "ime      "));
             s.push(styled_field(tv, tf, ts));
@@ -184,7 +190,7 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, _
         }
         if let Some(&right) = cols.get(1) {
             let ew = (right.width as usize).saturating_sub(10).max(5);
-            let ev = adv_field(&form.time_off, ef, es, ew);
+            let ev = adv_field(&form.time_off, ef, es, form.field_cursor, ew);
             let mut s: Vec<Span<'static>> = Vec::new();
             s.extend(kl("T", 'e', "nd      "));
             s.push(styled_field(ev, ef, es));
@@ -202,7 +208,7 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, _
         let ns = nf && form.field_selected;
         if let Some(&left) = cols.first() {
             let qw = (left.width as usize).saturating_sub(10).max(5);
-            let qv = adv_field(&form.qth, qf, qs, qw);
+            let qv = adv_field(&form.qth, qf, qs, form.field_cursor, qw);
             let mut s: Vec<Span<'static>> = Vec::new();
             s.extend(kl("", 'q', "th       "));
             s.push(styled_field(qv, qf, qs));
@@ -210,7 +216,7 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, _
         }
         if let Some(&right) = cols.get(1) {
             let nw = (right.width as usize).saturating_sub(10).max(5);
-            let nv = adv_field(&form.worked_name, nf, ns, nw);
+            let nv = adv_field(&form.worked_name, nf, ns, form.field_cursor, nw);
             let mut s: Vec<Span<'static>> = Vec::new();
             s.extend(kl("N", 'a', "me      "));
             s.push(styled_field(nv, nf, ns));
@@ -227,14 +233,14 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, _
         let rf = form.focused == Field::RstRcvd;
         let rs = rf && form.field_selected;
         if let Some(&left) = cols.first() {
-            let sv = adv_field(&form.rst_sent, sf, ss, 5);
+            let sv = adv_field(&form.rst_sent, sf, ss, form.field_cursor, 5);
             let mut s: Vec<Span<'static>> = Vec::new();
             s.extend(kl("RST ", 's', "ent  "));
             s.push(styled_field(sv, sf, ss));
             frame.render_widget(Paragraph::new(Line::from(s)), left);
         }
         if let Some(&right) = cols.get(1) {
-            let rv = adv_field(&form.rst_rcvd, rf, rs, 5);
+            let rv = adv_field(&form.rst_rcvd, rf, rs, form.field_cursor, 5);
             let mut s: Vec<Span<'static>> = Vec::new();
             s.extend(kl("RST ", 'r', "cvd  "));
             s.push(styled_field(rv, rf, rs));
@@ -250,6 +256,7 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, _
             &form.comment,
             focused,
             selected,
+            form.field_cursor,
             (row.width as usize).saturating_sub(10).max(10),
         );
         let mut spans: Vec<Span<'static>> = Vec::new();
@@ -266,6 +273,7 @@ fn render_main_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm, _
             &form.notes,
             focused,
             selected,
+            form.field_cursor,
             (row.width as usize).saturating_sub(10).max(10),
         );
         let mut spans: Vec<Span<'static>> = Vec::new();
@@ -304,8 +312,8 @@ fn render_contest_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm
         let ps = pf && form.field_selected;
         let sf = form.focused == Field::Submode;
         let ss = sf && form.field_selected;
-        let pv = adv_field(&form.tx_power, pf, ps, short);
-        let sv = adv_field(&form.submode_override, sf, ss, short);
+        let pv = adv_field(&form.tx_power, pf, ps, form.field_cursor, short);
+        let sv = adv_field(&form.submode_override, sf, ss, form.field_cursor, short);
         let mut row0_spans: Vec<Span<'static>> = Vec::new();
         row0_spans.extend(kl("TX Po", 'w', "er "));
         row0_spans.push(styled_field(pv, pf, ps));
@@ -317,7 +325,7 @@ fn render_contest_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm
     if let Some(row) = rows.get(1).copied() {
         let focused = form.focused == Field::ContestId;
         let selected = focused && form.field_selected;
-        let val = adv_field(&form.contest_id, focused, selected, wide);
+        let val = adv_field(&form.contest_id, focused, selected, form.field_cursor, wide);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 label("Contest  "),
@@ -331,8 +339,8 @@ fn render_contest_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm
         let ss = sf && form.field_selected;
         let rf = form.focused == Field::SerialRcvd;
         let rs = rf && form.field_selected;
-        let sv = adv_field(&form.serial_sent, sf, ss, short);
-        let rv = adv_field(&form.serial_rcvd, rf, rs, short);
+        let sv = adv_field(&form.serial_sent, sf, ss, form.field_cursor, short);
+        let rv = adv_field(&form.serial_rcvd, rf, rs, form.field_cursor, short);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 label("Ser Sent "),
@@ -347,7 +355,13 @@ fn render_contest_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm
     if let Some(row) = rows.get(3).copied() {
         let focused = form.focused == Field::ExchangeSent;
         let selected = focused && form.field_selected;
-        let val = adv_field(&form.exchange_sent, focused, selected, wide);
+        let val = adv_field(
+            &form.exchange_sent,
+            focused,
+            selected,
+            form.field_cursor,
+            wide,
+        );
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 label("Exch Snt "),
@@ -359,7 +373,13 @@ fn render_contest_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm
     if let Some(row) = rows.get(4).copied() {
         let focused = form.focused == Field::ExchangeRcvd;
         let selected = focused && form.field_selected;
-        let val = adv_field(&form.exchange_rcvd, focused, selected, wide);
+        let val = adv_field(
+            &form.exchange_rcvd,
+            focused,
+            selected,
+            form.field_cursor,
+            wide,
+        );
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 label("Exch Rcvd"),
@@ -382,7 +402,7 @@ fn render_technical_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogFo
     if let Some(row) = rows.first().copied() {
         let focused = form.focused == Field::PropMode;
         let selected = focused && form.field_selected;
-        let val = adv_field(&form.prop_mode, focused, selected, wide);
+        let val = adv_field(&form.prop_mode, focused, selected, form.field_cursor, wide);
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.extend(kl("", 'p', "rop Mode"));
         spans.push(styled_field(val, focused, selected));
@@ -391,7 +411,7 @@ fn render_technical_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogFo
     if let Some(row) = rows.get(1).copied() {
         let focused = form.focused == Field::SatName;
         let selected = focused && form.field_selected;
-        let val = adv_field(&form.sat_name, focused, selected, wide);
+        let val = adv_field(&form.sat_name, focused, selected, form.field_cursor, wide);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 label("Sat Name "),
@@ -403,7 +423,7 @@ fn render_technical_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogFo
     if let Some(row) = rows.get(2).copied() {
         let focused = form.focused == Field::SatMode;
         let selected = focused && form.field_selected;
-        let val = adv_field(&form.sat_mode, focused, selected, wide);
+        let val = adv_field(&form.sat_mode, focused, selected, form.field_cursor, wide);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 label("Sat Mode "),
@@ -430,7 +450,7 @@ fn render_awards_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm,
     if let Some(row) = rows.first().copied() {
         let focused = form.focused == Field::Iota;
         let selected = focused && form.field_selected;
-        let val = adv_field(&form.iota, focused, selected, short);
+        let val = adv_field(&form.iota, focused, selected, form.field_cursor, short);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 label("IOTA     "),
@@ -442,7 +462,13 @@ fn render_awards_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm,
     if let Some(row) = rows.get(1).copied() {
         let focused = form.focused == Field::ArrlSection;
         let selected = focused && form.field_selected;
-        let val = adv_field(&form.arrl_section, focused, selected, short);
+        let val = adv_field(
+            &form.arrl_section,
+            focused,
+            selected,
+            form.field_cursor,
+            short,
+        );
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 label("ARRL Sec "),
@@ -456,8 +482,8 @@ fn render_awards_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm,
         let ws = wf && form.field_selected;
         let cf = form.focused == Field::WorkedCounty;
         let cs = cf && form.field_selected;
-        let wv = adv_field(&form.worked_state, wf, ws, short);
-        let cv = adv_field(&form.worked_county, cf, cs, wide);
+        let wv = adv_field(&form.worked_state, wf, ws, form.field_cursor, short);
+        let cv = adv_field(&form.worked_county, cf, cs, form.field_cursor, wide);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 label("State    "),
@@ -472,7 +498,7 @@ fn render_awards_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm,
     if let Some(row) = rows.get(3).copied() {
         let focused = form.focused == Field::Skcc;
         let selected = focused && form.field_selected;
-        let val = adv_field(&form.skcc, focused, selected, short);
+        let val = adv_field(&form.skcc, focused, selected, form.field_cursor, short);
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.extend(kl("S", 'k', "CC     "));
         spans.push(styled_field(val, focused, selected));
@@ -481,7 +507,7 @@ fn render_awards_tab(frame: &mut Frame, area: Rect, form: &crate::form::LogForm,
 }
 
 /// Format an advanced field value with a fixed display width and optional cursor.
-fn adv_field(text: &str, focused: bool, selected: bool, width: usize) -> String {
+fn adv_field(text: &str, focused: bool, selected: bool, cursor: usize, width: usize) -> String {
     if selected {
         let len = text.chars().count();
         if len >= width {
@@ -490,17 +516,39 @@ fn adv_field(text: &str, focused: bool, selected: bool, width: usize) -> String 
             format!("{text:<width$}")
         }
     } else {
-        let mut s = text.to_string();
-        if focused {
-            s.push('|');
-        }
+        let s = if focused {
+            text_with_cursor(text, cursor)
+        } else {
+            text.to_string()
+        };
         let len = s.chars().count();
         if len > width {
-            s.chars().skip(len - width).collect()
+            let skip = if focused {
+                cursor.saturating_add(1).saturating_sub(width)
+            } else {
+                len - width
+            };
+            s.chars().skip(skip).take(width).collect()
         } else {
             format!("{s:<width$}")
         }
     }
+}
+
+fn text_with_cursor(text: &str, cursor: usize) -> String {
+    let len = text.chars().count();
+    let cursor = cursor.min(len);
+    let mut value = String::new();
+    for (idx, ch) in text.chars().enumerate() {
+        if idx == cursor {
+            value.push('|');
+        }
+        value.push(ch);
+    }
+    if cursor == len {
+        value.push('|');
+    }
+    value
 }
 
 fn label(text: &str) -> Span<'static> {

@@ -430,12 +430,14 @@ fn handle_key_with_channel(
                 app.view = app::View::LogEntry;
                 app.form.focused = Field::Callsign;
                 app.form.field_selected = false;
+                app.form.field_cursor = app.form.focused_text_len();
             }
             app::View::LogEntry => {
                 app.view = app::View::Advanced;
                 app.form.advanced_tab = AdvancedTab::Main;
                 app.form.focused = Field::Callsign;
                 app.form.field_selected = true;
+                app.form.field_cursor = app.form.focused_text_len();
             }
             app::View::Help | app::View::ConfirmDeleteQso | app::View::ConfirmPurge => {}
         },
@@ -463,35 +465,34 @@ fn handle_key_with_channel(
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
             spawn_log_qso(app, event_tx, channel);
         }
-        KeyCode::End => {
-            app.form.field_selected = false;
-        }
+        KeyCode::Home => app.form.move_cursor_home(),
+        KeyCode::End => app.form.move_cursor_end(),
         KeyCode::Esc => match app.view {
-            app::View::Advanced => {
-                app.view = app::View::LogEntry;
-                app.form.focused = Field::Callsign;
-                app.form.field_selected = false;
-            }
-            app::View::LogEntry => {
-                app.form = LogForm::new();
-                app.lookup_result = None;
-                app.editing_local_id = None;
-                app.reset_timer();
+            app::View::Advanced | app::View::LogEntry => {
+                let focused = app.form.focused.clone();
+                app.form.clear_focused_text_field();
+                if focused == Field::Callsign {
+                    let _ = lookup_tx.send(app.form.callsign.clone());
+                    app.lookup_result = None;
+                }
             }
             app::View::Help | app::View::ConfirmDeleteQso | app::View::ConfirmPurge => {}
         },
         KeyCode::Left if app.form.is_cycle_field() => cycle_left(app),
         KeyCode::Right if app.form.is_cycle_field() => cycle_right(app),
+        KeyCode::Left => app.form.move_cursor_left(),
+        KeyCode::Right => app.form.move_cursor_right(),
         KeyCode::Backspace => {
             let focused = app.form.focused.clone();
-            if app.form.field_selected {
-                if let Some(text) = app.form.current_field_text_mut() {
-                    text.clear();
-                }
-                app.form.field_selected = false;
-            } else if let Some(text) = app.form.current_field_text_mut() {
-                text.pop();
+            app.form.backspace_at_cursor();
+            if focused == Field::Callsign {
+                let callsign = app.form.callsign.clone();
+                let _ = lookup_tx.send(callsign);
             }
+        }
+        KeyCode::Delete => {
+            let focused = app.form.focused.clone();
+            app.form.delete_at_cursor();
             if focused == Field::Callsign {
                 let callsign = app.form.callsign.clone();
                 let _ = lookup_tx.send(callsign);
@@ -717,19 +718,12 @@ fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
         Field::Band => app.form.type_select_band(c),
         Field::Mode => app.form.type_select_mode(c),
         _ => {
-            if app.form.field_selected {
-                if let Some(text) = app.form.current_field_text_mut() {
-                    text.clear();
-                }
-                app.form.field_selected = false;
-            }
-            if let Some(text) = app.form.current_field_text_mut() {
-                if focused == Field::Callsign {
-                    text.push(c.to_ascii_uppercase());
-                } else {
-                    text.push(c);
-                }
-            }
+            let ch = if focused == Field::Callsign {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            };
+            app.form.insert_char_at_cursor(ch);
             if focused == Field::Callsign {
                 let callsign = app.form.callsign.clone();
                 let _ = lookup_tx.send(callsign);
@@ -753,6 +747,7 @@ fn switch_to_tab(app: &mut App, tab: AdvancedTab) {
     app.form.advanced_tab = tab;
     app.form.focused = tab.first_field();
     app.form.field_selected = true;
+    app.form.field_cursor = app.form.focused_text_len();
     app.qso_list_focused = false;
 }
 
@@ -786,6 +781,7 @@ fn jump_to_field(app: &mut App, ch: char) {
     }
     app.form.focused = target;
     app.form.field_selected = true;
+    app.form.field_cursor = app.form.focused_text_len();
     app.qso_list_focused = false;
 }
 
@@ -883,6 +879,7 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
 
     app.form.focused = Field::Callsign;
     app.form.field_selected = true;
+    app.form.field_cursor = app.form.focused_text_len();
     app.qso_list_focused = false;
     app.qso_selected = None;
     app.editing_local_id = Some(local_id.to_string());
@@ -2308,12 +2305,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_key_esc_clears_form_in_log_entry() {
+    async fn handle_key_esc_clears_only_focused_field_in_log_entry() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
         let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.form.callsign = "K7ABC".to_string();
+        app.form.comment = "keep this".to_string();
+        app.form.focused = Field::Callsign;
+        app.editing_local_id = Some("q1".to_string());
         handle_key(
             &mut app,
             make_key(KeyCode::Esc),
@@ -2323,15 +2323,20 @@ mod tests {
             "",
         );
         assert!(app.form.callsign.is_empty());
+        assert_eq!(app.form.comment, "keep this");
+        assert_eq!(app.editing_local_id, Some("q1".to_string()));
     }
 
     #[tokio::test]
-    async fn handle_key_esc_in_advanced_returns_to_log_entry() {
+    async fn handle_key_esc_in_advanced_clears_focused_field() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
         let (rig_tx, _rig_rx) = make_rig_watch();
         let mut app = make_app();
         app.view = View::Advanced;
+        app.form.focused = Field::Comment;
+        app.form.comment = "clear me".to_string();
+        app.form.callsign = "K7ABC".to_string();
         handle_key(
             &mut app,
             make_key(KeyCode::Esc),
@@ -2340,7 +2345,9 @@ mod tests {
             &rig_tx,
             "",
         );
-        assert!(matches!(app.view, View::LogEntry));
+        assert!(matches!(app.view, View::Advanced));
+        assert!(app.form.comment.is_empty());
+        assert_eq!(app.form.callsign, "K7ABC");
     }
 
     #[tokio::test]
@@ -2359,6 +2366,27 @@ mod tests {
             "",
         );
         assert!(!app.form.field_selected);
+        assert_eq!(app.form.field_cursor, app.form.focused_text_len());
+    }
+
+    #[tokio::test]
+    async fn handle_key_home_moves_text_cursor_to_start() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.form.focused = Field::Comment;
+        app.form.comment = "abc".to_string();
+        app.form.field_cursor = 3;
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Home),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert_eq!(app.form.field_cursor, 0);
     }
 
     #[tokio::test]
@@ -2434,6 +2462,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_key_left_moves_text_cursor() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.form.focused = Field::Comment;
+        app.form.comment = "abc".to_string();
+        app.form.field_cursor = 2;
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Left),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert_eq!(app.form.field_cursor, 1);
+    }
+
+    #[tokio::test]
+    async fn handle_key_right_moves_text_cursor() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.form.focused = Field::Comment;
+        app.form.comment = "abc".to_string();
+        app.form.field_cursor = 1;
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Right),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert_eq!(app.form.field_cursor, 2);
+    }
+
+    #[tokio::test]
     async fn handle_key_char_appends_to_callsign_uppercase() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
@@ -2470,6 +2538,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn handle_key_char_inserts_at_text_cursor() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.form.focused = Field::Comment;
+        app.form.comment = "ac".to_string();
+        app.form.field_cursor = 1;
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Char('b')),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert_eq!(app.form.comment, "abc");
+        assert_eq!(app.form.field_cursor, 2);
+    }
+
+    #[tokio::test]
     async fn handle_key_char_with_field_selected_clears_first() {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
         let (lookup_tx, _lookup_rx) = make_watch();
@@ -2497,6 +2586,7 @@ mod tests {
         let mut app = make_app();
         app.form.focused = Field::Callsign;
         app.form.callsign = "K7A".to_string();
+        app.form.field_cursor = 3;
         handle_key(
             &mut app,
             make_key(KeyCode::Backspace),
@@ -2506,6 +2596,27 @@ mod tests {
             "",
         );
         assert_eq!(app.form.callsign, "K7");
+    }
+
+    #[tokio::test]
+    async fn handle_key_delete_removes_char_at_cursor() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.form.focused = Field::Comment;
+        app.form.comment = "abc".to_string();
+        app.form.field_cursor = 1;
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Delete),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert_eq!(app.form.comment, "ac");
+        assert_eq!(app.form.field_cursor, 1);
     }
 
     #[tokio::test]
