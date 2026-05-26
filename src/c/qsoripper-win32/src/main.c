@@ -2942,7 +2942,7 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
     int ch = g_state.char_h;
     int row_h = ch + 8;
     int pad = cw * 2;
-    int label_w = cw * 13;
+    int label_w = cw * 16;
     int focused_form = !g_state.qso_list_focused && !g_state.search_focused;
     int tab = g_state.advanced_tab;
     int field_count, form_h, y, i, t;
@@ -2966,7 +2966,7 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
     }
 
     DrawText_A(hdc, pad, y_start + ch + 2, CLR_DARKGRAY,
-               "Ctrl+Tab or F5/F6 pages - Alt+1..7 jumps - F10 saves - Esc closes card");
+               "F5/F6 pages - Alt+1..7 jumps - F10 saves - Esc closes card");
 
     y = y_start + ch * 2 + 8;
 
@@ -3053,9 +3053,6 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
                        CLR_GRAY, line);
         }
 
-        y = card_y + card_h - ch - 6;
-        DrawText_A(hdc, card_x + cw * 2, y, CLR_GRAY,
-                   "Tab/Shift+Tab cycles fields; Ctrl+Tab/Ctrl+Shift+Tab cycles pages.");
     }
 
     return y_start + form_h;
@@ -3334,8 +3331,6 @@ static void PaintHelp(HDC hdc, int w, int h)
         "F4              Toggle search",
         "F7              Start QSO timer",
         "F8              Toggle rig control",
-        "Ctrl+Tab        Advanced page next",
-        "Ctrl+Shift+Tab  Advanced page previous",
         "F5 / F6         Advanced page next/previous",
         "Alt+1..7        Advanced page direct",
         "F10 / Alt+Enter Log QSO (or update)",
