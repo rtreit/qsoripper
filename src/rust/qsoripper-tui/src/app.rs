@@ -101,8 +101,6 @@ pub(crate) struct RecentQso {
     pub(crate) grid: Option<String>,
     /// Worked operator name.
     pub(crate) name: Option<String>,
-    /// Calculated QSO duration (e.g. "2m 35s"), or `None` when end time is absent.
-    pub(crate) duration: Option<String>,
     /// Full proto record from the engine, preserved for lossless round-trip during edits.
     pub(crate) source_record: QsoRecord,
 }
@@ -129,6 +127,13 @@ impl RecentQso {
                 .contains(lower)
             || self
                 .name
+                .as_deref()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains(lower)
+            || self
+                .source_record
+                .comment
                 .as_deref()
                 .unwrap_or("")
                 .to_lowercase()
@@ -350,7 +355,6 @@ mod tests {
             country: None,
             grid: None,
             name: None,
-            duration: None,
             source_record: QsoRecord {
                 local_id: id.to_string(),
                 worked_callsign: callsign.to_string(),
@@ -534,14 +538,17 @@ mod tests {
             country: Some("United States".to_string()),
             grid: Some("CN87".to_string()),
             name: Some("John".to_string()),
-            duration: None,
-            source_record: QsoRecord::default(),
+            source_record: QsoRecord {
+                comment: Some("Portable activation".to_string()),
+                ..Default::default()
+            },
         };
         assert!(qso.matches_search("40m"));
         assert!(qso.matches_search("cw"));
         assert!(qso.matches_search("united"));
         assert!(qso.matches_search("cn87"));
         assert!(qso.matches_search("john"));
+        assert!(qso.matches_search("portable"));
         assert!(qso.matches_search("12:00"));
     }
 
@@ -564,7 +571,6 @@ mod tests {
             country: None,
             grid: None,
             name: None,
-            duration: None,
             source_record: QsoRecord::default(),
         };
         assert!(!qso.matches_search("united"));
