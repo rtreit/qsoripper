@@ -250,7 +250,7 @@ typedef struct {
 
     /* Advanced view state */
     int advanced_view;        /* 0 = basic, 1 = advanced */
-    int advanced_tab;         /* 0=Main, 1=Contest, 2=Technical, 3=Awards */
+    int advanced_tab;         /* 0=Core, 1=Signal, 2=Station/Location, 3=Notes/Metadata */
 
     /* Advanced field buffers */
     char time_off[16];
@@ -277,6 +277,7 @@ typedef struct {
 
     /* Hit-test rectangles for click-to-focus (populated during paint) */
     RECT field_rects[FIELD_COUNT];
+    RECT advanced_tab_rects[4];
     int  field_rects_valid;
     int  qso_list_y;  /* top of QSO list panel for click detection */
     int  qso_list_row_h; /* row height in QSO list */
@@ -421,6 +422,7 @@ static void RefreshQsoListAsync(HWND hwnd);
 static void FetchSpaceWeather(void);
 static void LoadSelectedQso(void);
 static void DeleteSelectedQso(void);
+static int  AdvancedFormHeight(void);
 static int  PaintAdvancedForm(HDC hdc, int y_start, int w);
 static void InitBackend(void);
 static void ShutdownBackend(void);
@@ -2418,44 +2420,57 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
     return y_start + form_h;
 }
 
-/* ── Advanced view tab field definitions ────────────────────────────────── */
+/* ── Advanced card editor tab field definitions ─────────────────────────── */
 
 #define ADV_TAB_COUNT 4
+#define ADV_TAB_CORE 0
+#define ADV_TAB_SIGNAL 1
+#define ADV_TAB_STATION 2
+#define ADV_TAB_NOTES 3
 
-static const enum Field ADV_TAB_MAIN[] = {
+static const enum Field ADV_TAB_CORE_FIELDS[] = {
     FIELD_CALLSIGN, FIELD_BAND, FIELD_MODE, FIELD_FREQ,
-    FIELD_DATE, FIELD_TIME, FIELD_TIME_OFF, FIELD_QTH,
-    FIELD_WORKED_NAME, FIELD_RST_SENT, FIELD_RST_RCVD,
-    FIELD_COMMENT, FIELD_NOTES
+    FIELD_DATE, FIELD_TIME, FIELD_TIME_OFF
 };
 
-static const enum Field ADV_TAB_CONTEST[] = {
-    FIELD_TX_POWER, FIELD_SUBMODE, FIELD_CONTEST_ID,
+static const enum Field ADV_TAB_SIGNAL_FIELDS[] = {
+    FIELD_RST_SENT, FIELD_RST_RCVD, FIELD_TX_POWER, FIELD_SUBMODE,
+    FIELD_PROP_MODE, FIELD_SAT_NAME, FIELD_SAT_MODE
+};
+
+static const enum Field ADV_TAB_STATION_FIELDS[] = {
+    FIELD_WORKED_NAME, FIELD_QTH, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY,
+    FIELD_ARRL_SECTION, FIELD_IOTA, FIELD_SKCC
+};
+
+static const enum Field ADV_TAB_NOTES_FIELDS[] = {
+    FIELD_COMMENT, FIELD_NOTES, FIELD_CONTEST_ID,
     FIELD_SERIAL_SENT, FIELD_SERIAL_RCVD,
     FIELD_EXCHANGE_SENT, FIELD_EXCHANGE_RCVD
 };
 
-static const enum Field ADV_TAB_TECHNICAL[] = {
-    FIELD_PROP_MODE, FIELD_SAT_NAME, FIELD_SAT_MODE
-};
-
-static const enum Field ADV_TAB_AWARDS[] = {
-    FIELD_IOTA, FIELD_ARRL_SECTION, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY,
-    FIELD_SKCC
-};
-
 static const enum Field *ADV_TABS[] = {
-    ADV_TAB_MAIN, ADV_TAB_CONTEST, ADV_TAB_TECHNICAL, ADV_TAB_AWARDS
+    ADV_TAB_CORE_FIELDS, ADV_TAB_SIGNAL_FIELDS,
+    ADV_TAB_STATION_FIELDS, ADV_TAB_NOTES_FIELDS
 };
 
 static const int ADV_TAB_COUNTS[] = {
-    sizeof(ADV_TAB_MAIN) / sizeof(ADV_TAB_MAIN[0]),
-    sizeof(ADV_TAB_CONTEST) / sizeof(ADV_TAB_CONTEST[0]),
-    sizeof(ADV_TAB_TECHNICAL) / sizeof(ADV_TAB_TECHNICAL[0]),
-    sizeof(ADV_TAB_AWARDS) / sizeof(ADV_TAB_AWARDS[0])
+    sizeof(ADV_TAB_CORE_FIELDS) / sizeof(ADV_TAB_CORE_FIELDS[0]),
+    sizeof(ADV_TAB_SIGNAL_FIELDS) / sizeof(ADV_TAB_SIGNAL_FIELDS[0]),
+    sizeof(ADV_TAB_STATION_FIELDS) / sizeof(ADV_TAB_STATION_FIELDS[0]),
+    sizeof(ADV_TAB_NOTES_FIELDS) / sizeof(ADV_TAB_NOTES_FIELDS[0])
 };
 
-static const char *ADV_TAB_NAMES[] = { "Main", "Contest", "Technical", "Awards" };
+static const char *ADV_TAB_NAMES[] = {
+    "Core", "Signal", "Station/Location", "Notes/Metadata"
+};
+
+static const char *ADV_TAB_DESCRIPTIONS[] = {
+    "Identity, band/mode, frequency and UTC timing",
+    "Reports, power, submode and propagation details",
+    "Worked operator name, QTH and location/award fields",
+    "Operator notes plus contest exchange metadata"
+};
 
 static const enum Field *AdvTabFields(int tab, int *count)
 {
@@ -2472,6 +2487,34 @@ static int AdvTabFieldIndex(int tab, enum Field f)
     }
     return -1;
 }
+
+static int AdvTabForField(enum Field f)
+{
+    int t;
+    for (t = 0; t < ADV_TAB_COUNT; t++) {
+        if (AdvTabFieldIndex(t, f) >= 0) return t;
+    }
+    return -1;
+}
+
+#ifdef QSORIPPER_WIN32_TESTING
+int qsr_test_advanced_tab_for_field(enum Field f)
+{
+    return AdvTabForField(f);
+}
+
+const char *qsr_test_advanced_tab_name(int tab)
+{
+    if (tab < 0 || tab >= ADV_TAB_COUNT) return NULL;
+    return ADV_TAB_NAMES[tab];
+}
+
+int qsr_test_advanced_tab_field_count(int tab)
+{
+    if (tab < 0 || tab >= ADV_TAB_COUNT) return 0;
+    return ADV_TAB_COUNTS[tab];
+}
+#endif
 
 static int CountAdvancedRows(const enum Field *fields, int count)
 {
@@ -2491,7 +2534,58 @@ static int CountAdvancedRows(const enum Field *fields, int count)
     return rows;
 }
 
-/* ── Drawing: Advanced log form ────────────────────────────────────────── */
+static int AdvancedFormHeight(void)
+{
+    int cnt;
+    const enum Field *fields = AdvTabFields(g_state.advanced_tab, &cnt);
+    int rows = CountAdvancedRows(fields, cnt);
+    int ch = g_state.char_h;
+    int row_h = ch + 8;
+
+    /* Title + tabs + section header + rows + action hint, with compact padding. */
+    return ch * 3 + row_h * (rows + 3) + 42;
+}
+
+static void DrawCardPanel(HDC hdc, int x, int y, int w, int h,
+                          const char *title, const char *subtitle,
+                          COLORREF border, int cw, int ch)
+{
+    FillRect_Color(hdc, x, y, w, h, RGB(20, 24, 29));
+    DrawBox(hdc, x, y, w, h, border);
+    SelectObject(hdc, g_state.hFontSmallBold);
+    DrawText_A_BG(hdc, x + cw, y, border, RGB(20, 24, 29), title);
+    SelectObject(hdc, g_state.hFont);
+    if (subtitle && subtitle[0])
+        DrawText_A(hdc, x + cw, y + ch + 6, CLR_DARKGRAY, subtitle);
+}
+
+static void DrawAdvancedEditorField(HDC hdc, enum Field f, int x, int y,
+                                    int label_w, int field_chars,
+                                    int focused_form, int cw, int ch)
+{
+    int field_x = x + label_w;
+    int box_w = field_chars * cw + 6;
+    int box_h = ch + 4;
+
+    DrawLabelWithHotkey(hdc, x, y + 3, CLR_LABEL, FIELD_LABELS[f],
+                        FieldHotkey(f), cw, ch);
+    if (f == FIELD_BAND) {
+        DrawCycleField(hdc, field_x, y, field_chars, BANDS[g_state.band_idx],
+                       focused_form && g_state.focused_field == f, cw, ch);
+    } else if (f == FIELD_MODE) {
+        DrawCycleField(hdc, field_x, y, field_chars, MODES[g_state.mode_idx],
+                       focused_form && g_state.focused_field == f, cw, ch);
+    } else {
+        char *buf = FieldBuffer(f);
+        DrawField(hdc, field_x, y, field_chars, buf ? buf : "",
+                  g_state.cursor_pos[f],
+                  focused_form && g_state.focused_field == f, cw, ch);
+    }
+
+    SetRect(&g_state.field_rects[f], field_x, y, field_x + box_w, y + box_h);
+}
+
+/* ── Drawing: Advanced card editor ─────────────────────────────────────── */
 
 static int PaintAdvancedForm(HDC hdc, int y_start, int w)
 {
@@ -2499,17 +2593,15 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
     int ch = g_state.char_h;
     int row_h = ch + 8;
     int pad = cw * 2;
-    int label_w = cw * 14;
+    int label_w = cw * 13;
     int focused_form = !g_state.qso_list_focused && !g_state.search_focused;
     int tab = g_state.advanced_tab;
-    int field_count, num_rows, form_h, y, i, t;
+    int field_count, form_h, y, i, t;
     const enum Field *fields;
     COLORREF border_clr;
 
     fields = AdvTabFields(tab, &field_count);
-    num_rows = CountAdvancedRows(fields, field_count);
-    /* form_h: title + tab bar + field rows + margin */
-    form_h = ch + 4 + row_h * (num_rows + 1) + 12;
+    form_h = AdvancedFormHeight();
 
     border_clr = focused_form ? CLR_MAGENTA : CLR_DARKGRAY;
     DrawBox(hdc, 4, y_start, w - 8, form_h, border_clr);
@@ -2518,13 +2610,16 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
     {
         char title[64];
         const char *pfx = g_state.editing_local_id[0] ? "Edit" : "Advanced";
-        snprintf(title, sizeof(title), " %s - %s ", pfx, ADV_TAB_NAMES[tab]);
+        snprintf(title, sizeof(title), " %s QSO Card - %s ", pfx, ADV_TAB_NAMES[tab]);
         SelectObject(hdc, g_state.hFontSmallBold);
         DrawText_A_BG(hdc, pad, y_start, CLR_MAGENTA, CLR_BG, title);
         SelectObject(hdc, g_state.hFont);
     }
 
-    y = y_start + ch + 4;
+    DrawText_A(hdc, pad + cw * 28, y_start + 1, CLR_DARKGRAY,
+               "F5/F6 or Alt+1..4 pages - F10/Alt+Enter saves - Esc closes card");
+
+    y = y_start + ch + 6;
 
     /* Tab bar */
     {
@@ -2533,83 +2628,62 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
             char tab_label[32];
             COLORREF bg = (t == tab) ? CLR_CYAN : CLR_DARKGRAY;
             COLORREF fg = (t == tab) ? CLR_BG : CLR_WHITE;
-            snprintf(tab_label, sizeof(tab_label), " %s ", ADV_TAB_NAMES[t]);
+            int tw;
+            snprintf(tab_label, sizeof(tab_label), " %d %s ", t + 1, ADV_TAB_NAMES[t]);
             DrawChip(hdc, tx, y, bg, fg, tab_label, cw, ch);
-            tx += (int)strlen(tab_label) * cw + 12;
+            tw = (int)strlen(tab_label) * cw + 8;
+            SetRect(&g_state.advanced_tab_rects[t], tx, y, tx + tw, y + ch + 2);
+            tx += tw + 10;
         }
     }
     y += row_h;
 
-    /* Two-column field layout */
+    /* Compact desktop card surface: one grouped panel per logical page. */
     {
-        int col_w = (w - pad * 2 - 16) / 2;
+        int card_x = pad;
+        int card_y = y;
+        int card_w = w - pad * 2;
+        int card_h = form_h - (card_y - y_start) - row_h;
+        int col_w = (card_w - cw * 4) / 2;
         int field_w = (col_w - label_w - 8) / cw;
+        const char *card_title = ADV_TAB_NAMES[tab];
+        const char *card_subtitle = ADV_TAB_DESCRIPTIONS[tab];
+
         if (field_w > 30) field_w = 30;
         if (field_w < 8) field_w = 8;
+
+        DrawCardPanel(hdc, card_x, card_y, card_w, card_h,
+                      card_title, card_subtitle, CLR_DARKGRAY, cw, ch);
+        y = card_y + ch * 2 + 10;
 
         for (i = 0; i < field_count; ) {
             enum Field f1 = fields[i];
             int full_w = (f1 == FIELD_COMMENT || f1 == FIELD_NOTES);
+            int left_x = card_x + cw * 2;
 
-            /* First field */
-            DrawLabelWithHotkey(hdc, pad, y + 3, CLR_CYAN, FIELD_LABELS[f1],
-                                FieldHotkey(f1), cw, ch);
-            if (f1 == FIELD_BAND) {
-                DrawCycleField(hdc, pad + label_w, y, 8,
-                               BANDS[g_state.band_idx],
-                               focused_form && g_state.focused_field == f1,
-                               cw, ch);
-            } else if (f1 == FIELD_MODE) {
-                DrawCycleField(hdc, pad + label_w, y, 8,
-                               MODES[g_state.mode_idx],
-                               focused_form && g_state.focused_field == f1,
-                               cw, ch);
-            } else {
-                int fw = full_w ? ((w - pad * 2 - label_w - 12) / cw)
-                                : field_w;
-                char *buf = FieldBuffer(f1);
-                if (fw > 60) fw = 60;
-                if (fw < 8) fw = 8;
-                DrawField(hdc, pad + label_w, y, fw,
-                          buf ? buf : "", g_state.cursor_pos[f1],
-                          focused_form && g_state.focused_field == f1,
-                          cw, ch);
-            }
+            DrawAdvancedEditorField(hdc, f1, left_x, y, label_w,
+                                    full_w ? ((card_w - cw * 4 - label_w - 8) / cw)
+                                           : field_w,
+                                    focused_form, cw, ch);
             i++;
 
             /* Second field in same row (if first wasn't full-width) */
             if (!full_w && i < field_count) {
                 enum Field f2 = fields[i];
                 if (f2 != FIELD_COMMENT && f2 != FIELD_NOTES) {
-                    int col2_x = pad + col_w + 8;
-                    DrawLabelWithHotkey(hdc, col2_x, y + 3, CLR_CYAN,
-                                       FIELD_LABELS[f2], FieldHotkey(f2), cw, ch);
-                    if (f2 == FIELD_BAND) {
-                        DrawCycleField(hdc, col2_x + label_w, y, 8,
-                                       BANDS[g_state.band_idx],
-                                       focused_form &&
-                                           g_state.focused_field == f2,
-                                       cw, ch);
-                    } else if (f2 == FIELD_MODE) {
-                        DrawCycleField(hdc, col2_x + label_w, y, 8,
-                                       MODES[g_state.mode_idx],
-                                       focused_form &&
-                                           g_state.focused_field == f2,
-                                       cw, ch);
-                    } else {
-                        char *buf2 = FieldBuffer(f2);
-                        DrawField(hdc, col2_x + label_w, y, field_w,
-                                  buf2 ? buf2 : "", g_state.cursor_pos[f2],
-                                  focused_form &&
-                                      g_state.focused_field == f2,
-                                  cw, ch);
-                    }
+                    int col2_x = card_x + cw * 2 + col_w + cw * 4;
+                    DrawAdvancedEditorField(hdc, f2, col2_x, y, label_w,
+                                            field_w, focused_form, cw, ch);
                     i++;
                 }
             }
 
             y += row_h;
         }
+
+        y = card_y + card_h - ch - 6;
+        DrawText_A(hdc, card_x + cw * 2, y, CLR_DARKGRAY,
+                   "Tab/Shift+Tab cycles fields on this page; Alt+underlined letter jumps directly to a field.");
     }
 
     return y_start + form_h;
@@ -2888,7 +2962,8 @@ static void PaintHelp(HDC hdc, int w, int h)
         "F4              Toggle search",
         "F7              Start QSO timer",
         "F8              Toggle rig control",
-        "F5 / F6         Adv tab next/prev",
+        "F5 / F6         Advanced page next/prev",
+        "Alt+1..4        Advanced page direct",
         "F10 / Alt+Enter Log QSO (or update)",
         "Tab / Shift+Tab Navigate fields",
         "Left / Right    Cycle Band/Mode",
@@ -3134,9 +3209,12 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
     if (vk == VK_F2) {
         g_state.advanced_view = !g_state.advanced_view;
         if (g_state.advanced_view) {
-            /* Keep field if it exists in current tab, else focus first */
-            if (AdvTabFieldIndex(g_state.advanced_tab,
-                                 g_state.focused_field) < 0) {
+            /* Keep the operator's current basic field by opening its page. */
+            int field_tab = AdvTabForField(g_state.focused_field);
+            if (field_tab >= 0) {
+                g_state.advanced_tab = field_tab;
+            } else if (AdvTabFieldIndex(g_state.advanced_tab,
+                                        g_state.focused_field) < 0) {
                 int cnt;
                 const enum Field *flds =
                     AdvTabFields(g_state.advanced_tab, &cnt);
@@ -3235,6 +3313,17 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
     /* ── Alt+key: jump to field ──────────────────────────────────── */
     if (alt_down && !ctrl_down) {
         enum Field target = FIELD_COUNT;
+        if (g_state.advanced_view && vk >= '1' && vk <= '4') {
+            int cnt;
+            const enum Field *flds;
+            g_state.advanced_tab = (int)(vk - '1');
+            flds = AdvTabFields(g_state.advanced_tab, &cnt);
+            SetFocusField(flds[0]);
+            g_state.qso_list_focused = 0;
+            g_state.search_focused = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return;
+        }
         switch (vk) {
         case 'C': target = FIELD_CALLSIGN; break;
         case 'B': target = FIELD_BAND; break;
@@ -3256,6 +3345,12 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         case 'K': target = FIELD_SKCC; break;
         }
         if (target != FIELD_COUNT) {
+            if (g_state.advanced_view) {
+                int target_tab = AdvTabForField(target);
+                if (target_tab >= 0) {
+                    g_state.advanced_tab = target_tab;
+                }
+            }
             SetFocusField(target);
             g_state.qso_list_focused = 0;
             g_state.search_focused = 0;
@@ -3943,13 +4038,46 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         int row_h = ch + 8;
         int form_start = header_h + status_h;
         int form_h = g_state.advanced_view
-            ? (row_h * 12 + ch + 10)
+            ? AdvancedFormHeight()
             : (row_h * 9 + ch + 10);
         int form_end = form_start + form_h;
         int lookup_h = ch * 5 + 8;
         int qso_list_start = form_end + lookup_h;
 
-        /* Click in form area? */
+        /* Click in advanced card editor? */
+        if (my >= form_start && my < form_end && g_state.advanced_view) {
+            POINT pt;
+            int i;
+            pt.x = mx;
+            pt.y = my;
+
+            for (i = 0; i < ADV_TAB_COUNT; i++) {
+                if (PtInRect(&g_state.advanced_tab_rects[i], pt)) {
+                    int cnt;
+                    const enum Field *flds;
+                    g_state.advanced_tab = i;
+                    flds = AdvTabFields(g_state.advanced_tab, &cnt);
+                    SetFocusField(flds[0]);
+                    g_state.qso_list_focused = 0;
+                    g_state.search_focused = 0;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    return 0;
+                }
+            }
+
+            for (i = 0; i < FIELD_COUNT; i++) {
+                if (PtInRect(&g_state.field_rects[i], pt) &&
+                    AdvTabFieldIndex(g_state.advanced_tab, (enum Field)i) >= 0) {
+                    SetFocusField((enum Field)i);
+                    g_state.qso_list_focused = 0;
+                    g_state.search_focused = 0;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    return 0;
+                }
+            }
+        }
+
+        /* Click in basic form area? */
         if (my >= form_start && my < form_end && !g_state.advanced_view) {
             int pad = cw * 2;
             int label_w = cw * 10;
@@ -4046,7 +4174,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         int row_h = ch + 8;
         int form_start = header_h + status_h;
         int form_h = g_state.advanced_view
-            ? (row_h * 12 + ch + 10)
+            ? AdvancedFormHeight()
             : (row_h * 9 + ch + 10);
         int form_end = form_start + form_h;
         int lookup_h = ch * 5 + 8;
