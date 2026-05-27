@@ -357,6 +357,8 @@ pub(crate) struct LogForm {
     pub(crate) focused: Field,
     /// When `true`, the focused field's text is fully selected; typing replaces it.
     pub(crate) field_selected: bool,
+    /// Cursor position within the focused text field, measured in Unicode scalar values.
+    pub(crate) field_cursor: usize,
     /// Active tab in the Advanced view.
     pub(crate) advanced_tab: AdvancedTab,
     /// Worked callsign text.
@@ -511,6 +513,7 @@ impl LogForm {
         let mut form = Self {
             focused: Field::Callsign,
             field_selected: false,
+            field_cursor: 0,
             advanced_tab: AdvancedTab::Core,
             callsign: String::new(),
             band_idx: DEFAULT_BAND_IDX,
@@ -595,6 +598,7 @@ impl LogForm {
             .copied()
             .unwrap_or(Field::Callsign);
         self.field_selected = true;
+        self.field_cursor = self.focused_text_len();
     }
 
     /// Move focus to the previous basic field, wrapping around, and select its text.
@@ -610,6 +614,7 @@ impl LogForm {
         };
         self.focused = FIELD_ORDER.get(new_idx).copied().unwrap_or(Field::Callsign);
         self.field_selected = true;
+        self.field_cursor = self.focused_text_len();
     }
 
     /// Return the field list for the current advanced tab.
@@ -638,6 +643,7 @@ impl LogForm {
             .copied()
             .unwrap_or(Field::Callsign);
         self.field_selected = true;
+        self.field_cursor = self.focused_text_len();
     }
 
     /// Move focus to the previous field in the current advanced tab, and select its text.
@@ -655,6 +661,7 @@ impl LogForm {
         };
         self.focused = fields.get(new_idx).copied().unwrap_or(Field::Callsign);
         self.field_selected = true;
+        self.field_cursor = self.focused_text_len();
     }
 
     /// Switch to the next advanced tab and focus its first field.
@@ -666,6 +673,7 @@ impl LogForm {
             .copied()
             .unwrap_or(Field::Callsign);
         self.field_selected = true;
+        self.field_cursor = self.focused_text_len();
     }
 
     /// Switch to the previous advanced tab and focus its first field.
@@ -677,6 +685,7 @@ impl LogForm {
             .copied()
             .unwrap_or(Field::Callsign);
         self.field_selected = true;
+        self.field_cursor = self.focused_text_len();
     }
 
     /// Update frequency and RST defaults after the band changes.
@@ -771,6 +780,199 @@ impl LogForm {
         }
     }
 
+    /// Return the focused field's text buffer.
+    ///
+    /// Returns `None` for cycle-only or read-only fields.
+    pub(crate) fn current_field_text(&self) -> Option<&str> {
+        match self.focused {
+            Field::Callsign => Some(&self.callsign),
+            Field::FrequencyMhz => Some(&self.frequency_mhz),
+            Field::Date => Some(&self.date),
+            Field::Time => Some(&self.time),
+            Field::TimeOff => Some(&self.time_off),
+            Field::Qth => Some(&self.qth),
+            Field::StationCallsign => Some(&self.station_callsign),
+            Field::RstSent => Some(&self.rst_sent),
+            Field::RstRcvd => Some(&self.rst_rcvd),
+            Field::Comment => Some(&self.comment),
+            Field::Notes => Some(&self.notes),
+            Field::TxPower => Some(&self.tx_power),
+            Field::Submode => Some(&self.submode_override),
+            Field::ContestId => Some(&self.contest_id),
+            Field::SerialSent => Some(&self.serial_sent),
+            Field::SerialRcvd => Some(&self.serial_rcvd),
+            Field::ExchangeSent => Some(&self.exchange_sent),
+            Field::ExchangeRcvd => Some(&self.exchange_rcvd),
+            Field::PropMode => Some(&self.prop_mode),
+            Field::SatName => Some(&self.sat_name),
+            Field::SatMode => Some(&self.sat_mode),
+            Field::Iota => Some(&self.iota),
+            Field::ArrlSection => Some(&self.arrl_section),
+            Field::WorkedState => Some(&self.worked_state),
+            Field::WorkedCounty => Some(&self.worked_county),
+            Field::WorkedOperatorCallsign => Some(&self.worked_operator_callsign),
+            Field::WorkedName => Some(&self.worked_name),
+            Field::WorkedGrid => Some(&self.worked_grid),
+            Field::WorkedCountry => Some(&self.worked_country),
+            Field::WorkedDxcc => Some(&self.worked_dxcc),
+            Field::WorkedCqZone => Some(&self.worked_cq_zone),
+            Field::WorkedItuZone => Some(&self.worked_itu_zone),
+            Field::WorkedContinent => Some(&self.worked_continent),
+            Field::Skcc => Some(&self.skcc),
+            Field::QslSentStatus => Some(&self.qsl_sent_status),
+            Field::QslSentDate => Some(&self.qsl_sent_date),
+            Field::QslReceivedStatus => Some(&self.qsl_received_status),
+            Field::QslReceivedDate => Some(&self.qsl_received_date),
+            Field::LotwSent => Some(&self.lotw_sent),
+            Field::LotwReceived => Some(&self.lotw_received),
+            Field::EqslSent => Some(&self.eqsl_sent),
+            Field::EqslReceived => Some(&self.eqsl_received),
+            Field::QrzLogId => Some(&self.qrz_log_id),
+            Field::QrzBookId => Some(&self.qrz_book_id),
+            Field::SnapshotProfileName => Some(&self.snapshot_profile_name),
+            Field::SnapshotStationCallsign => Some(&self.snapshot_station_callsign),
+            Field::SnapshotOperatorCallsign => Some(&self.snapshot_operator_callsign),
+            Field::SnapshotOperatorName => Some(&self.snapshot_operator_name),
+            Field::SnapshotGrid => Some(&self.snapshot_grid),
+            Field::SnapshotCountry => Some(&self.snapshot_country),
+            Field::SnapshotState => Some(&self.snapshot_state),
+            Field::SnapshotCounty => Some(&self.snapshot_county),
+            Field::SnapshotArrlSection => Some(&self.snapshot_arrl_section),
+            Field::SnapshotDxcc => Some(&self.snapshot_dxcc),
+            Field::SnapshotCqZone => Some(&self.snapshot_cq_zone),
+            Field::SnapshotItuZone => Some(&self.snapshot_itu_zone),
+            Field::SnapshotLatitude => Some(&self.snapshot_latitude),
+            Field::SnapshotLongitude => Some(&self.snapshot_longitude),
+            Field::CwDecodeRxWpm => Some(&self.cw_decode_rx_wpm),
+            Field::CwDecodeTranscript => Some(&self.cw_decode_transcript),
+            Field::ExtraFields => Some(&self.extra_fields),
+            Field::Band
+            | Field::Mode
+            | Field::LocalId
+            | Field::SyncStatus
+            | Field::CreatedAt
+            | Field::UpdatedAt => None,
+        }
+    }
+
+    /// Length of the focused text field in Unicode scalar values.
+    pub(crate) fn focused_text_len(&self) -> usize {
+        self.current_field_text()
+            .map_or(0, |text| text.chars().count())
+    }
+
+    /// Move the focused text field cursor one character left, clamping at the start.
+    pub(crate) fn move_cursor_left(&mut self) {
+        if self.current_field_text().is_none() {
+            return;
+        }
+        if self.field_selected {
+            self.field_cursor = 0;
+        } else {
+            self.field_cursor = self.field_cursor.saturating_sub(1);
+        }
+        self.field_selected = false;
+    }
+
+    /// Move the focused text field cursor one character right, clamping at the end.
+    pub(crate) fn move_cursor_right(&mut self) {
+        let len = self.focused_text_len();
+        if self.current_field_text().is_none() {
+            return;
+        }
+        if self.field_selected {
+            self.field_cursor = len;
+        } else {
+            self.field_cursor = (self.field_cursor + 1).min(len);
+        }
+        self.field_selected = false;
+    }
+
+    /// Move the focused text field cursor to the beginning.
+    pub(crate) fn move_cursor_home(&mut self) {
+        if self.current_field_text().is_some() {
+            self.field_cursor = 0;
+            self.field_selected = false;
+        }
+    }
+
+    /// Move the focused text field cursor to the end.
+    pub(crate) fn move_cursor_end(&mut self) {
+        if self.current_field_text().is_some() {
+            self.field_cursor = self.focused_text_len();
+            self.field_selected = false;
+        }
+    }
+
+    /// Insert `ch` into the focused text field at the cursor position.
+    pub(crate) fn insert_char_at_cursor(&mut self, ch: char) {
+        if self.field_selected {
+            if let Some(text) = self.current_field_text_mut() {
+                text.clear();
+            }
+            self.field_cursor = 0;
+            self.field_selected = false;
+        }
+        let cursor = self.field_cursor;
+        if let Some(text) = self.current_field_text_mut() {
+            let idx = byte_index_for_char(text, cursor);
+            text.insert(idx, ch);
+            self.field_cursor = cursor + 1;
+        }
+    }
+
+    /// Remove the character before the cursor in the focused text field.
+    pub(crate) fn backspace_at_cursor(&mut self) {
+        if self.field_selected {
+            if let Some(text) = self.current_field_text_mut() {
+                text.clear();
+            }
+            self.field_cursor = 0;
+            self.field_selected = false;
+            return;
+        }
+        if self.field_cursor == 0 {
+            return;
+        }
+        let cursor = self.field_cursor;
+        if let Some(text) = self.current_field_text_mut() {
+            let start = byte_index_for_char(text, cursor - 1);
+            let end = byte_index_for_char(text, cursor);
+            text.replace_range(start..end, "");
+            self.field_cursor = cursor - 1;
+        }
+    }
+
+    /// Remove the character at the cursor in the focused text field.
+    pub(crate) fn delete_at_cursor(&mut self) {
+        if self.field_selected {
+            if let Some(text) = self.current_field_text_mut() {
+                text.clear();
+            }
+            self.field_cursor = 0;
+            self.field_selected = false;
+            return;
+        }
+        let cursor = self.field_cursor;
+        if let Some(text) = self.current_field_text_mut() {
+            if cursor >= text.chars().count() {
+                return;
+            }
+            let start = byte_index_for_char(text, cursor);
+            let end = byte_index_for_char(text, cursor + 1);
+            text.replace_range(start..end, "");
+        }
+    }
+
+    /// Clear the focused text field and place the cursor at the beginning.
+    pub(crate) fn clear_focused_text_field(&mut self) {
+        if let Some(text) = self.current_field_text_mut() {
+            text.clear();
+        }
+        self.field_cursor = 0;
+        self.field_selected = false;
+    }
+
     /// Current band name from the [`BANDS`] slice.
     pub(crate) fn band_str(&self) -> &str {
         BANDS.get(self.band_idx).copied().unwrap_or("20M")
@@ -829,6 +1031,12 @@ impl LogForm {
             self.on_mode_change();
         }
     }
+}
+
+fn byte_index_for_char(text: &str, char_idx: usize) -> usize {
+    text.char_indices()
+        .nth(char_idx)
+        .map_or_else(|| text.len(), |(idx, _)| idx)
 }
 
 /// Return the default RST string for the given mode index.

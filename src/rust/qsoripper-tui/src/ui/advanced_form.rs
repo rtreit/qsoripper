@@ -650,7 +650,13 @@ fn render_field(frame: &mut Frame, area: Rect, form: &LogForm, spec: &FieldSpec)
     let value = if matches!(spec.field, Field::Band | Field::Mode) {
         cycle_value(field_text(form, spec.field), focused)
     } else {
-        adv_field(field_text(form, spec.field), focused, selected, value_width)
+        adv_field(
+            field_text(form, spec.field),
+            focused,
+            selected,
+            form.field_cursor,
+            value_width,
+        )
     };
 
     let mut spans = Vec::new();
@@ -746,7 +752,7 @@ fn two_columns(area: Rect) -> [Rect; 2] {
 }
 
 /// Format an advanced field value with a fixed display width and optional cursor.
-fn adv_field(text: &str, focused: bool, selected: bool, width: usize) -> String {
+fn adv_field(text: &str, focused: bool, selected: bool, cursor: usize, width: usize) -> String {
     if selected {
         let len = text.chars().count();
         if len >= width {
@@ -755,17 +761,38 @@ fn adv_field(text: &str, focused: bool, selected: bool, width: usize) -> String 
             format!("{text:<width$}")
         }
     } else {
-        let mut s = text.to_string();
-        if focused {
-            s.push('|');
-        }
+        let s = if focused {
+            text_with_cursor(text, cursor)
+        } else {
+            text.to_string()
+        };
         let len = s.chars().count();
         if len > width {
-            s.chars().skip(len - width).collect()
+            let start = if focused {
+                cursor.saturating_add(1).saturating_sub(width)
+            } else {
+                len - width
+            };
+            s.chars().skip(start).take(width).collect()
         } else {
             format!("{s:<width$}")
         }
     }
+}
+
+fn text_with_cursor(text: &str, cursor: usize) -> String {
+    let cursor = cursor.min(text.chars().count());
+    let mut result = String::with_capacity(text.len() + 1);
+    for (idx, ch) in text.chars().enumerate() {
+        if idx == cursor {
+            result.push('|');
+        }
+        result.push(ch);
+    }
+    if cursor == text.chars().count() {
+        result.push('|');
+    }
+    result
 }
 
 fn shortcut_label(key: char, label: &'static str) -> [Span<'static>; 3] {

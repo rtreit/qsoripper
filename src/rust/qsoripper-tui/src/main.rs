@@ -495,9 +495,8 @@ fn handle_key_with_channel(
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
             spawn_log_qso(app, event_tx, channel);
         }
-        KeyCode::End => {
-            app.form.field_selected = false;
-        }
+        KeyCode::Home => app.form.move_cursor_home(),
+        KeyCode::End => app.form.move_cursor_end(),
         KeyCode::Esc => match app.view {
             app::View::Advanced => {
                 app.view = app::View::LogEntry;
@@ -512,18 +511,24 @@ fn handle_key_with_channel(
             }
             app::View::Help | app::View::ConfirmDeleteQso | app::View::ConfirmPurge => {}
         },
+        KeyCode::Backspace | KeyCode::Delete if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            clear_focused_field(app, lookup_tx);
+        }
         KeyCode::Left if app.form.is_cycle_field() => cycle_left(app),
         KeyCode::Right if app.form.is_cycle_field() => cycle_right(app),
+        KeyCode::Left => app.form.move_cursor_left(),
+        KeyCode::Right => app.form.move_cursor_right(),
         KeyCode::Backspace => {
             let focused = app.form.focused;
-            if app.form.field_selected {
-                if let Some(text) = app.form.current_field_text_mut() {
-                    text.clear();
-                }
-                app.form.field_selected = false;
-            } else if let Some(text) = app.form.current_field_text_mut() {
-                text.pop();
+            app.form.backspace_at_cursor();
+            if focused == Field::Callsign {
+                let callsign = app.form.callsign.clone();
+                let _ = lookup_tx.send(callsign);
             }
+        }
+        KeyCode::Delete => {
+            let focused = app.form.focused;
+            app.form.delete_at_cursor();
             if focused == Field::Callsign {
                 let callsign = app.form.callsign.clone();
                 let _ = lookup_tx.send(callsign);
@@ -534,6 +539,15 @@ fn handle_key_with_channel(
         }
         KeyCode::Char(c) => handle_char_key(app, c, lookup_tx),
         _ => {}
+    }
+}
+
+fn clear_focused_field(app: &mut App, lookup_tx: &watch::Sender<String>) {
+    let focused = app.form.focused;
+    app.form.clear_focused_text_field();
+    if focused == Field::Callsign {
+        let _ = lookup_tx.send(app.form.callsign.clone());
+        app.lookup_result = None;
     }
 }
 
@@ -757,26 +771,19 @@ fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
         Field::Band => app.form.type_select_band(c),
         Field::Mode => app.form.type_select_mode(c),
         _ => {
-            if app.form.field_selected {
-                if let Some(text) = app.form.current_field_text_mut() {
-                    text.clear();
-                }
-                app.form.field_selected = false;
-            }
-            if let Some(text) = app.form.current_field_text_mut() {
-                if matches!(
-                    focused,
-                    Field::Callsign
-                        | Field::StationCallsign
-                        | Field::WorkedOperatorCallsign
-                        | Field::SnapshotStationCallsign
-                        | Field::SnapshotOperatorCallsign
-                ) {
-                    text.push(c.to_ascii_uppercase());
-                } else {
-                    text.push(c);
-                }
-            }
+            let ch = if matches!(
+                focused,
+                Field::Callsign
+                    | Field::StationCallsign
+                    | Field::WorkedOperatorCallsign
+                    | Field::SnapshotStationCallsign
+                    | Field::SnapshotOperatorCallsign
+            ) {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            };
+            app.form.insert_char_at_cursor(ch);
             if focused == Field::Callsign {
                 let callsign = app.form.callsign.clone();
                 let _ = lookup_tx.send(callsign);
@@ -803,6 +810,7 @@ fn switch_to_tab(app: &mut App, tab: AdvancedTab) {
     app.form.advanced_tab = tab;
     app.form.focused = tab.first_field();
     app.form.field_selected = true;
+    app.form.field_cursor = app.form.focused_text_len();
     app.qso_list_focused = false;
 }
 
@@ -866,6 +874,7 @@ fn jump_to_field(app: &mut App, ch: char) {
     }
     app.form.focused = target;
     app.form.field_selected = true;
+    app.form.field_cursor = app.form.focused_text_len();
     app.qso_list_focused = false;
 }
 
@@ -2824,6 +2833,7 @@ mod tests {
         let mut app = make_app();
         app.form.focused = Field::Callsign;
         app.form.callsign = "K7A".to_string();
+        app.form.field_cursor = app.form.focused_text_len();
         handle_key(
             &mut app,
             make_key(KeyCode::Backspace),
