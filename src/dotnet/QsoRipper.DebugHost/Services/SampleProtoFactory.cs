@@ -515,8 +515,7 @@ internal sealed class SampleProtoFactory
     {
         var enumValue = field.EnumType.Values.FirstOrDefault(static value => value.Number != 0)
             ?? field.EnumType.Values[0];
-        var enumType = field.Accessor.GetValue(message).GetType();
-        return System.Enum.ToObject(enumType, enumValue.Number);
+        return CreateEnumValue(message, field, enumValue.Number);
     }
 
     private IMessage? CreateSampleNestedMessage(
@@ -558,8 +557,28 @@ internal sealed class SampleProtoFactory
         var enumValue = preferredValue
             ?? field.EnumType.Values.FirstOrDefault(static value => value.Number != 0 && !value.Name.Contains("UNSPECIFIED", StringComparison.Ordinal))
             ?? field.EnumType.Values[0];
-        var enumType = field.Accessor.GetValue(message).GetType();
-        return System.Enum.ToObject(enumType, enumValue.Number);
+        return CreateEnumValue(message, field, enumValue.Number);
+    }
+
+    private static object CreateEnumValue(IMessage message, FieldDescriptor field, int value)
+    {
+        var fieldValue = field.Accessor.GetValue(message);
+        var fieldType = fieldValue.GetType();
+        if (fieldType.IsEnum)
+        {
+            return System.Enum.ToObject(fieldType, value);
+        }
+
+        if (field.IsRepeated)
+        {
+            var itemType = fieldType.GetGenericArguments().FirstOrDefault();
+            if (itemType is not null && itemType.IsEnum)
+            {
+                return System.Enum.ToObject(itemType, value);
+            }
+        }
+
+        throw new InvalidOperationException($"Could not resolve enum CLR type for field '{field.FullName}'.");
     }
 
     private static string CreateSampleString(FieldDescriptor field, SampleGenerationContext context)

@@ -832,7 +832,7 @@ Computes the great-circle path from `origin` to `target`.
 - No external I/O; the RPC must complete entirely from in-process math.
 - This service is required, not optional. Engines that lack the math should still expose the RPC and return `UNIMPLEMENTED`, but the reference Rust and .NET engines both implement it.
 
-### 3.10 DeveloperControlService
+### 3.11 DeveloperControlService
 
 **Proto file:** `proto/services/developer_control_service.proto`
 
@@ -876,7 +876,7 @@ Resets all runtime configuration to environment/default values.
 - Reload configuration from environment variables and defaults.
 - Return the reset configuration snapshot.
 
-### 3.11 StressControlService (Optional)
+### 3.12 StressControlService (Optional)
 
 **Proto file:** `proto/services/stress_control_service.proto`
 

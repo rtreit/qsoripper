@@ -32,7 +32,7 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     };
 
     let title = if app.qso_list_focused {
-        format!(" QSOs  {count_str}  \u{2191}\u{2193} navigate  Enter load  D delete  Esc exit ")
+        format!(" QSOs  {count_str}  \u{2191}\u{2193} navigate  Enter load  F2 card  D delete  Esc exit ")
     } else if app.search_focused {
         format!(" QSOs  {count_str}  Esc clear  \u{2193}/Enter\u{2192}list ")
     } else if !app.search_text.is_empty() {
@@ -101,9 +101,9 @@ fn render_table(app: &App, filtered: &[&crate::app::RecentQso], frame: &mut Fram
         "Mode",
         "RST\u{2191}",
         "RST\u{2193}",
-        "Dur",
         "Country",
         "Grid",
+        "Comment",
     ]
     .iter()
     .map(|h| {
@@ -133,9 +133,9 @@ fn render_table(app: &App, filtered: &[&crate::app::RecentQso], frame: &mut Fram
             Cell::from(qso.mode.as_str()),
             Cell::from(qso.rst_sent.as_str()),
             Cell::from(qso.rst_rcvd.as_str()),
-            Cell::from(qso.duration.as_deref().unwrap_or("")),
             Cell::from(qso.country.as_deref().unwrap_or("")),
             Cell::from(qso.grid.as_deref().unwrap_or("")),
+            Cell::from(qso.source_record.comment.as_deref().unwrap_or("")),
         ])
         .style(row_style)
         .height(1)
@@ -148,9 +148,9 @@ fn render_table(app: &App, filtered: &[&crate::app::RecentQso], frame: &mut Fram
         Constraint::Length(6),
         Constraint::Length(5),
         Constraint::Length(5),
-        Constraint::Length(9),
-        Constraint::Fill(1),
+        Constraint::Length(14),
         Constraint::Length(7),
+        Constraint::Fill(1),
     ];
 
     let highlight_style = if app.qso_list_focused {

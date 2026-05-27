@@ -352,6 +352,26 @@ fn apply_lookup_result(app: &mut App, result: Option<app::CallsignInfo>) {
                 app.form.worked_name.clone_from(name);
             }
         }
+        if app.form.worked_grid.is_empty() {
+            if let Some(ref grid) = info.grid {
+                app.form.worked_grid.clone_from(grid);
+            }
+        }
+        if app.form.worked_country.is_empty() {
+            if let Some(ref country) = info.country {
+                app.form.worked_country.clone_from(country);
+            }
+        }
+        if app.form.worked_cq_zone.is_empty() {
+            if let Some(cq_zone) = info.cq_zone {
+                app.form.worked_cq_zone = cq_zone.to_string();
+            }
+        }
+        if app.form.worked_dxcc.is_empty() {
+            if let Some(dxcc) = info.dxcc {
+                app.form.worked_dxcc = dxcc.to_string();
+            }
+        }
     }
     app.lookup_result = result;
 }
@@ -416,6 +436,18 @@ fn handle_key_with_channel(
     }
 
     match key.code {
+        KeyCode::Tab
+            if matches!(app.view, app::View::Advanced)
+                && key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            app.form.next_advanced_tab();
+        }
+        KeyCode::BackTab
+            if matches!(app.view, app::View::Advanced)
+                && key.modifiers.contains(KeyModifiers::CONTROL) =>
+        {
+            app.form.prev_advanced_tab();
+        }
         KeyCode::Tab => match app.view {
             app::View::Advanced => app.form.next_advanced_field(),
             _ => app.form.next_field(),
@@ -433,7 +465,7 @@ fn handle_key_with_channel(
             }
             app::View::LogEntry => {
                 app.view = app::View::Advanced;
-                app.form.advanced_tab = AdvancedTab::Main;
+                app.form.advanced_tab = AdvancedTab::Core;
                 app.form.focused = Field::Callsign;
                 app.form.field_selected = true;
             }
@@ -483,7 +515,7 @@ fn handle_key_with_channel(
         KeyCode::Left if app.form.is_cycle_field() => cycle_left(app),
         KeyCode::Right if app.form.is_cycle_field() => cycle_right(app),
         KeyCode::Backspace => {
-            let focused = app.form.focused.clone();
+            let focused = app.form.focused;
             if app.form.field_selected {
                 if let Some(text) = app.form.current_field_text_mut() {
                     text.clear();
@@ -567,16 +599,16 @@ fn handle_qso_list_key(
     lookup_tx: &watch::Sender<String>,
 ) {
     use crossterm::event::KeyCode;
-    let (max, enter_id, delete_id) = {
+    let (max, selected_id, delete_id) = {
         let filtered = app.filtered_qsos();
         let max = filtered.len().saturating_sub(1);
-        let enter_id = app
+        let selected_id = app
             .qso_selected
             .and_then(|i| filtered.get(i).map(|q| q.local_id.clone()));
         let delete_id = app
             .qso_selected
             .and_then(|i| filtered.get(i).map(|q| q.local_id.clone()));
-        (max, enter_id, delete_id)
+        (max, selected_id, delete_id)
     };
     match key.code {
         KeyCode::Up => {
@@ -606,8 +638,16 @@ fn handle_qso_list_key(
             app.qso_selected = Some(max);
         }
         KeyCode::Enter => {
-            if let Some(id) = enter_id {
+            if let Some(id) = selected_id {
                 load_qso_into_form(app, &id, lookup_tx);
+            } else {
+                app.qso_list_focused = false;
+            }
+        }
+        KeyCode::F(2) => {
+            if let Some(id) = selected_id {
+                load_qso_into_form(app, &id, lookup_tx);
+                switch_to_tab(app, AdvancedTab::Core);
             } else {
                 app.qso_list_focused = false;
             }
@@ -712,7 +752,7 @@ fn spawn_purge_deleted_qsos(
 
 /// Handle a plain character key press — type-selects Band/Mode, or appends to text fields.
 fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
-    let focused = app.form.focused.clone();
+    let focused = app.form.focused;
     match focused {
         Field::Band => app.form.type_select_band(c),
         Field::Mode => app.form.type_select_mode(c),
@@ -724,7 +764,14 @@ fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
                 app.form.field_selected = false;
             }
             if let Some(text) = app.form.current_field_text_mut() {
-                if focused == Field::Callsign {
+                if matches!(
+                    focused,
+                    Field::Callsign
+                        | Field::StationCallsign
+                        | Field::WorkedOperatorCallsign
+                        | Field::SnapshotStationCallsign
+                        | Field::SnapshotOperatorCallsign
+                ) {
                     text.push(c.to_ascii_uppercase());
                 } else {
                     text.push(c);
@@ -740,10 +787,13 @@ fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
 
 fn digit_to_tab(ch: char) -> Option<AdvancedTab> {
     match ch {
-        '1' => Some(AdvancedTab::Main),
-        '2' => Some(AdvancedTab::Contest),
-        '3' => Some(AdvancedTab::Technical),
-        '4' => Some(AdvancedTab::Awards),
+        '1' => Some(AdvancedTab::Core),
+        '2' => Some(AdvancedTab::Lookup),
+        '3' => Some(AdvancedTab::Qsl),
+        '4' => Some(AdvancedTab::Contest),
+        '5' => Some(AdvancedTab::Station),
+        '6' => Some(AdvancedTab::Transcript),
+        '7' => Some(AdvancedTab::Metadata),
         _ => None,
     }
 }
@@ -762,7 +812,24 @@ fn jump_to_field(app: &mut App, ch: char) {
         switch_to_tab(app, tab);
         return;
     }
-    let (target, tab) = match ch.to_ascii_lowercase() {
+    if matches!(app.view, app::View::Advanced) && app.form.advanced_tab == AdvancedTab::Contest {
+        match ch.to_ascii_lowercase() {
+            'o' => {
+                app.form.focused = Field::ExchangeSent;
+                app.form.field_selected = true;
+                app.qso_list_focused = false;
+                return;
+            }
+            'n' => {
+                app.form.focused = Field::ExchangeRcvd;
+                app.form.field_selected = true;
+                app.qso_list_focused = false;
+                return;
+            }
+            _ => {}
+        }
+    }
+    let (target, mut tab) = match ch.to_ascii_lowercase() {
         'c' => (Field::Callsign, None),
         'b' => (Field::Band, None),
         'm' => (Field::Mode, None),
@@ -775,12 +842,25 @@ fn jump_to_field(app: &mut App, ch: char) {
         't' => (Field::Time, None),
         'e' => (Field::TimeOff, None),
         'q' => (Field::Qth, None),
-        'a' => (Field::WorkedName, Some(AdvancedTab::Main)),
-        'k' => (Field::Skcc, Some(AdvancedTab::Awards)),
-        'w' => (Field::TxPower, Some(AdvancedTab::Contest)),
-        'p' => (Field::PropMode, Some(AdvancedTab::Technical)),
+        'a' => (Field::WorkedName, Some(AdvancedTab::Lookup)),
+        'k' => (Field::Skcc, Some(AdvancedTab::Lookup)),
+        'w' => (Field::TxPower, Some(AdvancedTab::Core)),
+        'p' => (Field::PropMode, Some(AdvancedTab::Contest)),
+        'u' => (Field::Submode, Some(AdvancedTab::Core)),
+        'l' => (Field::WorkedGrid, Some(AdvancedTab::Lookup)),
+        'v' => (Field::WorkedContinent, Some(AdvancedTab::Lookup)),
+        'i' => (Field::Iota, Some(AdvancedTab::Lookup)),
+        'h' => (Field::WorkedState, Some(AdvancedTab::Lookup)),
+        'y' => (Field::WorkedCounty, Some(AdvancedTab::Lookup)),
+        'x' => (Field::ArrlSection, Some(AdvancedTab::Lookup)),
+        'g' => (Field::ContestId, Some(AdvancedTab::Contest)),
+        'j' => (Field::SerialSent, Some(AdvancedTab::Contest)),
+        'z' => (Field::SerialRcvd, Some(AdvancedTab::Contest)),
         _ => return,
     };
+    if tab.is_none() && matches!(app.view, app::View::Advanced) {
+        tab = Some(advanced_tab_for_field(target));
+    }
     if let Some(tab) = tab {
         switch_to_tab(app, tab);
     }
@@ -789,17 +869,108 @@ fn jump_to_field(app: &mut App, ch: char) {
     app.qso_list_focused = false;
 }
 
+fn advanced_tab_for_field(field: Field) -> AdvancedTab {
+    match field {
+        Field::Callsign
+        | Field::Band
+        | Field::Mode
+        | Field::FrequencyMhz
+        | Field::Date
+        | Field::Time
+        | Field::TimeOff
+        | Field::StationCallsign
+        | Field::RstSent
+        | Field::RstRcvd
+        | Field::TxPower
+        | Field::Submode
+        | Field::Comment
+        | Field::Notes
+        | Field::CwDecodeRxWpm => AdvancedTab::Core,
+        Field::WorkedOperatorCallsign
+        | Field::WorkedName
+        | Field::WorkedGrid
+        | Field::WorkedCountry
+        | Field::WorkedDxcc
+        | Field::WorkedState
+        | Field::WorkedCqZone
+        | Field::WorkedItuZone
+        | Field::WorkedCounty
+        | Field::Iota
+        | Field::WorkedContinent
+        | Field::ArrlSection
+        | Field::Skcc => AdvancedTab::Lookup,
+        Field::ContestId
+        | Field::SerialSent
+        | Field::SerialRcvd
+        | Field::ExchangeSent
+        | Field::ExchangeRcvd
+        | Field::PropMode
+        | Field::SatName
+        | Field::SatMode => AdvancedTab::Contest,
+        Field::QslSentStatus
+        | Field::QslSentDate
+        | Field::QslReceivedStatus
+        | Field::QslReceivedDate
+        | Field::LotwSent
+        | Field::LotwReceived
+        | Field::EqslSent
+        | Field::EqslReceived
+        | Field::QrzLogId
+        | Field::QrzBookId => AdvancedTab::Qsl,
+        Field::Qth
+        | Field::SnapshotProfileName
+        | Field::SnapshotStationCallsign
+        | Field::SnapshotOperatorCallsign
+        | Field::SnapshotOperatorName
+        | Field::SnapshotGrid
+        | Field::SnapshotCountry
+        | Field::SnapshotState
+        | Field::SnapshotCounty
+        | Field::SnapshotArrlSection
+        | Field::SnapshotDxcc
+        | Field::SnapshotCqZone
+        | Field::SnapshotItuZone
+        | Field::SnapshotLatitude
+        | Field::SnapshotLongitude => AdvancedTab::Station,
+        Field::CwDecodeTranscript => AdvancedTab::Transcript,
+        Field::LocalId
+        | Field::SyncStatus
+        | Field::CreatedAt
+        | Field::UpdatedAt
+        | Field::ExtraFields => AdvancedTab::Metadata,
+    }
+}
+
+fn sync_status_label(status: i32) -> &'static str {
+    use qsoripper_core::proto::qsoripper::domain::SyncStatus;
+
+    match SyncStatus::try_from(status).ok() {
+        Some(SyncStatus::LocalOnly) => "Local only",
+        Some(SyncStatus::Synced) => "Synced",
+        Some(SyncStatus::Modified) => "Modified",
+        Some(SyncStatus::Conflict) => "Conflict",
+        _ => "Unspecified",
+    }
+}
+
 /// Load the QSO identified by `local_id` into the form for editing.
 ///
 /// Sets `editing_local_id` so that saving the form calls `UpdateQso` instead of `LogQso`.
 /// All form-visible fields are populated from the stored `source_record` so that
 /// the operator sees the full QSO data, not just the columns displayed in the list.
+#[expect(
+    clippy::too_many_lines,
+    reason = "loading an editable QSO card intentionally maps each visible field explicitly"
+)]
 fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<String>) {
     let Some(qso) = app.recent_qsos.iter().find(|q| q.local_id == local_id) else {
         return;
     };
 
-    // --- Display fields (from the display-ready RecentQso) ---
+    let advanced_tab = app.form.advanced_tab;
+    app.form = LogForm::new();
+    app.form.advanced_tab = advanced_tab;
+
     app.form.callsign = qso.callsign.clone();
     if let Some(bi) = BANDS.iter().position(|&b| b == qso.band.as_str()) {
         app.form.band_idx = bi;
@@ -808,13 +979,29 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
         app.form.mode_idx = mi;
     }
     app.form.on_band_change();
+    app.form.frequency_mhz.clear();
     app.form.rst_sent = qso.rst_sent.clone();
     app.form.rst_rcvd = qso.rst_rcvd.clone();
     app.form.time = qso.utc.clone();
     app.form.worked_name = qso.name.clone().unwrap_or_default();
 
-    // --- Additional fields from the source proto record ---
     let src = &qso.source_record;
+    app.form.local_id = src.local_id.clone();
+    app.form.station_callsign = src.station_callsign.clone();
+    app.form.qsl_sent_status = grpc::format_qsl_status(src.qsl_sent_status);
+    app.form.qsl_received_status = grpc::format_qsl_status(src.qsl_received_status);
+    app.form.lotw_sent = grpc::format_optional_bool(src.lotw_sent);
+    app.form.lotw_received = grpc::format_optional_bool(src.lotw_received);
+    app.form.eqsl_sent = grpc::format_optional_bool(src.eqsl_sent);
+    app.form.eqsl_received = grpc::format_optional_bool(src.eqsl_received);
+    app.form.qsl_sent_date = grpc::format_optional_date(src.qsl_sent_date.as_ref());
+    app.form.qsl_received_date = grpc::format_optional_date(src.qsl_received_date.as_ref());
+    app.form.qrz_log_id = src.qrz_logid.clone().unwrap_or_default();
+    app.form.qrz_book_id = src.qrz_bookid.clone().unwrap_or_default();
+    app.form.sync_status = sync_status_label(src.sync_status).to_string();
+    app.form.created_at = grpc::format_optional_timestamp(src.created_at.as_ref());
+    app.form.updated_at = grpc::format_optional_timestamp(src.updated_at.as_ref());
+    app.form.extra_fields = grpc::format_extra_fields(&src.extra_fields);
     app.form.comment = src.comment.clone().unwrap_or_default();
     app.form.notes = src.notes.clone().unwrap_or_default();
     if let Some(hz) = src.frequency_hz {
@@ -879,7 +1066,71 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
     app.form.arrl_section = src.worked_arrl_section.clone().unwrap_or_default();
     app.form.worked_state = src.worked_state.clone().unwrap_or_default();
     app.form.worked_county = src.worked_county.clone().unwrap_or_default();
+    app.form.worked_grid = src.worked_grid.clone().unwrap_or_default();
+    app.form.worked_country = src.worked_country.clone().unwrap_or_default();
+    app.form.worked_dxcc = src.worked_dxcc.map(|v| v.to_string()).unwrap_or_default();
+    app.form.worked_cq_zone = src
+        .worked_cq_zone
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+    app.form.worked_itu_zone = src
+        .worked_itu_zone
+        .map(|v| v.to_string())
+        .unwrap_or_default();
+    app.form.worked_continent = src.worked_continent.clone().unwrap_or_default();
+    app.form.worked_operator_callsign = src.worked_operator_callsign.clone().unwrap_or_default();
     app.form.skcc = src.skcc.clone().unwrap_or_default();
+    app.form.cw_decode_rx_wpm = src
+        .cw_decode_rx_wpm
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    app.form.cw_decode_transcript = src.cw_decode_transcript.clone().unwrap_or_default();
+    app.form.snapshot_profile_name.clear();
+    app.form.snapshot_station_callsign.clear();
+    app.form.snapshot_operator_callsign.clear();
+    app.form.snapshot_operator_name.clear();
+    app.form.snapshot_grid.clear();
+    app.form.snapshot_country.clear();
+    app.form.snapshot_state.clear();
+    app.form.snapshot_county.clear();
+    app.form.snapshot_arrl_section.clear();
+    app.form.snapshot_dxcc.clear();
+    app.form.snapshot_cq_zone.clear();
+    app.form.snapshot_itu_zone.clear();
+    app.form.snapshot_latitude.clear();
+    app.form.snapshot_longitude.clear();
+    if let Some(snapshot) = src.station_snapshot.as_ref() {
+        app.form.snapshot_profile_name = snapshot.profile_name.clone().unwrap_or_default();
+        app.form.snapshot_station_callsign = snapshot.station_callsign.clone();
+        app.form.snapshot_operator_callsign =
+            snapshot.operator_callsign.clone().unwrap_or_default();
+        app.form.snapshot_operator_name = snapshot.operator_name.clone().unwrap_or_default();
+        app.form.snapshot_grid = snapshot.grid.clone().unwrap_or_default();
+        app.form.snapshot_country = snapshot.country.clone().unwrap_or_default();
+        app.form.snapshot_state = snapshot.state.clone().unwrap_or_default();
+        app.form.snapshot_county = snapshot.county.clone().unwrap_or_default();
+        app.form.snapshot_arrl_section = snapshot.arrl_section.clone().unwrap_or_default();
+        app.form.snapshot_dxcc = snapshot
+            .dxcc
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        app.form.snapshot_cq_zone = snapshot
+            .cq_zone
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        app.form.snapshot_itu_zone = snapshot
+            .itu_zone
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        app.form.snapshot_latitude = snapshot
+            .latitude
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        app.form.snapshot_longitude = snapshot
+            .longitude
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+    }
 
     app.form.focused = Field::Callsign;
     app.form.field_selected = true;
@@ -1149,7 +1400,6 @@ mod tests {
             country: None,
             grid: None,
             name: None,
-            duration: None,
             source_record: QsoRecord {
                 local_id: id.to_string(),
                 worked_callsign: callsign.to_string(),
@@ -1346,6 +1596,7 @@ mod tests {
         assert!(matches!(app.view, View::LogEntry));
         jump_to_field(&mut app, 'a');
         assert_eq!(app.form.focused, Field::WorkedName);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Lookup);
         assert!(matches!(app.view, View::Advanced));
     }
 
@@ -1355,84 +1606,106 @@ mod tests {
         app.view = View::Advanced;
         jump_to_field(&mut app, 'a');
         assert_eq!(app.form.focused, Field::WorkedName);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Lookup);
         assert!(matches!(app.view, View::Advanced));
     }
 
     #[test]
     fn jump_to_field_unknown_char_does_nothing() {
         let mut app = make_app();
-        let original_focused = app.form.focused.clone();
-        jump_to_field(&mut app, 'z');
+        let original_focused = app.form.focused;
+        jump_to_field(&mut app, '?');
         assert_eq!(app.form.focused, original_focused);
     }
 
     #[test]
-    fn jump_to_tab_1_switches_to_main() {
+    fn jump_to_tab_1_switches_to_core() {
         let mut app = make_app();
         jump_to_field(&mut app, '1');
         assert!(matches!(app.view, View::Advanced));
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Main);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Core);
         assert_eq!(app.form.focused, Field::Callsign);
         assert!(app.form.field_selected);
         assert!(!app.qso_list_focused);
     }
 
     #[test]
-    fn jump_to_tab_2_switches_to_contest() {
+    fn jump_to_tab_2_switches_to_lookup() {
         let mut app = make_app();
         jump_to_field(&mut app, '2');
         assert!(matches!(app.view, View::Advanced));
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Contest);
-        assert_eq!(app.form.focused, Field::TxPower);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Lookup);
+        assert_eq!(app.form.focused, Field::WorkedOperatorCallsign);
         assert!(app.form.field_selected);
     }
 
     #[test]
-    fn jump_to_tab_3_switches_to_technical() {
+    fn jump_to_tab_3_switches_to_qsl() {
         let mut app = make_app();
         jump_to_field(&mut app, '3');
         assert!(matches!(app.view, View::Advanced));
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Technical);
-        assert_eq!(app.form.focused, Field::PropMode);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Qsl);
+        assert_eq!(app.form.focused, Field::QslSentStatus);
         assert!(app.form.field_selected);
     }
 
     #[test]
-    fn jump_to_tab_4_switches_to_awards() {
+    fn jump_to_tab_4_switches_to_contest() {
         let mut app = make_app();
         jump_to_field(&mut app, '4');
         assert!(matches!(app.view, View::Advanced));
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Awards);
-        assert_eq!(app.form.focused, Field::Iota);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Contest);
+        assert_eq!(app.form.focused, Field::ContestId);
         assert!(app.form.field_selected);
     }
 
     #[test]
-    fn jump_to_field_skcc_opens_awards_tab() {
+    fn jump_to_tab_5_switches_to_station() {
+        let mut app = make_app();
+        jump_to_field(&mut app, '5');
+        assert!(matches!(app.view, View::Advanced));
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Station);
+        assert_eq!(app.form.focused, Field::SnapshotStationCallsign);
+        assert!(app.form.field_selected);
+    }
+
+    #[test]
+    fn jump_to_field_exchange_uses_contest_context() {
+        let mut app = make_app();
+        app.view = View::Advanced;
+        app.form.advanced_tab = AdvancedTab::Contest;
+        jump_to_field(&mut app, 'o');
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Contest);
+        assert_eq!(app.form.focused, Field::ExchangeSent);
+        assert!(app.form.field_selected);
+    }
+
+    #[test]
+    fn jump_to_field_skcc_opens_lookup_tab() {
         let mut app = make_app();
         jump_to_field(&mut app, 'k');
         assert!(matches!(app.view, View::Advanced));
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Awards);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Lookup);
         assert_eq!(app.form.focused, Field::Skcc);
         assert!(app.form.field_selected);
     }
 
     #[test]
-    fn jump_to_field_tx_power_opens_contest_tab() {
+    fn jump_to_field_tx_power_opens_core_tab() {
         let mut app = make_app();
         jump_to_field(&mut app, 'w');
         assert!(matches!(app.view, View::Advanced));
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Contest);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Core);
         assert_eq!(app.form.focused, Field::TxPower);
         assert!(app.form.field_selected);
     }
 
     #[test]
-    fn jump_to_field_prop_mode_opens_technical_tab() {
+    fn jump_to_field_prop_mode_opens_contest_tab() {
         let mut app = make_app();
         jump_to_field(&mut app, 'p');
         assert!(matches!(app.view, View::Advanced));
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Technical);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Contest);
         assert_eq!(app.form.focused, Field::PropMode);
         assert!(app.form.field_selected);
     }
@@ -1720,7 +1993,6 @@ mod tests {
             country: None,
             grid: None,
             name: Some("John".to_string()),
-            duration: None,
             source_record: QsoRecord {
                 local_id: "q1".to_string(),
                 worked_callsign: "K7ABC".to_string(),
@@ -1762,8 +2034,12 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "regression test asserts the advanced-card field mapping surface"
+    )]
     fn load_qso_into_form_populates_advanced_fields_from_source() {
-        use qsoripper_core::proto::qsoripper::domain::QsoRecord;
+        use qsoripper_core::proto::qsoripper::domain::{QslStatus, QsoRecord, StationSnapshot};
         let (lookup_tx, _rx) = make_watch();
         let mut app = make_app();
         let qso = RecentQso {
@@ -1777,10 +2053,18 @@ mod tests {
             country: Some("United States".to_string()),
             grid: Some("FN31pr".to_string()),
             name: Some("Hiram".to_string()),
-            duration: None,
             source_record: QsoRecord {
                 local_id: "adv1".to_string(),
+                qrz_logid: Some("log-9".to_string()),
+                qrz_bookid: Some("book-2".to_string()),
+                station_callsign: "N7STA".to_string(),
                 worked_callsign: "W1AW".to_string(),
+                qsl_sent_status: i32::from(QslStatus::Yes),
+                qsl_received_status: i32::from(QslStatus::Requested),
+                lotw_sent: Some(true),
+                lotw_received: Some(false),
+                eqsl_sent: Some(true),
+                eqsl_received: Some(false),
                 tx_power: Some("100W".to_string()),
                 contest_id: Some("CQWW".to_string()),
                 serial_sent: Some("001".to_string()),
@@ -1794,14 +2078,45 @@ mod tests {
                 worked_arrl_section: Some("CT".to_string()),
                 worked_state: Some("CT".to_string()),
                 worked_county: Some("Hartford".to_string()),
+                worked_operator_callsign: Some("W1OP".to_string()),
                 skcc: Some("12345".to_string()),
+                station_snapshot: Some(StationSnapshot {
+                    profile_name: Some("Home".to_string()),
+                    station_callsign: "N7STA".to_string(),
+                    operator_callsign: Some("N7OP".to_string()),
+                    operator_name: Some("Station Op".to_string()),
+                    grid: Some("CN87".to_string()),
+                    county: Some("King".to_string()),
+                    state: Some("WA".to_string()),
+                    country: Some("United States".to_string()),
+                    dxcc: Some(291),
+                    cq_zone: Some(3),
+                    itu_zone: Some(6),
+                    latitude: Some(47.6),
+                    longitude: Some(-122.3),
+                    arrl_section: Some("WWA".to_string()),
+                    altitude_meters: None,
+                    gridsquare_ext: None,
+                }),
                 comment: Some("solid copy".to_string()),
                 notes: Some("first QSO with W1AW".to_string()),
+                cw_decode_rx_wpm: Some(21),
+                cw_decode_transcript: Some("CQ TEST W1AW".to_string()),
                 ..Default::default()
             },
         };
         app.recent_qsos.push(qso);
         load_qso_into_form(&mut app, "adv1", &lookup_tx);
+        assert_eq!(app.form.local_id, "adv1");
+        assert_eq!(app.form.station_callsign, "N7STA");
+        assert_eq!(app.form.qsl_sent_status, "Y");
+        assert_eq!(app.form.qsl_received_status, "R");
+        assert_eq!(app.form.lotw_sent, "Y");
+        assert_eq!(app.form.lotw_received, "N");
+        assert_eq!(app.form.eqsl_sent, "Y");
+        assert_eq!(app.form.eqsl_received, "N");
+        assert_eq!(app.form.qrz_log_id, "log-9");
+        assert_eq!(app.form.qrz_book_id, "book-2");
         assert_eq!(app.form.tx_power, "100W");
         assert_eq!(app.form.contest_id, "CQWW");
         assert_eq!(app.form.serial_sent, "001");
@@ -1815,7 +2130,19 @@ mod tests {
         assert_eq!(app.form.arrl_section, "CT");
         assert_eq!(app.form.worked_state, "CT");
         assert_eq!(app.form.worked_county, "Hartford");
+        assert_eq!(app.form.worked_operator_callsign, "W1OP");
         assert_eq!(app.form.skcc, "12345");
+        assert_eq!(app.form.snapshot_profile_name, "Home");
+        assert_eq!(app.form.snapshot_station_callsign, "N7STA");
+        assert_eq!(app.form.snapshot_operator_callsign, "N7OP");
+        assert_eq!(app.form.snapshot_grid, "CN87");
+        assert_eq!(app.form.snapshot_dxcc, "291");
+        assert_eq!(app.form.snapshot_cq_zone, "3");
+        assert_eq!(app.form.snapshot_itu_zone, "6");
+        assert_eq!(app.form.snapshot_latitude, "47.6");
+        assert_eq!(app.form.snapshot_longitude, "-122.3");
+        assert_eq!(app.form.cw_decode_rx_wpm, "21");
+        assert_eq!(app.form.cw_decode_transcript, "CQ TEST W1AW");
         assert_eq!(app.form.comment, "solid copy");
         assert_eq!(app.form.notes, "first QSO with W1AW");
     }
@@ -2574,7 +2901,7 @@ mod tests {
         let mut app = make_app();
         app.view = View::Advanced;
         use crate::form::AdvancedTab;
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Main);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Core);
         handle_key(
             &mut app,
             make_key(KeyCode::F(5)),
@@ -2583,7 +2910,27 @@ mod tests {
             &rig_tx,
             "",
         );
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Contest);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Lookup);
+    }
+
+    #[tokio::test]
+    async fn handle_key_ctrl_tab_in_advanced_switches_tab_when_terminal_sends_it() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.view = View::Advanced;
+        use crate::form::AdvancedTab;
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Core);
+        handle_key(
+            &mut app,
+            make_key_with_mod(KeyCode::Tab, KeyModifiers::CONTROL),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Lookup);
     }
 
     #[tokio::test]
@@ -2602,7 +2949,7 @@ mod tests {
             "",
         );
         use crate::form::AdvancedTab;
-        assert_eq!(app.form.advanced_tab, AdvancedTab::Awards);
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Metadata);
     }
 
     #[tokio::test]
@@ -2640,6 +2987,42 @@ mod tests {
             "",
         );
         assert!(!app.qso_list_focused);
+    }
+
+    #[tokio::test]
+    async fn handle_key_f2_from_qso_list_loads_selected_qso_into_advanced() {
+        use crate::form::AdvancedTab;
+
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.recent_qsos.push(make_qso("q1", "K7ABC"));
+
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(3)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+        assert!(app.qso_list_focused);
+
+        handle_key(
+            &mut app,
+            make_key(KeyCode::F(2)),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+
+        assert!(matches!(app.view, View::Advanced));
+        assert!(!app.qso_list_focused);
+        assert_eq!(app.editing_local_id.as_deref(), Some("q1"));
+        assert_eq!(app.form.callsign, "K7ABC");
+        assert_eq!(app.form.advanced_tab, AdvancedTab::Core);
     }
 
     #[tokio::test]

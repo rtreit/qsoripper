@@ -101,13 +101,31 @@ enum Field {
     FIELD_COMMENT,  FIELD_NOTES,
     FIELD_FREQ,     FIELD_DATE, FIELD_TIME,
     /* Advanced fields */
-    FIELD_TIME_OFF, FIELD_QTH, FIELD_WORKED_NAME,
+    FIELD_TIME_OFF, FIELD_STATION_CALLSIGN, FIELD_QTH,
+    FIELD_WORKED_OPERATOR_CALLSIGN, FIELD_WORKED_NAME,
+    FIELD_WORKED_GRID, FIELD_WORKED_COUNTRY, FIELD_WORKED_DXCC,
+    FIELD_WORKED_CQ_ZONE, FIELD_WORKED_ITU_ZONE, FIELD_WORKED_CONTINENT,
     FIELD_TX_POWER, FIELD_SUBMODE, FIELD_CONTEST_ID,
     FIELD_SERIAL_SENT, FIELD_SERIAL_RCVD,
     FIELD_EXCHANGE_SENT, FIELD_EXCHANGE_RCVD,
     FIELD_PROP_MODE, FIELD_SAT_NAME, FIELD_SAT_MODE,
     FIELD_IOTA, FIELD_ARRL_SECTION, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY,
     FIELD_SKCC,
+    FIELD_QSL_SENT_STATUS, FIELD_QSL_SENT_DATE,
+    FIELD_QSL_RCVD_STATUS, FIELD_QSL_RCVD_DATE,
+    FIELD_LOTW_SENT, FIELD_LOTW_RCVD,
+    FIELD_EQSL_SENT, FIELD_EQSL_RCVD,
+    FIELD_QRZ_LOG_ID, FIELD_QRZ_BOOK_ID,
+    FIELD_SNAPSHOT_STATION_CALLSIGN, FIELD_SNAPSHOT_OPERATOR_CALLSIGN,
+    FIELD_SNAPSHOT_PROFILE, FIELD_SNAPSHOT_OPERATOR_NAME,
+    FIELD_SNAPSHOT_GRID, FIELD_SNAPSHOT_COUNTRY,
+    FIELD_SNAPSHOT_STATE, FIELD_SNAPSHOT_COUNTY,
+    FIELD_SNAPSHOT_ARRL_SECTION, FIELD_SNAPSHOT_DXCC,
+    FIELD_SNAPSHOT_CQ_ZONE, FIELD_SNAPSHOT_ITU_ZONE,
+    FIELD_SNAPSHOT_LATITUDE, FIELD_SNAPSHOT_LONGITUDE,
+    FIELD_CW_RX_WPM, FIELD_CW_TRANSCRIPT,
+    FIELD_LOCAL_ID, FIELD_SYNC_STATUS, FIELD_CREATED_AT,
+    FIELD_UPDATED_AT, FIELD_EXTRA_FIELDS,
     FIELD_COUNT
 };
 
@@ -117,26 +135,71 @@ static const char *FIELD_LABELS[] = {
     "Comment",  "Notes",
     "Freq MHz", "Date", "Time",
     /* Advanced labels */
-    "Time Off", "QTH", "Name",
+    "Time Off", "Station Call", "QTH", "Worked Op Call", "Name",
+    "Grid", "Country", "DXCC",
+    "CQ Zone", "ITU Zone", "Continent",
     "TX Power", "Submode", "Contest ID",
     "Serial Sent", "Serial Rcvd",
     "Exch Sent", "Exch Rcvd",
     "Prop Mode", "Sat Name", "Sat Mode",
-    "IOTA", "ARRL Sect", "State", "County", "SKCC"
+    "IOTA", "ARRL Sect", "State", "County", "SKCC",
+    "QSL Sent", "QSL Sent Date",
+    "QSL Rcvd", "QSL Rcvd Date",
+    "LoTW Sent", "LoTW Rcvd",
+    "eQSL Sent", "eQSL Rcvd",
+    "QRZ Log ID", "QRZ Book ID",
+    "Station Call", "Operator Call",
+    "Profile", "Operator Name",
+    "Grid", "Country",
+    "State", "County",
+    "ARRL Sect", "DXCC",
+    "CQ Zone", "ITU Zone",
+    "Latitude", "Longitude",
+    "CW RX WPM", "CW Transcript",
+    "Local ID", "Sync Status", "Created",
+    "Updated", "Extra ADIF"
 };
 
+static const char *AdvancedFieldLabel(enum Field f)
+{
+    switch (f) {
+    case FIELD_CALLSIGN:
+        return "Worked Call";
+    case FIELD_WORKED_OPERATOR_CALLSIGN:
+        return "Operator Call";
+    case FIELD_SNAPSHOT_STATION_CALLSIGN:
+        return "Profile Stn Call";
+    case FIELD_SNAPSHOT_OPERATOR_CALLSIGN:
+        return "Profile Op Call";
+    default:
+        return FIELD_LABELS[f];
+    }
+}
+
 static const int FIELD_MAX_LEN[] = {
-    30, 0, 0,   /* callsign, band(cycle), mode(cycle) */
+    30, 0, 0,  /* callsign, band(cycle), mode(cycle) */
     6,  6,      /* rst sent, rst rcvd */
     250, 250,   /* comment, notes */
     14, 14, 14, /* freq, date, time */
     /* Advanced max lengths */
-    14, 60, 60,         /* time_off, qth, worked_name */
+    14, 30, 60, 30, 60, /* time_off, station callsign, qth, worked_operator, worked_name */
+    14, 60, 14,         /* worked_grid, worked_country, worked_dxcc */
+    14, 14, 8,          /* worked_cq_zone, worked_itu_zone, worked_continent */
     14, 14, 30,         /* tx_power, submode, contest_id */
     14, 14,             /* serial_sent, serial_rcvd */
     60, 60,             /* exchange_sent, exchange_rcvd */
     14, 30, 14,         /* prop_mode, sat_name, sat_mode */
-    14, 14, 14, 30, 16  /* iota, arrl_section, worked_state, worked_county, skcc */
+    14, 14, 14, 30, 16, /* iota, arrl_section, worked_state, worked_county, skcc */
+    14, 14, 14, 14,     /* qsl statuses and dates */
+    6, 6, 6, 6,         /* lotw/eqsl tri-state fields */
+    30, 30,             /* qrz ids */
+    30, 30,             /* station and operator callsigns */
+    60, 60,             /* station profile and operator name */
+    14, 60, 14, 30,     /* station grid, country, state, county */
+    14, 14, 14, 14,     /* station arrl, dxcc, cq, itu */
+    20, 20,             /* station latitude, longitude */
+    8, 250,             /* cw rx wpm, transcript */
+    63, 20, 24, 24, 250 /* local id, sync status, created, updated, extra fields */
 };
 
 /* ── Async lookup message structs ──────────────────────────────────────── */
@@ -207,6 +270,8 @@ typedef struct {
     char callsign[16];
 } QsoDeleteResult;
 
+static void LoadSelectedQso(void);
+
 /* ── Recent QSO record ─────────────────────────────────────────────────── */
 
 typedef struct {
@@ -240,6 +305,7 @@ typedef struct {
 
     /* Form field buffers */
     char callsign[32];
+    char station_callsign[32];
     char rst_sent[8];
     char rst_rcvd[8];
     char comment[256];
@@ -250,12 +316,19 @@ typedef struct {
 
     /* Advanced view state */
     int advanced_view;        /* 0 = basic, 1 = advanced */
-    int advanced_tab;         /* 0=Main, 1=Contest, 2=Technical, 3=Awards */
+    int advanced_tab;         /* 0=Core, 1=Lookup, 2=QSL, 3=Contest, 4=Station, 5=Transcript, 6=Metadata */
 
     /* Advanced field buffers */
     char time_off[16];
     char qth[64];
+    char worked_operator_callsign[32];
     char worked_name[64];
+    char worked_grid[16];
+    char worked_country[64];
+    char worked_dxcc[16];
+    char worked_cq_zone[16];
+    char worked_itu_zone[16];
+    char worked_continent[8];
     char tx_power[16];
     char submode[16];
     char contest_id[32];
@@ -271,12 +344,44 @@ typedef struct {
     char worked_state[16];
     char worked_county[32];
     char skcc[16];
+    char qsl_sent_status[16];
+    char qsl_sent_date[16];
+    char qsl_rcvd_status[16];
+    char qsl_rcvd_date[16];
+    char lotw_sent[8];
+    char lotw_rcvd[8];
+    char eqsl_sent[8];
+    char eqsl_rcvd[8];
+    char qrz_log_id[32];
+    char qrz_book_id[32];
+    char snapshot_station_callsign[32];
+    char snapshot_operator_callsign[32];
+    char snapshot_profile[64];
+    char snapshot_operator_name[64];
+    char snapshot_grid[16];
+    char snapshot_country[64];
+    char snapshot_state[16];
+    char snapshot_county[32];
+    char snapshot_arrl_section[16];
+    char snapshot_dxcc[16];
+    char snapshot_cq_zone[16];
+    char snapshot_itu_zone[16];
+    char snapshot_latitude[24];
+    char snapshot_longitude[24];
+    char cw_rx_wpm[8];
+    char cw_transcript[256];
+    char metadata_local_id[64];
+    char sync_status[24];
+    char created_at[32];
+    char updated_at[32];
+    char extra_fields[256];
 
     /* Cursor positions per field */
     int cursor_pos[FIELD_COUNT];
 
     /* Hit-test rectangles for click-to-focus (populated during paint) */
     RECT field_rects[FIELD_COUNT];
+    RECT advanced_tab_rects[7];
     int  field_rects_valid;
     int  qso_list_y;  /* top of QSO list panel for click detection */
     int  qso_list_row_h; /* row height in QSO list */
@@ -421,6 +526,7 @@ static void RefreshQsoListAsync(HWND hwnd);
 static void FetchSpaceWeather(void);
 static void LoadSelectedQso(void);
 static void DeleteSelectedQso(void);
+static int  AdvancedFormHeight(void);
 static int  PaintAdvancedForm(HDC hdc, int y_start, int w);
 static void InitBackend(void);
 static void ShutdownBackend(void);
@@ -899,6 +1005,7 @@ static char *FieldBuffer(enum Field f)
 {
     switch (f) {
     case FIELD_CALLSIGN:      return g_state.callsign;
+    case FIELD_STATION_CALLSIGN:return g_state.station_callsign;
     case FIELD_RST_SENT:      return g_state.rst_sent;
     case FIELD_RST_RCVD:      return g_state.rst_rcvd;
     case FIELD_COMMENT:       return g_state.comment;
@@ -908,7 +1015,14 @@ static char *FieldBuffer(enum Field f)
     case FIELD_TIME:          return g_state.time_str;
     case FIELD_TIME_OFF:      return g_state.time_off;
     case FIELD_QTH:           return g_state.qth;
+    case FIELD_WORKED_OPERATOR_CALLSIGN:return g_state.worked_operator_callsign;
     case FIELD_WORKED_NAME:   return g_state.worked_name;
+    case FIELD_WORKED_GRID:   return g_state.worked_grid;
+    case FIELD_WORKED_COUNTRY:return g_state.worked_country;
+    case FIELD_WORKED_DXCC:   return g_state.worked_dxcc;
+    case FIELD_WORKED_CQ_ZONE:return g_state.worked_cq_zone;
+    case FIELD_WORKED_ITU_ZONE:return g_state.worked_itu_zone;
+    case FIELD_WORKED_CONTINENT:return g_state.worked_continent;
     case FIELD_TX_POWER:      return g_state.tx_power;
     case FIELD_SUBMODE:       return g_state.submode;
     case FIELD_CONTEST_ID:    return g_state.contest_id;
@@ -924,6 +1038,37 @@ static char *FieldBuffer(enum Field f)
     case FIELD_WORKED_STATE:  return g_state.worked_state;
     case FIELD_WORKED_COUNTY: return g_state.worked_county;
     case FIELD_SKCC:          return g_state.skcc;
+    case FIELD_QSL_SENT_STATUS:return g_state.qsl_sent_status;
+    case FIELD_QSL_SENT_DATE: return g_state.qsl_sent_date;
+    case FIELD_QSL_RCVD_STATUS:return g_state.qsl_rcvd_status;
+    case FIELD_QSL_RCVD_DATE: return g_state.qsl_rcvd_date;
+    case FIELD_LOTW_SENT:     return g_state.lotw_sent;
+    case FIELD_LOTW_RCVD:     return g_state.lotw_rcvd;
+    case FIELD_EQSL_SENT:     return g_state.eqsl_sent;
+    case FIELD_EQSL_RCVD:     return g_state.eqsl_rcvd;
+    case FIELD_QRZ_LOG_ID:    return g_state.qrz_log_id;
+    case FIELD_QRZ_BOOK_ID:   return g_state.qrz_book_id;
+    case FIELD_SNAPSHOT_STATION_CALLSIGN:return g_state.snapshot_station_callsign;
+    case FIELD_SNAPSHOT_OPERATOR_CALLSIGN:return g_state.snapshot_operator_callsign;
+    case FIELD_SNAPSHOT_PROFILE:return g_state.snapshot_profile;
+    case FIELD_SNAPSHOT_OPERATOR_NAME:return g_state.snapshot_operator_name;
+    case FIELD_SNAPSHOT_GRID:return g_state.snapshot_grid;
+    case FIELD_SNAPSHOT_COUNTRY:return g_state.snapshot_country;
+    case FIELD_SNAPSHOT_STATE:return g_state.snapshot_state;
+    case FIELD_SNAPSHOT_COUNTY:return g_state.snapshot_county;
+    case FIELD_SNAPSHOT_ARRL_SECTION:return g_state.snapshot_arrl_section;
+    case FIELD_SNAPSHOT_DXCC:return g_state.snapshot_dxcc;
+    case FIELD_SNAPSHOT_CQ_ZONE:return g_state.snapshot_cq_zone;
+    case FIELD_SNAPSHOT_ITU_ZONE:return g_state.snapshot_itu_zone;
+    case FIELD_SNAPSHOT_LATITUDE:return g_state.snapshot_latitude;
+    case FIELD_SNAPSHOT_LONGITUDE:return g_state.snapshot_longitude;
+    case FIELD_CW_RX_WPM:     return g_state.cw_rx_wpm;
+    case FIELD_CW_TRANSCRIPT: return g_state.cw_transcript;
+    case FIELD_LOCAL_ID:      return g_state.metadata_local_id;
+    case FIELD_SYNC_STATUS:   return g_state.sync_status;
+    case FIELD_CREATED_AT:    return g_state.created_at;
+    case FIELD_UPDATED_AT:    return g_state.updated_at;
+    case FIELD_EXTRA_FIELDS:  return g_state.extra_fields;
     default: return NULL; /* band/mode are cycle selectors, FIELD_COUNT sentinel */
     }
 }
@@ -1008,6 +1153,12 @@ static char FieldHotkey(enum Field f)
     case FIELD_DATE:          return 'D';
     case FIELD_TIME:          return 'T';
     case FIELD_WORKED_NAME:   return 'A';
+    case FIELD_WORKED_GRID:   return 'G';
+    case FIELD_WORKED_COUNTRY:return 'Y';
+    case FIELD_WORKED_DXCC:   return 'X';
+    case FIELD_WORKED_CQ_ZONE:return 'Z';
+    case FIELD_WORKED_ITU_ZONE:return 'V';
+    case FIELD_WORKED_CONTINENT:return 'H';
     case FIELD_TIME_OFF:      return 'I';
     case FIELD_QTH:           return 'Q';
     case FIELD_TX_POWER:      return 'W';
@@ -1203,6 +1354,12 @@ static void ClearForm(void)
     g_state.time_off[0] = 0;
     g_state.qth[0] = 0;
     g_state.worked_name[0] = 0;
+    g_state.worked_grid[0] = 0;
+    g_state.worked_country[0] = 0;
+    g_state.worked_dxcc[0] = 0;
+    g_state.worked_cq_zone[0] = 0;
+    g_state.worked_itu_zone[0] = 0;
+    g_state.worked_continent[0] = 0;
     g_state.tx_power[0] = 0;
     g_state.submode[0] = 0;
     g_state.contest_id[0] = 0;
@@ -1245,6 +1402,7 @@ static void fill_log_request(QsrLogQsoRequest *req)
 {
     memset(req, 0, sizeof(*req));
     safe_strcpy((char *)req->callsign, sizeof(req->callsign), g_state.callsign);
+    safe_strcpy((char *)req->station_callsign, sizeof(req->station_callsign), g_state.station_callsign);
     safe_strcpy((char *)req->band, sizeof(req->band), BANDS[g_state.band_idx]);
     safe_strcpy((char *)req->mode, sizeof(req->mode), MODES[g_state.mode_idx]);
 
@@ -1274,7 +1432,14 @@ static void fill_log_request(QsrLogQsoRequest *req)
 
     safe_strcpy((char *)req->comment,       sizeof(req->comment),       g_state.comment);
     safe_strcpy((char *)req->notes,          sizeof(req->notes),          g_state.notes);
+    safe_strcpy((char *)req->worked_operator_callsign, sizeof(req->worked_operator_callsign), g_state.worked_operator_callsign);
     safe_strcpy((char *)req->worked_name,    sizeof(req->worked_name),    g_state.worked_name);
+    safe_strcpy((char *)req->worked_grid,    sizeof(req->worked_grid),    g_state.worked_grid);
+    safe_strcpy((char *)req->worked_country, sizeof(req->worked_country), g_state.worked_country);
+    safe_strcpy((char *)req->worked_dxcc,    sizeof(req->worked_dxcc),    g_state.worked_dxcc);
+    safe_strcpy((char *)req->worked_cq_zone, sizeof(req->worked_cq_zone), g_state.worked_cq_zone);
+    safe_strcpy((char *)req->worked_itu_zone,sizeof(req->worked_itu_zone),g_state.worked_itu_zone);
+    safe_strcpy((char *)req->worked_continent,sizeof(req->worked_continent),g_state.worked_continent);
     safe_strcpy((char *)req->tx_power,       sizeof(req->tx_power),       g_state.tx_power);
     safe_strcpy((char *)req->submode,        sizeof(req->submode),        g_state.submode);
     safe_strcpy((char *)req->contest_id,     sizeof(req->contest_id),     g_state.contest_id);
@@ -1290,6 +1455,33 @@ static void fill_log_request(QsrLogQsoRequest *req)
     safe_strcpy((char *)req->worked_state,   sizeof(req->worked_state),   g_state.worked_state);
     safe_strcpy((char *)req->worked_county,  sizeof(req->worked_county),  g_state.worked_county);
     safe_strcpy((char *)req->skcc,           sizeof(req->skcc),           g_state.skcc);
+    safe_strcpy((char *)req->qsl_sent_status, sizeof(req->qsl_sent_status), g_state.qsl_sent_status);
+    safe_strcpy((char *)req->qsl_sent_date, sizeof(req->qsl_sent_date), g_state.qsl_sent_date);
+    safe_strcpy((char *)req->qsl_rcvd_status, sizeof(req->qsl_rcvd_status), g_state.qsl_rcvd_status);
+    safe_strcpy((char *)req->qsl_rcvd_date, sizeof(req->qsl_rcvd_date), g_state.qsl_rcvd_date);
+    safe_strcpy((char *)req->lotw_sent, sizeof(req->lotw_sent), g_state.lotw_sent);
+    safe_strcpy((char *)req->lotw_rcvd, sizeof(req->lotw_rcvd), g_state.lotw_rcvd);
+    safe_strcpy((char *)req->eqsl_sent, sizeof(req->eqsl_sent), g_state.eqsl_sent);
+    safe_strcpy((char *)req->eqsl_rcvd, sizeof(req->eqsl_rcvd), g_state.eqsl_rcvd);
+    safe_strcpy((char *)req->qrz_log_id, sizeof(req->qrz_log_id), g_state.qrz_log_id);
+    safe_strcpy((char *)req->qrz_book_id, sizeof(req->qrz_book_id), g_state.qrz_book_id);
+    safe_strcpy((char *)req->snapshot_station_callsign, sizeof(req->snapshot_station_callsign), g_state.snapshot_station_callsign);
+    safe_strcpy((char *)req->snapshot_operator_callsign, sizeof(req->snapshot_operator_callsign), g_state.snapshot_operator_callsign);
+    safe_strcpy((char *)req->snapshot_profile, sizeof(req->snapshot_profile), g_state.snapshot_profile);
+    safe_strcpy((char *)req->snapshot_operator_name, sizeof(req->snapshot_operator_name), g_state.snapshot_operator_name);
+    safe_strcpy((char *)req->snapshot_grid, sizeof(req->snapshot_grid), g_state.snapshot_grid);
+    safe_strcpy((char *)req->snapshot_country, sizeof(req->snapshot_country), g_state.snapshot_country);
+    safe_strcpy((char *)req->snapshot_state, sizeof(req->snapshot_state), g_state.snapshot_state);
+    safe_strcpy((char *)req->snapshot_county, sizeof(req->snapshot_county), g_state.snapshot_county);
+    safe_strcpy((char *)req->snapshot_arrl_section, sizeof(req->snapshot_arrl_section), g_state.snapshot_arrl_section);
+    safe_strcpy((char *)req->snapshot_dxcc, sizeof(req->snapshot_dxcc), g_state.snapshot_dxcc);
+    safe_strcpy((char *)req->snapshot_cq_zone, sizeof(req->snapshot_cq_zone), g_state.snapshot_cq_zone);
+    safe_strcpy((char *)req->snapshot_itu_zone, sizeof(req->snapshot_itu_zone), g_state.snapshot_itu_zone);
+    safe_strcpy((char *)req->snapshot_latitude, sizeof(req->snapshot_latitude), g_state.snapshot_latitude);
+    safe_strcpy((char *)req->snapshot_longitude, sizeof(req->snapshot_longitude), g_state.snapshot_longitude);
+    safe_strcpy((char *)req->cw_rx_wpm, sizeof(req->cw_rx_wpm), g_state.cw_rx_wpm);
+    safe_strcpy((char *)req->cw_transcript, sizeof(req->cw_transcript), g_state.cw_transcript);
+    safe_strcpy((char *)req->extra_fields, sizeof(req->extra_fields), g_state.extra_fields);
 
     if (g_state.time_off[0] && g_state.date[0]) {
         char off[64];
@@ -1628,6 +1820,12 @@ static void ClearLookupDisplay(void)
     /* Clear form fields that were auto-populated from lookup */
     g_state.worked_name[0] = 0;
     g_state.cursor_pos[FIELD_WORKED_NAME] = 0;
+    g_state.worked_grid[0] = 0;
+    g_state.cursor_pos[FIELD_WORKED_GRID] = 0;
+    g_state.worked_country[0] = 0;
+    g_state.cursor_pos[FIELD_WORKED_COUNTRY] = 0;
+    g_state.worked_cq_zone[0] = 0;
+    g_state.cursor_pos[FIELD_WORKED_CQ_ZONE] = 0;
     g_state.qth[0] = 0;
     g_state.cursor_pos[FIELD_QTH] = 0;
 }
@@ -1656,6 +1854,15 @@ static void ApplyLookupResult(LookupResultMsg *res)
             g_state.lookup_error[0] = 0;
             safe_strcpy(g_state.worked_name, sizeof(g_state.worked_name), res->name);
             g_state.cursor_pos[FIELD_WORKED_NAME] = (int)strlen(g_state.worked_name);
+            safe_strcpy(g_state.worked_grid, sizeof(g_state.worked_grid), res->grid);
+            g_state.cursor_pos[FIELD_WORKED_GRID] = (int)strlen(g_state.worked_grid);
+            safe_strcpy(g_state.worked_country, sizeof(g_state.worked_country), res->country);
+            g_state.cursor_pos[FIELD_WORKED_COUNTRY] = (int)strlen(g_state.worked_country);
+            if (res->cq_zone > 0)
+                snprintf(g_state.worked_cq_zone, sizeof(g_state.worked_cq_zone), "%d", res->cq_zone);
+            else
+                g_state.worked_cq_zone[0] = 0;
+            g_state.cursor_pos[FIELD_WORKED_CQ_ZONE] = (int)strlen(g_state.worked_cq_zone);
             safe_strcpy(g_state.qth, sizeof(g_state.qth), res->qth);
             g_state.cursor_pos[FIELD_QTH] = (int)strlen(g_state.qth);
         } else if (res->not_found) {
@@ -1921,6 +2128,7 @@ static void ApplyLoadedQsoDetail(const char *local_id, const QsrQsoDetail *detai
     ClearForm();
 
     safe_strcpy(g_state.callsign, sizeof(g_state.callsign), (const char *)detail->callsign);
+    safe_strcpy(g_state.station_callsign, sizeof(g_state.station_callsign), (const char *)detail->station_callsign);
 
     /* Match band to index */
     {
@@ -1961,7 +2169,14 @@ static void ApplyLoadedQsoDetail(const char *local_id, const QsrQsoDetail *detai
 
     safe_strcpy(g_state.comment,       sizeof(g_state.comment),       (const char *)detail->comment);
     safe_strcpy(g_state.notes,          sizeof(g_state.notes),          (const char *)detail->notes);
+    safe_strcpy(g_state.worked_operator_callsign, sizeof(g_state.worked_operator_callsign), (const char *)detail->worked_operator_callsign);
     safe_strcpy(g_state.worked_name,    sizeof(g_state.worked_name),    (const char *)detail->worked_name);
+    safe_strcpy(g_state.worked_grid,    sizeof(g_state.worked_grid),    (const char *)detail->worked_grid);
+    safe_strcpy(g_state.worked_country, sizeof(g_state.worked_country), (const char *)detail->worked_country);
+    safe_strcpy(g_state.worked_dxcc,    sizeof(g_state.worked_dxcc),    (const char *)detail->worked_dxcc);
+    safe_strcpy(g_state.worked_cq_zone, sizeof(g_state.worked_cq_zone), (const char *)detail->worked_cq_zone);
+    safe_strcpy(g_state.worked_itu_zone,sizeof(g_state.worked_itu_zone),(const char *)detail->worked_itu_zone);
+    safe_strcpy(g_state.worked_continent,sizeof(g_state.worked_continent),(const char *)detail->worked_continent);
     safe_strcpy(g_state.tx_power,       sizeof(g_state.tx_power),       (const char *)detail->tx_power);
     safe_strcpy(g_state.submode,        sizeof(g_state.submode),        (const char *)detail->submode);
     safe_strcpy(g_state.contest_id,     sizeof(g_state.contest_id),     (const char *)detail->contest_id);
@@ -1977,6 +2192,37 @@ static void ApplyLoadedQsoDetail(const char *local_id, const QsrQsoDetail *detai
     safe_strcpy(g_state.worked_state,   sizeof(g_state.worked_state),   (const char *)detail->worked_state);
     safe_strcpy(g_state.worked_county,  sizeof(g_state.worked_county),  (const char *)detail->worked_county);
     safe_strcpy(g_state.skcc,           sizeof(g_state.skcc),           (const char *)detail->skcc);
+    safe_strcpy(g_state.qsl_sent_status, sizeof(g_state.qsl_sent_status), (const char *)detail->qsl_sent_status);
+    safe_strcpy(g_state.qsl_sent_date, sizeof(g_state.qsl_sent_date), (const char *)detail->qsl_sent_date);
+    safe_strcpy(g_state.qsl_rcvd_status, sizeof(g_state.qsl_rcvd_status), (const char *)detail->qsl_rcvd_status);
+    safe_strcpy(g_state.qsl_rcvd_date, sizeof(g_state.qsl_rcvd_date), (const char *)detail->qsl_rcvd_date);
+    safe_strcpy(g_state.lotw_sent, sizeof(g_state.lotw_sent), (const char *)detail->lotw_sent);
+    safe_strcpy(g_state.lotw_rcvd, sizeof(g_state.lotw_rcvd), (const char *)detail->lotw_rcvd);
+    safe_strcpy(g_state.eqsl_sent, sizeof(g_state.eqsl_sent), (const char *)detail->eqsl_sent);
+    safe_strcpy(g_state.eqsl_rcvd, sizeof(g_state.eqsl_rcvd), (const char *)detail->eqsl_rcvd);
+    safe_strcpy(g_state.qrz_log_id, sizeof(g_state.qrz_log_id), (const char *)detail->qrz_log_id);
+    safe_strcpy(g_state.qrz_book_id, sizeof(g_state.qrz_book_id), (const char *)detail->qrz_book_id);
+    safe_strcpy(g_state.snapshot_station_callsign, sizeof(g_state.snapshot_station_callsign), (const char *)detail->snapshot_station_callsign);
+    safe_strcpy(g_state.snapshot_operator_callsign, sizeof(g_state.snapshot_operator_callsign), (const char *)detail->snapshot_operator_callsign);
+    safe_strcpy(g_state.snapshot_profile, sizeof(g_state.snapshot_profile), (const char *)detail->snapshot_profile);
+    safe_strcpy(g_state.snapshot_operator_name, sizeof(g_state.snapshot_operator_name), (const char *)detail->snapshot_operator_name);
+    safe_strcpy(g_state.snapshot_grid, sizeof(g_state.snapshot_grid), (const char *)detail->snapshot_grid);
+    safe_strcpy(g_state.snapshot_country, sizeof(g_state.snapshot_country), (const char *)detail->snapshot_country);
+    safe_strcpy(g_state.snapshot_state, sizeof(g_state.snapshot_state), (const char *)detail->snapshot_state);
+    safe_strcpy(g_state.snapshot_county, sizeof(g_state.snapshot_county), (const char *)detail->snapshot_county);
+    safe_strcpy(g_state.snapshot_arrl_section, sizeof(g_state.snapshot_arrl_section), (const char *)detail->snapshot_arrl_section);
+    safe_strcpy(g_state.snapshot_dxcc, sizeof(g_state.snapshot_dxcc), (const char *)detail->snapshot_dxcc);
+    safe_strcpy(g_state.snapshot_cq_zone, sizeof(g_state.snapshot_cq_zone), (const char *)detail->snapshot_cq_zone);
+    safe_strcpy(g_state.snapshot_itu_zone, sizeof(g_state.snapshot_itu_zone), (const char *)detail->snapshot_itu_zone);
+    safe_strcpy(g_state.snapshot_latitude, sizeof(g_state.snapshot_latitude), (const char *)detail->snapshot_latitude);
+    safe_strcpy(g_state.snapshot_longitude, sizeof(g_state.snapshot_longitude), (const char *)detail->snapshot_longitude);
+    safe_strcpy(g_state.cw_rx_wpm, sizeof(g_state.cw_rx_wpm), (const char *)detail->cw_rx_wpm);
+    safe_strcpy(g_state.cw_transcript, sizeof(g_state.cw_transcript), (const char *)detail->cw_transcript);
+    safe_strcpy(g_state.metadata_local_id, sizeof(g_state.metadata_local_id), local_id);
+    safe_strcpy(g_state.sync_status, sizeof(g_state.sync_status), (const char *)detail->sync_status);
+    safe_strcpy(g_state.created_at, sizeof(g_state.created_at), (const char *)detail->created_at);
+    safe_strcpy(g_state.updated_at, sizeof(g_state.updated_at), (const char *)detail->updated_at);
+    safe_strcpy(g_state.extra_fields, sizeof(g_state.extra_fields), (const char *)detail->extra_fields);
 
     safe_strcpy(g_state.editing_local_id, sizeof(g_state.editing_local_id), local_id);
 
@@ -2418,44 +2664,96 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
     return y_start + form_h;
 }
 
-/* ── Advanced view tab field definitions ────────────────────────────────── */
+/* ── Advanced card editor tab field definitions ─────────────────────────── */
 
-#define ADV_TAB_COUNT 4
+#define ADV_TAB_COUNT 7
+#define ADV_TAB_CORE 0
+#define ADV_TAB_LOOKUP 1
+#define ADV_TAB_QSL 2
+#define ADV_TAB_CONTEST 3
+#define ADV_TAB_STATION 4
+#define ADV_TAB_TRANSCRIPT 5
+#define ADV_TAB_METADATA 6
 
-static const enum Field ADV_TAB_MAIN[] = {
-    FIELD_CALLSIGN, FIELD_BAND, FIELD_MODE, FIELD_FREQ,
-    FIELD_DATE, FIELD_TIME, FIELD_TIME_OFF, FIELD_QTH,
-    FIELD_WORKED_NAME, FIELD_RST_SENT, FIELD_RST_RCVD,
+static const enum Field ADV_TAB_CORE_FIELDS[] = {
+    FIELD_CALLSIGN, FIELD_DATE, FIELD_TIME, FIELD_TIME_OFF,
+    FIELD_BAND, FIELD_MODE, FIELD_FREQ, FIELD_RST_SENT,
+    FIELD_RST_RCVD, FIELD_STATION_CALLSIGN, FIELD_TX_POWER, FIELD_SUBMODE,
     FIELD_COMMENT, FIELD_NOTES
 };
 
-static const enum Field ADV_TAB_CONTEST[] = {
-    FIELD_TX_POWER, FIELD_SUBMODE, FIELD_CONTEST_ID,
-    FIELD_SERIAL_SENT, FIELD_SERIAL_RCVD,
-    FIELD_EXCHANGE_SENT, FIELD_EXCHANGE_RCVD
-};
-
-static const enum Field ADV_TAB_TECHNICAL[] = {
-    FIELD_PROP_MODE, FIELD_SAT_NAME, FIELD_SAT_MODE
-};
-
-static const enum Field ADV_TAB_AWARDS[] = {
-    FIELD_IOTA, FIELD_ARRL_SECTION, FIELD_WORKED_STATE, FIELD_WORKED_COUNTY,
+static const enum Field ADV_TAB_LOOKUP_FIELDS[] = {
+    FIELD_WORKED_OPERATOR_CALLSIGN, FIELD_WORKED_NAME,
+    FIELD_WORKED_GRID, FIELD_WORKED_COUNTRY,
+    FIELD_WORKED_DXCC, FIELD_WORKED_STATE,
+    FIELD_WORKED_CQ_ZONE, FIELD_WORKED_ITU_ZONE,
+    FIELD_WORKED_COUNTY, FIELD_IOTA,
+    FIELD_WORKED_CONTINENT, FIELD_ARRL_SECTION,
     FIELD_SKCC
 };
 
+static const enum Field ADV_TAB_QSL_FIELDS[] = {
+    FIELD_QSL_SENT_STATUS, FIELD_QSL_SENT_DATE,
+    FIELD_QSL_RCVD_STATUS, FIELD_QSL_RCVD_DATE,
+    FIELD_LOTW_SENT, FIELD_LOTW_RCVD,
+    FIELD_EQSL_SENT, FIELD_EQSL_RCVD,
+    FIELD_QRZ_LOG_ID, FIELD_QRZ_BOOK_ID
+};
+
+static const enum Field ADV_TAB_CONTEST_FIELDS[] = {
+    FIELD_CONTEST_ID, FIELD_SERIAL_SENT, FIELD_SERIAL_RCVD,
+    FIELD_EXCHANGE_SENT, FIELD_EXCHANGE_RCVD,
+    FIELD_PROP_MODE, FIELD_SAT_NAME, FIELD_SAT_MODE
+};
+
+static const enum Field ADV_TAB_STATION_FIELDS[] = {
+    FIELD_SNAPSHOT_STATION_CALLSIGN, FIELD_SNAPSHOT_OPERATOR_CALLSIGN,
+    FIELD_SNAPSHOT_PROFILE, FIELD_SNAPSHOT_OPERATOR_NAME,
+    FIELD_SNAPSHOT_GRID, FIELD_SNAPSHOT_COUNTRY,
+    FIELD_SNAPSHOT_STATE, FIELD_SNAPSHOT_COUNTY,
+    FIELD_SNAPSHOT_ARRL_SECTION, FIELD_SNAPSHOT_DXCC,
+    FIELD_SNAPSHOT_CQ_ZONE, FIELD_SNAPSHOT_ITU_ZONE,
+    FIELD_SNAPSHOT_LATITUDE, FIELD_SNAPSHOT_LONGITUDE
+};
+
+static const enum Field ADV_TAB_TRANSCRIPT_FIELDS[] = {
+    FIELD_CW_RX_WPM, FIELD_CW_TRANSCRIPT
+};
+
+static const enum Field ADV_TAB_METADATA_FIELDS[] = {
+    FIELD_LOCAL_ID, FIELD_SYNC_STATUS, FIELD_CREATED_AT,
+    FIELD_UPDATED_AT, FIELD_EXTRA_FIELDS
+};
+
 static const enum Field *ADV_TABS[] = {
-    ADV_TAB_MAIN, ADV_TAB_CONTEST, ADV_TAB_TECHNICAL, ADV_TAB_AWARDS
+    ADV_TAB_CORE_FIELDS, ADV_TAB_LOOKUP_FIELDS, ADV_TAB_QSL_FIELDS,
+    ADV_TAB_CONTEST_FIELDS, ADV_TAB_STATION_FIELDS,
+    ADV_TAB_TRANSCRIPT_FIELDS, ADV_TAB_METADATA_FIELDS
 };
 
 static const int ADV_TAB_COUNTS[] = {
-    sizeof(ADV_TAB_MAIN) / sizeof(ADV_TAB_MAIN[0]),
-    sizeof(ADV_TAB_CONTEST) / sizeof(ADV_TAB_CONTEST[0]),
-    sizeof(ADV_TAB_TECHNICAL) / sizeof(ADV_TAB_TECHNICAL[0]),
-    sizeof(ADV_TAB_AWARDS) / sizeof(ADV_TAB_AWARDS[0])
+    sizeof(ADV_TAB_CORE_FIELDS) / sizeof(ADV_TAB_CORE_FIELDS[0]),
+    sizeof(ADV_TAB_LOOKUP_FIELDS) / sizeof(ADV_TAB_LOOKUP_FIELDS[0]),
+    sizeof(ADV_TAB_QSL_FIELDS) / sizeof(ADV_TAB_QSL_FIELDS[0]),
+    sizeof(ADV_TAB_CONTEST_FIELDS) / sizeof(ADV_TAB_CONTEST_FIELDS[0]),
+    sizeof(ADV_TAB_STATION_FIELDS) / sizeof(ADV_TAB_STATION_FIELDS[0]),
+    sizeof(ADV_TAB_TRANSCRIPT_FIELDS) / sizeof(ADV_TAB_TRANSCRIPT_FIELDS[0]),
+    sizeof(ADV_TAB_METADATA_FIELDS) / sizeof(ADV_TAB_METADATA_FIELDS[0])
 };
 
-static const char *ADV_TAB_NAMES[] = { "Main", "Contest", "Technical", "Awards" };
+static const char *ADV_TAB_NAMES[] = {
+    "Core", "Lookup", "QSL", "Contest", "Station", "Transcript", "Metadata"
+};
+
+static const char *ADV_TAB_DESCRIPTIONS[] = {
+    "Identity, UTC timing, band/mode, reports, comments and notes",
+    "Worked operator lookup, location, DXCC, zone and award fields",
+    "QSL workflow, LoTW/eQSL status and QRZ log identifiers",
+    "Contest identifiers, serial numbers, exchange text, propagation and satellite details",
+    "Station profile snapshot fields captured with the contact",
+    "CW decode speed and transcript text",
+    "Engine metadata and extra ADIF fields"
+};
 
 static const enum Field *AdvTabFields(int tab, int *count)
 {
@@ -2473,17 +2771,131 @@ static int AdvTabFieldIndex(int tab, enum Field f)
     return -1;
 }
 
+static int AdvTabForField(enum Field f)
+{
+    int t;
+    for (t = 0; t < ADV_TAB_COUNT; t++) {
+        if (AdvTabFieldIndex(t, f) >= 0) return t;
+    }
+    return -1;
+}
+
+static void ToggleAdvancedView(HWND hwnd)
+{
+    if (!g_state.advanced_view && g_state.qso_list_focused &&
+        g_state.qso_selected >= 0 && g_state.qso_selected < g_state.recent_count) {
+        g_state.advanced_view = 1;
+        g_state.advanced_tab = ADV_TAB_CORE;
+        g_state.qso_list_focused = 0;
+        g_state.search_focused = 0;
+        LoadSelectedQso();
+        InvalidateRect(hwnd, NULL, FALSE);
+        return;
+    }
+
+    g_state.advanced_view = !g_state.advanced_view;
+    if (g_state.advanced_view) {
+        int field_tab = AdvTabForField(g_state.focused_field);
+        if (field_tab >= 0) {
+            g_state.advanced_tab = field_tab;
+        } else if (AdvTabFieldIndex(g_state.advanced_tab,
+                                    g_state.focused_field) < 0) {
+            int cnt;
+            const enum Field *flds = AdvTabFields(g_state.advanced_tab, &cnt);
+            SetFocusField(flds[0]);
+        }
+    } else {
+        if (g_state.focused_field > FIELD_TIME)
+            SetFocusField(FIELD_CALLSIGN);
+    }
+    g_state.qso_list_focused = 0;
+    g_state.search_focused = 0;
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+static void SetAdvancedTab(int tab)
+{
+    int cnt;
+    const enum Field *fields;
+    if (tab < 0 || tab >= ADV_TAB_COUNT) return;
+    g_state.advanced_tab = tab;
+    fields = AdvTabFields(g_state.advanced_tab, &cnt);
+    if (cnt > 0) SetFocusField(fields[0]);
+}
+
+static void CycleAdvancedTab(int delta)
+{
+    SetAdvancedTab((g_state.advanced_tab + ADV_TAB_COUNT + delta) % ADV_TAB_COUNT);
+}
+
+#ifdef QSORIPPER_WIN32_TESTING
+int qsr_test_advanced_tab_for_field(enum Field f)
+{
+    return AdvTabForField(f);
+}
+
+const char *qsr_test_advanced_tab_name(int tab)
+{
+    if (tab < 0 || tab >= ADV_TAB_COUNT) return NULL;
+    return ADV_TAB_NAMES[tab];
+}
+
+int qsr_test_advanced_tab_field_count(int tab)
+{
+    if (tab < 0 || tab >= ADV_TAB_COUNT) return 0;
+    return ADV_TAB_COUNTS[tab];
+}
+
+const char *qsr_test_advanced_field_label(enum Field f)
+{
+    if (f < 0 || f >= FIELD_COUNT) return NULL;
+    return AdvancedFieldLabel(f);
+}
+
+int qsr_test_get_advanced_tab(void)
+{
+    return g_state.advanced_tab;
+}
+
+void qsr_test_set_advanced_tab(int tab)
+{
+    SetAdvancedTab(tab);
+}
+
+void qsr_test_cycle_advanced_tab(int delta)
+{
+    CycleAdvancedTab(delta);
+}
+
+int qsr_test_advanced_view_enabled(void)
+{
+    return g_state.advanced_view;
+}
+
+void qsr_test_set_qso_list_focused(int focused)
+{
+    g_state.qso_list_focused = focused ? 1 : 0;
+}
+
+void qsr_test_toggle_advanced_view(void)
+{
+    ToggleAdvancedView(g_state.hwnd);
+}
+#endif
+
 static int CountAdvancedRows(const enum Field *fields, int count)
 {
     int rows = 0;
     int i;
     for (i = 0; i < count; ) {
-        if (fields[i] == FIELD_COMMENT || fields[i] == FIELD_NOTES) {
+        if (fields[i] == FIELD_COMMENT || fields[i] == FIELD_NOTES ||
+            fields[i] == FIELD_CW_TRANSCRIPT || fields[i] == FIELD_EXTRA_FIELDS) {
             rows++; i++;
         } else {
             rows++; i++;
             if (i < count && fields[i] != FIELD_COMMENT &&
-                fields[i] != FIELD_NOTES) {
+                fields[i] != FIELD_NOTES && fields[i] != FIELD_CW_TRANSCRIPT &&
+                fields[i] != FIELD_EXTRA_FIELDS) {
                 i++; /* paired into same row */
             }
         }
@@ -2491,7 +2903,60 @@ static int CountAdvancedRows(const enum Field *fields, int count)
     return rows;
 }
 
-/* ── Drawing: Advanced log form ────────────────────────────────────────── */
+static int AdvancedFormHeight(void)
+{
+    int cnt;
+    const enum Field *fields = AdvTabFields(g_state.advanced_tab, &cnt);
+    int rows = CountAdvancedRows(fields, cnt);
+    int ch = g_state.char_h;
+    int row_h = ch + 8;
+
+    if (g_state.advanced_tab == ADV_TAB_LOOKUP && rows < 10) rows = 10;
+    if (cnt == 0 && rows < 3) rows = 3;
+
+    return ch * 3 + row_h * (rows + 3) + 42;
+}
+
+static void DrawCardPanel(HDC hdc, int x, int y, int w, int h,
+                          const char *title, const char *subtitle,
+                          COLORREF border, int cw, int ch)
+{
+    FillRect_Color(hdc, x, y, w, h, CLR_BG);
+    DrawBox(hdc, x, y, w, h, border);
+    SelectObject(hdc, g_state.hFontSmallBold);
+    DrawText_A_BG(hdc, x + cw, y, border, CLR_BG, title);
+    SelectObject(hdc, g_state.hFont);
+    if (subtitle && subtitle[0])
+        DrawText_A(hdc, x + cw, y + ch + 6, CLR_GRAY, subtitle);
+}
+
+static void DrawAdvancedEditorField(HDC hdc, enum Field f, int x, int y,
+                                    int label_w, int field_chars,
+                                    int focused_form, int cw, int ch)
+{
+    int field_x = x + label_w;
+    int box_w = field_chars * cw + 6;
+    int box_h = ch + 4;
+
+    DrawLabelWithHotkey(hdc, x, y + 3, CLR_LABEL, AdvancedFieldLabel(f),
+                        FieldHotkey(f), cw, ch);
+    if (f == FIELD_BAND) {
+        DrawCycleField(hdc, field_x, y, field_chars, BANDS[g_state.band_idx],
+                       focused_form && g_state.focused_field == f, cw, ch);
+    } else if (f == FIELD_MODE) {
+        DrawCycleField(hdc, field_x, y, field_chars, MODES[g_state.mode_idx],
+                       focused_form && g_state.focused_field == f, cw, ch);
+    } else {
+        char *buf = FieldBuffer(f);
+        DrawField(hdc, field_x, y, field_chars, buf ? buf : "",
+                  g_state.cursor_pos[f],
+                  focused_form && g_state.focused_field == f, cw, ch);
+    }
+
+    SetRect(&g_state.field_rects[f], field_x, y, field_x + box_w, y + box_h);
+}
+
+/* ── Drawing: Advanced card editor ─────────────────────────────────────── */
 
 static int PaintAdvancedForm(HDC hdc, int y_start, int w)
 {
@@ -2499,17 +2964,15 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
     int ch = g_state.char_h;
     int row_h = ch + 8;
     int pad = cw * 2;
-    int label_w = cw * 14;
+    int label_w = cw * 16;
     int focused_form = !g_state.qso_list_focused && !g_state.search_focused;
     int tab = g_state.advanced_tab;
-    int field_count, num_rows, form_h, y, i, t;
+    int field_count, form_h, y, i, t;
     const enum Field *fields;
     COLORREF border_clr;
 
     fields = AdvTabFields(tab, &field_count);
-    num_rows = CountAdvancedRows(fields, field_count);
-    /* form_h: title + tab bar + field rows + margin */
-    form_h = ch + 4 + row_h * (num_rows + 1) + 12;
+    form_h = AdvancedFormHeight();
 
     border_clr = focused_form ? CLR_MAGENTA : CLR_DARKGRAY;
     DrawBox(hdc, 4, y_start, w - 8, form_h, border_clr);
@@ -2518,13 +2981,16 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
     {
         char title[64];
         const char *pfx = g_state.editing_local_id[0] ? "Edit" : "Advanced";
-        snprintf(title, sizeof(title), " %s - %s ", pfx, ADV_TAB_NAMES[tab]);
+        snprintf(title, sizeof(title), " %s QSO Card - %s ", pfx, ADV_TAB_NAMES[tab]);
         SelectObject(hdc, g_state.hFontSmallBold);
         DrawText_A_BG(hdc, pad, y_start, CLR_MAGENTA, CLR_BG, title);
         SelectObject(hdc, g_state.hFont);
     }
 
-    y = y_start + ch + 4;
+    DrawText_A(hdc, pad, y_start + ch + 2, CLR_DARKGRAY,
+               "F5/F6 pages - Alt+1..7 jumps - F10 saves - Esc closes card");
+
+    y = y_start + ch * 2 + 8;
 
     /* Tab bar */
     {
@@ -2533,83 +2999,82 @@ static int PaintAdvancedForm(HDC hdc, int y_start, int w)
             char tab_label[32];
             COLORREF bg = (t == tab) ? CLR_CYAN : CLR_DARKGRAY;
             COLORREF fg = (t == tab) ? CLR_BG : CLR_WHITE;
-            snprintf(tab_label, sizeof(tab_label), " %s ", ADV_TAB_NAMES[t]);
+            int tw;
+            snprintf(tab_label, sizeof(tab_label), " %d %s ", t + 1, ADV_TAB_NAMES[t]);
             DrawChip(hdc, tx, y, bg, fg, tab_label, cw, ch);
-            tx += (int)strlen(tab_label) * cw + 12;
+            tw = (int)strlen(tab_label) * cw + 8;
+            SetRect(&g_state.advanced_tab_rects[t], tx, y, tx + tw, y + ch + 2);
+            tx += tw + 10;
         }
     }
     y += row_h;
 
-    /* Two-column field layout */
+    /* Compact desktop card surface: one grouped panel per logical page. */
     {
-        int col_w = (w - pad * 2 - 16) / 2;
+        int card_x = pad;
+        int card_y = y;
+        int card_w = w - pad * 2;
+        int card_h = form_h - (card_y - y_start) - row_h;
+        int col_w = (card_w - cw * 4) / 2;
         int field_w = (col_w - label_w - 8) / cw;
+        const char *card_title = ADV_TAB_NAMES[tab];
+        const char *card_subtitle = ADV_TAB_DESCRIPTIONS[tab];
+
         if (field_w > 30) field_w = 30;
         if (field_w < 8) field_w = 8;
 
+        DrawCardPanel(hdc, card_x, card_y, card_w, card_h,
+                      card_title, card_subtitle, CLR_FORM_BORDER, cw, ch);
+        y = card_y + ch * 2 + 10;
+
         for (i = 0; i < field_count; ) {
             enum Field f1 = fields[i];
-            int full_w = (f1 == FIELD_COMMENT || f1 == FIELD_NOTES);
+            int full_w = (f1 == FIELD_COMMENT || f1 == FIELD_NOTES ||
+                          f1 == FIELD_CW_TRANSCRIPT || f1 == FIELD_EXTRA_FIELDS);
+            int left_x = card_x + cw * 2;
 
-            /* First field */
-            DrawLabelWithHotkey(hdc, pad, y + 3, CLR_CYAN, FIELD_LABELS[f1],
-                                FieldHotkey(f1), cw, ch);
-            if (f1 == FIELD_BAND) {
-                DrawCycleField(hdc, pad + label_w, y, 8,
-                               BANDS[g_state.band_idx],
-                               focused_form && g_state.focused_field == f1,
-                               cw, ch);
-            } else if (f1 == FIELD_MODE) {
-                DrawCycleField(hdc, pad + label_w, y, 8,
-                               MODES[g_state.mode_idx],
-                               focused_form && g_state.focused_field == f1,
-                               cw, ch);
-            } else {
-                int fw = full_w ? ((w - pad * 2 - label_w - 12) / cw)
-                                : field_w;
-                char *buf = FieldBuffer(f1);
-                if (fw > 60) fw = 60;
-                if (fw < 8) fw = 8;
-                DrawField(hdc, pad + label_w, y, fw,
-                          buf ? buf : "", g_state.cursor_pos[f1],
-                          focused_form && g_state.focused_field == f1,
-                          cw, ch);
-            }
+            DrawAdvancedEditorField(hdc, f1, left_x, y, label_w,
+                                    full_w ? ((card_w - cw * 4 - label_w - 8) / cw)
+                                           : field_w,
+                                    focused_form, cw, ch);
             i++;
 
             /* Second field in same row (if first wasn't full-width) */
             if (!full_w && i < field_count) {
                 enum Field f2 = fields[i];
-                if (f2 != FIELD_COMMENT && f2 != FIELD_NOTES) {
-                    int col2_x = pad + col_w + 8;
-                    DrawLabelWithHotkey(hdc, col2_x, y + 3, CLR_CYAN,
-                                       FIELD_LABELS[f2], FieldHotkey(f2), cw, ch);
-                    if (f2 == FIELD_BAND) {
-                        DrawCycleField(hdc, col2_x + label_w, y, 8,
-                                       BANDS[g_state.band_idx],
-                                       focused_form &&
-                                           g_state.focused_field == f2,
-                                       cw, ch);
-                    } else if (f2 == FIELD_MODE) {
-                        DrawCycleField(hdc, col2_x + label_w, y, 8,
-                                       MODES[g_state.mode_idx],
-                                       focused_form &&
-                                           g_state.focused_field == f2,
-                                       cw, ch);
-                    } else {
-                        char *buf2 = FieldBuffer(f2);
-                        DrawField(hdc, col2_x + label_w, y, field_w,
-                                  buf2 ? buf2 : "", g_state.cursor_pos[f2],
-                                  focused_form &&
-                                      g_state.focused_field == f2,
-                                  cw, ch);
-                    }
+                if (f2 != FIELD_COMMENT && f2 != FIELD_NOTES &&
+                    f2 != FIELD_CW_TRANSCRIPT && f2 != FIELD_EXTRA_FIELDS) {
+                    int col2_x = card_x + cw * 2 + col_w + cw * 4;
+                    DrawAdvancedEditorField(hdc, f2, col2_x, y, label_w,
+                                            field_w, focused_form, cw, ch);
                     i++;
                 }
             }
 
             y += row_h;
         }
+
+        if (tab == ADV_TAB_LOOKUP) {
+            int summary_y = y + 4;
+            int summary_h = ch * 4 + 12;
+            char line[192];
+            DrawBox(hdc, card_x + cw * 2, summary_y, card_w - cw * 4,
+                    summary_h, CLR_DARKGRAY);
+            SelectObject(hdc, g_state.hFontSmallBold);
+            DrawText_A(hdc, card_x + cw * 3, summary_y + 4,
+                       CLR_TEXT, "Lookup Summary");
+            SelectObject(hdc, g_state.hFont);
+            snprintf(line, sizeof(line), "%s", g_state.worked_name);
+            DrawText_A(hdc, card_x + cw * 3, summary_y + ch + 6,
+                       CLR_TEXT, line);
+            snprintf(line, sizeof(line), "%s", g_state.worked_country);
+            DrawText_A(hdc, card_x + cw * 3, summary_y + ch * 2 + 8,
+                       CLR_GRAY, line);
+            snprintf(line, sizeof(line), "%s", g_state.worked_grid);
+            DrawText_A(hdc, card_x + cw * 3, summary_y + ch * 3 + 10,
+                       CLR_GRAY, line);
+        }
+
     }
 
     return y_start + form_h;
@@ -2888,7 +3353,8 @@ static void PaintHelp(HDC hdc, int w, int h)
         "F4              Toggle search",
         "F7              Start QSO timer",
         "F8              Toggle rig control",
-        "F5 / F6         Adv tab next/prev",
+        "F5 / F6         Advanced page next/previous",
+        "Alt+1..7        Advanced page direct",
         "F10 / Alt+Enter Log QSO (or update)",
         "Tab / Shift+Tab Navigate fields",
         "Left / Right    Cycle Band/Mode",
@@ -3132,46 +3598,26 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
 
     /* F2: toggle advanced view */
     if (vk == VK_F2) {
-        g_state.advanced_view = !g_state.advanced_view;
-        if (g_state.advanced_view) {
-            /* Keep field if it exists in current tab, else focus first */
-            if (AdvTabFieldIndex(g_state.advanced_tab,
-                                 g_state.focused_field) < 0) {
-                int cnt;
-                const enum Field *flds =
-                    AdvTabFields(g_state.advanced_tab, &cnt);
-                SetFocusField(flds[0]);
-            }
-        } else {
-            /* Return to basic: ensure field is in basic range */
-            if (g_state.focused_field > FIELD_TIME)
-                SetFocusField(FIELD_CALLSIGN);
-        }
-        g_state.qso_list_focused = 0;
-        g_state.search_focused = 0;
-        InvalidateRect(hwnd, NULL, FALSE);
+        ToggleAdvancedView(hwnd);
         return;
     }
 
     /* F5: next advanced tab */
     if (vk == VK_F5 && g_state.advanced_view) {
-        int cnt;
-        const enum Field *flds;
-        g_state.advanced_tab = (g_state.advanced_tab + 1) % ADV_TAB_COUNT;
-        flds = AdvTabFields(g_state.advanced_tab, &cnt);
-        SetFocusField(flds[0]);
+        CycleAdvancedTab(1);
         InvalidateRect(hwnd, NULL, FALSE);
         return;
     }
 
     /* F6: previous advanced tab */
     if (vk == VK_F6 && g_state.advanced_view) {
-        int cnt;
-        const enum Field *flds;
-        g_state.advanced_tab =
-            (g_state.advanced_tab + ADV_TAB_COUNT - 1) % ADV_TAB_COUNT;
-        flds = AdvTabFields(g_state.advanced_tab, &cnt);
-        SetFocusField(flds[0]);
+        CycleAdvancedTab(-1);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return;
+    }
+
+    if (ctrl_down && vk == VK_TAB && g_state.advanced_view) {
+        CycleAdvancedTab(shift_down ? -1 : 1);
         InvalidateRect(hwnd, NULL, FALSE);
         return;
     }
@@ -3235,6 +3681,13 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
     /* ── Alt+key: jump to field ──────────────────────────────────── */
     if (alt_down && !ctrl_down) {
         enum Field target = FIELD_COUNT;
+        if (g_state.advanced_view && vk >= '1' && vk <= '7') {
+            SetAdvancedTab((int)(vk - '1'));
+            g_state.qso_list_focused = 0;
+            g_state.search_focused = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return;
+        }
         switch (vk) {
         case 'C': target = FIELD_CALLSIGN; break;
         case 'B': target = FIELD_BAND; break;
@@ -3256,6 +3709,12 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         case 'K': target = FIELD_SKCC; break;
         }
         if (target != FIELD_COUNT) {
+            if (g_state.advanced_view) {
+                int target_tab = AdvTabForField(target);
+                if (target_tab >= 0) {
+                    g_state.advanced_tab = target_tab;
+                }
+            }
             SetFocusField(target);
             g_state.qso_list_focused = 0;
             g_state.search_focused = 0;
@@ -3943,13 +4402,42 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         int row_h = ch + 8;
         int form_start = header_h + status_h;
         int form_h = g_state.advanced_view
-            ? (row_h * 12 + ch + 10)
+            ? AdvancedFormHeight()
             : (row_h * 9 + ch + 10);
         int form_end = form_start + form_h;
         int lookup_h = ch * 5 + 8;
         int qso_list_start = form_end + lookup_h;
 
-        /* Click in form area? */
+        /* Click in advanced card editor? */
+        if (my >= form_start && my < form_end && g_state.advanced_view) {
+            POINT pt;
+            int i;
+            pt.x = mx;
+            pt.y = my;
+
+            for (i = 0; i < ADV_TAB_COUNT; i++) {
+                if (PtInRect(&g_state.advanced_tab_rects[i], pt)) {
+                    SetAdvancedTab(i);
+                    g_state.qso_list_focused = 0;
+                    g_state.search_focused = 0;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    return 0;
+                }
+            }
+
+            for (i = 0; i < FIELD_COUNT; i++) {
+                if (PtInRect(&g_state.field_rects[i], pt) &&
+                    AdvTabFieldIndex(g_state.advanced_tab, (enum Field)i) >= 0) {
+                    SetFocusField((enum Field)i);
+                    g_state.qso_list_focused = 0;
+                    g_state.search_focused = 0;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                    return 0;
+                }
+            }
+        }
+
+        /* Click in basic form area? */
         if (my >= form_start && my < form_end && !g_state.advanced_view) {
             int pad = cw * 2;
             int label_w = cw * 10;
@@ -4046,7 +4534,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         int row_h = ch + 8;
         int form_start = header_h + status_h;
         int form_h = g_state.advanced_view
-            ? (row_h * 12 + ch + 10)
+            ? AdvancedFormHeight()
             : (row_h * 9 + ch + 10);
         int form_end = form_start + form_h;
         int lookup_h = ch * 5 + 8;
