@@ -199,18 +199,19 @@ fn decode_form_value(value: &str) -> String {
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
 
-    while index < bytes.len() {
-        match bytes[index] {
+    while let Some(&byte) = bytes.get(index) {
+        match byte {
             b'+' => decoded.push(b' '),
             b'%' if index + 2 < bytes.len() => {
-                if let (Some(high), Some(low)) =
-                    (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
-                {
+                if let (Some(high), Some(low)) = (
+                    bytes.get(index + 1).copied().and_then(hex_value),
+                    bytes.get(index + 2).copied().and_then(hex_value),
+                ) {
                     decoded.push((high << 4) | low);
                     index += 3;
                     continue;
                 }
-                decoded.push(bytes[index]);
+                decoded.push(byte);
             }
             byte => decoded.push(byte),
         }
