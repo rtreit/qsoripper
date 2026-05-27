@@ -174,6 +174,18 @@ fn log_list_get_delete_round_trip() {
     };
     req.freq_khz = 14225;
     fill_buf(&mut req.comment, "FFI integration test");
+    fill_buf(&mut req.worked_operator_callsign, "W1AW/OP");
+    fill_buf(&mut req.qsl_sent_status, "Y");
+    fill_buf(&mut req.qsl_sent_date, "2025-01-16");
+    fill_buf(&mut req.lotw_sent, "N");
+    fill_buf(&mut req.qrz_log_id, "qrz-123");
+    fill_buf(&mut req.snapshot_profile, "Home");
+    fill_buf(&mut req.snapshot_station_callsign, "K7TST");
+    fill_buf(&mut req.snapshot_grid, "CN87");
+    fill_buf(&mut req.snapshot_dxcc, "291");
+    fill_buf(&mut req.cw_rx_wpm, "34");
+    fill_buf(&mut req.cw_transcript, "CQ TEST");
+    fill_buf(&mut req.extra_fields, "APP_TEST=value");
 
     let mut result: QsrLogQsoResult = unsafe { std::mem::zeroed() };
     let rc = unsafe { qsr_log_qso(client, &req, &mut result) };
@@ -205,15 +217,45 @@ fn log_list_get_delete_round_trip() {
     assert_eq!(buf_as_str(&detail.band), "20M");
     assert_eq!(buf_as_str(&detail.mode), "SSB");
     assert_eq!(buf_as_str(&detail.comment), "FFI integration test");
+    assert_eq!(buf_as_str(&detail.worked_operator_callsign), "W1AW/OP");
+    assert_eq!(buf_as_str(&detail.qsl_sent_status), "Y");
+    assert_eq!(buf_as_str(&detail.qsl_sent_date), "2025-01-16");
+    assert_eq!(buf_as_str(&detail.lotw_sent), "N");
+    assert_eq!(buf_as_str(&detail.qrz_log_id), "qrz-123");
+    assert_eq!(buf_as_str(&detail.snapshot_profile), "Home");
+    assert_eq!(buf_as_str(&detail.snapshot_station_callsign), "K7TST");
+    assert_eq!(buf_as_str(&detail.snapshot_grid), "CN87");
+    assert_eq!(buf_as_str(&detail.snapshot_dxcc), "291");
+    assert_eq!(buf_as_str(&detail.cw_rx_wpm), "34");
+    assert_eq!(buf_as_str(&detail.cw_transcript), "CQ TEST");
+    assert!(buf_as_str(&detail.extra_fields).contains("APP_TEST=value"));
 
     // 4. Delete the QSO
     let rc = unsafe { qsr_delete_qso(client, c_id.as_ptr()) };
     assert_eq!(rc, 0, "qsr_delete_qso failed: {}", last_error());
 
-    // 5. Verify it's gone
+    // 5. Verify soft-deleted rows are hidden from the default list but loadable by ID
     let mut detail2: QsrQsoDetail = unsafe { std::mem::zeroed() };
     let rc = unsafe { qsr_get_qso(client, c_id.as_ptr(), &mut detail2) };
-    assert_ne!(rc, 0, "qsr_get_qso should fail for deleted QSO");
+    assert_eq!(
+        rc,
+        0,
+        "qsr_get_qso failed after soft-delete: {}",
+        last_error()
+    );
+
+    let mut list_after_delete: QsrQsoList = unsafe { std::mem::zeroed() };
+    let rc = unsafe { qsr_list_qsos(client, &mut list_after_delete) };
+    assert_eq!(rc, 0, "qsr_list_qsos failed: {}", last_error());
+    let found_after_delete = (0..list_after_delete.count).any(|i| {
+        let item = unsafe { &*list_after_delete.items.add(i as usize) };
+        buf_as_str(&item.local_id) == local_id
+    });
+    assert!(
+        !found_after_delete,
+        "soft-deleted QSO should be hidden from default list"
+    );
+    unsafe { qsr_free_qso_list(&mut list_after_delete) };
 
     unsafe { qsr_disconnect(client) };
 }

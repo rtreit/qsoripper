@@ -10,7 +10,7 @@ mod lookup_panel;
 mod recent_qsos;
 
 use ratatui::{
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph},
@@ -43,12 +43,18 @@ pub(crate) fn render_ui(app: &App, frame: &mut Frame) {
     header::render(app, frame, header_area);
     render_status_bar(app, frame, status_area);
     if matches!(app.view, View::Advanced) {
-        advanced_form::render(app, frame, form_area);
+        let advanced_area = Rect {
+            x: form_area.x,
+            y: form_area.y,
+            width: form_area.width,
+            height: footer_area.y.saturating_sub(form_area.y),
+        };
+        advanced_form::render(app, frame, advanced_area);
     } else {
         log_form::render(app, frame, form_area);
+        lookup_panel::render(app, frame, lookup_area);
+        recent_qsos::render(app, frame, recent_area);
     }
-    lookup_panel::render(app, frame, lookup_area);
-    recent_qsos::render(app, frame, recent_area);
     footer::render(frame, footer_area);
 
     if matches!(app.view, View::Help) {
@@ -117,7 +123,6 @@ mod tests {
             country: Some("United States".to_string()),
             grid: Some("CN87".to_string()),
             name: Some("John Smith".to_string()),
-            duration: None,
             source_record: QsoRecord {
                 local_id: id.to_string(),
                 worked_callsign: callsign.to_string(),
@@ -142,11 +147,29 @@ mod tests {
     }
 
     #[test]
-    fn render_advanced_main_tab() {
+    fn render_advanced_core_tab() {
         let mut terminal = make_terminal();
         let mut app = make_app();
         app.view = View::Advanced;
-        app.form.advanced_tab = AdvancedTab::Main;
+        app.form.advanced_tab = AdvancedTab::Core;
+        terminal.draw(|f| super::render_ui(&app, f)).unwrap();
+    }
+
+    #[test]
+    fn render_advanced_lookup_tab() {
+        let mut terminal = make_terminal();
+        let mut app = make_app();
+        app.view = View::Advanced;
+        app.form.advanced_tab = AdvancedTab::Lookup;
+        terminal.draw(|f| super::render_ui(&app, f)).unwrap();
+    }
+
+    #[test]
+    fn render_advanced_station_tab() {
+        let mut terminal = make_terminal();
+        let mut app = make_app();
+        app.view = View::Advanced;
+        app.form.advanced_tab = AdvancedTab::Station;
         terminal.draw(|f| super::render_ui(&app, f)).unwrap();
     }
 
@@ -160,20 +183,11 @@ mod tests {
     }
 
     #[test]
-    fn render_advanced_technical_tab() {
+    fn render_advanced_metadata_tab() {
         let mut terminal = make_terminal();
         let mut app = make_app();
         app.view = View::Advanced;
-        app.form.advanced_tab = AdvancedTab::Technical;
-        terminal.draw(|f| super::render_ui(&app, f)).unwrap();
-    }
-
-    #[test]
-    fn render_advanced_awards_tab() {
-        let mut terminal = make_terminal();
-        let mut app = make_app();
-        app.view = View::Advanced;
-        app.form.advanced_tab = AdvancedTab::Awards;
+        app.form.advanced_tab = AdvancedTab::Metadata;
         terminal.draw(|f| super::render_ui(&app, f)).unwrap();
     }
 
@@ -305,7 +319,7 @@ mod tests {
         let mut terminal = make_terminal();
         let mut app = make_app();
         app.view = View::Advanced;
-        app.form.advanced_tab = AdvancedTab::Main;
+        app.form.advanced_tab = AdvancedTab::Core;
         app.form.field_selected = true;
         terminal.draw(|f| super::render_ui(&app, f)).unwrap();
     }

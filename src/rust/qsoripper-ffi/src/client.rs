@@ -12,6 +12,7 @@
 )]
 
 use std::ffi::CStr;
+use std::fmt::Write as _;
 use std::os::raw::c_char;
 use std::sync::Mutex;
 
@@ -20,7 +21,7 @@ use tonic::transport::Channel;
 use qsoripper_core::domain::band::{band_from_adif, band_to_adif};
 use qsoripper_core::domain::mode::{mode_from_adif, mode_to_adif};
 use qsoripper_core::proto::qsoripper::domain::{
-    Band, Mode, QsoRecord, RigConnectionStatus, RstReport,
+    Band, Mode, QslStatus, QsoRecord, RigConnectionStatus, RstReport, StationSnapshot, SyncStatus,
 };
 use qsoripper_core::proto::qsoripper::services::{
     logbook_service_client::LogbookServiceClient, lookup_service_client::LookupServiceClient,
@@ -182,8 +183,11 @@ impl QsrClient {
             Ok(resp) => {
                 if let Some(qso) = resp.into_inner().qso {
                     populate_qso_detail(&qso, out);
+                    0
+                } else {
+                    set_error(format!("QSO not found: {local_id}"));
+                    -1
                 }
-                0
             }
             Err(e) => {
                 set_error(format!("GetQso failed: {}", e.message()));
@@ -377,6 +381,22 @@ fn build_qso_record(req: &QsrLogQsoRequest) -> Result<QsoRecord, String> {
     set_optional_str(&req.worked_name, |s| {
         qso.worked_operator_name = Some(s.to_string());
     });
+    set_optional_str(&req.worked_grid, |s| qso.worked_grid = Some(s.to_string()));
+    set_optional_str(&req.worked_country, |s| {
+        qso.worked_country = Some(s.to_string());
+    });
+    set_optional_u32(&req.worked_dxcc, "worked DXCC", |v| {
+        qso.worked_dxcc = Some(v);
+    })?;
+    set_optional_u32(&req.worked_cq_zone, "worked CQ zone", |v| {
+        qso.worked_cq_zone = Some(v);
+    })?;
+    set_optional_u32(&req.worked_itu_zone, "worked ITU zone", |v| {
+        qso.worked_itu_zone = Some(v);
+    })?;
+    set_optional_str(&req.worked_continent, |s| {
+        qso.worked_continent = Some(s.to_string());
+    });
     set_optional_str(&req.tx_power, |s| qso.tx_power = Some(s.to_string()));
     set_optional_str(&req.submode, |s| qso.submode = Some(s.to_string()));
     set_optional_str(&req.contest_id, |s| qso.contest_id = Some(s.to_string()));
@@ -404,6 +424,12 @@ fn build_qso_record(req: &QsrLogQsoRequest) -> Result<QsoRecord, String> {
         qso.worked_county = Some(s.to_string());
     });
     set_optional_str(&req.skcc, |s| qso.skcc = Some(s.to_string()));
+    set_optional_str(&req.worked_operator_callsign, |s| {
+        qso.worked_operator_callsign = Some(s.to_uppercase());
+    });
+    populate_qsl_fields(req, &mut qso)?;
+    populate_station_snapshot(req, &mut qso)?;
+    populate_transcript_and_extra_fields(req, &mut qso)?;
 
     let time_off = buf_to_str(&req.time_off);
     if !time_off.is_empty() {
@@ -421,6 +447,179 @@ fn set_optional_str(buf: &[u8], setter: impl FnOnce(&str)) {
     if !s.is_empty() {
         setter(s);
     }
+}
+
+fn set_optional_u32(buf: &[u8], field_name: &str, setter: impl FnOnce(u32)) -> Result<(), String> {
+    let s = buf_to_str(buf);
+    if !s.is_empty() {
+        setter(
+            s.parse::<u32>()
+                .map_err(|_| format!("Invalid {field_name}: {s}"))?,
+        );
+    }
+    Ok(())
+}
+
+fn set_optional_f64(buf: &[u8], field_name: &str, setter: impl FnOnce(f64)) -> Result<(), String> {
+    let s = buf_to_str(buf);
+    if !s.is_empty() {
+        setter(
+            s.parse::<f64>()
+                .map_err(|_| format!("Invalid {field_name}: {s}"))?,
+        );
+    }
+    Ok(())
+}
+
+fn parse_qsl_status(buf: &[u8], field_name: &str) -> Result<Option<QslStatus>, String> {
+    let s = buf_to_str(buf).trim().to_ascii_uppercase();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    let status = match s.as_str() {
+        "N" | "NO" => QslStatus::No,
+        "Y" | "YES" => QslStatus::Yes,
+        "R" | "REQUESTED" => QslStatus::Requested,
+        "Q" | "QUEUED" => QslStatus::Queued,
+        "I" | "IGNORE" | "IGNORED" => QslStatus::Ignore,
+        "UNSPECIFIED" => QslStatus::Unspecified,
+        _ => return Err(format!("Invalid {field_name}: {s}")),
+    };
+    Ok(Some(status))
+}
+
+fn parse_optional_bool(buf: &[u8], field_name: &str) -> Result<Option<bool>, String> {
+    let s = buf_to_str(buf).trim().to_ascii_uppercase();
+    if s.is_empty() {
+        return Ok(None);
+    }
+    match s.as_str() {
+        "Y" | "YES" | "TRUE" | "1" => Ok(Some(true)),
+        "N" | "NO" | "FALSE" | "0" => Ok(Some(false)),
+        _ => Err(format!("Invalid {field_name}: {s}")),
+    }
+}
+
+fn parse_date(buf: &[u8], field_name: &str) -> Result<Option<prost_types::Timestamp>, String> {
+    let s = buf_to_str(buf);
+    if s.is_empty() {
+        return Ok(None);
+    }
+    parse_datetime(&format!("{s} 00:00"))
+        .map(Some)
+        .map_err(|e| format!("Invalid {field_name}: {e}"))
+}
+
+fn populate_qsl_fields(req: &QsrLogQsoRequest, qso: &mut QsoRecord) -> Result<(), String> {
+    if let Some(status) = parse_qsl_status(&req.qsl_sent_status, "QSL sent status")? {
+        qso.qsl_sent_status = status.into();
+    }
+    if let Some(status) = parse_qsl_status(&req.qsl_rcvd_status, "QSL received status")? {
+        qso.qsl_received_status = status.into();
+    }
+    qso.lotw_sent = parse_optional_bool(&req.lotw_sent, "LoTW sent")?;
+    qso.lotw_received = parse_optional_bool(&req.lotw_rcvd, "LoTW received")?;
+    qso.eqsl_sent = parse_optional_bool(&req.eqsl_sent, "eQSL sent")?;
+    qso.eqsl_received = parse_optional_bool(&req.eqsl_rcvd, "eQSL received")?;
+    qso.qsl_sent_date = parse_date(&req.qsl_sent_date, "QSL sent date")?;
+    qso.qsl_received_date = parse_date(&req.qsl_rcvd_date, "QSL received date")?;
+    set_optional_str(&req.qrz_log_id, |s| qso.qrz_logid = Some(s.to_string()));
+    set_optional_str(&req.qrz_book_id, |s| qso.qrz_bookid = Some(s.to_string()));
+    Ok(())
+}
+
+fn populate_station_snapshot(req: &QsrLogQsoRequest, qso: &mut QsoRecord) -> Result<(), String> {
+    let has_snapshot = [
+        &req.snapshot_station_callsign[..],
+        &req.snapshot_operator_callsign[..],
+        &req.snapshot_profile[..],
+        &req.snapshot_operator_name[..],
+        &req.snapshot_grid[..],
+        &req.snapshot_country[..],
+        &req.snapshot_state[..],
+        &req.snapshot_county[..],
+        &req.snapshot_arrl_section[..],
+        &req.snapshot_dxcc[..],
+        &req.snapshot_cq_zone[..],
+        &req.snapshot_itu_zone[..],
+        &req.snapshot_latitude[..],
+        &req.snapshot_longitude[..],
+    ]
+    .iter()
+    .any(|buf| !buf_to_str(buf).is_empty());
+    if !has_snapshot {
+        return Ok(());
+    }
+
+    let mut snapshot = StationSnapshot {
+        station_callsign: buf_to_str(&req.snapshot_station_callsign).to_uppercase(),
+        ..Default::default()
+    };
+    if snapshot.station_callsign.is_empty() {
+        snapshot.station_callsign = buf_to_str(&req.station_callsign).to_uppercase();
+    }
+    set_optional_str(&req.snapshot_operator_callsign, |s| {
+        snapshot.operator_callsign = Some(s.to_uppercase());
+    });
+    set_optional_str(&req.snapshot_profile, |s| {
+        snapshot.profile_name = Some(s.to_string());
+    });
+    set_optional_str(&req.snapshot_operator_name, |s| {
+        snapshot.operator_name = Some(s.to_string());
+    });
+    set_optional_str(&req.snapshot_grid, |s| {
+        snapshot.grid = Some(s.to_uppercase());
+    });
+    set_optional_str(&req.snapshot_country, |s| {
+        snapshot.country = Some(s.to_string());
+    });
+    set_optional_str(&req.snapshot_state, |s| {
+        snapshot.state = Some(s.to_string());
+    });
+    set_optional_str(&req.snapshot_county, |s| {
+        snapshot.county = Some(s.to_string());
+    });
+    set_optional_str(&req.snapshot_arrl_section, |s| {
+        snapshot.arrl_section = Some(s.to_uppercase());
+    });
+    set_optional_u32(&req.snapshot_dxcc, "station DXCC", |v| {
+        snapshot.dxcc = Some(v);
+    })?;
+    set_optional_u32(&req.snapshot_cq_zone, "station CQ zone", |v| {
+        snapshot.cq_zone = Some(v);
+    })?;
+    set_optional_u32(&req.snapshot_itu_zone, "station ITU zone", |v| {
+        snapshot.itu_zone = Some(v);
+    })?;
+    set_optional_f64(&req.snapshot_latitude, "station latitude", |v| {
+        snapshot.latitude = Some(v);
+    })?;
+    set_optional_f64(&req.snapshot_longitude, "station longitude", |v| {
+        snapshot.longitude = Some(v);
+    })?;
+    qso.station_snapshot = Some(snapshot);
+    Ok(())
+}
+
+fn populate_transcript_and_extra_fields(
+    req: &QsrLogQsoRequest,
+    qso: &mut QsoRecord,
+) -> Result<(), String> {
+    set_optional_u32(&req.cw_rx_wpm, "CW RX WPM", |v| {
+        qso.cw_decode_rx_wpm = Some(v);
+    })?;
+    set_optional_str(&req.cw_transcript, |s| {
+        qso.cw_decode_transcript = Some(s.to_string());
+    });
+    let extra = buf_to_str(&req.extra_fields);
+    for line in extra.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let Some((key, value)) = line.split_once('=') else {
+            return Err(format!("Invalid extra ADIF field: {line}"));
+        };
+        qso.extra_fields
+            .insert(key.trim().to_ascii_uppercase(), value.trim().to_string());
+    }
+    Ok(())
 }
 
 /// Build a proto `RstReport` from the FFI `QsrRstReport`.
@@ -632,6 +831,163 @@ fn format_rst(rst: &RstReport) -> String {
     }
 }
 
+fn timestamp_date(ts: &prost_types::Timestamp) -> String {
+    let (y, m, d, _, _) = timestamp_parts(ts);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+fn timestamp_datetime(ts: &prost_types::Timestamp) -> String {
+    let (y, m, d, h, min) = timestamp_parts(ts);
+    format!("{y:04}-{m:02}-{d:02} {h:02}:{min:02}")
+}
+
+fn timestamp_parts(ts: &prost_types::Timestamp) -> (i64, i64, i64, i64, i64) {
+    let total_secs = ts.seconds;
+    let days = (total_secs / 86400) + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let doe = days - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    let day_secs = total_secs.rem_euclid(86400);
+    let h = day_secs / 3600;
+    let min = (day_secs % 3600) / 60;
+    (y, m, d, h, min)
+}
+
+fn qsl_status_text(status: i32) -> &'static str {
+    match QslStatus::try_from(status).unwrap_or(QslStatus::Unspecified) {
+        QslStatus::No => "N",
+        QslStatus::Yes => "Y",
+        QslStatus::Requested => "R",
+        QslStatus::Queued => "Q",
+        QslStatus::Ignore => "I",
+        QslStatus::Unspecified => "",
+    }
+}
+
+fn optional_bool_text(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "Y",
+        Some(false) => "N",
+        None => "",
+    }
+}
+
+fn sync_status_text(status: i32) -> &'static str {
+    match SyncStatus::try_from(status).unwrap_or(SyncStatus::LocalOnly) {
+        SyncStatus::LocalOnly => "LocalOnly",
+        SyncStatus::Synced => "Synced",
+        SyncStatus::Modified => "Modified",
+        SyncStatus::Conflict => "Conflict",
+    }
+}
+
+fn populate_confirmation_detail(qso: &QsoRecord, out: &mut QsrQsoDetail) {
+    str_to_buf(
+        qsl_status_text(qso.qsl_sent_status),
+        &mut out.qsl_sent_status,
+    );
+    str_to_buf(
+        qsl_status_text(qso.qsl_received_status),
+        &mut out.qsl_rcvd_status,
+    );
+    str_to_buf(optional_bool_text(qso.lotw_sent), &mut out.lotw_sent);
+    str_to_buf(optional_bool_text(qso.lotw_received), &mut out.lotw_rcvd);
+    str_to_buf(optional_bool_text(qso.eqsl_sent), &mut out.eqsl_sent);
+    str_to_buf(optional_bool_text(qso.eqsl_received), &mut out.eqsl_rcvd);
+    if let Some(ts) = &qso.qsl_sent_date {
+        str_to_buf(&timestamp_date(ts), &mut out.qsl_sent_date);
+    }
+    if let Some(ts) = &qso.qsl_received_date {
+        str_to_buf(&timestamp_date(ts), &mut out.qsl_rcvd_date);
+    }
+    if let Some(v) = &qso.qrz_logid {
+        str_to_buf(v, &mut out.qrz_log_id);
+    }
+    if let Some(v) = &qso.qrz_bookid {
+        str_to_buf(v, &mut out.qrz_book_id);
+    }
+}
+
+fn populate_station_snapshot_detail(qso: &QsoRecord, out: &mut QsrQsoDetail) {
+    let Some(snapshot) = &qso.station_snapshot else {
+        return;
+    };
+    str_to_buf(
+        &snapshot.station_callsign,
+        &mut out.snapshot_station_callsign,
+    );
+    if let Some(v) = &snapshot.operator_callsign {
+        str_to_buf(v, &mut out.snapshot_operator_callsign);
+    }
+    if let Some(v) = &snapshot.profile_name {
+        str_to_buf(v, &mut out.snapshot_profile);
+    }
+    if let Some(v) = &snapshot.operator_name {
+        str_to_buf(v, &mut out.snapshot_operator_name);
+    }
+    if let Some(v) = &snapshot.grid {
+        str_to_buf(v, &mut out.snapshot_grid);
+    }
+    if let Some(v) = &snapshot.country {
+        str_to_buf(v, &mut out.snapshot_country);
+    }
+    if let Some(v) = &snapshot.state {
+        str_to_buf(v, &mut out.snapshot_state);
+    }
+    if let Some(v) = &snapshot.county {
+        str_to_buf(v, &mut out.snapshot_county);
+    }
+    if let Some(v) = &snapshot.arrl_section {
+        str_to_buf(v, &mut out.snapshot_arrl_section);
+    }
+    if let Some(v) = snapshot.dxcc {
+        str_to_buf(&v.to_string(), &mut out.snapshot_dxcc);
+    }
+    if let Some(v) = snapshot.cq_zone {
+        str_to_buf(&v.to_string(), &mut out.snapshot_cq_zone);
+    }
+    if let Some(v) = snapshot.itu_zone {
+        str_to_buf(&v.to_string(), &mut out.snapshot_itu_zone);
+    }
+    if let Some(v) = snapshot.latitude {
+        str_to_buf(&v.to_string(), &mut out.snapshot_latitude);
+    }
+    if let Some(v) = snapshot.longitude {
+        str_to_buf(&v.to_string(), &mut out.snapshot_longitude);
+    }
+}
+
+fn populate_transcript_metadata_detail(qso: &QsoRecord, out: &mut QsrQsoDetail) {
+    if let Some(v) = qso.cw_decode_rx_wpm {
+        str_to_buf(&v.to_string(), &mut out.cw_rx_wpm);
+    }
+    if let Some(v) = &qso.cw_decode_transcript {
+        str_to_buf(v, &mut out.cw_transcript);
+    }
+    str_to_buf(sync_status_text(qso.sync_status), &mut out.sync_status);
+    if let Some(ts) = &qso.created_at {
+        str_to_buf(&timestamp_datetime(ts), &mut out.created_at);
+    }
+    if let Some(ts) = &qso.updated_at {
+        str_to_buf(&timestamp_datetime(ts), &mut out.updated_at);
+    }
+    if !qso.extra_fields.is_empty() {
+        let mut text = String::new();
+        let mut entries: Vec<_> = qso.extra_fields.iter().collect();
+        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        for (key, value) in entries {
+            let _ = writeln!(&mut text, "{key}={value}");
+        }
+        str_to_buf(&text, &mut out.extra_fields);
+    }
+}
+
 fn populate_qso_optional_fields(qso: &QsoRecord, out: &mut QsrQsoDetail) {
     if let Some(v) = &qso.comment {
         str_to_buf(v, &mut out.comment);
@@ -641,6 +997,27 @@ fn populate_qso_optional_fields(qso: &QsoRecord, out: &mut QsrQsoDetail) {
     }
     if let Some(v) = &qso.worked_operator_name {
         str_to_buf(v, &mut out.worked_name);
+    }
+    if let Some(v) = &qso.worked_operator_callsign {
+        str_to_buf(v, &mut out.worked_operator_callsign);
+    }
+    if let Some(v) = &qso.worked_grid {
+        str_to_buf(v, &mut out.worked_grid);
+    }
+    if let Some(v) = &qso.worked_country {
+        str_to_buf(v, &mut out.worked_country);
+    }
+    if let Some(v) = qso.worked_dxcc {
+        str_to_buf(&v.to_string(), &mut out.worked_dxcc);
+    }
+    if let Some(v) = qso.worked_cq_zone {
+        str_to_buf(&v.to_string(), &mut out.worked_cq_zone);
+    }
+    if let Some(v) = qso.worked_itu_zone {
+        str_to_buf(&v.to_string(), &mut out.worked_itu_zone);
+    }
+    if let Some(v) = &qso.worked_continent {
+        str_to_buf(v, &mut out.worked_continent);
     }
     if let Some(v) = &qso.tx_power {
         str_to_buf(v, &mut out.tx_power);
@@ -687,42 +1064,17 @@ fn populate_qso_optional_fields(qso: &QsoRecord, out: &mut QsrQsoDetail) {
     if let Some(v) = &qso.skcc {
         str_to_buf(v, &mut out.skcc);
     }
+    populate_confirmation_detail(qso, out);
+    populate_station_snapshot_detail(qso, out);
+    populate_transcript_metadata_detail(qso, out);
 }
 
 /// Populate a `QsrQsoDetail` from a proto `QsoRecord`.
 fn populate_qso_detail(qso: &QsoRecord, out: &mut QsrQsoDetail) {
-    *out = QsrQsoDetail {
-        callsign: [0; 32],
-        band: [0; 8],
-        mode: [0; 8],
-        date: [0; 16],
-        time: [0; 16],
-        freq_mhz: [0; 16],
-        rst_sent: [0; 8],
-        rst_rcvd: [0; 8],
-        comment: [0; 256],
-        notes: [0; 256],
-        local_id: [0; 64],
-        time_off: [0; 16],
-        worked_name: [0; 64],
-        tx_power: [0; 16],
-        submode: [0; 16],
-        contest_id: [0; 32],
-        serial_sent: [0; 16],
-        serial_rcvd: [0; 16],
-        exchange_sent: [0; 64],
-        exchange_rcvd: [0; 64],
-        prop_mode: [0; 16],
-        sat_name: [0; 32],
-        sat_mode: [0; 16],
-        iota: [0; 16],
-        arrl_section: [0; 16],
-        worked_state: [0; 16],
-        worked_county: [0; 32],
-        skcc: [0; 16],
-    };
+    *out = QsrQsoDetail::default();
 
     str_to_buf(&qso.worked_callsign, &mut out.callsign);
+    str_to_buf(&qso.station_callsign, &mut out.station_callsign);
     str_to_buf(&qso.local_id, &mut out.local_id);
 
     let band = Band::try_from(qso.band).unwrap_or(Band::Unspecified);
@@ -902,7 +1254,7 @@ fn populate_rig_status(
 mod tests {
     use super::{buf_to_str, build_qso_record, parse_datetime, qso_to_summary};
     use crate::types::{str_to_buf, QsrLogQsoRequest, QsrRstReport};
-    use qsoripper_core::proto::qsoripper::domain::{QsoRecord, StationSnapshot};
+    use qsoripper_core::proto::qsoripper::domain::{QslStatus, QsoRecord, StationSnapshot};
 
     fn baseline_request() -> QsrLogQsoRequest {
         let mut req: QsrLogQsoRequest = unsafe { std::mem::zeroed() };
@@ -946,6 +1298,44 @@ mod tests {
             qso.station_callsign.trim().is_empty(),
             "empty FFI station_callsign must round-trip as empty so the server fills it"
         );
+    }
+
+    #[test]
+    fn build_qso_record_populates_advanced_card_fields() {
+        let mut req = baseline_request();
+        str_to_buf("W1AW/OP", &mut req.worked_operator_callsign);
+        str_to_buf("Y", &mut req.qsl_sent_status);
+        str_to_buf("N", &mut req.lotw_sent);
+        str_to_buf("2025-01-16", &mut req.qsl_sent_date);
+        str_to_buf("123", &mut req.qrz_log_id);
+        str_to_buf("Home", &mut req.snapshot_profile);
+        str_to_buf("K7TST", &mut req.snapshot_station_callsign);
+        str_to_buf("CN87", &mut req.snapshot_grid);
+        str_to_buf("291", &mut req.snapshot_dxcc);
+        str_to_buf("34", &mut req.cw_rx_wpm);
+        str_to_buf("CQ TEST", &mut req.cw_transcript);
+        str_to_buf("APP_TEST=value", &mut req.extra_fields);
+
+        let qso = build_qso_record(&req).expect("advanced card fields should map");
+
+        assert_eq!(qso.worked_operator_callsign.as_deref(), Some("W1AW/OP"));
+        assert_eq!(qso.qsl_sent_status, QslStatus::Yes as i32);
+        assert_eq!(qso.lotw_sent, Some(false));
+        assert!(qso.qsl_sent_date.is_some());
+        assert_eq!(qso.qrz_logid.as_deref(), Some("123"));
+        assert_eq!(qso.cw_decode_rx_wpm, Some(34));
+        assert_eq!(qso.cw_decode_transcript.as_deref(), Some("CQ TEST"));
+        assert_eq!(
+            qso.extra_fields.get("APP_TEST").map(String::as_str),
+            Some("value")
+        );
+        let snapshot = qso
+            .station_snapshot
+            .expect("station snapshot should be present");
+        assert_eq!(snapshot.profile_name.as_deref(), Some("Home"));
+        assert_eq!(snapshot.station_callsign, "K7TST");
+        assert_eq!(snapshot.grid.as_deref(), Some("CN87"));
+        assert_eq!(snapshot.dxcc, Some(291));
     }
 
     #[test]

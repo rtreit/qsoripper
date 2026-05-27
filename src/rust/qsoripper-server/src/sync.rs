@@ -228,6 +228,7 @@ pub(crate) async fn execute_sync(
             client,
             store,
             metadata: &metadata,
+            remote_qso_count: status_result.as_ref().ok().map(|status| status.qso_count),
             full_sync,
             conflict_policy,
             freshly_uploaded_logids: &freshly_uploaded_logids,
@@ -282,10 +283,40 @@ struct DownloadPhaseInput<'a> {
     client: &'a dyn QrzLogbookApi,
     store: &'a dyn LogbookStore,
     metadata: &'a SyncMetadata,
+    remote_qso_count: Option<u32>,
     full_sync: bool,
     conflict_policy: ConflictPolicy,
     freshly_uploaded_logids: &'a HashSet<String>,
     progress_tx: &'a mpsc::Sender<Result<SyncWithQrzResponse, Status>>,
+}
+
+async fn fetch_remote_qsos_for_download(
+    client: &dyn QrzLogbookApi,
+    since_date: Option<&str>,
+    remote_qso_count: Option<u32>,
+    local_qso_count: usize,
+    counters: &SyncCounters,
+    progress_tx: &mpsc::Sender<Result<SyncWithQrzResponse, Status>>,
+) -> Result<Vec<QsoRecord>, QrzLogbookError> {
+    let mut remote_qsos = client.fetch_qsos(since_date).await?;
+
+    if remote_qsos.is_empty()
+        && since_date.is_some()
+        && remote_qso_count.is_some_and(|count| count as usize > local_qso_count)
+    {
+        send_progress(
+            progress_tx,
+            "Incremental QRZ fetch was empty; retrying a full fetch…",
+            counters.downloaded,
+            counters.uploaded,
+            counters.conflicts,
+        )
+        .await;
+
+        remote_qsos = client.fetch_qsos(None).await?;
+    }
+
+    Ok(remote_qsos)
 }
 
 async fn download_phase(
@@ -296,6 +327,7 @@ async fn download_phase(
         client,
         store,
         metadata,
+        remote_qso_count,
         full_sync,
         conflict_policy,
         freshly_uploaded_logids,
@@ -346,7 +378,16 @@ async fn download_phase(
             .map(|dt| dt.format("%Y-%m-%d").to_string())
     };
 
-    let remote_qsos = match client.fetch_qsos(since_date.as_deref()).await {
+    let remote_qsos = match fetch_remote_qsos_for_download(
+        client,
+        since_date.as_deref(),
+        remote_qso_count,
+        local_qsos.len(),
+        counters,
+        progress_tx,
+    )
+    .await
+    {
         Ok(qsos) => qsos,
         Err(err) => {
             send_complete(
@@ -1164,7 +1205,8 @@ mod tests {
     // -- Mock API -----------------------------------------------------------
 
     struct MockQrzApi {
-        fetch_result: Mutex<Option<Result<Vec<QsoRecord>, QrzLogbookError>>>,
+        fetch_results: Mutex<Vec<Result<Vec<QsoRecord>, QrzLogbookError>>>,
+        fetch_calls: Mutex<Vec<Option<String>>>,
         upload_results: Mutex<Vec<Result<QrzUploadResult, QrzLogbookError>>>,
         upload_calls: Mutex<Vec<(QsoRecord, Option<String>)>>,
         upload_replace_results: Mutex<Vec<Result<QrzUploadResult, QrzLogbookError>>>,
@@ -1182,7 +1224,8 @@ mod tests {
             uploads: Vec<Result<QrzUploadResult, QrzLogbookError>>,
         ) -> Self {
             Self {
-                fetch_result: Mutex::new(Some(fetch)),
+                fetch_results: Mutex::new(vec![fetch]),
+                fetch_calls: Mutex::new(Vec::new()),
                 upload_results: Mutex::new(uploads),
                 upload_calls: Mutex::new(Vec::new()),
                 upload_replace_results: Mutex::new(Vec::new()),
@@ -1202,19 +1245,31 @@ mod tests {
             *self.status_result.lock().unwrap() = Some(status);
             self
         }
+
+        fn with_fetch_results(self, fetches: Vec<Result<Vec<QsoRecord>, QrzLogbookError>>) -> Self {
+            *self.fetch_results.lock().unwrap() = fetches;
+            self
+        }
+
+        fn fetch_calls(&self) -> Vec<Option<String>> {
+            self.fetch_calls.lock().unwrap().clone()
+        }
     }
 
     #[tonic::async_trait]
     impl QrzLogbookApi for MockQrzApi {
-        async fn fetch_qsos(
-            &self,
-            _since: Option<&str>,
-        ) -> Result<Vec<QsoRecord>, QrzLogbookError> {
-            self.fetch_result
+        async fn fetch_qsos(&self, since: Option<&str>) -> Result<Vec<QsoRecord>, QrzLogbookError> {
+            self.fetch_calls
                 .lock()
                 .unwrap()
-                .take()
-                .unwrap_or_else(|| Ok(Vec::new()))
+                .push(since.map(String::from));
+
+            let mut fetch_results = self.fetch_results.lock().unwrap();
+            if fetch_results.is_empty() {
+                Ok(Vec::new())
+            } else {
+                fetch_results.remove(0)
+            }
         }
 
         async fn upload_qso(
@@ -2162,6 +2217,48 @@ mod tests {
             captured.is_none(),
             "empty local log should force a full remote fetch"
         );
+    }
+
+    #[tokio::test]
+    async fn incremental_sync_retries_full_fetch_when_remote_count_exceeds_local_count() {
+        let store = MemoryStorage::new();
+
+        let local = make_qso("W1AW", "K7LOCAL", Band::Band20m, Mode::Cw, 1_700_000_050);
+        store.insert_qso(&local).await.unwrap();
+
+        let metadata = SyncMetadata {
+            last_sync: Some(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            }),
+            ..SyncMetadata::default()
+        };
+        store.upsert_sync_metadata(&metadata).await.unwrap();
+
+        let mut remote = make_qso("W1AW", "K7REMOTE", Band::Band40m, Mode::Cw, 1_700_000_100);
+        remote.qrz_logid = Some("QRZREMOTE".into());
+        let api = MockQrzApi::new(Ok(Vec::new()), Vec::new())
+            .with_fetch_results(vec![Ok(Vec::new()), Ok(vec![remote])])
+            .with_status(Ok(QrzLogbookStatus {
+                owner: "W1AW".into(),
+                qso_count: 2,
+            }));
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, false, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.downloaded_records, 1);
+        assert_eq!(
+            api.fetch_calls(),
+            vec![Some("2023-11-14".into()), None],
+            "empty incremental fetch should be followed by a full fetch"
+        );
+
+        let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
+        assert_eq!(all.len(), 2);
     }
 
     #[tokio::test]

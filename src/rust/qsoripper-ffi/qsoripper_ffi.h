@@ -72,9 +72,37 @@ typedef struct QsrLogQsoRequest {
    */
   uint8_t notes[256];
   /**
+   * Worked operator callsign (null-terminated).
+   */
+  uint8_t worked_operator_callsign[32];
+  /**
    * Operator name (null-terminated).
    */
   uint8_t worked_name[64];
+  /**
+   * Worked grid square (null-terminated).
+   */
+  uint8_t worked_grid[16];
+  /**
+   * Worked country (null-terminated).
+   */
+  uint8_t worked_country[64];
+  /**
+   * Worked DXCC entity code as decimal text (null-terminated).
+   */
+  uint8_t worked_dxcc[16];
+  /**
+   * Worked CQ zone as decimal text (null-terminated).
+   */
+  uint8_t worked_cq_zone[16];
+  /**
+   * Worked ITU zone as decimal text (null-terminated).
+   */
+  uint8_t worked_itu_zone[16];
+  /**
+   * Worked continent code (null-terminated).
+   */
+  uint8_t worked_continent[8];
   /**
    * TX power (null-terminated).
    */
@@ -135,6 +163,33 @@ typedef struct QsrLogQsoRequest {
    * SKCC membership number (null-terminated).
    */
   uint8_t skcc[16];
+  uint8_t qsl_sent_status[16];
+  uint8_t qsl_sent_date[16];
+  uint8_t qsl_rcvd_status[16];
+  uint8_t qsl_rcvd_date[16];
+  uint8_t lotw_sent[8];
+  uint8_t lotw_rcvd[8];
+  uint8_t eqsl_sent[8];
+  uint8_t eqsl_rcvd[8];
+  uint8_t qrz_log_id[32];
+  uint8_t qrz_book_id[32];
+  uint8_t snapshot_station_callsign[32];
+  uint8_t snapshot_operator_callsign[32];
+  uint8_t snapshot_profile[64];
+  uint8_t snapshot_operator_name[64];
+  uint8_t snapshot_grid[16];
+  uint8_t snapshot_country[64];
+  uint8_t snapshot_state[16];
+  uint8_t snapshot_county[32];
+  uint8_t snapshot_arrl_section[16];
+  uint8_t snapshot_dxcc[16];
+  uint8_t snapshot_cq_zone[16];
+  uint8_t snapshot_itu_zone[16];
+  uint8_t snapshot_latitude[24];
+  uint8_t snapshot_longitude[24];
+  uint8_t cw_rx_wpm[8];
+  uint8_t cw_transcript[256];
+  uint8_t extra_fields[256];
   /**
    * Time off date+time string "YYYY-MM-DD HH:MM" (null-terminated, empty = not set).
    */
@@ -218,9 +273,37 @@ typedef struct QsrQsoDetail {
    */
   uint8_t time_off[16];
   /**
+   * Worked operator callsign (null-terminated).
+   */
+  uint8_t worked_operator_callsign[32];
+  /**
    * Worked name (null-terminated).
    */
   uint8_t worked_name[64];
+  /**
+   * Worked grid square (null-terminated).
+   */
+  uint8_t worked_grid[16];
+  /**
+   * Worked country (null-terminated).
+   */
+  uint8_t worked_country[64];
+  /**
+   * Worked DXCC entity code as decimal text (null-terminated).
+   */
+  uint8_t worked_dxcc[16];
+  /**
+   * Worked CQ zone as decimal text (null-terminated).
+   */
+  uint8_t worked_cq_zone[16];
+  /**
+   * Worked ITU zone as decimal text (null-terminated).
+   */
+  uint8_t worked_itu_zone[16];
+  /**
+   * Worked continent code (null-terminated).
+   */
+  uint8_t worked_continent[8];
   /**
    * TX power (null-terminated).
    */
@@ -281,6 +364,37 @@ typedef struct QsrQsoDetail {
    * SKCC membership number (null-terminated).
    */
   uint8_t skcc[16];
+  uint8_t station_callsign[32];
+  uint8_t qsl_sent_status[16];
+  uint8_t qsl_sent_date[16];
+  uint8_t qsl_rcvd_status[16];
+  uint8_t qsl_rcvd_date[16];
+  uint8_t lotw_sent[8];
+  uint8_t lotw_rcvd[8];
+  uint8_t eqsl_sent[8];
+  uint8_t eqsl_rcvd[8];
+  uint8_t qrz_log_id[32];
+  uint8_t qrz_book_id[32];
+  uint8_t snapshot_station_callsign[32];
+  uint8_t snapshot_operator_callsign[32];
+  uint8_t snapshot_profile[64];
+  uint8_t snapshot_operator_name[64];
+  uint8_t snapshot_grid[16];
+  uint8_t snapshot_country[64];
+  uint8_t snapshot_state[16];
+  uint8_t snapshot_county[32];
+  uint8_t snapshot_arrl_section[16];
+  uint8_t snapshot_dxcc[16];
+  uint8_t snapshot_cq_zone[16];
+  uint8_t snapshot_itu_zone[16];
+  uint8_t snapshot_latitude[24];
+  uint8_t snapshot_longitude[24];
+  uint8_t cw_rx_wpm[8];
+  uint8_t cw_transcript[256];
+  uint8_t sync_status[24];
+  uint8_t created_at[32];
+  uint8_t updated_at[32];
+  uint8_t extra_fields[256];
 } QsrQsoDetail;
 
 /**
