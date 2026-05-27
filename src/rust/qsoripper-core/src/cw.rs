@@ -1,7 +1,6 @@
 //! CW keying support for contest macro expansion and keyer backends.
 
 use std::fmt::Write as _;
-use std::io::{Read, Write};
 use std::time::Duration;
 
 use thiserror::Error;
@@ -402,15 +401,18 @@ fn clamp_speed(speed_wpm: u32) -> u32 {
 }
 
 struct WinkeyerPort {
-    port: Box<dyn serialport::SerialPort>,
+    port: serial2::SerialPort,
 }
 
 impl WinkeyerPort {
     fn open(port_name: &str, baud_rate: u32) -> Result<Self, CwError> {
-        let port = serialport::new(port_name, baud_rate)
-            .timeout(Duration::from_millis(500))
-            .open()
+        let mut port = serial2::SerialPort::open(port_name, baud_rate)
             .map_err(|err| CwError::Io(format!("open {port_name}: {err}")))?;
+        let timeout = Duration::from_millis(500);
+        port.set_read_timeout(timeout)
+            .map_err(|err| CwError::Io(format!("set read timeout for {port_name}: {err}")))?;
+        port.set_write_timeout(timeout)
+            .map_err(|err| CwError::Io(format!("set write timeout for {port_name}: {err}")))?;
         Ok(Self { port })
     }
 
