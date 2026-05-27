@@ -26,7 +26,7 @@ tonic = "0.12"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 uuid = { version = "1", features = ["v4"] }
 sqlite = { version = "0.37", features = ["bundled"] }
-serialport = "4"
+serialport = { version = "4", default-features = false }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
