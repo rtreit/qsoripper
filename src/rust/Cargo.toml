@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "qsoripper-cathub",
     "qsoripper-core",
     "qsoripper-ffi",
     "qsoripper-server",
@@ -26,6 +27,16 @@ tonic = "0.12"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 uuid = { version = "1", features = ["v4"] }
 sqlite = { version = "0.37", features = ["bundled"] }
+async-trait = "0.1"
+thiserror = "2"
+serial2-tokio = "0.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+bytes = "1"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
