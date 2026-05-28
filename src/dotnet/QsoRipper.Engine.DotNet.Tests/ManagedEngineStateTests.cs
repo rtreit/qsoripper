@@ -918,6 +918,75 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
+    public void Update_qso_trims_local_id_before_lookup()
+    {
+        var state = CreateState();
+        EnsureStationConfigured(state);
+        var loggedResp = LogSampleQso(state, "W1AW");
+        var logged = state.GetQso(loggedResp.LocalId)!;
+
+        var updateResponse = state.UpdateQso(new UpdateQsoRequest
+        {
+            SyncToQrz = false,
+            Qso = new QsoRecord(logged)
+            {
+                LocalId = $"  {logged.LocalId}  ",
+                Comment = "Trimmed local id update",
+            },
+        });
+
+        Assert.True(updateResponse.Success);
+        var stored = state.GetQso(logged.LocalId);
+        Assert.NotNull(stored);
+        Assert.Equal("Trimmed local id update", stored!.Comment);
+    }
+
+    [Fact]
+    public void Update_qso_falls_back_to_unique_qrz_logid_when_local_id_misses()
+    {
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzLogbookApiKey = "test-api-key",
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87",
+            },
+        });
+        var loggedResp = state.LogQso(new LogQsoRequest
+        {
+            SyncToQrz = true,
+            Qso = new QsoRecord
+            {
+                WorkedCallsign = "W1AW",
+                Band = Band._20M,
+                Mode = Mode.Cw,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+        var logged = state.GetQso(loggedResp.LocalId)!;
+        Assert.False(string.IsNullOrWhiteSpace(logged.QrzLogid));
+
+        var updateResponse = state.UpdateQso(new UpdateQsoRequest
+        {
+            SyncToQrz = false,
+            Qso = new QsoRecord(logged)
+            {
+                LocalId = "missing-local-id",
+                Comment = "Recovered via QRZ logid",
+            },
+        });
+
+        Assert.True(updateResponse.Success);
+        var stored = state.GetQso(logged.LocalId);
+        Assert.NotNull(stored);
+        Assert.Equal("Recovered via QRZ logid", stored!.Comment);
+    }
+
+    [Fact]
     public void Restore_clears_tombstone_and_pending_flag()
     {
         var state = CreateState();

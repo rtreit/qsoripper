@@ -440,7 +440,15 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
         {
             if (IsEditingExisting)
             {
-                await _engine.UpdateQsoAsync(qso);
+                var response = await _engine.UpdateQsoAsync(qso);
+                if (!response.Success)
+                {
+                    StatusText = string.IsNullOrWhiteSpace(response.Error)
+                        ? $"Update failed for {qso.WorkedCallsign}."
+                        : $"Update failed: {response.Error}";
+                    return;
+                }
+
                 StatusText = $"Updated {qso.WorkedCallsign}.";
             }
             else

@@ -529,15 +529,45 @@ internal sealed class ManagedEngineState
         lock (_gate)
         {
             var qso = request.Qso?.Clone() ?? throw new InvalidOperationException("qso is required.");
-            if (string.IsNullOrWhiteSpace(qso.LocalId))
+            var requestedLocalId = qso.LocalId?.Trim();
+            if (string.IsNullOrWhiteSpace(requestedLocalId))
             {
                 return new UpdateQsoResponse { Success = false, Error = "local_id is required." };
             }
+            qso.LocalId = requestedLocalId;
 
-            var existing = Sync(_storage.Logbook.GetQsoAsync(qso.LocalId));
+            var existing = Sync(_storage.Logbook.GetQsoAsync(requestedLocalId));
             if (existing is null)
             {
-                return new UpdateQsoResponse { Success = false, Error = $"QSO '{qso.LocalId}' was not found." };
+                if (!string.IsNullOrWhiteSpace(qso.QrzLogid))
+                {
+                    var matches = Sync(_storage.Logbook.ListQsosAsync(new QsoListQuery
+                    {
+                        DeletedFilter = Storage.DeletedRecordsFilter.All,
+                    }))
+                    .Where(candidate =>
+                        string.Equals(candidate.QrzLogid, qso.QrzLogid, StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+
+                    if (matches.Length == 1)
+                    {
+                        existing = matches[0];
+                        qso.LocalId = existing.LocalId;
+                    }
+                    else if (matches.Length > 1)
+                    {
+                        return new UpdateQsoResponse
+                        {
+                            Success = false,
+                            Error = $"QSO '{requestedLocalId}' was not found and QRZ logid '{qso.QrzLogid}' matched multiple local QSOs.",
+                        };
+                    }
+                }
+            }
+
+            if (existing is null)
+            {
+                return new UpdateQsoResponse { Success = false, Error = $"QSO '{requestedLocalId}' was not found." };
             }
             if (existing.DeletedAt is not null)
             {
