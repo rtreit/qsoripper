@@ -176,6 +176,43 @@ public sealed class FullQsoCardViewModelTests
     }
 
     [Fact]
+    public async Task SaveCommandKeepsCardOpenWhenUpdateFails()
+    {
+        var engine = new RecordingEngineClient
+        {
+            UpdateResponse = new UpdateQsoResponse
+            {
+                Success = false,
+                Error = "QSO 'qso-1' was not found.",
+            },
+        };
+        var existing = new QsoRecord
+        {
+            LocalId = "qso-1",
+            WorkedCallsign = "F6BCW",
+            StationCallsign = "K7RND",
+            UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 5, 26, 4, 15, 0, TimeSpan.Zero)),
+            Band = Band._20M,
+            Mode = Mode.Cw,
+        };
+
+        var card = FullQsoCardViewModel.ForEdit(engine, existing);
+        var savedRaised = false;
+        var closeRaised = false;
+        card.Saved += (_, _) => savedRaised = true;
+        card.CloseRequested += (_, _) => closeRaised = true;
+        card.Comment = "Edited in advanced panel";
+
+        await card.SaveCommand.ExecuteAsync(null);
+
+        Assert.NotNull(engine.LastUpdatedQso);
+        Assert.Contains("Update failed", card.StatusText, StringComparison.Ordinal);
+        Assert.Contains("not found", card.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.False(savedRaised);
+        Assert.False(closeRaised);
+    }
+
+    [Fact]
     public async Task OpenQsoCardCommandUsesSelectedGridQsoForEdit()
     {
         var engine = new RecordingEngineClient
@@ -478,6 +515,8 @@ public sealed class FullQsoCardViewModelTests
         public Dictionary<string, LookupResponse> LookupResponsesByCallsign { get; } =
             new(StringComparer.OrdinalIgnoreCase);
 
+        public UpdateQsoResponse UpdateResponse { get; init; } = new UpdateQsoResponse { Success = true };
+
         public Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default) =>
             Task.FromResult(new GetSetupWizardStateResponse());
 
@@ -509,7 +548,7 @@ public sealed class FullQsoCardViewModelTests
         public Task<UpdateQsoResponse> UpdateQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default)
         {
             LastUpdatedQso = qso.Clone();
-            return Task.FromResult(new UpdateQsoResponse { Success = true });
+            return Task.FromResult(UpdateResponse);
         }
 
         public Task<SyncWithQrzResponse> SyncWithQrzAsync(CancellationToken ct = default) =>
