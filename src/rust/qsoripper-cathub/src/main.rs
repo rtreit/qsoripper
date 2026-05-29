@@ -1,25 +1,21 @@
-//! Thin binary entry point for the CAT hub daemon: initialize logging, parse
-//! arguments, and run the daemon until shutdown.
+//! Binary entry point for the qsoripper-cathub daemon.
 
-use clap::Parser as _;
+use std::process::ExitCode;
+
+use clap::Parser;
+
 use qsoripper_cathub::{run, Cli};
-use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
-async fn main() -> std::process::ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_writer(std::io::stderr)
-        .init();
-
+async fn main() -> ExitCode {
     let cli = Cli::parse();
+    let _guard = qsoripper_cathub::init_logging();
     match run(cli).await {
-        Ok(()) => std::process::ExitCode::SUCCESS,
-        Err(error) => {
-            tracing::error!(%error, "cathub failed");
-            std::process::ExitCode::FAILURE
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            tracing::error!(error = %err, "cathub exited with error");
+            eprintln!("cathub: {err}");
+            ExitCode::FAILURE
         }
     }
 }

@@ -1,123 +1,135 @@
-//! In-memory backend used by tests and `--dry-run`. Records every mutation and
-//! passthrough, reflects mutations into the universal state, and serves canned
-//! poll data without touching hardware.
+//! The in-memory loopback backend used by tests and the `loopback` config option.
+//!
+//! It records every mutation and passthrough it receives and exposes a mutable "truth"
+//! frequency so a test can simulate a front-panel knob turn that a poll then diffs into
+//! state. It has no native push (so the poller always runs at baseline against it).
 
-#[cfg(test)]
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
 
-use crate::backend::{RadioBackend, StateMutation};
-use crate::error::BackendError;
-use crate::model::{Mode, Vfo};
+use crate::backend::{
+    BackendCapabilities, BackendError, Framing, NativeCommandFamily, RadioBackend, SplitStyle,
+    TrustTier,
+};
+use crate::model::{RadioEventSource, StateChange, StateMutation, Vfo};
+use crate::radio::RadioLink;
 use crate::state::StateHandle;
 
-/// A canned poll snapshot the loopback backend reports.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct CannedPoll {
-    /// VFO A frequency in Hz.
-    pub(crate) freq_a: u64,
-    /// VFO B frequency in Hz.
-    pub(crate) freq_b: u64,
-    /// VFO A mode.
-    pub(crate) mode_a: Mode,
-    /// VFO B mode.
-    pub(crate) mode_b: Mode,
-}
+/// The default VFO-A "truth" the loopback radio reports when polled.
+const DEFAULT_TRUTH_FREQ_A: u64 = 14_074_000;
 
-impl Default for CannedPoll {
-    fn default() -> Self {
-        Self {
-            freq_a: 14_074_000,
-            freq_b: 14_074_000,
-            mode_a: Mode::Usb,
-            mode_b: Mode::Usb,
-        }
-    }
-}
-
-/// Backend that records interactions instead of driving a radio.
+/// A deterministic in-memory backend.
+#[derive(Clone)]
 pub(crate) struct LoopbackBackend {
-    canned: CannedPoll,
-    #[cfg(test)]
-    mutations: Mutex<Vec<StateMutation>>,
-    #[cfg(test)]
-    passthroughs: Mutex<Vec<Vec<u8>>>,
+    mutations: Arc<Mutex<Vec<StateMutation>>>,
+    passthroughs: Arc<Mutex<Vec<Vec<u8>>>>,
+    polls: Arc<AtomicUsize>,
+    truth_freq_a: Arc<AtomicU64>,
 }
 
 impl LoopbackBackend {
-    /// Create a loopback backend with default canned poll data.
+    /// Create a fresh loopback backend.
     pub(crate) fn new() -> Self {
-        Self {
-            canned: CannedPoll::default(),
-            #[cfg(test)]
-            mutations: Mutex::new(Vec::new()),
-            #[cfg(test)]
-            passthroughs: Mutex::new(Vec::new()),
+        LoopbackBackend {
+            mutations: Arc::new(Mutex::new(Vec::new())),
+            passthroughs: Arc::new(Mutex::new(Vec::new())),
+            polls: Arc::new(AtomicUsize::new(0)),
+            truth_freq_a: Arc::new(AtomicU64::new(DEFAULT_TRUTH_FREQ_A)),
         }
     }
 
-    /// Snapshot of mutations recorded so far (test introspection only).
+    /// The mutations applied so far (in order).
     #[cfg(test)]
-    pub(crate) fn recorded_mutations(&self) -> Vec<StateMutation> {
-        self.mutations.lock().map(|g| g.clone()).unwrap_or_default()
+    pub(crate) fn mutations(&self) -> Vec<StateMutation> {
+        self.mutations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
-    /// Snapshot of passthrough payloads recorded so far (test introspection only).
+    /// The raw passthrough payloads forwarded so far (in order).
     #[cfg(test)]
-    pub(crate) fn recorded_passthroughs(&self) -> Vec<Vec<u8>> {
+    pub(crate) fn passthroughs(&self) -> Vec<Vec<u8>> {
         self.passthroughs
             .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
+    /// How many poll cycles have run.
     #[cfg(test)]
-    fn record_mutation(&self, mutation: StateMutation) {
-        if let Ok(mut guard) = self.mutations.lock() {
-            guard.push(mutation);
-        }
+    pub(crate) fn poll_count(&self) -> usize {
+        self.polls.load(Ordering::SeqCst)
     }
 
-    #[cfg(not(test))]
-    #[allow(clippy::unused_self)]
-    fn record_mutation(&self, _mutation: StateMutation) {}
+    /// Simulate a front-panel change to VFO A's frequency; the next poll diffs it.
+    #[cfg(test)]
+    pub(crate) fn set_truth_freq_a(&self, hz: u64) {
+        self.truth_freq_a.store(hz, Ordering::SeqCst);
+    }
 }
 
 #[async_trait]
 impl RadioBackend for LoopbackBackend {
-    async fn poll(&self, state: &StateHandle) -> Result<(), BackendError> {
-        state.set_frequency(Vfo::A, self.canned.freq_a).await;
-        state.set_frequency(Vfo::B, self.canned.freq_b).await;
-        state.set_mode(Vfo::A, self.canned.mode_a).await;
-        state.set_mode(Vfo::B, self.canned.mode_b).await;
+    async fn poll(&self, _link: &RadioLink, state: &StateHandle) -> Result<(), BackendError> {
+        self.polls.fetch_add(1, Ordering::SeqCst);
+        // The loopback radio only surfaces VFO-A frequency truth; recording just one field
+        // keeps the "one broadcast per real change" invariant easy to reason about.
+        let hz = self.truth_freq_a.load(Ordering::SeqCst);
+        state.record(
+            StateChange::Freq { vfo: Vfo::A, hz },
+            RadioEventSource::PollDiff,
+        );
         Ok(())
     }
 
     async fn apply(
         &self,
         mutation: StateMutation,
+        _link: &RadioLink,
         state: &StateHandle,
     ) -> Result<(), BackendError> {
-        self.record_mutation(mutation);
-        match mutation {
-            StateMutation::Frequency { vfo, hz } => state.set_frequency(vfo, hz).await,
-            StateMutation::Mode { vfo, mode } => state.set_mode(vfo, mode).await,
-            StateMutation::Ptt { .. } => {}
-        }
+        self.mutations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(mutation);
+        state.record(mutation.into_change(), RadioEventSource::OptimisticWrite);
         Ok(())
     }
 
-    async fn passthrough(&self, raw: &[u8]) -> Result<Vec<u8>, BackendError> {
-        #[cfg(test)]
-        {
-            if let Ok(mut guard) = self.passthroughs.lock() {
-                guard.push(raw.to_vec());
-            }
+    fn parse_event(&self, _frame: &[u8]) -> Option<StateMutation> {
+        None
+    }
+
+    async fn passthrough(&self, raw: &[u8], _link: &RadioLink) -> Result<Vec<u8>, BackendError> {
+        self.passthroughs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(raw.to_vec());
+        Ok(raw.to_vec())
+    }
+
+    fn capabilities(&self) -> BackendCapabilities {
+        BackendCapabilities {
+            model: "loopback".to_string(),
+            vfo_count: 2,
+            has_rit: true,
+            has_xit: true,
+            has_smeter: true,
+            split: SplitStyle::VfoPair,
+            native_push: false,
+            native_command_family: Some(NativeCommandFamily::Kenwood),
+            framing: Framing::SemicolonTerminated,
+            freq_min_hz: 30_000,
+            freq_max_hz: 60_000_000,
+            trust: TrustTier::Loopback,
         }
-        #[cfg(not(test))]
-        let _ = raw;
-        Ok(Vec::new())
+    }
+
+    fn native_push_enable(&self) -> Option<Vec<u8>> {
+        None
     }
 }
 
@@ -125,38 +137,60 @@ impl RadioBackend for LoopbackBackend {
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use crate::radio::detached_link;
 
     #[tokio::test]
-    async fn poll_populates_state_from_canned_data() {
-        let (handle, _inbox) = StateHandle::new(16);
+    async fn poll_records_truth_and_counts() {
         let backend = LoopbackBackend::new();
-        backend.poll(&handle).await.expect("poll");
-        assert_eq!(handle.snapshot().await.freq_a, 14_074_000);
+        let state = StateHandle::new();
+        backend.set_truth_freq_a(7_123_000);
+        backend
+            .poll(&detached_link(), &state)
+            .await
+            .expect("poll");
+        assert_eq!(backend.poll_count(), 1);
+        assert_eq!(state.snapshot().vfo(Vfo::A).freq_hz, 7_123_000);
     }
 
     #[tokio::test]
-    async fn apply_records_and_reflects_mutation() {
-        let (handle, _inbox) = StateHandle::new(16);
+    async fn apply_records_mutation_and_state() {
         let backend = LoopbackBackend::new();
+        let state = StateHandle::new();
         backend
             .apply(
-                StateMutation::Mode {
+                StateMutation::SetVfoFreq {
                     vfo: Vfo::A,
-                    mode: Mode::Cw,
+                    hz: 14_250_000,
                 },
-                &handle,
+                &detached_link(),
+                &state,
             )
             .await
             .expect("apply");
-        assert_eq!(handle.snapshot().await.mode_a, Mode::Cw);
-        assert_eq!(backend.recorded_mutations().len(), 1);
+        assert_eq!(
+            backend.mutations(),
+            vec![StateMutation::SetVfoFreq {
+                vfo: Vfo::A,
+                hz: 14_250_000
+            }]
+        );
+        assert_eq!(state.snapshot().vfo(Vfo::A).freq_hz, 14_250_000);
     }
 
     #[tokio::test]
-    async fn passthrough_records_raw_bytes() {
+    async fn passthrough_echoes_and_records() {
         let backend = LoopbackBackend::new();
-        let reply = backend.passthrough(b"FA;").await.expect("passthrough");
-        assert!(reply.is_empty());
-        assert_eq!(backend.recorded_passthroughs(), vec![b"FA;".to_vec()]);
+        let reply = backend
+            .passthrough(b"EX0050000;", &detached_link())
+            .await
+            .expect("passthrough");
+        assert_eq!(reply, b"EX0050000;");
+        assert_eq!(backend.passthroughs(), vec![b"EX0050000;".to_vec()]);
+    }
+
+    #[test]
+    fn loopback_has_no_native_push() {
+        assert!(LoopbackBackend::new().native_push_enable().is_none());
+        assert!(!LoopbackBackend::new().capabilities().native_push);
     }
 }

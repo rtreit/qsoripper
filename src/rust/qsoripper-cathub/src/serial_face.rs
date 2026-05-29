@@ -1,201 +1,167 @@
-//! A serial face: one virtual COM port (or in-memory transport) bound to a
-//! client dialect. Reads client commands, frames them on the Kenwood
-//! terminator, dispatches them to the dialect, writes replies, and pushes
-//! auto-information notifications when the face has AI enabled.
+//! A generic client face: read delimited request frames, dispatch them to a
+//! [`ClientDialect`], and write replies, while concurrently fanning out state-change
+//! notifications the face has subscribed to (auto-information).
+//!
+//! `run_face` is transport-agnostic (`AsyncRead + AsyncWrite`): it serves a real serial
+//! port, a TCP socket, or an in-memory duplex in tests. [`open_serial`] opens a real COM /
+//! tty port for production wiring.
 
 use std::sync::Arc;
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::broadcast;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::dialect::{ClientDialect, FaceContext};
-use crate::error::FaceError;
-use crate::state::StateChange;
 
-/// Kenwood command terminator used for framing.
-const TERMINATOR: u8 = b';';
+/// Serve one client connection until the transport closes.
+///
+/// Inbound bytes are split on `delim` into request frames; each is handed to `dialect`.
+/// Concurrently, every [`StateChange`](crate::model::StateChange) the face is subscribed to
+/// is rendered by the dialect's notification formatter and written out (gated by the face's
+/// virtualized auto-information flag inside the dialect).
+pub(crate) async fn run_face<T>(
+    transport: T,
+    dialect: Arc<dyn ClientDialect>,
+    ctx: FaceContext,
+    delim: u8,
+) where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
+{
+    let (mut reader, mut writer) = tokio::io::split(transport);
+    let mut notifications = ctx.state.subscribe();
+    let mut frame: Vec<u8> = Vec::with_capacity(64);
+    let mut chunk = [0u8; 512];
 
-/// Open a virtual serial port for a face.
+    loop {
+        tokio::select! {
+            read = reader.read(&mut chunk) => {
+                match read {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let slice = chunk.get(..n).unwrap_or(&[]);
+                        for &byte in slice {
+                            frame.push(byte);
+                            if byte == delim {
+                                let request = std::mem::take(&mut frame);
+                                let reply = dialect.handle(&request, &ctx).await;
+                                if !reply.is_empty() && writer.write_all(&reply).await.is_err() {
+                                    return;
+                                }
+                                let _ = writer.flush().await;
+                            }
+                        }
+                    }
+                }
+            }
+            change = notifications.recv() => {
+                match change {
+                    Ok(change) => {
+                        if let Some(bytes) = dialect.format_notification(&change, &ctx) {
+                            if writer.write_all(&bytes).await.is_err() {
+                                return;
+                            }
+                            let _ = writer.flush().await;
+                        }
+                    }
+                    // A lagged subscriber simply skips missed frames; the next poll re-syncs.
+                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => break,
+                }
+            }
+        }
+    }
+}
+
+/// Open a real serial port for a serial face.
 pub(crate) fn open_serial(
     name: &str,
     port: &str,
     baud: u32,
-) -> Result<serial2_tokio::SerialPort, FaceError> {
-    serial2_tokio::SerialPort::open(port, baud).map_err(|error| FaceError::Bind {
-        name: name.to_string(),
-        endpoint: port.to_string(),
-        message: error.to_string(),
-    })
-}
-
-/// Drive one face over the given transport until the client disconnects.
-///
-/// `changes` is the caller-provided change subscription; subscribing before the
-/// task is spawned guarantees no state change is missed between spawn and the
-/// first poll of the receiver.
-pub(crate) async fn run_face<T>(
-    mut transport: T,
-    dialect: Arc<dyn ClientDialect>,
-    ctx: FaceContext,
-    mut changes: broadcast::Receiver<StateChange>,
-) -> Result<(), FaceError>
-where
-    T: AsyncRead + AsyncWrite + Unpin,
-{
-    let mut pending = Vec::new();
-    let mut chunk = [0u8; 256];
-
-    loop {
-        tokio::select! {
-            read = transport.read(&mut chunk) => {
-                let n = read.map_err(|source| FaceError::Io {
-                    name: ctx.name().to_string(),
-                    source,
-                })?;
-                if n == 0 {
-                    return Ok(());
-                }
-                if let Some(slice) = chunk.get(..n) {
-                    pending.extend_from_slice(slice);
-                }
-                drain_frames(&mut transport, &mut pending, dialect.as_ref(), &ctx).await?;
-            }
-            change = changes.recv() => {
-                match change {
-                    Ok(change) => {
-                        if let Some(frame) = dialect.format_notification(&change, &ctx) {
-                            write_all(&mut transport, &frame, &ctx).await?;
-                        }
-                    }
-                    Err(RecvError::Lagged(_)) => {}
-                    Err(RecvError::Closed) => return Ok(()),
-                }
-            }
-        }
-    }
-}
-
-async fn drain_frames<T>(
-    transport: &mut T,
-    pending: &mut Vec<u8>,
-    dialect: &dyn ClientDialect,
-    ctx: &FaceContext,
-) -> Result<(), FaceError>
-where
-    T: AsyncWrite + Unpin,
-{
-    while let Some(pos) = pending.iter().position(|&b| b == TERMINATOR) {
-        let frame: Vec<u8> = pending.drain(..=pos).collect();
-        let reply = dialect.handle(&frame, ctx).await;
-        if !reply.is_empty() {
-            write_all(transport, &reply, ctx).await?;
-        }
-    }
-    Ok(())
-}
-
-async fn write_all<T>(transport: &mut T, bytes: &[u8], ctx: &FaceContext) -> Result<(), FaceError>
-where
-    T: AsyncWrite + Unpin,
-{
-    transport
-        .write_all(bytes)
-        .await
-        .map_err(|source| FaceError::Io {
-            name: ctx.name().to_string(),
-            source,
-        })?;
-    transport.flush().await.map_err(|source| FaceError::Io {
-        name: ctx.name().to_string(),
-        source,
-    })
+) -> std::io::Result<serial2_tokio::SerialPort> {
+    tracing::info!(face = name, port, baud, "opening serial face");
+    serial2_tokio::SerialPort::open(port, baud)
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    clippy::unused_async
-)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::backend::loopback::LoopbackBackend;
-    use crate::dialect::kenwood::Ts590Dialect;
-    use crate::dialect::Permissions;
-    use crate::model::Vfo;
-    use crate::state::{run_mutation_dispatcher, StateHandle};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use crate::backend::RadioBackend;
+    use crate::dialect::kenwood::ts590::Ts590Dialect;
+    use crate::model::{RadioEventSource, StateChange, Vfo};
+    use crate::permissions::FacePermissions;
+    use crate::ptt::PttManager;
+    use crate::radio::{detached_link, spawn_scheduler};
+    use crate::state::StateHandle;
+    use std::time::Duration;
+    use tokio::io::DuplexStream;
 
-    #[tokio::test]
-    async fn face_answers_read_and_applies_write() {
-        let (state, inbox) = StateHandle::new(16);
-        let backend = Arc::new(LoopbackBackend::new());
-        let dispatcher = tokio::spawn(run_mutation_dispatcher(
-            inbox,
-            backend.clone(),
-            state.clone(),
+    fn spawn_ts590_face(perms: FacePermissions) -> (DuplexStream, StateHandle) {
+        let backend = LoopbackBackend::new();
+        let caps = backend.capabilities();
+        let arc: Arc<dyn RadioBackend> = Arc::new(backend);
+        let state = StateHandle::new();
+        let radio = spawn_scheduler(arc, detached_link(), state.clone());
+        let ptt = PttManager::new(Duration::from_secs(300));
+        let ctx = FaceContext::new(1, perms, state.clone(), radio, ptt, caps);
+        let (client, server) = tokio::io::duplex(1024);
+        tokio::spawn(run_face(
+            server,
+            Arc::new(Ts590Dialect::new()) as Arc<dyn ClientDialect>,
+            ctx,
+            b';',
         ));
-        state.set_frequency(Vfo::A, 14_074_000).await;
+        (client, state)
+    }
 
-        let ctx = FaceContext::new(
-            "n1mm",
-            Permissions::default(),
-            state.clone(),
-            backend.clone(),
-        );
-        let dialect: Arc<dyn ClientDialect> = Arc::new(Ts590Dialect::new());
-        let (mut client, face_side) = tokio::io::duplex(1024);
-        let changes = state.subscribe();
-        let face = tokio::spawn(run_face(face_side, dialect, ctx, changes));
-
-        client.write_all(b"FA;").await.expect("write read cmd");
-        let mut reply = vec![0u8; 14];
-        client.read_exact(&mut reply).await.expect("read reply");
-        assert_eq!(&reply, b"FA00014074000;");
-
-        client
-            .write_all(b"FA00021074000;")
-            .await
-            .expect("write set cmd");
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        assert_eq!(state.snapshot().await.freq_a, 21_074_000);
-
-        drop(client);
-        face.await.expect("face task").expect("face ok");
-        dispatcher.abort();
+    async fn read_frame(client: &mut DuplexStream) -> Vec<u8> {
+        let mut frame = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            let n = tokio::time::timeout(Duration::from_secs(2), client.read(&mut byte))
+                .await
+                .expect("timely reply")
+                .expect("read");
+            if n == 0 {
+                break;
+            }
+            frame.push(byte[0]);
+            if byte[0] == b';' {
+                break;
+            }
+        }
+        frame
     }
 
     #[tokio::test]
-    async fn ai_subscribed_face_receives_notifications() {
-        let (state, inbox) = StateHandle::new(16);
-        let backend = Arc::new(LoopbackBackend::new());
-        let dispatcher = tokio::spawn(run_mutation_dispatcher(
-            inbox,
-            backend.clone(),
-            state.clone(),
-        ));
-
-        let ctx = FaceContext::new(
-            "n1mm",
-            Permissions::default(),
-            state.clone(),
-            backend.clone(),
+    async fn serves_a_read_request() {
+        let (mut client, state) = spawn_ts590_face(FacePermissions::read_only());
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::A,
+                hz: 7_030_000,
+            },
+            RadioEventSource::PollDiff,
         );
-        ctx.set_ai_enabled(true);
-        let dialect: Arc<dyn ClientDialect> = Arc::new(Ts590Dialect::new());
-        let (mut client, face_side) = tokio::io::duplex(1024);
-        let changes = state.subscribe();
-        let face = tokio::spawn(run_face(face_side, dialect, ctx, changes));
+        client.write_all(b"FA;").await.expect("write");
+        assert_eq!(read_frame(&mut client).await, b"FA00007030000;");
+    }
 
-        state.set_frequency(Vfo::A, 18_100_000).await;
-        let mut reply = vec![0u8; 14];
-        client.read_exact(&mut reply).await.expect("notification");
-        assert_eq!(&reply, b"FA00018100000;");
-
-        drop(client);
-        face.await.expect("face task").expect("face ok");
-        dispatcher.abort();
+    #[tokio::test]
+    async fn fans_out_notifications_to_subscribed_face() {
+        let (mut client, state) = spawn_ts590_face(FacePermissions::read_only());
+        // Enable auto-info on the face.
+        client.write_all(b"AI2;").await.expect("write");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        // A state change is pushed without the client polling.
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::A,
+                hz: 14_123_000,
+            },
+            RadioEventSource::PollDiff,
+        );
+        assert_eq!(read_frame(&mut client).await, b"FA00014123000;");
     }
 }

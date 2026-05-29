@@ -1,180 +1,237 @@
-//! Universal in-memory rig state, the mutation dispatch channel, and the
-//! change-notification broadcast.
+//! The universal radio state: a single in-memory snapshot every face reads from, plus a
+//! broadcast channel of [`StateChange`] notifications faces subscribe to for auto-info
+//! fan-out (design §8.3, §8.4).
 //!
-//! Every path that observes or changes the radio goes through this layer:
-//! backends populate it, dialects read and mutate it, and the poller refreshes
-//! it. Faces subscribe to [`StateHandle::subscribe`] to push updates to
-//! auto-information clients.
+//! [`StateHandle`] is synchronous (a plain `Mutex`/`RwLock`): reads and writes are short,
+//! uncontended critical sections, so there is no reason to make callers `await`. A change
+//! is broadcast **only when a field's value actually changes**, so an idempotent write
+//! (re-setting the same frequency) produces no spurious notification.
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
-use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
+use tokio::sync::broadcast;
 
-use crate::backend::{RadioBackend, StateMutation};
-use crate::error::BackendError;
-use crate::model::{Mode, Vfo};
+use crate::model::{Field, Mode, RadioEventSource, StateChange, Vfo};
 
-/// A change to one universal-state field, broadcast to faces for AI fan-out.
+/// Default IF passband reported for a VFO (Hz). Real backends may refine this; the default
+/// matches the canonical Hamlib `get_mode` second line.
+const DEFAULT_PASSBAND_HZ: u32 = 2_400;
+
+/// A point-in-time view of one VFO.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StateChange {
-    /// A VFO frequency changed.
-    Frequency {
-        /// Affected VFO.
-        vfo: Vfo,
-        /// New frequency in Hz.
-        hz: u64,
-    },
-    /// A VFO mode changed.
-    Mode {
-        /// Affected VFO.
-        vfo: Vfo,
-        /// New mode.
-        mode: Mode,
-    },
+pub(crate) struct VfoSnapshot {
+    /// Frequency in Hz.
+    pub(crate) freq_hz: u64,
+    /// Operating mode.
+    pub(crate) mode: Mode,
+    /// IF passband in Hz.
+    pub(crate) passband_hz: u32,
 }
 
-/// The universal rig state snapshot.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RigState {
-    /// VFO A frequency in Hz.
-    pub(crate) freq_a: u64,
-    /// VFO B frequency in Hz.
-    pub(crate) freq_b: u64,
-    /// VFO A mode.
-    pub(crate) mode_a: Mode,
-    /// VFO B mode.
-    pub(crate) mode_b: Mode,
-    /// Active receive VFO.
-    pub(crate) rx_vfo: Vfo,
-}
-
-impl Default for RigState {
+impl Default for VfoSnapshot {
     fn default() -> Self {
-        Self {
-            freq_a: 0,
-            freq_b: 0,
-            mode_a: Mode::Usb,
-            mode_b: Mode::Usb,
+        VfoSnapshot {
+            freq_hz: 0,
+            mode: Mode::Usb,
+            passband_hz: DEFAULT_PASSBAND_HZ,
+        }
+    }
+}
+
+/// A consistent point-in-time view of the whole radio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // Each flag mirrors an independent radio state.
+pub(crate) struct Snapshot {
+    a: VfoSnapshot,
+    b: VfoSnapshot,
+    /// The receive VFO.
+    pub(crate) rx_vfo: Vfo,
+    /// The transmit VFO (relevant when split is enabled).
+    pub(crate) tx_vfo: Vfo,
+    /// Whether split is enabled.
+    pub(crate) split: bool,
+    /// Whether the transmitter is keyed.
+    pub(crate) ptt: bool,
+    /// Whether the radio reports power on.
+    pub(crate) power_on: bool,
+    /// Whether RIT is enabled.
+    pub(crate) rit_enabled: bool,
+    /// RIT offset in Hz.
+    pub(crate) rit_offset_hz: i32,
+    /// Whether XIT is enabled.
+    pub(crate) xit_enabled: bool,
+    /// XIT offset in Hz.
+    pub(crate) xit_offset_hz: i32,
+}
+
+impl Default for Snapshot {
+    fn default() -> Self {
+        Snapshot {
+            a: VfoSnapshot::default(),
+            b: VfoSnapshot::default(),
             rx_vfo: Vfo::A,
+            tx_vfo: Vfo::A,
+            split: false,
+            ptt: false,
+            // A TS-590 answers `\get_powerstat` with "1" at rest.
+            power_on: true,
+            rit_enabled: false,
+            rit_offset_hz: 0,
+            xit_enabled: false,
+            xit_offset_hz: 0,
         }
     }
 }
 
-impl RigState {
-    /// Frequency for the given VFO.
-    pub(crate) fn freq(&self, vfo: Vfo) -> u64 {
+impl Snapshot {
+    /// The view of one VFO.
+    pub(crate) fn vfo(&self, vfo: Vfo) -> VfoSnapshot {
         match vfo {
-            Vfo::A => self.freq_a,
-            Vfo::B => self.freq_b,
-        }
-    }
-
-    /// Mode for the given VFO.
-    pub(crate) fn mode(&self, vfo: Vfo) -> Mode {
-        match vfo {
-            Vfo::A => self.mode_a,
-            Vfo::B => self.mode_b,
+            Vfo::A => self.a,
+            Vfo::B => self.b,
         }
     }
 }
 
-/// A request to mutate the radio, carried over the dispatch channel.
-struct MutationRequest {
-    mutation: StateMutation,
-    reply: oneshot::Sender<Result<(), BackendError>>,
+struct Inner {
+    snapshot: RwLock<Snapshot>,
+    covered: Mutex<HashSet<Field>>,
+    tx: broadcast::Sender<StateChange>,
 }
 
-/// Opaque wrapper around the mutation receiver so the channel payload stays
-/// private while the receiver can be handed to the dispatcher.
-pub(crate) struct MutationInbox {
-    rx: mpsc::Receiver<MutationRequest>,
-}
-
-/// Shared, cloneable handle to the universal rig state.
+/// A clonable handle to the universal state.
 #[derive(Clone)]
 pub(crate) struct StateHandle {
-    inner: Arc<RwLock<RigState>>,
-    changes: broadcast::Sender<StateChange>,
-    mutations: mpsc::Sender<MutationRequest>,
+    inner: Arc<Inner>,
 }
 
 impl StateHandle {
-    /// Create a state handle plus the receiver half of the mutation channel.
-    ///
-    /// The caller runs [`run_mutation_dispatcher`] with the returned inbox and
-    /// the active backend to service [`StateHandle::apply_mutation`] calls.
-    pub(crate) fn new(broadcast_capacity: usize) -> (Self, MutationInbox) {
-        let (changes, _) = broadcast::channel(broadcast_capacity);
-        let (mutations, rx) = mpsc::channel(64);
-        let handle = Self {
-            inner: Arc::new(RwLock::new(RigState::default())),
-            changes,
-            mutations,
+    /// Create an empty state at its defaults.
+    pub(crate) fn new() -> Self {
+        let (tx, _rx) = broadcast::channel(256);
+        StateHandle {
+            inner: Arc::new(Inner {
+                snapshot: RwLock::new(Snapshot::default()),
+                covered: Mutex::new(HashSet::new()),
+                tx,
+            }),
+        }
+    }
+
+    /// Record an observed change. The change is applied to the snapshot and broadcast to
+    /// subscribers **only if it actually changes a value**. A [`RadioEventSource::NativePush`]
+    /// change additionally marks the field as natively covered so the poller can back off.
+    pub(crate) fn record(&self, change: StateChange, source: RadioEventSource) {
+        if source == RadioEventSource::NativePush {
+            self.inner
+                .covered
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(change.field());
+        }
+        let changed = {
+            let mut snap = self
+                .inner
+                .snapshot
+                .write()
+                .unwrap_or_else(PoisonError::into_inner);
+            apply_change(&mut snap, change)
         };
-        (handle, MutationInbox { rx })
+        if changed {
+            // A send error only means there are no subscribers; that is fine.
+            let _ = self.inner.tx.send(change);
+        }
     }
 
-    /// Subscribe to the change-notification broadcast.
+    /// A consistent point-in-time view of the radio.
+    pub(crate) fn snapshot(&self) -> Snapshot {
+        *self
+            .inner
+            .snapshot
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Subscribe to the change stream (for a face's auto-info fan-out).
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<StateChange> {
-        self.changes.subscribe()
+        self.inner.tx.subscribe()
     }
 
-    /// Take a snapshot of the current state.
-    pub(crate) async fn snapshot(&self) -> RigState {
-        *self.inner.read().await
-    }
-
-    fn broadcast(&self, change: StateChange) {
-        // A send error only means there are no subscribers, which is fine.
-        let _ = self.changes.send(change);
-    }
-
-    /// Set a VFO frequency and broadcast the change.
-    pub(crate) async fn set_frequency(&self, vfo: Vfo, hz: u64) {
-        {
-            let mut state = self.inner.write().await;
-            match vfo {
-                Vfo::A => state.freq_a = hz,
-                Vfo::B => state.freq_b = hz,
-            }
-        }
-        self.broadcast(StateChange::Frequency { vfo, hz });
-    }
-
-    /// Set a VFO mode and broadcast the change.
-    pub(crate) async fn set_mode(&self, vfo: Vfo, mode: Mode) {
-        {
-            let mut state = self.inner.write().await;
-            match vfo {
-                Vfo::A => state.mode_a = mode,
-                Vfo::B => state.mode_b = mode,
-            }
-        }
-        self.broadcast(StateChange::Mode { vfo, mode });
-    }
-
-    /// Submit a mutation for the backend to apply, awaiting the result.
-    pub(crate) async fn apply_mutation(&self, mutation: StateMutation) -> Result<(), BackendError> {
-        let (reply, rx) = oneshot::channel();
-        self.mutations
-            .send(MutationRequest { mutation, reply })
-            .await
-            .map_err(|_| BackendError::Transport("mutation dispatcher stopped".to_string()))?;
-        rx.await
-            .map_err(|_| BackendError::Transport("mutation dispatcher dropped reply".to_string()))?
+    /// Whether the radio's native push stream has been observed to cover this field.
+    pub(crate) fn is_native_push_covered(&self, field: Field) -> bool {
+        self.inner
+            .covered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(&field)
     }
 }
 
-/// Run the mutation dispatcher: pull mutation requests and apply them through
-/// the backend, which updates the shared state on success.
-pub(crate) async fn run_mutation_dispatcher(
-    mut inbox: MutationInbox,
-    backend: Arc<dyn RadioBackend>,
-    state: StateHandle,
-) {
-    while let Some(request) = inbox.rx.recv().await {
-        let result = backend.apply(request.mutation, &state).await;
-        let _ = request.reply.send(result);
+/// Apply a change to the snapshot, returning whether any value actually changed.
+fn apply_change(snap: &mut Snapshot, change: StateChange) -> bool {
+    match change {
+        StateChange::Freq { vfo, hz } => {
+            let target = vfo_mut(snap, vfo);
+            if target.freq_hz == hz {
+                false
+            } else {
+                target.freq_hz = hz;
+                true
+            }
+        }
+        StateChange::Mode { vfo, mode } => {
+            let target = vfo_mut(snap, vfo);
+            if target.mode == mode {
+                false
+            } else {
+                target.mode = mode;
+                true
+            }
+        }
+        StateChange::Split { enabled, tx_vfo } => {
+            let new_tx = tx_vfo.unwrap_or(snap.tx_vfo);
+            if snap.split == enabled && snap.tx_vfo == new_tx {
+                false
+            } else {
+                snap.split = enabled;
+                snap.tx_vfo = new_tx;
+                true
+            }
+        }
+        StateChange::Ptt { keyed } => {
+            if snap.ptt == keyed {
+                false
+            } else {
+                snap.ptt = keyed;
+                true
+            }
+        }
+        StateChange::Rit { enabled, offset_hz } => {
+            if snap.rit_enabled == enabled && snap.rit_offset_hz == offset_hz {
+                false
+            } else {
+                snap.rit_enabled = enabled;
+                snap.rit_offset_hz = offset_hz;
+                true
+            }
+        }
+        StateChange::Xit { enabled, offset_hz } => {
+            if snap.xit_enabled == enabled && snap.xit_offset_hz == offset_hz {
+                false
+            } else {
+                snap.xit_enabled = enabled;
+                snap.xit_offset_hz = offset_hz;
+                true
+            }
+        }
+    }
+}
+
+fn vfo_mut(snap: &mut Snapshot, vfo: Vfo) -> &mut VfoSnapshot {
+    match vfo {
+        Vfo::A => &mut snap.a,
+        Vfo::B => &mut snap.b,
     }
 }
 
@@ -182,55 +239,104 @@ pub(crate) async fn run_mutation_dispatcher(
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::backend::loopback::LoopbackBackend;
 
-    #[tokio::test]
-    async fn set_frequency_updates_snapshot() {
-        let (handle, _inbox) = StateHandle::new(16);
-        handle.set_frequency(Vfo::A, 14_074_000).await;
-        assert_eq!(handle.snapshot().await.freq_a, 14_074_000);
+    #[test]
+    fn defaults_are_sane() {
+        let snap = StateHandle::new().snapshot();
+        assert!(snap.power_on);
+        assert_eq!(snap.vfo(Vfo::A).freq_hz, 0);
+        assert_eq!(snap.vfo(Vfo::A).mode, Mode::Usb);
+        assert_eq!(snap.vfo(Vfo::A).passband_hz, 2_400);
+        assert!(!snap.split && !snap.ptt);
+    }
+
+    #[test]
+    fn record_updates_snapshot() {
+        let state = StateHandle::new();
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::A,
+                hz: 7_030_000,
+            },
+            RadioEventSource::PollDiff,
+        );
+        assert_eq!(state.snapshot().vfo(Vfo::A).freq_hz, 7_030_000);
     }
 
     #[tokio::test]
-    async fn set_mode_updates_snapshot() {
-        let (handle, _inbox) = StateHandle::new(16);
-        handle.set_mode(Vfo::B, Mode::Cw).await;
-        assert_eq!(handle.snapshot().await.mode_b, Mode::Cw);
-    }
-
-    #[tokio::test]
-    async fn subscribers_receive_changes() {
-        let (handle, _inbox) = StateHandle::new(16);
-        let mut rx = handle.subscribe();
-        handle.set_mode(Vfo::A, Mode::Cw).await;
-        let change = rx.recv().await.expect("a change");
-        assert_eq!(
-            change,
+    async fn change_broadcasts_only_on_actual_change() {
+        let state = StateHandle::new();
+        let mut rx = state.subscribe();
+        // First set: USB == default USB, so NO broadcast.
+        state.record(
             StateChange::Mode {
                 vfo: Vfo::A,
-                mode: Mode::Cw
-            }
+                mode: Mode::Usb,
+            },
+            RadioEventSource::PollDiff,
         );
+        // A real change: CW differs from USB, so exactly one frame.
+        state.record(
+            StateChange::Mode {
+                vfo: Vfo::A,
+                mode: Mode::Cw,
+            },
+            RadioEventSource::PollDiff,
+        );
+        let got = rx.try_recv().expect("one change");
+        assert_eq!(got, StateChange::Mode { vfo: Vfo::A, mode: Mode::Cw });
+        assert!(rx.try_recv().is_err(), "no second frame for the no-op set");
     }
 
-    #[tokio::test]
-    async fn apply_mutation_round_trips_through_backend() {
-        let (handle, inbox) = StateHandle::new(16);
-        let backend = Arc::new(LoopbackBackend::new());
-        let dispatcher = tokio::spawn(run_mutation_dispatcher(
-            inbox,
-            backend.clone(),
-            handle.clone(),
-        ));
-        handle
-            .apply_mutation(StateMutation::Frequency {
+    #[test]
+    fn native_push_marks_coverage_but_poll_diff_does_not() {
+        let state = StateHandle::new();
+        assert!(!state.is_native_push_covered(Field::Freq(Vfo::A)));
+        state.record(
+            StateChange::Freq {
                 vfo: Vfo::A,
-                hz: 21_074_000,
-            })
-            .await
-            .expect("mutation applied");
-        assert_eq!(handle.snapshot().await.freq_a, 21_074_000);
-        assert_eq!(backend.recorded_mutations().len(), 1);
-        dispatcher.abort();
+                hz: 1,
+            },
+            RadioEventSource::PollDiff,
+        );
+        assert!(!state.is_native_push_covered(Field::Freq(Vfo::A)));
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::A,
+                hz: 2,
+            },
+            RadioEventSource::NativePush,
+        );
+        assert!(state.is_native_push_covered(Field::Freq(Vfo::A)));
+    }
+
+    #[test]
+    fn split_and_rit_xit_round_trip() {
+        let state = StateHandle::new();
+        state.record(
+            StateChange::Split {
+                enabled: true,
+                tx_vfo: Some(Vfo::B),
+            },
+            RadioEventSource::OptimisticWrite,
+        );
+        state.record(
+            StateChange::Rit {
+                enabled: true,
+                offset_hz: 100,
+            },
+            RadioEventSource::OptimisticWrite,
+        );
+        state.record(
+            StateChange::Xit {
+                enabled: true,
+                offset_hz: -50,
+            },
+            RadioEventSource::OptimisticWrite,
+        );
+        let snap = state.snapshot();
+        assert!(snap.split && snap.tx_vfo == Vfo::B);
+        assert!(snap.rit_enabled && snap.rit_offset_hz == 100);
+        assert!(snap.xit_enabled && snap.xit_offset_hz == -50);
     }
 }

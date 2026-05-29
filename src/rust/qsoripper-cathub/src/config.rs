@@ -1,225 +1,319 @@
-//! Configuration schema and loading. The hub is configured from a TOML file
-//! describing the radio, the baseline poll cadence, and one or more client
-//! faces. Phase 1 supports serial faces; the Hamlib net section lands later.
+//! Daemon configuration (TOML).
+//!
+//! One `[radio]` section selects and parameterizes the backend; `[poll]`, `[ptt]`, and
+//! `[events]` tune cadence and safety; `[[face]]` and `[[hamlib_net]]` declare the client
+//! endpoints. Everything but `[radio].backend` has a sane default so a minimal config is
+//! short.
 
-use std::fmt::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::time::Duration;
 
 use serde::Deserialize;
 
-use crate::dialect::Permissions;
 use crate::error::ConfigError;
+use crate::permissions::FacePermissions;
 
-/// Top-level daemon configuration.
+fn default_transport() -> String {
+    "serial".to_string()
+}
+fn default_baud() -> u32 {
+    4_800
+}
+fn default_host() -> String {
+    "127.0.0.1".to_string()
+}
+fn default_tcp_port() -> u16 {
+    4_532
+}
+fn default_reply_timeout_ms() -> u64 {
+    1_000
+}
+fn default_baseline_ms() -> u64 {
+    250
+}
+fn default_heartbeat_ms() -> u64 {
+    3_000
+}
+fn default_max_tx_ms() -> u64 {
+    300_000
+}
+fn default_native_push() -> bool {
+    true
+}
+
+/// The `[radio]` section.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Config {
-    /// Radio transport settings.
-    pub(crate) radio: RadioConfig,
-    /// Baseline polling settings.
-    #[serde(default)]
-    pub(crate) poll: PollConfig,
-    /// Client faces.
-    #[serde(default, rename = "face")]
-    pub(crate) faces: Vec<FaceConfig>,
-}
-
-/// Which radio backend family to drive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum BackendKind {
-    /// Kenwood TS-590.
-    Ts590,
-    /// In-memory loopback backend (testing and `--dry-run`).
-    Loopback,
-}
-
-/// Which client dialect a face speaks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum DialectKind {
-    /// Native Kenwood TS-590.
-    Ts590,
-}
-
-/// Radio transport configuration.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct RadioConfig {
-    /// Serial port path (for example `COM3` or `/dev/ttyUSB0`).
+    /// Backend selector: `ts590`, `rigctld`, or `loopback`.
+    pub(crate) backend: String,
+    /// Human-readable / Hamlib model id (e.g. `TS-590SG`, `2014`).
+    #[serde(default)]
+    pub(crate) model: String,
+    /// `serial` or `tcp`.
+    #[serde(default = "default_transport")]
+    pub(crate) transport: String,
+    /// Serial port path (e.g. `COM3`, `/dev/ttyUSB0`).
+    #[serde(default)]
     pub(crate) port: String,
     /// Serial baud rate.
     #[serde(default = "default_baud")]
     pub(crate) baud: u32,
-    /// Backend family.
-    pub(crate) backend: BackendKind,
+    /// TCP host (for `tcp` transport or the rigctld bridge).
+    #[serde(default = "default_host")]
+    pub(crate) host: String,
+    /// TCP port.
+    #[serde(default = "default_tcp_port")]
+    pub(crate) tcp_port: u16,
+    /// Whether a bridge backend has been operator-certified.
+    #[serde(default)]
+    pub(crate) certified: bool,
     /// Per-command reply timeout in milliseconds.
     #[serde(default = "default_reply_timeout_ms")]
     pub(crate) reply_timeout_ms: u64,
 }
 
-/// Baseline polling configuration.
+/// The `[poll]` section.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct PollConfig {
     /// Baseline poll interval in milliseconds.
     #[serde(default = "default_baseline_ms")]
     pub(crate) baseline_ms: u64,
+    /// Heartbeat (backed-off) interval in milliseconds.
+    #[serde(default = "default_heartbeat_ms")]
+    pub(crate) heartbeat_ms: u64,
 }
 
 impl Default for PollConfig {
     fn default() -> Self {
-        Self {
+        PollConfig {
             baseline_ms: default_baseline_ms(),
+            heartbeat_ms: default_heartbeat_ms(),
         }
     }
 }
 
-/// One client face.
+/// The `[ptt]` section.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+pub(crate) struct PttConfig {
+    /// Maximum continuous transmit time in milliseconds (safety ceiling).
+    #[serde(default = "default_max_tx_ms")]
+    pub(crate) max_tx_ms: u64,
+}
+
+impl Default for PttConfig {
+    fn default() -> Self {
+        PttConfig {
+            max_tx_ms: default_max_tx_ms(),
+        }
+    }
+}
+
+/// The `[events]` section.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct EventsConfig {
+    /// Whether to enable the radio's native push stream.
+    #[serde(default = "default_native_push")]
+    pub(crate) native_push: bool,
+}
+
+impl Default for EventsConfig {
+    fn default() -> Self {
+        EventsConfig {
+            native_push: default_native_push(),
+        }
+    }
+}
+
+/// A `[[face]]` (serial client) endpoint.
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct FaceConfig {
-    /// Face name (used in logs and as PTT owner identity).
+    /// A label for logging.
     pub(crate) name: String,
-    /// Serial port path the client connects to.
-    pub(crate) port: String,
-    /// Serial baud rate.
+    /// The serial port this face listens on (a com0com / tty path).
+    pub(crate) transport: String,
+    /// Baud rate for the face port.
     #[serde(default = "default_baud")]
     pub(crate) baud: u32,
-    /// Dialect this face speaks.
-    pub(crate) dialect: DialectKind,
-    /// Whether the face may change frequency/mode/split.
-    #[serde(default = "default_true")]
-    pub(crate) allow_write: bool,
-    /// Whether the face may key PTT.
+    /// Dialect: `ts590` or `ts2000`.
+    pub(crate) dialect: String,
+    /// Permission tokens (`read`, `write`, `ptt`, `config_write`).
     #[serde(default)]
-    pub(crate) allow_ptt: bool,
-    /// Whether the face may send raw passthrough commands.
-    #[serde(default = "default_true")]
-    pub(crate) allow_passthrough: bool,
+    pub(crate) perms: Vec<String>,
 }
 
 impl FaceConfig {
-    /// Permissions derived from this face configuration.
-    pub(crate) fn permissions(&self) -> Permissions {
-        Permissions {
-            allow_write: self.allow_write,
-            allow_ptt: self.allow_ptt,
-            allow_passthrough: self.allow_passthrough,
-        }
+    /// The parsed permission set.
+    pub(crate) fn permissions(&self) -> FacePermissions {
+        FacePermissions::from_tokens(&self.perms)
     }
 }
 
+/// A `[[hamlib_net]]` (rigctld-compatible TCP) endpoint.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct HamlibNetConfig {
+    /// A label for logging.
+    pub(crate) name: String,
+    /// The bind address (e.g. `127.0.0.1:4532`).
+    pub(crate) bind: String,
+    /// Permission tokens (`read`, `write`, `ptt`, `config_write`).
+    #[serde(default)]
+    pub(crate) perms: Vec<String>,
+}
+
+impl HamlibNetConfig {
+    /// The parsed permission set.
+    pub(crate) fn permissions(&self) -> FacePermissions {
+        FacePermissions::from_tokens(&self.perms)
+    }
+}
+
+/// The full daemon configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct Config {
+    /// The radio backend section.
+    pub(crate) radio: RadioConfig,
+    /// Poll cadence.
+    #[serde(default)]
+    pub(crate) poll: PollConfig,
+    /// PTT safety.
+    #[serde(default)]
+    pub(crate) ptt: PttConfig,
+    /// Event/native-push policy.
+    #[serde(default)]
+    pub(crate) events: EventsConfig,
+    /// Serial client endpoints.
+    #[serde(default)]
+    pub(crate) face: Vec<FaceConfig>,
+    /// Hamlib net endpoints.
+    #[serde(default)]
+    pub(crate) hamlib_net: Vec<HamlibNetConfig>,
+}
+
 impl Config {
-    /// Load and parse configuration from a TOML file.
-    pub(crate) fn load(path: &Path) -> Result<Self, ConfigError> {
-        let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
-            path: path.display().to_string(),
-            source,
-        })?;
-        Self::parse(&text)
+    /// Parse a configuration from a TOML string.
+    pub(crate) fn parse(text: &str) -> Result<Config, ConfigError> {
+        let config: Config = toml::from_str(text)?;
+        config.validate()?;
+        Ok(config)
     }
 
-    /// Parse configuration from a TOML string.
-    pub(crate) fn parse(text: &str) -> Result<Self, ConfigError> {
-        toml::from_str(text).map_err(|e| ConfigError::Parse(e.to_string()))
+    /// Load and parse a configuration from a file.
+    pub(crate) fn load(path: &std::path::Path) -> Result<Config, ConfigError> {
+        let text = std::fs::read_to_string(path)?;
+        Config::parse(&text)
     }
 
-    /// Validate semantic constraints not expressible in the schema.
+    /// Validate semantic constraints not captured by the type system.
     pub(crate) fn validate(&self) -> Result<(), ConfigError> {
-        if self.radio.port.trim().is_empty() {
-            return Err(ConfigError::Invalid(
-                "radio.port must not be empty".to_string(),
-            ));
-        }
-        if self.radio.reply_timeout_ms == 0 {
-            return Err(ConfigError::Invalid(
-                "radio.reply_timeout_ms must be greater than zero".to_string(),
-            ));
-        }
-        if self.poll.baseline_ms == 0 {
-            return Err(ConfigError::Invalid(
-                "poll.baseline_ms must be greater than zero".to_string(),
-            ));
-        }
-        for face in &self.faces {
-            if face.name.trim().is_empty() {
-                return Err(ConfigError::Invalid(
-                    "face.name must not be empty".to_string(),
-                ));
-            }
-            if face.port.trim().is_empty() {
+        match self.radio.backend.as_str() {
+            "ts590" | "rigctld" | "loopback" => {}
+            other => {
                 return Err(ConfigError::Invalid(format!(
-                    "face '{}' port must not be empty",
-                    face.name
+                    "unknown radio.backend '{other}' (expected ts590, rigctld, or loopback)"
+                )))
+            }
+        }
+        if self.radio.backend != "loopback" {
+            match self.radio.transport.as_str() {
+                "serial" => {
+                    if self.radio.port.is_empty() {
+                        return Err(ConfigError::Invalid(
+                            "radio.transport = \"serial\" requires radio.port".to_string(),
+                        ));
+                    }
+                }
+                "tcp" => {}
+                other => {
+                    return Err(ConfigError::Invalid(format!(
+                        "unknown radio.transport '{other}' (expected serial or tcp)"
+                    )))
+                }
+            }
+        }
+        for face in &self.face {
+            if !matches!(face.dialect.as_str(), "ts590" | "ts2000") {
+                return Err(ConfigError::Invalid(format!(
+                    "face '{}' has unknown dialect '{}' (expected ts590 or ts2000)",
+                    face.name, face.dialect
                 )));
             }
+        }
+        if self.face.is_empty() && self.hamlib_net.is_empty() {
+            return Err(ConfigError::Invalid(
+                "at least one [[face]] or [[hamlib_net]] endpoint is required".to_string(),
+            ));
         }
         Ok(())
     }
 
-    /// Render a human-readable summary of the resolved configuration.
+    /// The PTT maximum-transmit safety ceiling.
+    pub(crate) fn ptt_max_tx(&self) -> Duration {
+        Duration::from_millis(self.ptt.max_tx_ms)
+    }
+
+    /// The baseline poll interval.
+    pub(crate) fn baseline_interval(&self) -> Duration {
+        Duration::from_millis(self.poll.baseline_ms)
+    }
+
+    /// The heartbeat poll interval.
+    pub(crate) fn heartbeat_interval(&self) -> Duration {
+        Duration::from_millis(self.poll.heartbeat_ms)
+    }
+
+    /// A human-readable multi-line description (used for `--dry-run`).
     pub(crate) fn describe(&self) -> String {
         let mut out = String::new();
-        let _ = writeln!(
-            out,
-            "radio: port={} baud={} backend={:?} reply_timeout_ms={}",
-            self.radio.port, self.radio.baud, self.radio.backend, self.radio.reply_timeout_ms
-        );
-        let _ = writeln!(out, "poll: baseline_ms={}", self.poll.baseline_ms);
-        if self.faces.is_empty() {
-            let _ = writeln!(out, "faces: (none)");
+        out.push_str(&format!(
+            "radio: backend={} model={} transport={} port={} baud={} host={} tcp_port={} \
+             certified={} reply_timeout_ms={}\n",
+            self.radio.backend,
+            self.radio.model,
+            self.radio.transport,
+            self.radio.port,
+            self.radio.baud,
+            self.radio.host,
+            self.radio.tcp_port,
+            self.radio.certified,
+            self.radio.reply_timeout_ms,
+        ));
+        out.push_str(&format!(
+            "poll: baseline_ms={} heartbeat_ms={}\n",
+            self.poll.baseline_ms, self.poll.heartbeat_ms
+        ));
+        out.push_str(&format!("ptt: max_tx_ms={}\n", self.ptt.max_tx_ms));
+        out.push_str(&format!("events: native_push={}\n", self.events.native_push));
+        for face in &self.face {
+            out.push_str(&format!(
+                "face: name={} transport={} baud={} dialect={} perms={:?}\n",
+                face.name, face.transport, face.baud, face.dialect, face.perms
+            ));
         }
-        for face in &self.faces {
-            let _ = writeln!(
-                out,
-                "face: name={} port={} baud={} dialect={:?} write={} ptt={} passthrough={}",
-                face.name,
-                face.port,
-                face.baud,
-                face.dialect,
-                face.allow_write,
-                face.allow_ptt,
-                face.allow_passthrough
-            );
+        for ep in &self.hamlib_net {
+            out.push_str(&format!(
+                "hamlib_net: name={} bind={} perms={:?}\n",
+                ep.name, ep.bind, ep.perms
+            ));
         }
         out
     }
-}
 
-/// Resolve the default configuration file path from the environment.
-pub(crate) fn default_config_path() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("APPDATA") {
-        return Some(Path::new(&dir).join("qsoripper").join("cathub.toml"));
+    /// The default config path for this platform.
+    pub(crate) fn default_config_path() -> PathBuf {
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(profile) = std::env::var("USERPROFILE") {
+                return PathBuf::from(profile).join("cathub.toml");
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            if let Ok(home) = std::env::var("HOME") {
+                return PathBuf::from(home).join(".config").join("cathub.toml");
+            }
+        }
+        PathBuf::from("cathub.toml")
     }
-    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
-        return Some(Path::new(&dir).join("qsoripper").join("cathub.toml"));
-    }
-    if let Some(dir) = std::env::var_os("HOME") {
-        return Some(
-            Path::new(&dir)
-                .join(".config")
-                .join("qsoripper")
-                .join("cathub.toml"),
-        );
-    }
-    None
-}
-
-fn default_baud() -> u32 {
-    115_200
-}
-
-fn default_reply_timeout_ms() -> u64 {
-    250
-}
-
-fn default_baseline_ms() -> u64 {
-    500
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[cfg(test)]
@@ -229,122 +323,136 @@ mod tests {
 
     const SAMPLE: &str = r#"
 [radio]
-port = "COM3"
-baud = 115200
 backend = "ts590"
-reply_timeout_ms = 200
+model = "TS-590SG"
+transport = "serial"
+port = "COM3"
+baud = 4800
 
 [poll]
-baseline_ms = 400
+baseline_ms = 200
+heartbeat_ms = 2500
+
+[ptt]
+max_tx_ms = 120000
+
+[events]
+native_push = true
 
 [[face]]
 name = "n1mm"
-port = "COM11"
+transport = "COM11"
+baud = 4800
 dialect = "ts590"
-allow_ptt = true
+perms = ["read", "write", "ptt"]
+
+[[hamlib_net]]
+name = "engine"
+bind = "127.0.0.1:4532"
+perms = ["read"]
 "#;
 
     #[test]
     fn parses_full_config() {
         let config = Config::parse(SAMPLE).expect("parse");
+        assert_eq!(config.radio.backend, "ts590");
         assert_eq!(config.radio.port, "COM3");
-        assert_eq!(config.radio.backend, BackendKind::Ts590);
-        assert_eq!(config.radio.reply_timeout_ms, 200);
-        assert_eq!(config.poll.baseline_ms, 400);
-        assert_eq!(config.faces.len(), 1);
-        let face = &config.faces[0];
-        assert_eq!(face.name, "n1mm");
-        assert_eq!(face.baud, 115_200);
-        assert!(face.allow_ptt);
-        assert!(face.allow_write);
-        assert!(face.allow_passthrough);
-        config.validate().expect("valid");
+        assert_eq!(config.face.len(), 1);
+        assert_eq!(config.hamlib_net.len(), 1);
+        assert!(config.face[0].permissions().ptt);
+        assert!(config.hamlib_net[0].permissions().read);
+        assert!(!config.hamlib_net[0].permissions().write);
+        assert_eq!(config.baseline_interval(), Duration::from_millis(200));
+        assert_eq!(config.heartbeat_interval(), Duration::from_millis(2_500));
+        assert_eq!(config.ptt_max_tx(), Duration::from_millis(120_000));
     }
 
     #[test]
-    fn defaults_apply_when_omitted() {
-        let config = Config::parse(
-            r#"
+    fn applies_defaults() {
+        let text = r#"
 [radio]
-port = "/dev/ttyUSB0"
 backend = "loopback"
-"#,
-        )
-        .expect("parse");
-        assert_eq!(config.radio.baud, 115_200);
-        assert_eq!(config.radio.reply_timeout_ms, 250);
-        assert_eq!(config.poll.baseline_ms, 500);
-        assert!(config.faces.is_empty());
+
+[[face]]
+name = "x"
+transport = "COM5"
+dialect = "ts590"
+"#;
+        let config = Config::parse(text).expect("parse");
+        assert_eq!(config.radio.baud, 4_800);
+        assert_eq!(config.poll.baseline_ms, 250);
+        assert_eq!(config.ptt.max_tx_ms, 300_000);
+        assert!(config.events.native_push);
+        assert_eq!(config.face[0].baud, 4_800);
     }
 
     #[test]
-    fn unknown_field_is_rejected() {
-        let err = Config::parse(
-            r#"
+    fn rejects_unknown_backend() {
+        let text = r#"
 [radio]
-port = "COM3"
-backend = "ts590"
-bogus = true
-"#,
-        )
-        .expect_err("should reject unknown field");
-        assert!(matches!(err, ConfigError::Parse(_)));
+backend = "icom"
+[[face]]
+name = "x"
+transport = "COM5"
+dialect = "ts590"
+"#;
+        assert!(Config::parse(text).is_err());
     }
 
     #[test]
-    fn empty_port_is_invalid() {
-        let config = Config::parse(
-            r#"
+    fn serial_backend_requires_port() {
+        let text = r#"
 [radio]
-port = "  "
 backend = "ts590"
-"#,
-        )
-        .expect("parse");
-        assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
+transport = "serial"
+[[face]]
+name = "x"
+transport = "COM5"
+dialect = "ts590"
+"#;
+        let err = Config::parse(text).expect_err("missing port");
+        assert!(err.to_string().contains("requires radio.port"));
     }
 
     #[test]
-    fn zero_timeout_is_invalid() {
-        let config = Config::parse(
-            r#"
+    fn rejects_unknown_dialect() {
+        let text = r#"
 [radio]
-port = "COM3"
-backend = "ts590"
-reply_timeout_ms = 0
-"#,
-        )
-        .expect("parse");
-        assert!(matches!(config.validate(), Err(ConfigError::Invalid(_))));
+backend = "loopback"
+[[face]]
+name = "x"
+transport = "COM5"
+dialect = "yaesu"
+"#;
+        assert!(Config::parse(text).is_err());
     }
 
     #[test]
-    fn permissions_round_trip_from_face() {
+    fn requires_at_least_one_endpoint() {
+        let text = r#"
+[radio]
+backend = "loopback"
+"#;
+        assert!(Config::parse(text).is_err());
+    }
+
+    #[test]
+    fn describe_mentions_all_sections() {
         let config = Config::parse(SAMPLE).expect("parse");
-        let perms = config.faces[0].permissions();
-        assert!(perms.allow_ptt);
-        assert!(perms.allow_write);
-        assert!(perms.allow_passthrough);
+        let text = config.describe();
+        assert!(text.contains("radio: backend=ts590"));
+        assert!(text.contains("reply_timeout_ms=1000"));
+        assert!(text.contains("poll: baseline_ms=200"));
+        assert!(text.contains("ptt: max_tx_ms=120000"));
+        assert!(text.contains("events: native_push=true"));
+        assert!(text.contains("face: name=n1mm"));
+        assert!(text.contains("hamlib_net: name=engine"));
     }
 
     #[test]
-    fn describe_lists_radio_and_faces() {
-        let config = Config::parse(SAMPLE).expect("parse");
-        let described = config.describe();
-        assert!(described.contains("port=COM3"));
-        assert!(described.contains("name=n1mm"));
-    }
-
-    #[test]
-    fn describe_handles_no_faces() {
-        let config = Config::parse(
-            r#"
-[radio]
-port = "COM3"
-backend = "ts590"
-"#,
-        )
-        .expect("parse");
-        assert!(config.describe().contains("faces: (none)"));
+    fn default_path_is_named_cathub_toml() {
+        assert!(Config::default_config_path()
+            .to_string_lossy()
+            .ends_with("cathub.toml"));
     }
 }
