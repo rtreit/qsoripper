@@ -478,7 +478,29 @@ Tests TCP connectivity to the configured rigctld instance.
 **Error semantics:**
 - Connection and protocol errors are reported in the response, not as gRPC errors.
 
-### 3.5 SpaceWeatherService
+#### Rig-control front door: `qsoripper-cathub`
+
+`RigControlService` consumes rig state from a rigctld-compatible endpoint. On a multi-app
+station the engine must **not** connect directly to the radio's serial port, because many
+applications share one radio and direct contention produces VFO A/B oscillation, frequency
+drift, and PTT conflicts.
+
+The supported topology is a single multi-client CAT hub daemon, `qsoripper-cathub`, that owns
+the radio serial port and fans it out to every client over its native protocol. The engine
+points its `RigctldProvider` at one of the hub's read-only Hamlib NET endpoints
+(`QSORIPPER_RIGCTLD_HOST`:`QSORIPPER_RIGCTLD_PORT`); the hub also serves other applications
+(HDSDR/OmniRig, N1MM, ARCP-590, WSJT-X, Log4OM) on their own endpoints simultaneously. The
+hub enforces the no-VFO-retargeting invariant (baseline polling never emits VFO-select/retarget
+commands), serializes all writes, owns the radio's native push stream, and arbitrates PTT with
+a single-owner lease and a hard transmit-time ceiling. The engine's behavior contracts above
+are unchanged: it remains a read-mostly NET rigctl client and is agnostic to whether the
+endpoint is the cathub daemon or a bare `rigctld`.
+
+- Design: `docs/design/cathub-multi-client-cat-hub.md`.
+- Operator setup: `docs/integrations/cathub-setup.md`.
+- Implementation: the `qsoripper-cathub` crate under `src/rust/`.
+
+
 
 **Proto file:** `proto/services/space_weather_service.proto`
 
