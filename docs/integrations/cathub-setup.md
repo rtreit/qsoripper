@@ -166,7 +166,15 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
   daemon's half of the pair. The app binds the **second** port of each pair (COM11/21/31).
 - A NET client cannot connect: confirm the bind address/port in `config\cathub.toml` matches
   the app, and that the hub log shows the endpoint listening.
-- Set `CATHUB_LOG=debug` before starting for verbose tracing.
+- An app that relies on Kenwood auto-information (notably **ARCP-590**) connects but never
+  tracks the dial / shows "BUSY": such apps poll `AI;` as a keepalive and depend entirely on
+  the radio pushing `FA;`/`IF;` frames. The hub virtualizes auto-info per connection — an `AI;`
+  read reports the face's current state (`AI0;`/`AI2;`) without disabling it, and the hub fans
+  out native-push frames to any face that has enabled `AI2;`. This works in current builds; if
+  an older build froze ARCP-590 on connect, update the daemon.
+- Set `CATHUB_LOG=debug` before starting for verbose tracing. Use
+  `CATHUB_LOG=qsoripper_cathub::serial_face=trace` to see each face's request/reply/notify
+  frames, which is the fastest way to diagnose a client handshake.
 
 ## 8. Known v1 limitations
 

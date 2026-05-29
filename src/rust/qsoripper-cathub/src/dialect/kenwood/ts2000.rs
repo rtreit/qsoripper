@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 
-use super::{freq_frame, mode_from_digit, mode_to_digit, parse_command, ERR};
+use super::{ai_frame, freq_frame, mode_from_digit, mode_to_digit, parse_command, ERR};
 use crate::dialect::{ApplyOutcome, ClientDialect, FaceContext};
 use crate::model::{StateChange, StateMutation, Vfo};
 use crate::permissions::CommandClass;
@@ -93,9 +93,14 @@ impl ClientDialect for Ts2000Dialect {
                 vec![b'F', b'T', vfo_digit(tx), b';']
             }
             b"AI" => {
-                let on = payload.first().is_some_and(|&d| d != b'0');
-                ctx.set_ai(on);
-                Vec::new()
+                // `AI;` read reports current state without changing it; `AI<n>;` writes toggle.
+                if read {
+                    ai_frame(ctx.ai_on())
+                } else {
+                    let on = payload.first().is_some_and(|&d| d != b'0');
+                    ctx.set_ai(on);
+                    Vec::new()
+                }
             }
             b"ID" if read => b"ID019;".to_vec(),
             b"PS" if read => b"PS1;".to_vec(),
@@ -208,6 +213,22 @@ mod tests {
             Ts2000Dialect::new().handle(b"ID;", &ctx).await,
             b"ID019;".to_vec()
         );
+    }
+
+    #[tokio::test]
+    async fn ai_read_reports_state_without_changing_it() {
+        let (ctx, _b) = ctx_with(FacePermissions::read_only());
+        assert_eq!(
+            Ts2000Dialect::new().handle(b"AI;", &ctx).await,
+            b"AI0;".to_vec()
+        );
+        assert!(!ctx.ai_on());
+        assert!(Ts2000Dialect::new().handle(b"AI2;", &ctx).await.is_empty());
+        assert_eq!(
+            Ts2000Dialect::new().handle(b"AI;", &ctx).await,
+            b"AI2;".to_vec()
+        );
+        assert!(ctx.ai_on(), "AI; read must not disable auto-info");
     }
 
     #[tokio::test]

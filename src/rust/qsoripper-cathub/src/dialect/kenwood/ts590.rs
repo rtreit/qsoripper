@@ -8,7 +8,7 @@
 
 use async_trait::async_trait;
 
-use super::{freq_frame, mode_from_digit, mode_to_digit, parse_command, ERR};
+use super::{ai_frame, freq_frame, mode_from_digit, mode_to_digit, parse_command, ERR};
 use crate::dialect::{ApplyOutcome, ClientDialect, FaceContext};
 use crate::model::{StateChange, StateMutation, Vfo};
 use crate::permissions::CommandClass;
@@ -95,10 +95,16 @@ impl ClientDialect for Ts590Dialect {
                 .await,
             ),
             b"AI" => {
-                // Auto-information is virtualized per face: it never reaches the radio.
-                let on = payload.first().is_some_and(|&d| d != b'0');
-                ctx.set_ai(on);
-                Vec::new()
+                // `AI;` is a read: report the current virtualized auto-info state without
+                // changing it, so a native client's connection handshake completes. Only an
+                // `AI<n>;` write toggles auto-information for this face.
+                if read {
+                    ai_frame(ctx.ai_on())
+                } else {
+                    let on = payload.first().is_some_and(|&d| d != b'0');
+                    ctx.set_ai(on);
+                    Vec::new()
+                }
             }
             b"ID" if read => b"ID021;".to_vec(),
             b"PS" if read => b"PS1;".to_vec(),
@@ -225,6 +231,28 @@ mod tests {
                 mode: Mode::Cw
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn ai_read_reports_state_without_changing_it() {
+        let (ctx, _b) = ctx_with(FacePermissions::read_only());
+        // A fresh face: auto-info off, and reading it must not enable it.
+        assert_eq!(
+            Ts590Dialect::new().handle(b"AI;", &ctx).await,
+            b"AI0;".to_vec()
+        );
+        assert!(!ctx.ai_on(), "AI; read must not change the flag");
+
+        // After enabling, a read reports 2 and leaves it enabled (regression: a read used
+        // to be parsed as a write with an empty payload and silently disabled auto-info,
+        // which froze native clients like ARCP-590 that poll AI; as a keepalive).
+        assert!(Ts590Dialect::new().handle(b"AI2;", &ctx).await.is_empty());
+        assert!(ctx.ai_on());
+        assert_eq!(
+            Ts590Dialect::new().handle(b"AI;", &ctx).await,
+            b"AI2;".to_vec()
+        );
+        assert!(ctx.ai_on(), "AI; read must not disable auto-info");
     }
 
     #[tokio::test]

@@ -43,6 +43,16 @@ pub(crate) fn mode_from_digit(digit: u8) -> Mode {
     Mode::from_kenwood_digit(digit)
 }
 
+/// Build a Kenwood `AI` auto-information status frame (`AI0;` or `AI2;`).
+///
+/// `AI;` is a *read* on Kenwood radios: a native client (ARCP-590, N1MM) queries the
+/// current auto-information mode during connection and waits for a valid `AI<n>;` answer
+/// before it proceeds. The reply must report the face's current virtualized state without
+/// changing it; only an `AI<n>;` *write* toggles auto-information.
+pub(crate) fn ai_frame(on: bool) -> Vec<u8> {
+    vec![b'A', b'I', if on { b'2' } else { b'0' }, b';']
+}
+
 /// Build a Kenwood frequency frame: `verb` + 11 zero-padded digits + `;`.
 pub(crate) fn freq_frame(verb: &[u8], hz: u64) -> Vec<u8> {
     let mut out = Vec::with_capacity(verb.len() + 12);

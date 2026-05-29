@@ -192,6 +192,7 @@ pub(crate) async fn run_transport<T>(
                         break;
                     }
                     let _ = writer.flush().await;
+                    tracing::trace!(tx = %String::from_utf8_lossy(&cmd.bytes), "radio tx");
                     match cmd.expect {
                         Expect::NoReply => {
                             let _ = cmd.reply.send(Ok(Vec::new()));
@@ -213,6 +214,7 @@ pub(crate) async fn run_transport<T>(
                 }
                 frame = frame_rx.recv() => {
                     let Some(frame) = frame else { break };
+                    tracing::trace!(rx = %String::from_utf8_lossy(&frame), "radio rx (idle)");
                     route_event(&backend, &state, &frame);
                 }
             }
@@ -220,12 +222,22 @@ pub(crate) async fn run_transport<T>(
             let recv = tokio::time::timeout(REPLY_TIMEOUT, frame_rx.recv()).await;
             match recv {
                 Err(_elapsed) => {
-                    if let Some((_, reply)) = pending.take() {
+                    if let Some((matcher, reply)) = pending.take() {
+                        if let Matcher::Verb(verbs) = &matcher {
+                            let awaited: Vec<String> = verbs
+                                .iter()
+                                .map(|v| String::from_utf8_lossy(v).into_owned())
+                                .collect();
+                            tracing::warn!(?awaited, "radio reply timed out");
+                        } else {
+                            tracing::warn!("radio reply (lines) timed out");
+                        }
                         let _ = reply.send(Err(BackendError::Timeout));
                     }
                 }
                 Ok(None) => break,
                 Ok(Some(frame)) => {
+                    tracing::trace!(rx = %String::from_utf8_lossy(&frame), "radio rx (pending)");
                     pending = match pending.take() {
                         Some((Matcher::Verb(verbs), reply)) => {
                             if frame_matches(&frame, &verbs) {
@@ -269,6 +281,11 @@ pub(crate) async fn run_transport<T>(
 fn route_event(backend: &Arc<dyn RadioBackend>, state: &StateHandle, frame: &[u8]) {
     if let Some(mutation) = backend.parse_event(frame) {
         state.record(mutation.into_change(), RadioEventSource::NativePush);
+    } else {
+        tracing::debug!(
+            frame = %String::from_utf8_lossy(frame),
+            "unsolicited radio frame not understood by backend.parse_event; dropped"
+        );
     }
 }
 

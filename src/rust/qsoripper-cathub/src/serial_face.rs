@@ -43,7 +43,17 @@ pub(crate) async fn run_face<T>(
                             frame.push(byte);
                             if byte == delim {
                                 let request = std::mem::take(&mut frame);
+                                tracing::trace!(
+                                    face = ctx.face_id,
+                                    req = %String::from_utf8_lossy(&request),
+                                    "face request"
+                                );
                                 let reply = dialect.handle(&request, &ctx).await;
+                                tracing::trace!(
+                                    face = ctx.face_id,
+                                    reply = %String::from_utf8_lossy(&reply),
+                                    "face reply"
+                                );
                                 if !reply.is_empty() && writer.write_all(&reply).await.is_err() {
                                     return;
                                 }
@@ -57,6 +67,11 @@ pub(crate) async fn run_face<T>(
                 match change {
                     Ok(change) => {
                         if let Some(bytes) = dialect.format_notification(&change, &ctx) {
+                            tracing::trace!(
+                                face = ctx.face_id,
+                                note = %String::from_utf8_lossy(&bytes),
+                                "face notify"
+                            );
                             if writer.write_all(&bytes).await.is_err() {
                                 return;
                             }
