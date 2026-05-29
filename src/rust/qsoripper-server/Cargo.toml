@@ -18,6 +18,7 @@ serde = { version = "1", features = ["derive"] }
 tokio = { workspace = true, features = ["signal"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 toml = "0.8"
+toml_edit = "0.22"
 tonic = { workspace = true }
 
 [lints]
