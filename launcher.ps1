@@ -50,7 +50,7 @@ if ($WithCatHub) {
         throw "Start-CatHub.ps1 not found at $startCatHub"
     }
     $catHubArgs = @('-NoLogo', '-NoExit', '-File', $startCatHub)
-    if ($Dev) { $catHubArgs += '-Debug' }
+    if ($Dev) { $catHubArgs += '-DebugBuild' }
     Write-Host "Starting CAT hub daemon in a new window..." -ForegroundColor Cyan
     Start-Process pwsh -ArgumentList $catHubArgs -WorkingDirectory $PSScriptRoot
     Start-Sleep -Seconds 2

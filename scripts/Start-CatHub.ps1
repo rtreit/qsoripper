@@ -18,7 +18,7 @@
 .PARAMETER DryRun
     Validate and print the config, then exit without opening any ports.
 
-.PARAMETER Debug
+.PARAMETER DebugBuild
     Build and run the debug profile instead of release.
 
 .EXAMPLE
@@ -31,7 +31,7 @@
 param(
     [string]$Config,
     [switch]$DryRun,
-    [switch]$Debug
+    [switch]$DebugBuild
 )
 
 $ErrorActionPreference = 'Stop'
@@ -76,7 +76,7 @@ if (-not (Test-Path $Config)) {
 $logDir = $env:USERPROFILE
 
 # Prefer the published binary for instant startup; fall back to 'cargo run' when it is missing.
-$configuration = if ($Debug) { 'Debug' } else { 'Release' }
+$configuration = if ($DebugBuild) { 'Debug' } else { 'Release' }
 $binaryName = if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'qsoripper-cathub.exe' } else { 'qsoripper-cathub' }
 $publishedBinary = Join-Path $repoRoot "artifacts\publish\qsoripper-cathub\$configuration\$binaryName"
 
@@ -91,7 +91,7 @@ if (Test-Path $publishedBinary) {
 }
 else {
     $cargoArgs = @('run')
-    if (-not $Debug) { $cargoArgs += '--release' }
+    if (-not $DebugBuild) { $cargoArgs += '--release' }
     $cargoArgs += @('-p', 'qsoripper-cathub', '--manifest-path', $manifest, '--')
     $cargoArgs += @('--config', $Config)
     if ($DryRun) { $cargoArgs += '--dry-run' }
