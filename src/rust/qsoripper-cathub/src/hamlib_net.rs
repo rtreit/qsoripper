@@ -152,7 +152,10 @@ async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
             )
         }
         "T" | "\\set_ptt" => {
-            let keyed = parts.next().map(str::trim) == Some("1");
+            // Hamlib PTT values: 0 = RX, 1 = TX, 2 = TX on mic, 3 = TX on data.
+            // WSJT-X sends `T 3` (RIG_PTT_ON_DATA) to transmit in Data/Pkt mode, so any
+            // non-zero value must key the radio; only 0 (or a missing arg) means unkey.
+            let keyed = matches!(parts.next().map(str::trim), Some("1" | "2" | "3"));
             outcome_rprt(
                 ctx.apply_modeled(StateMutation::SetPtt { keyed }, CommandClass::PttWrite)
                     .await,
@@ -419,6 +422,35 @@ mod tests {
         let (ctx, _b, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
         // Has write but not ptt.
         assert_eq!(reply_of("T 1", &ctx).await, RPRT_EINVAL.to_vec());
+    }
+
+    #[tokio::test]
+    async fn set_ptt_keys_on_any_nonzero_value() {
+        // WSJT-X in Data/Pkt mode sends `T 3` (RIG_PTT_ON_DATA), N1MM/others may send
+        // `T 2` (on mic) or `T 1`; all must key. Only `T 0` unkeys.
+        for arg in ["1", "2", "3"] {
+            let (ctx, backend, _s) =
+                ctx_with(FacePermissions::from_tokens(&["read", "write", "ptt"]));
+            assert_eq!(
+                reply_of(&format!("T {arg}"), &ctx).await,
+                RPRT_OK.to_vec(),
+                "T {arg} should be accepted"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            assert_eq!(
+                backend.mutations(),
+                vec![StateMutation::SetPtt { keyed: true }],
+                "T {arg} should key the radio"
+            );
+        }
+
+        let (ctx, backend, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write", "ptt"]));
+        assert_eq!(reply_of("T 0", &ctx).await, RPRT_OK.to_vec());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            backend.mutations(),
+            vec![StateMutation::SetPtt { keyed: false }]
+        );
     }
 
     #[tokio::test]

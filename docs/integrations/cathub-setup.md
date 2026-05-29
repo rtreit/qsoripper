@@ -121,6 +121,18 @@ before the launcher starts engines and UIs, so everything connects to the hub's 
 ### WSJT-X
 - Settings > Radio: Rig `Hamlib NET rigctl`, Network Server **127.0.0.1:4533**.
 - PTT method `CAT`. The `wsjtx` endpoint is `perms = ["read", "write", "ptt"]`.
+- **Mode:** set the WSJT-X *Mode* selector to **None** and put the TS-590 in its data
+  position (DATA-USB) on the front panel. The hub speaks the native Kenwood `MD`
+  command set, which exposes SSB/CW/FSK/AM/FM but not the radio's DATA sub-mode, so a
+  WSJT-X *Mode = Data/Pkt* setting would send `PKTUSB`, which the hub can only honor as
+  plain `USB`; the read-back would then disagree with what WSJT-X asked for. *Mode =
+  None* leaves the operator-selected data mode untouched and avoids that mismatch.
+  *Mode = USB* also round-trips cleanly if you prefer WSJT-X to own the SSB mode.
+- **Split Operation:** `Rig` or `Fake It` both work; the hub tracks split and TX-VFO
+  state and never retargets VFO A/B on a poll.
+- Frequencies are sent by Hamlib as a `%f` value (e.g. `14074000.000000`); the hub
+  accepts both that decimal form and a plain integer, so `Test CAT` and band changes
+  set the dial correctly.
 
 ### Log4OM
 - CAT interface: Hamlib `NET rigctl`, host **127.0.0.1**, port **4534**.
@@ -195,4 +207,10 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
 - On shutdown (Ctrl+C) the daemon makes a best-effort `RX;` to unkey the transmitter. A hard
   crash cannot run that path; the `ptt_max_tx_ms` ceiling and the radio's own TX timeout are
   the ultimate stuck-transmitter backstops.
+- **Data sub-modes (PKTUSB/PKTLSB) are not mapped to the TS-590 DATA mode.** The hub
+  models the native Kenwood `MD` mode set (LSB/USB/CW/CWR/FSK/FSKR/AM/FM). A NET client
+  that requests `PKTUSB`/`PKTLSB` (e.g. WSJT-X with *Mode = Data/Pkt*) is accepted but
+  honored as plain `USB`/`LSB`, so a mode read-back will not echo the data variant.
+  Configure such clients with *Mode = None* (operator selects DATA on the radio) or a
+  plain SSB mode. See the WSJT-X notes in section 5.
 
