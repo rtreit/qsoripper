@@ -1,0 +1,430 @@
+//! The single-owner radio task: transport framing + reply matching, and the per-face
+//! priority scheduler that serializes every backend operation.
+//!
+//! Two cooperating layers:
+//! * [`run_transport`] owns the byte transport. It writes one command at a time, matches
+//!   solicited replies by verb, and routes every unsolicited frame to the backend's
+//!   `parse_event` (native push). It exposes [`RadioLink`].
+//! * [`spawn_scheduler`] owns per-face FIFO queues and selects the next backend
+//!   operation by priority across the ready heads, never reordering one face's stream.
+
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::{mpsc, oneshot};
+
+use crate::backend::{BackendError, Framing, RadioBackend};
+use crate::model::{RadioEventSource, StateMutation};
+use crate::state::StateHandle;
+
+/// Default per-command reply timeout.
+const REPLY_TIMEOUT: Duration = Duration::from_millis(1_000);
+
+/// Priority class for scheduling across faces. Lower discriminant wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Priority {
+    /// PTT (keying) — always preempts everything else at selection time.
+    Ptt = 0,
+    /// Interactive client writes (frequency, mode, split).
+    Write = 1,
+    /// Client reads and passthrough.
+    Read = 2,
+    /// Background baseline poll.
+    Poll = 3,
+}
+
+/// What the transport should expect after writing a command.
+#[derive(Debug, Clone)]
+pub(crate) enum Expect {
+    /// A reply whose frame begins with one of these verb prefixes (Kenwood/Yaesu, where
+    /// unsolicited push frames can interleave and must be told apart by verb).
+    Reply(Vec<Vec<u8>>),
+    /// The next `n` frames, concatenated (verb-less line protocols like `rigctld`, which
+    /// have no unsolicited frames so the next lines are unambiguously the reply).
+    Lines(usize),
+    /// No reply (set-and-forget write).
+    NoReply,
+}
+
+/// How a pending command recognizes its reply.
+enum Matcher {
+    Verb(Vec<Vec<u8>>),
+    Lines { remaining: usize, acc: Vec<u8> },
+}
+
+/// The reply channel a queued command is answered on.
+type ReplyTx = oneshot::Sender<Result<Vec<u8>, BackendError>>;
+
+/// A raw command queued to the transport task.
+pub(crate) struct RawCommand {
+    bytes: Vec<u8>,
+    expect: Expect,
+    reply: ReplyTx,
+}
+
+/// A clonable handle backends use to submit raw bytes to the serialized transport.
+#[derive(Clone)]
+pub(crate) struct RadioLink {
+    tx: mpsc::Sender<RawCommand>,
+}
+
+impl RadioLink {
+    /// Submit raw bytes and await the matching reply (or an empty vec for `NoReply`).
+    pub(crate) async fn submit(
+        &self,
+        bytes: Vec<u8>,
+        expect: Expect,
+    ) -> Result<Vec<u8>, BackendError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(RawCommand {
+                bytes,
+                expect,
+                reply,
+            })
+            .await
+            .map_err(|_| BackendError::Transport("transport task gone".into()))?;
+        rx.await
+            .map_err(|_| BackendError::Transport("transport dropped reply".into()))?
+    }
+}
+
+/// Create a transport command channel and its [`RadioLink`].
+pub(crate) fn link_channel() -> (RadioLink, mpsc::Receiver<RawCommand>) {
+    let (tx, rx) = mpsc::channel(64);
+    (RadioLink { tx }, rx)
+}
+
+/// A [`RadioLink`] whose transport is never spawned (loopback backend never submits).
+#[cfg(test)]
+pub(crate) fn detached_link() -> RadioLink {
+    let (link, _rx) = link_channel();
+    link
+}
+
+/// Split a byte stream into frames according to `framing`.
+struct Framer {
+    framing: Framing,
+    buf: Vec<u8>,
+}
+
+impl Framer {
+    fn new(framing: Framing) -> Self {
+        Framer {
+            framing,
+            buf: Vec::with_capacity(64),
+        }
+    }
+
+    fn delimiter(&self) -> u8 {
+        match self.framing {
+            Framing::SemicolonTerminated => b';',
+            Framing::LineTerminated => b'\n',
+            Framing::CiV => 0xFD,
+        }
+    }
+
+    /// Feed bytes; return any complete frames (delimiter included).
+    fn push(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
+        let delim = self.delimiter();
+        let mut frames = Vec::new();
+        for &b in bytes {
+            self.buf.push(b);
+            if b == delim {
+                frames.push(std::mem::take(&mut self.buf));
+            }
+        }
+        frames
+    }
+}
+
+fn frame_matches(frame: &[u8], verbs: &[Vec<u8>]) -> bool {
+    verbs.iter().any(|v| frame.starts_with(v))
+}
+
+/// Run the transport task to completion (until the stream closes or errors).
+///
+/// `transport` is any duplex byte stream (a serial port, a TCP socket, or an in-memory
+/// duplex in tests). Reply matching keeps exactly one solicited command in flight.
+#[allow(clippy::too_many_lines)] // The transport read/write/match loop is one cohesive unit.
+pub(crate) async fn run_transport<T>(
+    transport: T,
+    backend: Arc<dyn RadioBackend>,
+    state: StateHandle,
+    mut raw_rx: mpsc::Receiver<RawCommand>,
+) where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
+{
+    let framing = backend.capabilities().framing;
+    let (mut reader, mut writer) = tokio::io::split(transport);
+
+    // Reader task: frame the input and forward frames.
+    let (frame_tx, mut frame_rx) = mpsc::channel::<Vec<u8>>(256);
+    let reader_task = tokio::spawn(async move {
+        let mut framer = Framer::new(framing);
+        let mut chunk = [0u8; 512];
+        loop {
+            match reader.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    let slice = chunk.get(..n).unwrap_or(&[]);
+                    for frame in framer.push(slice) {
+                        if frame_tx.send(frame).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    let mut pending: Option<(Matcher, ReplyTx)> = None;
+
+    loop {
+        if pending.is_none() {
+            tokio::select! {
+                cmd = raw_rx.recv() => {
+                    let Some(cmd) = cmd else { break };
+                    if let Err(e) = writer.write_all(&cmd.bytes).await {
+                        let _ = cmd.reply.send(Err(BackendError::Transport(e.to_string())));
+                        break;
+                    }
+                    let _ = writer.flush().await;
+                    match cmd.expect {
+                        Expect::NoReply => {
+                            let _ = cmd.reply.send(Ok(Vec::new()));
+                        }
+                        Expect::Reply(verbs) => {
+                            pending = Some((Matcher::Verb(verbs), cmd.reply));
+                        }
+                        Expect::Lines(n) => {
+                            if n == 0 {
+                                let _ = cmd.reply.send(Ok(Vec::new()));
+                            } else {
+                                pending = Some((
+                                    Matcher::Lines { remaining: n, acc: Vec::new() },
+                                    cmd.reply,
+                                ));
+                            }
+                        }
+                    }
+                }
+                frame = frame_rx.recv() => {
+                    let Some(frame) = frame else { break };
+                    route_event(&backend, &state, &frame);
+                }
+            }
+        } else {
+            let recv = tokio::time::timeout(REPLY_TIMEOUT, frame_rx.recv()).await;
+            match recv {
+                Err(_elapsed) => {
+                    if let Some((_, reply)) = pending.take() {
+                        let _ = reply.send(Err(BackendError::Timeout));
+                    }
+                }
+                Ok(None) => break,
+                Ok(Some(frame)) => {
+                    pending = match pending.take() {
+                        Some((Matcher::Verb(verbs), reply)) => {
+                            if frame_matches(&frame, &verbs) {
+                                let _ = reply.send(Ok(frame));
+                                None
+                            } else {
+                                route_event(&backend, &state, &frame);
+                                Some((Matcher::Verb(verbs), reply))
+                            }
+                        }
+                        Some((Matcher::Lines { remaining, mut acc }, reply)) => {
+                            acc.extend_from_slice(&frame);
+                            let left = remaining.saturating_sub(1);
+                            if left == 0 {
+                                let _ = reply.send(Ok(acc));
+                                None
+                            } else {
+                                Some((
+                                    Matcher::Lines {
+                                        remaining: left,
+                                        acc,
+                                    },
+                                    reply,
+                                ))
+                            }
+                        }
+                        None => None,
+                    };
+                }
+            }
+        }
+    }
+
+    if let Some((_, reply)) = pending.take() {
+        let _ = reply.send(Err(BackendError::Transport("transport closed".into())));
+    }
+    reader_task.abort();
+}
+
+/// Route an unsolicited frame into the universal state as a native push event.
+fn route_event(backend: &Arc<dyn RadioBackend>, state: &StateHandle, frame: &[u8]) {
+    if let Some(mutation) = backend.parse_event(frame) {
+        state.record(mutation.into_change(), RadioEventSource::NativePush);
+    }
+}
+
+// --- Operation scheduler -------------------------------------------------------------
+
+/// The kind of backend operation a face requests.
+pub(crate) enum OpKind {
+    /// Run one baseline poll cycle.
+    Poll,
+    /// Apply a modeled mutation.
+    Apply(StateMutation),
+    /// Forward a raw native command (passthrough), returning the raw reply.
+    Passthrough(Vec<u8>),
+}
+
+struct Operation {
+    face: u64,
+    priority: Priority,
+    kind: OpKind,
+    reply: oneshot::Sender<Result<Vec<u8>, BackendError>>,
+}
+
+/// A clonable handle faces and the poller use to submit operations.
+#[derive(Clone)]
+pub(crate) struct RadioHandle {
+    tx: mpsc::Sender<Operation>,
+}
+
+impl RadioHandle {
+    /// Submit an operation tagged with the calling face's id and priority.
+    pub(crate) async fn submit(
+        &self,
+        face: u64,
+        priority: Priority,
+        kind: OpKind,
+    ) -> Result<Vec<u8>, BackendError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .send(Operation {
+                face,
+                priority,
+                kind,
+                reply,
+            })
+            .await
+            .map_err(|_| BackendError::Transport("scheduler gone".into()))?;
+        rx.await
+            .map_err(|_| BackendError::Transport("scheduler dropped reply".into()))?
+    }
+}
+
+/// Spawn the per-face priority scheduler. Returns a clonable [`RadioHandle`].
+pub(crate) fn spawn_scheduler(
+    backend: Arc<dyn RadioBackend>,
+    link: RadioLink,
+    state: StateHandle,
+) -> RadioHandle {
+    let (tx, mut rx) = mpsc::channel::<Operation>(128);
+    tokio::spawn(async move {
+        let mut queues: Vec<(u64, VecDeque<Operation>)> = Vec::new();
+        loop {
+            if queues.iter().all(|(_, q)| q.is_empty()) {
+                match rx.recv().await {
+                    Some(op) => enqueue(&mut queues, op),
+                    None => break,
+                }
+            }
+            while let Ok(op) = rx.try_recv() {
+                enqueue(&mut queues, op);
+            }
+            let Some(op) = select_next(&mut queues) else {
+                continue;
+            };
+            let result = execute(&backend, &link, &state, &op.kind).await;
+            let _ = op.reply.send(result);
+        }
+    });
+    RadioHandle { tx }
+}
+
+fn enqueue(queues: &mut Vec<(u64, VecDeque<Operation>)>, op: Operation) {
+    if let Some((_, q)) = queues.iter_mut().find(|(id, _)| *id == op.face) {
+        q.push_back(op);
+    } else {
+        let mut q = VecDeque::new();
+        let face = op.face;
+        q.push_back(op);
+        queues.push((face, q));
+    }
+}
+
+/// Pick the highest-priority ready head across all per-face queues (FIFO within a face).
+fn select_next(queues: &mut [(u64, VecDeque<Operation>)]) -> Option<Operation> {
+    let mut best: Option<usize> = None;
+    let mut best_priority = Priority::Poll;
+    for (idx, (_, q)) in queues.iter().enumerate() {
+        if let Some(head) = q.front() {
+            if best.is_none() || head.priority < best_priority {
+                best = Some(idx);
+                best_priority = head.priority;
+            }
+        }
+    }
+    best.and_then(|idx| queues.get_mut(idx).and_then(|(_, q)| q.pop_front()))
+}
+
+async fn execute(
+    backend: &Arc<dyn RadioBackend>,
+    link: &RadioLink,
+    state: &StateHandle,
+    kind: &OpKind,
+) -> Result<Vec<u8>, BackendError> {
+    match kind {
+        OpKind::Poll => backend.poll(link, state).await.map(|()| Vec::new()),
+        OpKind::Apply(m) => backend.apply(*m, link, state).await.map(|()| Vec::new()),
+        OpKind::Passthrough(bytes) => backend.passthrough(bytes, link).await,
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::similar_names
+)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn framer_splits_on_semicolons() {
+        let mut framer = Framer::new(Framing::SemicolonTerminated);
+        let frames = framer.push(b"FA00007030000;MD3;");
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0], b"FA00007030000;");
+        assert_eq!(frames[1], b"MD3;");
+    }
+
+    #[test]
+    fn framer_holds_partial_frames() {
+        let mut framer = Framer::new(Framing::SemicolonTerminated);
+        assert!(framer.push(b"FA0000703").is_empty());
+        let frames = framer.push(b"0000;");
+        assert_eq!(frames, vec![b"FA00007030000;".to_vec()]);
+    }
+
+    #[test]
+    fn verb_matching_uses_prefix() {
+        assert!(frame_matches(b"FA00007030000;", &[b"FA".to_vec()]));
+        assert!(!frame_matches(b"MD3;", &[b"FA".to_vec()]));
+    }
+
+    #[test]
+    fn priority_orders_ptt_first() {
+        assert!(Priority::Ptt < Priority::Write);
+        assert!(Priority::Write < Priority::Read);
+        assert!(Priority::Read < Priority::Poll);
+    }
+}
