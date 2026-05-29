@@ -21,12 +21,16 @@
 
 .EXAMPLE
     .\launcher.ps1 -- --help
+
+.EXAMPLE
+    .\launcher.ps1 -WithCatHub
 #>
 
 [CmdletBinding()]
 param(
     [switch]$Dev,
     [switch]$Rebuild,
+    [switch]$WithCatHub,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Forward
 )
@@ -36,6 +40,20 @@ $ErrorActionPreference = 'Stop'
 $rustRoot = Join-Path $PSScriptRoot 'src\rust'
 if (-not (Test-Path -LiteralPath $rustRoot)) {
     throw "Rust workspace not found at $rustRoot"
+}
+
+# Bring up the CAT hub daemon first so it owns the radio and the engines/UIs can connect to
+# its rigctld-compatible face. It runs in its own console window and reads the unified config.
+if ($WithCatHub) {
+    $startCatHub = Join-Path $PSScriptRoot 'scripts\Start-CatHub.ps1'
+    if (-not (Test-Path -LiteralPath $startCatHub)) {
+        throw "Start-CatHub.ps1 not found at $startCatHub"
+    }
+    $catHubArgs = @('-NoLogo', '-NoExit', '-File', $startCatHub)
+    if ($Dev) { $catHubArgs += '-Debug' }
+    Write-Host "Starting CAT hub daemon in a new window..." -ForegroundColor Cyan
+    Start-Process pwsh -ArgumentList $catHubArgs -WorkingDirectory $PSScriptRoot
+    Start-Sleep -Seconds 2
 }
 
 $profileDir = if ($Dev) { 'debug' } else { 'release' }

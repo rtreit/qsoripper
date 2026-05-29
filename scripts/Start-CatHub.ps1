@@ -11,7 +11,9 @@
     old chain at the same time: only one process may own the radio's COM port.
 
 .PARAMETER Config
-    Path to the cathub TOML config. Defaults to config\cathub.toml in the repo.
+    Path to the cathub TOML config. When omitted, the unified per-user config.toml is used if
+    it contains a [cat_hub] section (the same config the engine and launcher share); otherwise
+    the standalone config\cathub.toml sample in the repo is used.
 
 .PARAMETER DryRun
     Validate and print the config, then exit without opening any ports.
@@ -36,8 +38,36 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $manifest = Join-Path $repoRoot 'src\rust\Cargo.toml'
 
+function Get-UnifiedConfigPath {
+    if ($env:QSORIPPER_CONFIG_PATH) {
+        return $env:QSORIPPER_CONFIG_PATH
+    }
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+        if ($env:APPDATA) {
+            return (Join-Path $env:APPDATA 'qsoripper\config.toml')
+        }
+        return $null
+    }
+    if ($env:XDG_CONFIG_HOME) {
+        return (Join-Path $env:XDG_CONFIG_HOME 'qsoripper/config.toml')
+    }
+    if ($env:HOME) {
+        return (Join-Path $env:HOME '.config/qsoripper/config.toml')
+    }
+    return $null
+}
+
 if (-not $Config) {
-    $Config = Join-Path $repoRoot 'config\cathub.toml'
+    # Prefer the unified config.toml when it carries a [cat_hub] section, so cathub, the
+    # engine, and the launcher all read one file. Fall back to the repo sample otherwise.
+    $unified = Get-UnifiedConfigPath
+    if ($unified -and (Test-Path $unified) -and
+        (Select-String -Path $unified -Pattern '^\s*\[\[?cat_hub' -Quiet)) {
+        $Config = $unified
+    }
+    else {
+        $Config = Join-Path $repoRoot 'config\cathub.toml'
+    }
 }
 if (-not (Test-Path $Config)) {
     throw "Config not found: $Config"
@@ -45,14 +75,26 @@ if (-not (Test-Path $Config)) {
 
 $logDir = $env:USERPROFILE
 
-$cargoArgs = @('run')
-if (-not $Debug) { $cargoArgs += '--release' }
-$cargoArgs += @('-p', 'qsoripper-cathub', '--manifest-path', $manifest, '--')
-$cargoArgs += @('--config', $Config)
-if ($DryRun) { $cargoArgs += '--dry-run' }
+# Prefer the published binary for instant startup; fall back to 'cargo run' when it is missing.
+$configuration = if ($Debug) { 'Debug' } else { 'Release' }
+$binaryName = if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'qsoripper-cathub.exe' } else { 'qsoripper-cathub' }
+$publishedBinary = Join-Path $repoRoot "artifacts\publish\qsoripper-cathub\$configuration\$binaryName"
 
 Write-Host "Starting cathub with config: $Config" -ForegroundColor Cyan
 Write-Host "Rolling log: $logDir\qsoripper-cathub.log.*" -ForegroundColor DarkGray
-Write-Host "cargo $($cargoArgs -join ' ')" -ForegroundColor DarkGray
 
-& cargo @cargoArgs
+if (Test-Path $publishedBinary) {
+    $runArgs = @('--config', $Config)
+    if ($DryRun) { $runArgs += '--dry-run' }
+    Write-Host "$publishedBinary $($runArgs -join ' ')" -ForegroundColor DarkGray
+    & $publishedBinary @runArgs
+}
+else {
+    $cargoArgs = @('run')
+    if (-not $Debug) { $cargoArgs += '--release' }
+    $cargoArgs += @('-p', 'qsoripper-cathub', '--manifest-path', $manifest, '--')
+    $cargoArgs += @('--config', $Config)
+    if ($DryRun) { $cargoArgs += '--dry-run' }
+    Write-Host "cargo $($cargoArgs -join ' ')" -ForegroundColor DarkGray
+    & cargo @cargoArgs
+}

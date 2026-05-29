@@ -161,6 +161,7 @@ $Win32ResourcesDir = Join-Path $Win32SourceDir 'resources'
 $Win32ResourceScript = Join-Path $Win32ResourcesDir 'app.rc'
 $Win32PublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-win32' | Join-Path -ChildPath $Configuration
 $ServerPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-server' | Join-Path -ChildPath $Configuration
+$CatHubPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-cathub' | Join-Path -ChildPath $Configuration
 $DotnetEnginePublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-engine-dotnet' | Join-Path -ChildPath $Configuration
 $DotnetDebugHostPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-debughost' | Join-Path -ChildPath $Configuration
 $CwScopeGuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'cw-decoder-gui' | Join-Path -ChildPath $Configuration
@@ -168,6 +169,7 @@ $DotnetEngineProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.Engine.
 $DotnetDebugHostProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.DebugHost' 'QsoRipper.DebugHost.csproj'
 $CwScopeGuiProject = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'gui' 'CwDecoderGui.csproj'
 $ServerBinary = if ($IsWindows) { 'qsoripper-server.exe' } else { 'qsoripper-server' }
+$CatHubBinary = if ($IsWindows) { 'qsoripper-cathub.exe' } else { 'qsoripper-cathub' }
 $CwDecoderRustManifest = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'Cargo.toml'
 $CwDecoderRustTargetDir = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'target' | Join-Path -ChildPath $RustTargetProfile
 $CwDecoderRustBinary = if ($IsWindows) { 'cw-decoder.exe' } else { 'cw-decoder' }
@@ -203,6 +205,14 @@ function Build-Rust {
         $null = New-Item -ItemType Directory -Force -Path $ServerPublishDir
         Copy-Item -Path $serverSrc -Destination $ServerPublishDir -Force
         Write-Host "  -> $ServerPublishDir"
+    }
+
+    $catHubSrc = Join-Path $PSScriptRoot 'src' 'rust' 'target' $RustTargetProfile $CatHubBinary
+    if (Test-Path $catHubSrc) {
+        Write-Step "Publishing qsoripper-cathub ($Configuration)"
+        $null = New-Item -ItemType Directory -Force -Path $CatHubPublishDir
+        Copy-Item -Path $catHubSrc -Destination $CatHubPublishDir -Force
+        Write-Host "  -> $CatHubPublishDir"
     }
 
     # Publish qsoripper-ffi DLL and import library (Windows only)
