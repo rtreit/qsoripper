@@ -323,4 +323,38 @@ mod tests {
         };
         assert!(run(cli).await.is_err());
     }
+
+    #[tokio::test]
+    async fn open_transport_rejects_unknown_transport() {
+        let mut cfg = Config::parse(
+            "[radio]\nbackend = \"ts590\"\ntransport = \"serial\"\nport = \"COM3\"\n\
+             [[face]]\nname=\"f\"\ntransport=\"COM5\"\ndialect=\"ts590\"\n",
+        )
+        .expect("parse");
+        // open_transport defends against a transport string that bypassed validation.
+        cfg.radio.transport = "usb".to_string();
+        assert!(open_transport(&cfg.radio).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn run_wires_loopback_then_fails_opening_a_bogus_face_port() {
+        // Exercises the full bring-up: backend, state, PTT, scheduler, native-push probe,
+        // and poller, failing only when it tries to open a face's (nonexistent) serial port.
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("cathub-run-{}.toml", std::process::id()));
+        std::fs::write(
+            &path,
+            "[radio]\nbackend = \"loopback\"\n\
+             [[face]]\nname = \"bogus\"\ntransport = \"COM_DOES_NOT_EXIST\"\ndialect = \"ts590\"\n",
+        )
+        .expect("write");
+        let cli = Cli {
+            config: Some(path.clone()),
+            log: None,
+            dry_run: false,
+        };
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), run(cli)).await;
+        let _ = std::fs::remove_file(&path);
+        assert!(matches!(result, Ok(Err(_))), "expected a face open error");
+    }
 }
