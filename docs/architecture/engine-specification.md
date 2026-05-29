@@ -500,6 +500,21 @@ endpoint is the cathub daemon or a bare `rigctld`.
 - Operator setup: `docs/integrations/cathub-setup.md`.
 - Implementation: the `qsoripper-cathub` crate under `src/rust/`.
 
+##### Unified configuration
+
+The CAT hub daemon, the engine, and the launcher share one per-user `config.toml`
+(`%APPDATA%\qsoripper\config.toml` on Windows, `$XDG_CONFIG_HOME`/`$HOME/.config` on Unix,
+overridable with `QSORIPPER_CONFIG_PATH`). The daemon reads its settings from a `[cat_hub]`
+table in that file (radio/poll/ptt/events plus `[[cat_hub.face]]` and `[[cat_hub.hamlib_net]]`
+arrays); a standalone file with top-level `[radio]` … tables is still accepted via `--config`.
+
+Because multiple components write the same file, every engine setup save is **merge-preserving**:
+the engine replaces only its own top-level tables (`logbook`, `storage`, `station_profile`,
+`station_profiles`, `qrz_xml`, `qrz_logbook`, `sync`, `rig_control`) and preserves all other
+tables (`[cat_hub]`, `[launcher]`, and any future component sections). A conformant engine in
+any language must implement this merge-preserving behavior rather than rewriting the whole
+file, so it never clobbers another component's configuration.
+
 
 
 **Proto file:** `proto/services/space_weather_service.proto`

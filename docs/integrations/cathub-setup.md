@@ -39,13 +39,30 @@ no serial pair.
 
 ## 3. Configure the daemon
 
-The station config is `config\cathub.toml`. Validate it without touching hardware:
+The daemon settings live in the unified per-user `config.toml` shared with the engine and the
+launcher, under a `[cat_hub]` table:
+
+- Windows: `%APPDATA%\qsoripper\config.toml`
+- Linux/macOS: `$XDG_CONFIG_HOME/qsoripper/config.toml` (or `~/.config/qsoripper/config.toml`)
+- Override the location for every component with the `QSORIPPER_CONFIG_PATH` environment variable.
+
+Settings nest under `[cat_hub]`, for example `[cat_hub.radio]`, `[cat_hub.poll]`,
+`[cat_hub.ptt]`, `[cat_hub.events]`, `[[cat_hub.face]]`, and `[[cat_hub.hamlib_net]]`. The
+engine and launcher own other top-level tables in the same file (`[station_profile]`,
+`[launcher]`, `[rig_control]`, …); each component preserves the others' tables when it saves,
+so the file is safe to share.
+
+For a standalone setup you can still keep a separate file (the repo ships
+`config\cathub.toml` with top-level `[radio]` … tables) and point the daemon at it with
+`-Config`. Validate either layout without touching hardware:
 
     .\scripts\Start-CatHub.ps1 -DryRun
 
-This prints the resolved radio, poll, PTT, events, faces, and Hamlib NET endpoints. Adjust
-COM port numbers and baud to match your com0com pairs and the TS-590's CAT baud, then re-run
-the dry run until it is clean.
+When `-Config` is omitted the script uses the unified `config.toml` if it contains a
+`[cat_hub]` section, otherwise it falls back to the `config\cathub.toml` sample. The dry run
+prints the resolved radio, poll, PTT, events, faces, and Hamlib NET endpoints. Adjust COM port
+numbers and baud to match your com0com pairs and the TS-590's CAT baud, then re-run the dry run
+until it is clean.
 
 ## 4. Start the hub
 
@@ -60,6 +77,17 @@ face, and binds each Hamlib NET endpoint. Watch the log in another terminal:
 Stop the hub with Ctrl+C in its window, or:
 
     .\scripts\Stop-CatHub.ps1
+
+### Cold-start workflow (build + launch everything)
+
+For a clean start after logon, build all artifacts and then launch the hub together with the
+engines and UIs from one command:
+
+    .\build.ps1                  # publishes qsoripper-cathub alongside the engines/UIs
+    .\launcher.ps1 -WithCatHub   # starts the CAT hub first, then the launcher TUI
+
+`-WithCatHub` brings the radio daemon up in its own window (reading the unified `config.toml`)
+before the launcher starts engines and UIs, so everything connects to the hub's rigctld face.
 
 ## 5. Point each application at the hub
 
