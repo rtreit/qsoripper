@@ -130,6 +130,11 @@ before the launcher starts engines and UIs, so everything connects to the hub's 
   *Mode = USB* also round-trips cleanly if you prefer WSJT-X to own the SSB mode.
 - **Split Operation:** `Rig` or `Fake It` both work; the hub tracks split and TX-VFO
   state and never retargets VFO A/B on a poll.
+- **PTT / Tune (no beep):** WSJT-X keys with Hamlib `RIG_PTT_ON_DATA` (`T 3`). The hub maps
+  the Hamlib PTT family faithfully to the TS-590 — `T 1` -> `TX;`, `T 2` (mic) -> `TX0;`,
+  `T 3` (data) -> `TX1;`, `T 0` -> `RX;`. Using `TX1;` for digital PTT modulates from the
+  DATA/USB audio path and avoids the TS-590 data-confirmation beep (a Morse "U") that a bare
+  `TX;` triggers on every key/unkey.
 - Frequencies are sent by Hamlib as a `%f` value (e.g. `14074000.000000`); the hub
   accepts both that decimal form and a plain integer, so `Test CAT` and band changes
   set the dial correctly.

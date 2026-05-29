@@ -94,7 +94,7 @@ impl FaceContext {
             return ApplyOutcome::Denied;
         }
         match (class, mutation) {
-            (CommandClass::PttWrite, StateMutation::SetPtt { keyed: true }) => {
+            (CommandClass::PttWrite, StateMutation::SetPtt { keyed: true, .. }) => {
                 match self.ptt.try_key(self.face_id, self.perms.ptt) {
                     Err(PttDenied::Busy) => return ApplyOutcome::Busy,
                     Err(PttDenied::NotPermitted) => return ApplyOutcome::Denied,
@@ -113,7 +113,7 @@ impl FaceContext {
                     ApplyOutcome::Error
                 }
             }
-            (CommandClass::PttWrite, StateMutation::SetPtt { keyed: false }) => {
+            (CommandClass::PttWrite, StateMutation::SetPtt { keyed: false, .. }) => {
                 let result = self
                     .radio
                     .submit(self.face_id, Priority::Ptt, OpKind::Apply(mutation))
@@ -213,7 +213,7 @@ mod tests {
     use super::*;
     use crate::backend::loopback::LoopbackBackend;
     use crate::backend::RadioBackend;
-    use crate::model::Vfo;
+    use crate::model::{PttSource, Vfo};
     use crate::radio::{detached_link, spawn_scheduler};
     use std::time::Duration;
 
@@ -269,7 +269,10 @@ mod tests {
         let ctx2 = ctx1.clone_with_face(2);
         assert_eq!(
             ctx1.apply_modeled(
-                StateMutation::SetPtt { keyed: true },
+                StateMutation::SetPtt {
+                    keyed: true,
+                    source: PttSource::Generic
+                },
                 CommandClass::PttWrite
             )
             .await,
@@ -277,7 +280,10 @@ mod tests {
         );
         assert_eq!(
             ctx2.apply_modeled(
-                StateMutation::SetPtt { keyed: true },
+                StateMutation::SetPtt {
+                    keyed: true,
+                    source: PttSource::Generic
+                },
                 CommandClass::PttWrite
             )
             .await,

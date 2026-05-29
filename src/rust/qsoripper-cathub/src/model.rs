@@ -111,6 +111,24 @@ impl Mode {
     }
 }
 
+/// Which transmit audio path a PTT key request selects.
+///
+/// This mirrors Hamlib's `RIG_PTT_ON*` family and the Kenwood `TX`/`TX0`/`TX1`
+/// commands. Digital-mode clients such as WSJT-X request [`PttSource::Data`]
+/// (`T 3` / `RIG_PTT_ON_DATA`) so the radio modulates from the DATA/USB audio
+/// input rather than the microphone, and so the TS-590 does not emit the
+/// data-confirmation beep produced by a bare `TX;`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum PttSource {
+    /// Generic PTT (Hamlib `RIG_PTT_ON`, Kenwood `TX;`).
+    #[default]
+    Generic,
+    /// Microphone audio path (Hamlib `RIG_PTT_ON_MIC`, Kenwood `TX0;`).
+    Mic,
+    /// Data/USB audio path (Hamlib `RIG_PTT_ON_DATA`, Kenwood `TX1;`).
+    Data,
+}
+
 /// A single normalized change to apply to the radio (a write intent).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)] // The `Set` prefix names the write intent uniformly.
@@ -140,6 +158,8 @@ pub(crate) enum StateMutation {
     SetPtt {
         /// Whether the transmitter should be keyed.
         keyed: bool,
+        /// The transmit audio path to select when keying (ignored when unkeying).
+        source: PttSource,
     },
     /// Set the RIT offset in Hz (a zero offset disables RIT).
     SetRit {
@@ -164,7 +184,7 @@ impl StateMutation {
             StateMutation::SetVfoFreq { vfo, hz } => StateChange::Freq { vfo, hz },
             StateMutation::SetMode { vfo, mode } => StateChange::Mode { vfo, mode },
             StateMutation::SetSplit { enabled, tx_vfo } => StateChange::Split { enabled, tx_vfo },
-            StateMutation::SetPtt { keyed } => StateChange::Ptt { keyed },
+            StateMutation::SetPtt { keyed, .. } => StateChange::Ptt { keyed },
             StateMutation::SetRit { offset_hz, enabled } => StateChange::Rit { enabled, offset_hz },
             StateMutation::SetXit { offset_hz, enabled } => StateChange::Xit { enabled, offset_hz },
         }
@@ -334,7 +354,11 @@ mod tests {
             }
         );
         assert_eq!(
-            StateMutation::SetPtt { keyed: true }.into_change(),
+            StateMutation::SetPtt {
+                keyed: true,
+                source: PttSource::Generic,
+            }
+            .into_change(),
             StateChange::Ptt { keyed: true }
         );
         assert_eq!(

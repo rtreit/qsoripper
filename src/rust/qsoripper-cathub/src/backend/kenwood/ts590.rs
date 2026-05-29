@@ -13,7 +13,7 @@ use crate::backend::{
     BackendCapabilities, BackendError, Framing, NativeCommandFamily, RadioBackend, SplitStyle,
     TrustTier,
 };
-use crate::model::{Mode, RadioEventSource, StateMutation, Vfo};
+use crate::model::{Mode, PttSource, RadioEventSource, StateMutation, Vfo};
 use crate::radio::{Expect, RadioLink};
 use crate::state::StateHandle;
 
@@ -91,9 +91,16 @@ impl RadioBackend for Ts590Backend {
             StateMutation::SetMode { mode, .. } => {
                 vec![b'M', b'D', mode.to_kenwood_digit(), b';']
             }
-            StateMutation::SetPtt { keyed } => {
+            StateMutation::SetPtt { keyed, source } => {
                 if keyed {
-                    b"TX;".to_vec()
+                    // Mirror Hamlib's TS-590 mapping so digital clients modulate from the
+                    // DATA/USB path (`TX1;`) and the radio does not emit the data beep that
+                    // a bare `TX;` triggers on the TS-590.
+                    match source {
+                        PttSource::Generic => b"TX;".to_vec(),
+                        PttSource::Mic => b"TX0;".to_vec(),
+                        PttSource::Data => b"TX1;".to_vec(),
+                    }
                 } else {
                     b"RX;".to_vec()
                 }
@@ -279,12 +286,45 @@ mod tests {
         tokio::spawn(run_transport(server, arc, state.clone(), raw_rx));
 
         backend
-            .apply(StateMutation::SetPtt { keyed: true }, &link, &state)
+            .apply(
+                StateMutation::SetPtt {
+                    keyed: true,
+                    source: PttSource::Generic,
+                },
+                &link,
+                &state,
+            )
             .await
             .expect("key");
         let mut buf = vec![0u8; 3];
         radio_side.read_exact(&mut buf).await.expect("read tx");
         assert_eq!(&buf, b"TX;");
+        assert!(state.snapshot().ptt);
+    }
+
+    #[tokio::test]
+    async fn ptt_data_source_keys_with_tx1() {
+        let (link, raw_rx) = link_channel();
+        let backend = Arc::new(Ts590Backend::new());
+        let arc: Arc<dyn RadioBackend> = backend.clone();
+        let state = StateHandle::new();
+        let (mut radio_side, server) = tokio::io::duplex(1024);
+        tokio::spawn(run_transport(server, arc, state.clone(), raw_rx));
+
+        backend
+            .apply(
+                StateMutation::SetPtt {
+                    keyed: true,
+                    source: PttSource::Data,
+                },
+                &link,
+                &state,
+            )
+            .await
+            .expect("key");
+        let mut buf = vec![0u8; 4];
+        radio_side.read_exact(&mut buf).await.expect("read tx");
+        assert_eq!(&buf, b"TX1;");
         assert!(state.snapshot().ptt);
     }
 

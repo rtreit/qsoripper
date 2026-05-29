@@ -277,7 +277,10 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
                         .submit(
                             face,
                             Priority::Ptt,
-                            OpKind::Apply(StateMutation::SetPtt { keyed: false }),
+                            OpKind::Apply(StateMutation::SetPtt {
+                                keyed: false,
+                                source: crate::model::PttSource::Generic,
+                            }),
                         )
                         .await;
                     ptt.unkey(face);
@@ -300,7 +303,10 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
             radio.submit(
                 owner,
                 Priority::Ptt,
-                OpKind::Apply(StateMutation::SetPtt { keyed: false }),
+                OpKind::Apply(StateMutation::SetPtt {
+                    keyed: false,
+                    source: crate::model::PttSource::Generic,
+                }),
             ),
         )
         .await;

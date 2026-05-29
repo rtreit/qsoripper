@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use crate::backend::{
     BackendCapabilities, BackendError, Framing, RadioBackend, SplitStyle, TrustTier,
 };
-use crate::model::{Mode, RadioEventSource, StateChange, StateMutation, Vfo};
+use crate::model::{Mode, PttSource, RadioEventSource, StateChange, StateMutation, Vfo};
 use crate::radio::{Expect, RadioLink};
 use crate::state::StateHandle;
 
@@ -148,8 +148,16 @@ impl RadioBackend for RigctldBackend {
                     .await?;
                 check_rprt(&reply)?;
             }
-            StateMutation::SetPtt { keyed } => {
-                let on = u8::from(keyed);
+            StateMutation::SetPtt { keyed, source } => {
+                let on = if keyed {
+                    match source {
+                        PttSource::Generic => 1,
+                        PttSource::Mic => 2,
+                        PttSource::Data => 3,
+                    }
+                } else {
+                    0
+                };
                 let reply = link
                     .submit(format!("T {on}\n").into_bytes(), Expect::Lines(1))
                     .await?;

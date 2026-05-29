@@ -14,7 +14,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
 use crate::dialect::{ApplyOutcome, FaceContext};
-use crate::model::{Mode, StateMutation, Vfo};
+use crate::model::{Mode, PttSource, StateMutation, Vfo};
 use crate::permissions::CommandClass;
 
 /// The capability dump served for `\dump_state`. Captured verbatim from Hamlib 4.7.0
@@ -152,13 +152,23 @@ async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
             )
         }
         "T" | "\\set_ptt" => {
-            // Hamlib PTT values: 0 = RX, 1 = TX, 2 = TX on mic, 3 = TX on data.
-            // WSJT-X sends `T 3` (RIG_PTT_ON_DATA) to transmit in Data/Pkt mode, so any
-            // non-zero value must key the radio; only 0 (or a missing arg) means unkey.
-            let keyed = matches!(parts.next().map(str::trim), Some("1" | "2" | "3"));
+            // Hamlib PTT values: 0 = RX, 1 = TX (generic), 2 = TX on mic, 3 = TX on data.
+            // WSJT-X sends `T 3` (RIG_PTT_ON_DATA) to transmit in Data/Pkt mode, so the
+            // source is honored on the wire (TS-590 `TX1;`) to route the DATA/USB audio
+            // and avoid the data beep a bare `TX;` produces. Only 0 (or a missing arg)
+            // means unkey.
+            let (keyed, source) = match parts.next().map(str::trim) {
+                Some("1") => (true, PttSource::Generic),
+                Some("2") => (true, PttSource::Mic),
+                Some("3") => (true, PttSource::Data),
+                _ => (false, PttSource::Generic),
+            };
             outcome_rprt(
-                ctx.apply_modeled(StateMutation::SetPtt { keyed }, CommandClass::PttWrite)
-                    .await,
+                ctx.apply_modeled(
+                    StateMutation::SetPtt { keyed, source },
+                    CommandClass::PttWrite,
+                )
+                .await,
             )
         }
         // Accepted but unmodeled: selecting the active VFO never retargets on the wire.
@@ -428,7 +438,13 @@ mod tests {
     async fn set_ptt_keys_on_any_nonzero_value() {
         // WSJT-X in Data/Pkt mode sends `T 3` (RIG_PTT_ON_DATA), N1MM/others may send
         // `T 2` (on mic) or `T 1`; all must key. Only `T 0` unkeys.
-        for arg in ["1", "2", "3"] {
+        // `T 1` (generic), `T 2` (on mic), and `T 3` (on data) all key, but each selects
+        // the matching transmit audio path on the wire. Only `T 0` unkeys.
+        for (arg, source) in [
+            ("1", PttSource::Generic),
+            ("2", PttSource::Mic),
+            ("3", PttSource::Data),
+        ] {
             let (ctx, backend, _s) =
                 ctx_with(FacePermissions::from_tokens(&["read", "write", "ptt"]));
             assert_eq!(
@@ -439,8 +455,11 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
             assert_eq!(
                 backend.mutations(),
-                vec![StateMutation::SetPtt { keyed: true }],
-                "T {arg} should key the radio"
+                vec![StateMutation::SetPtt {
+                    keyed: true,
+                    source
+                }],
+                "T {arg} should key the radio with the matching source"
             );
         }
 
@@ -449,7 +468,10 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(
             backend.mutations(),
-            vec![StateMutation::SetPtt { keyed: false }]
+            vec![StateMutation::SetPtt {
+                keyed: false,
+                source: PttSource::Generic
+            }]
         );
     }
 

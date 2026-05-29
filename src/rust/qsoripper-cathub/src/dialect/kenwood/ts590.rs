@@ -10,7 +10,7 @@ use async_trait::async_trait;
 
 use super::{ai_frame, freq_frame, mode_from_digit, mode_to_digit, parse_command, ERR};
 use crate::dialect::{ApplyOutcome, ClientDialect, FaceContext};
-use crate::model::{StateChange, StateMutation, Vfo};
+use crate::model::{PttSource, StateChange, StateMutation, Vfo};
 use crate::permissions::CommandClass;
 use crate::state::Snapshot;
 
@@ -82,14 +82,20 @@ impl ClientDialect for Ts590Dialect {
             }
             b"TX" => reply(
                 ctx.apply_modeled(
-                    StateMutation::SetPtt { keyed: true },
+                    StateMutation::SetPtt {
+                        keyed: true,
+                        source: PttSource::Generic,
+                    },
                     CommandClass::PttWrite,
                 )
                 .await,
             ),
             b"RX" => reply(
                 ctx.apply_modeled(
-                    StateMutation::SetPtt { keyed: false },
+                    StateMutation::SetPtt {
+                        keyed: false,
+                        source: PttSource::Generic,
+                    },
                     CommandClass::PttWrite,
                 )
                 .await,
