@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use tokio::sync::broadcast;
 
-use crate::model::{Field, Mode, RadioEventSource, StateChange, Vfo};
+use crate::model::{Field, Mode, RadioEventSource, StateChange, StateMutation, Vfo};
 
 /// Default IF passband reported for a VFO (Hz). Real backends may refine this; the default
 /// matches the canonical Hamlib `get_mode` second line.
@@ -90,6 +90,34 @@ impl Snapshot {
         match vfo {
             Vfo::A => self.a,
             Vfo::B => self.b,
+        }
+    }
+
+    /// Whether applying `mutation` would leave the radio unchanged from this snapshot.
+    ///
+    /// The hub forwards a modeled write to the wire only when it would actually change the
+    /// radio. Re-sending a value the radio already holds is not just wasted I/O: on the
+    /// TS-590 every redundant `MD`/`FA` set makes the radio emit its PC-control beep (a
+    /// Morse "U"), which is why clients like WSJT-X — that re-assert mode/frequency on every
+    /// poll — chirp the radio through the hub but not through a native Hamlib driver, which
+    /// caches state and never re-sends an unchanged value. Suppressing the no-op keeps the
+    /// hub as quiet on the wire as the native driver. PTT is never redundant: keying and
+    /// unkeying must always reach the radio and participate in the single-owner lease.
+    pub(crate) fn is_redundant(&self, mutation: &StateMutation) -> bool {
+        match *mutation {
+            StateMutation::SetVfoFreq { vfo, hz } => self.vfo(vfo).freq_hz == hz,
+            // Mode is a single radio-wide value tracked against the receive VFO.
+            StateMutation::SetMode { mode, .. } => self.vfo(self.rx_vfo).mode == mode,
+            StateMutation::SetSplit { enabled, tx_vfo } => {
+                self.split == enabled && self.tx_vfo == tx_vfo.unwrap_or(self.tx_vfo)
+            }
+            StateMutation::SetRit { enabled, offset_hz } => {
+                self.rit_enabled == enabled && self.rit_offset_hz == offset_hz
+            }
+            StateMutation::SetXit { enabled, offset_hz } => {
+                self.xit_enabled == enabled && self.xit_offset_hz == offset_hz
+            }
+            StateMutation::SetPtt { .. } => false,
         }
     }
 }
@@ -261,6 +289,7 @@ fn vfo_mut(snap: &mut Snapshot, vfo: Vfo) -> &mut VfoSnapshot {
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use crate::model::PttSource;
 
     #[test]
     fn defaults_are_sane() {
@@ -283,6 +312,83 @@ mod tests {
             RadioEventSource::PollDiff,
         );
         assert_eq!(state.snapshot().vfo(Vfo::A).freq_hz, 7_030_000);
+    }
+
+    #[test]
+    fn is_redundant_detects_unchanged_values() {
+        let state = StateHandle::new();
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::A,
+                hz: 7_030_000,
+            },
+            RadioEventSource::PollDiff,
+        );
+        let snap = state.snapshot();
+
+        // Re-setting the value the radio already holds is redundant.
+        assert!(snap.is_redundant(&StateMutation::SetVfoFreq {
+            vfo: Vfo::A,
+            hz: 7_030_000,
+        }));
+        assert!(!snap.is_redundant(&StateMutation::SetVfoFreq {
+            vfo: Vfo::A,
+            hz: 7_040_000,
+        }));
+
+        // Mode is tracked against the receive VFO (default A, USB).
+        assert!(snap.is_redundant(&StateMutation::SetMode {
+            vfo: Vfo::A,
+            mode: Mode::Usb,
+        }));
+        assert!(!snap.is_redundant(&StateMutation::SetMode {
+            vfo: Vfo::A,
+            mode: Mode::Cw,
+        }));
+    }
+
+    #[test]
+    fn is_redundant_covers_split_rit_xit() {
+        let snap = StateHandle::new().snapshot();
+        // Defaults: split off, RIT/XIT off at zero offset.
+        assert!(snap.is_redundant(&StateMutation::SetSplit {
+            enabled: false,
+            tx_vfo: None,
+        }));
+        assert!(!snap.is_redundant(&StateMutation::SetSplit {
+            enabled: true,
+            tx_vfo: Some(Vfo::B),
+        }));
+        assert!(snap.is_redundant(&StateMutation::SetRit {
+            enabled: false,
+            offset_hz: 0,
+        }));
+        assert!(!snap.is_redundant(&StateMutation::SetRit {
+            enabled: true,
+            offset_hz: 100,
+        }));
+        assert!(snap.is_redundant(&StateMutation::SetXit {
+            enabled: false,
+            offset_hz: 0,
+        }));
+        assert!(!snap.is_redundant(&StateMutation::SetXit {
+            enabled: true,
+            offset_hz: -50,
+        }));
+    }
+
+    #[test]
+    fn is_redundant_never_suppresses_ptt() {
+        let snap = StateHandle::new().snapshot();
+        // PTT is off by default, but an unkey must still always reach the radio.
+        assert!(!snap.is_redundant(&StateMutation::SetPtt {
+            keyed: false,
+            source: PttSource::Generic,
+        }));
+        assert!(!snap.is_redundant(&StateMutation::SetPtt {
+            keyed: true,
+            source: PttSource::Generic,
+        }));
     }
 
     #[tokio::test]

@@ -93,6 +93,12 @@ impl FaceContext {
         if !self.perms.allows(class) {
             return ApplyOutcome::Denied;
         }
+        // Idempotent suppression: never re-send a value the radio already holds. This keeps
+        // the hub as quiet on the wire as a native Hamlib driver and avoids the TS-590
+        // PC-control beep that fires on every redundant set. PTT is never redundant.
+        if self.state.snapshot().is_redundant(&mutation) {
+            return ApplyOutcome::Ok;
+        }
         match (class, mutation) {
             (CommandClass::PttWrite, StateMutation::SetPtt { keyed: true, .. }) => {
                 match self.ptt.try_key(self.face_id, self.perms.ptt) {
@@ -213,7 +219,7 @@ mod tests {
     use super::*;
     use crate::backend::loopback::LoopbackBackend;
     use crate::backend::RadioBackend;
-    use crate::model::{PttSource, Vfo};
+    use crate::model::{Mode, PttSource, Vfo};
     use crate::radio::{detached_link, spawn_scheduler};
     use std::time::Duration;
 
@@ -244,6 +250,57 @@ mod tests {
             .await;
         assert_eq!(outcome, ApplyOutcome::Denied);
         assert!(backend.mutations().is_empty());
+    }
+
+    #[tokio::test]
+    async fn redundant_modeled_write_is_suppressed() {
+        let (ctx, backend) = ctx_with(FacePermissions::from_tokens(&["read", "write"]), 1);
+        // A fresh snapshot already reports VFO A in USB, so re-setting USB must not reach the
+        // radio: re-sending an unchanged value is exactly what triggers the TS-590 PC-control
+        // beep when a client like WSJT-X re-asserts mode on every poll.
+        let outcome = ctx
+            .apply_modeled(
+                StateMutation::SetMode {
+                    vfo: Vfo::A,
+                    mode: Mode::Usb,
+                },
+                CommandClass::ModeledWrite,
+            )
+            .await;
+        assert_eq!(outcome, ApplyOutcome::Ok);
+        assert!(backend.mutations().is_empty());
+
+        // A genuine change still reaches the radio.
+        let outcome = ctx
+            .apply_modeled(
+                StateMutation::SetMode {
+                    vfo: Vfo::A,
+                    mode: Mode::Cw,
+                },
+                CommandClass::ModeledWrite,
+            )
+            .await;
+        assert_eq!(outcome, ApplyOutcome::Ok);
+        assert_eq!(backend.mutations().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn ptt_write_is_never_suppressed_as_redundant() {
+        // Two unkey requests in a row must both reach the radio; PTT is never deduplicated.
+        let (ctx, backend) = ctx_with(FacePermissions::from_tokens(&["ptt"]), 1);
+        for _ in 0..2 {
+            let outcome = ctx
+                .apply_modeled(
+                    StateMutation::SetPtt {
+                        keyed: false,
+                        source: PttSource::Generic,
+                    },
+                    CommandClass::PttWrite,
+                )
+                .await;
+            assert_eq!(outcome, ApplyOutcome::Ok);
+        }
+        assert_eq!(backend.mutations().len(), 2);
     }
 
     #[tokio::test]

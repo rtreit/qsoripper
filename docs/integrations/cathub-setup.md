@@ -138,19 +138,20 @@ before the launcher starts engines and UIs, so everything connects to the hub's 
   accepts both that decimal form and a plain integer, so `Test CAT` and band changes
   set the dial correctly.
 
-### Required radio setting: silence the TS-590 PC-control beep
+### TS-590 PC-control beep (fixed in the hub)
 
-The TS-590 plays a short Morse **"U"** (di-di-dah) tone every time it receives a CAT/PC-control
-command (mode, frequency or PTT change) when the front-panel "beep output for PC control
-commands" menu is **ON**. This is a radio behavior, not a hub or client bug — it is just more
-noticeable with WSJT-X because WSJT-X re-asserts mode/PTT very frequently. No CAT command form
-(`TX;` vs `TX1;`, `MD2;`, etc.) changes it; the only fix is the radio menu.
+Earlier builds made the TS-590 emit a short Morse **"U"** (di-di-dah) tone during WSJT-X
+operation. The cause was the hub forwarding **redundant** CAT sets: clients such as WSJT-X
+re-assert mode and frequency on every poll, and the TS-590 beeps on each set even when the
+value is unchanged. A native Hamlib driver never beeps because it caches state and only sends
+a value when it actually changes.
 
-To disable it: open the front-panel **MENU**, scroll to the beep configuration group, and find
-the item whose displayed text mentions the **beep for PC / CAT control commands** and set it to
-**OFF**. On the TS-590SG this is in the menu's beep/sidetone section (verify by the on-screen
-label rather than the number, since the number differs between the TS-590S/D and the TS-590SG
-firmware). Once OFF, the radio stays silent while the hub drives it.
+The hub now does the same: a modeled write (frequency, mode, split, RIT/XIT) is sent to the
+radio **only when it would change the radio**, so re-asserted values are suppressed before
+they reach the wire. PTT is never suppressed — keying and unkeying always reach the radio.
+
+No radio-menu change is needed. Leave **Beep Volume** at your normal setting; the radio stays
+silent under CAT control because the hub no longer sends no-op commands.
 
 ### Log4OM
 - CAT interface: Hamlib `NET rigctl`, host **127.0.0.1**, port **4534**.
