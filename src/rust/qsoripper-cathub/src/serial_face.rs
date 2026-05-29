@@ -12,6 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::dialect::{ClientDialect, FaceContext};
+use crate::state::RadioEvent;
 
 /// Serve one client connection until the transport closes.
 ///
@@ -65,8 +66,14 @@ pub(crate) async fn run_face<T>(
             }
             change = notifications.recv() => {
                 match change {
-                    Ok(change) => {
-                        if let Some(bytes) = dialect.format_notification(&change, &ctx) {
+                    Ok(event) => {
+                        let bytes = match &event {
+                            RadioEvent::Change(change) => {
+                                dialect.format_notification(change, &ctx)
+                            }
+                            RadioEvent::Raw(raw) => dialect.format_passthrough(raw, &ctx),
+                        };
+                        if let Some(bytes) = bytes {
                             tracing::trace!(
                                 face = ctx.face_id,
                                 note = %String::from_utf8_lossy(&bytes),
@@ -178,5 +185,18 @@ mod tests {
             RadioEventSource::PollDiff,
         );
         assert_eq!(read_frame(&mut client).await, b"FA00014123000;");
+    }
+
+    #[tokio::test]
+    async fn relays_unmodeled_radio_frame_to_subscribed_face() {
+        let (mut client, state) = spawn_ts590_face(FacePermissions::read_only());
+        // Enable auto-info on the face.
+        client.write_all(b"AI2;").await.expect("write");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        // The radio echoes a noise-blanker change the backend does not model; it must reach
+        // the client verbatim so its NB state machine advances (regression for the ARCP-590
+        // NB cycle that stalled when these echoes were dropped).
+        state.record_raw(b"NB1;");
+        assert_eq!(read_frame(&mut client).await, b"NB1;");
     }
 }

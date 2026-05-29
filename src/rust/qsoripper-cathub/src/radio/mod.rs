@@ -278,14 +278,20 @@ pub(crate) async fn run_transport<T>(
 }
 
 /// Route an unsolicited frame into the universal state as a native push event.
+///
+/// Modeled frames update the snapshot and broadcast a coalesced change. Frames the backend
+/// does not model are relayed verbatim on the same ordered event bus so native pass-through
+/// faces (which consume the CAT stream directly) keep features like the radio's noise
+/// blanker and front-panel changes in sync.
 fn route_event(backend: &Arc<dyn RadioBackend>, state: &StateHandle, frame: &[u8]) {
     if let Some(mutation) = backend.parse_event(frame) {
         state.record(mutation.into_change(), RadioEventSource::NativePush);
     } else {
-        tracing::debug!(
+        tracing::trace!(
             frame = %String::from_utf8_lossy(frame),
-            "unsolicited radio frame not understood by backend.parse_event; dropped"
+            "relaying unmodeled unsolicited radio frame to native pass-through faces"
         );
+        state.record_raw(frame);
     }
 }
 

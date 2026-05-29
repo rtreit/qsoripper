@@ -134,6 +134,18 @@ impl ClientDialect for Ts590Dialect {
             _ => None,
         }
     }
+
+    fn format_passthrough(&self, raw: &[u8], ctx: &FaceContext) -> Option<Vec<u8>> {
+        // A certified-native client that enabled auto-information expects the radio's CAT
+        // stream verbatim. Relaying unmodeled frames (NB/NR/AG/front-panel changes, ...)
+        // keeps its client-side feature state machines in sync; without this, a client like
+        // ARCP-590 never sees the echo of its own NB write and cannot advance the NB cycle.
+        if ctx.ai_on() {
+            Some(raw.to_vec())
+        } else {
+            None
+        }
+    }
 }
 
 async fn set_freq(ctx: &FaceContext, vfo: Vfo, payload: &[u8]) -> Vec<u8> {
@@ -268,6 +280,24 @@ mod tests {
             &ctx,
         );
         assert_eq!(note, Some(b"FA00014074000;".to_vec()));
+    }
+
+    #[tokio::test]
+    async fn passthrough_frame_is_relayed_only_when_auto_info_on() {
+        let (ctx, _b) = ctx_with(FacePermissions::read_only());
+        // Auto-info off: the radio's unmodeled echo is suppressed for this face.
+        assert_eq!(Ts590Dialect::new().format_passthrough(b"NB1;", &ctx), None);
+        // After the client enables auto-info, the echo is relayed verbatim so its NB cycle
+        // (and front-panel changes) stay in sync.
+        ctx.set_ai(true);
+        assert_eq!(
+            Ts590Dialect::new().format_passthrough(b"NB1;", &ctx),
+            Some(b"NB1;".to_vec())
+        );
+        assert_eq!(
+            Ts590Dialect::new().format_passthrough(b"NB0;", &ctx),
+            Some(b"NB0;".to_vec())
+        );
     }
 
     #[tokio::test]

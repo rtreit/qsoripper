@@ -94,10 +94,25 @@ impl Snapshot {
     }
 }
 
+/// An ordered radio-output event delivered to faces for auto-information fan-out.
+///
+/// Both modeled changes and unmodeled native frames travel on the **same** broadcast so
+/// faces observe them in the order the radio produced them — important for native
+/// pass-through clients that consume the CAT stream directly.
+#[derive(Debug, Clone)]
+pub(crate) enum RadioEvent {
+    /// A coalesced modeled state change (poll diff or native push).
+    Change(StateChange),
+    /// An unsolicited native frame the backend does not model, forwarded verbatim to
+    /// native pass-through faces so client-side feature state machines (for example
+    /// ARCP-590's NB on/NB1/NB2/off cycle) and front-panel changes stay in sync.
+    Raw(Arc<[u8]>),
+}
+
 struct Inner {
     snapshot: RwLock<Snapshot>,
     covered: Mutex<HashSet<Field>>,
-    tx: broadcast::Sender<StateChange>,
+    tx: broadcast::Sender<RadioEvent>,
 }
 
 /// A clonable handle to the universal state.
@@ -140,8 +155,15 @@ impl StateHandle {
         };
         if changed {
             // A send error only means there are no subscribers; that is fine.
-            let _ = self.inner.tx.send(change);
+            let _ = self.inner.tx.send(RadioEvent::Change(change));
         }
+    }
+
+    /// Broadcast an unsolicited native frame the backend does not model, so native
+    /// pass-through faces can forward it verbatim. This does not touch the snapshot or the
+    /// native-push coverage set; it is a transparent relay of the radio's CAT stream.
+    pub(crate) fn record_raw(&self, frame: &[u8]) {
+        let _ = self.inner.tx.send(RadioEvent::Raw(Arc::from(frame)));
     }
 
     /// A consistent point-in-time view of the radio.
@@ -153,8 +175,8 @@ impl StateHandle {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Subscribe to the change stream (for a face's auto-info fan-out).
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<StateChange> {
+    /// Subscribe to the radio-output event stream (for a face's auto-info fan-out).
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<RadioEvent> {
         self.inner.tx.subscribe()
     }
 
@@ -284,14 +306,31 @@ mod tests {
             RadioEventSource::PollDiff,
         );
         let got = rx.try_recv().expect("one change");
-        assert_eq!(
-            got,
-            StateChange::Mode {
-                vfo: Vfo::A,
-                mode: Mode::Cw
-            }
+        assert!(
+            matches!(
+                got,
+                RadioEvent::Change(StateChange::Mode {
+                    vfo: Vfo::A,
+                    mode: Mode::Cw
+                })
+            ),
+            "expected a single CW mode change, got {got:?}"
         );
         assert!(rx.try_recv().is_err(), "no second frame for the no-op set");
+    }
+
+    #[tokio::test]
+    async fn record_raw_broadcasts_verbatim_without_touching_snapshot() {
+        let state = StateHandle::new();
+        let mut rx = state.subscribe();
+        state.record_raw(b"NB1;");
+        let evt = rx.try_recv().expect("one raw event");
+        assert!(
+            matches!(&evt, RadioEvent::Raw(bytes) if &**bytes == b"NB1;"),
+            "expected RadioEvent::Raw(NB1;), got {evt:?}"
+        );
+        // A raw relay must not mark native-push coverage.
+        assert!(!state.is_native_push_covered(Field::Freq(Vfo::A)));
     }
 
     #[test]

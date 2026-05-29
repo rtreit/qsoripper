@@ -196,6 +196,15 @@ pub(crate) trait ClientDialect: Send + Sync {
 
     /// Render a state change as an unsolicited notification for this face, if it applies.
     fn format_notification(&self, change: &StateChange, ctx: &FaceContext) -> Option<Vec<u8>>;
+
+    /// Render an unsolicited native frame the backend does not model as a notification for
+    /// this face, if it applies. Returns the bytes to push, or `None` to suppress it.
+    ///
+    /// The default suppresses the frame. A native pass-through dialect overrides this to
+    /// relay the radio's CAT stream verbatim to clients that have enabled auto-information.
+    fn format_passthrough(&self, _raw: &[u8], _ctx: &FaceContext) -> Option<Vec<u8>> {
+        None
+    }
 }
 
 #[cfg(test)]
