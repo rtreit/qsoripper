@@ -130,14 +130,27 @@ before the launcher starts engines and UIs, so everything connects to the hub's 
   *Mode = USB* also round-trips cleanly if you prefer WSJT-X to own the SSB mode.
 - **Split Operation:** `Rig` or `Fake It` both work; the hub tracks split and TX-VFO
   state and never retargets VFO A/B on a poll.
-- **PTT / Tune (no beep):** WSJT-X keys with Hamlib `RIG_PTT_ON_DATA` (`T 3`). The hub maps
-  the Hamlib PTT family faithfully to the TS-590 — `T 1` -> `TX;`, `T 2` (mic) -> `TX0;`,
-  `T 3` (data) -> `TX1;`, `T 0` -> `RX;`. Using `TX1;` for digital PTT modulates from the
-  DATA/USB audio path and avoids the TS-590 data-confirmation beep (a Morse "U") that a bare
-  `TX;` triggers on every key/unkey.
+- **PTT:** WSJT-X keys with Hamlib `RIG_PTT_ON_DATA` (`T 3`). The hub maps the Hamlib PTT
+  family faithfully to the TS-590 — `T 1` -> `TX;`, `T 2` (mic) -> `TX0;`, `T 3` (data) ->
+  `TX1;`, `T 0` -> `RX;`. `TX1;` keys with modulation from the DATA/USB audio path, which is
+  what digital modes want.
 - Frequencies are sent by Hamlib as a `%f` value (e.g. `14074000.000000`); the hub
   accepts both that decimal form and a plain integer, so `Test CAT` and band changes
   set the dial correctly.
+
+### Required radio setting: silence the TS-590 PC-control beep
+
+The TS-590 plays a short Morse **"U"** (di-di-dah) tone every time it receives a CAT/PC-control
+command (mode, frequency or PTT change) when the front-panel "beep output for PC control
+commands" menu is **ON**. This is a radio behavior, not a hub or client bug — it is just more
+noticeable with WSJT-X because WSJT-X re-asserts mode/PTT very frequently. No CAT command form
+(`TX;` vs `TX1;`, `MD2;`, etc.) changes it; the only fix is the radio menu.
+
+To disable it: open the front-panel **MENU**, scroll to the beep configuration group, and find
+the item whose displayed text mentions the **beep for PC / CAT control commands** and set it to
+**OFF**. On the TS-590SG this is in the menu's beep/sidetone section (verify by the on-screen
+label rather than the number, since the number differs between the TS-590S/D and the TS-590SG
+firmware). Once OFF, the radio stays silent while the hub drives it.
 
 ### Log4OM
 - CAT interface: Hamlib `NET rigctl`, host **127.0.0.1**, port **4534**.
