@@ -74,7 +74,6 @@ pub struct Cli {
 
 /// Initialize tracing for the process. The returned guard must be kept alive for the
 /// process lifetime so the non-blocking file writer flushes on shutdown.
-#[must_use]
 pub fn init_logging() -> WorkerGuard {
     logging::init()
 }
@@ -127,6 +126,12 @@ async fn open_transport(radio: &RadioConfig) -> Result<OpenedTransport, CatHubEr
 }
 
 /// Run the daemon to completion (until Ctrl+C).
+///
+/// # Errors
+///
+/// Returns a [`CatHubError`] if the configuration cannot be loaded or validated, the
+/// backend or a dialect cannot be built, the radio transport or a face port cannot be
+/// opened, or the process fails to install its Ctrl+C handler.
 #[allow(clippy::too_many_lines)] // The wiring is one cohesive bring-up sequence.
 pub async fn run(cli: Cli) -> Result<(), CatHubError> {
     let path = cli
@@ -161,7 +166,12 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
                 tokio::spawn(run_transport(port, backend.clone(), state.clone(), raw_rx));
             }
             OpenedTransport::Tcp(stream) => {
-                tokio::spawn(run_transport(stream, backend.clone(), state.clone(), raw_rx));
+                tokio::spawn(run_transport(
+                    stream,
+                    backend.clone(),
+                    state.clone(),
+                    raw_rx,
+                ));
             }
         }
     }
@@ -252,7 +262,10 @@ mod tests {
              [[face]]\nname=\"f\"\ntransport=\"COM5\"\ndialect=\"ts590\"\n",
         )
         .expect("parse");
-        assert_eq!(build_backend(&cfg).expect("ts590").capabilities().model, "TS-590");
+        assert_eq!(
+            build_backend(&cfg).expect("ts590").capabilities().model,
+            "TS-590"
+        );
 
         let cfg = Config::parse(
             "[radio]\nbackend = \"rigctld\"\nmodel=\"TS-590SG\"\ntransport=\"tcp\"\n\
@@ -269,7 +282,10 @@ mod tests {
             "[radio]\nbackend = \"loopback\"\n[[face]]\nname=\"f\"\ntransport=\"COM5\"\ndialect=\"ts590\"\n",
         )
         .expect("parse");
-        assert_eq!(build_backend(&cfg).expect("loopback").capabilities().model, "loopback");
+        assert_eq!(
+            build_backend(&cfg).expect("loopback").capabilities().model,
+            "loopback"
+        );
     }
 
     #[test]

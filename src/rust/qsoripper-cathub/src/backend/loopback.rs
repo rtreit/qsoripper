@@ -144,10 +144,7 @@ mod tests {
         let backend = LoopbackBackend::new();
         let state = StateHandle::new();
         backend.set_truth_freq_a(7_123_000);
-        backend
-            .poll(&detached_link(), &state)
-            .await
-            .expect("poll");
+        backend.poll(&detached_link(), &state).await.expect("poll");
         assert_eq!(backend.poll_count(), 1);
         assert_eq!(state.snapshot().vfo(Vfo::A).freq_hz, 7_123_000);
     }

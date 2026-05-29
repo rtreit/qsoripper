@@ -263,10 +263,12 @@ impl Config {
 
     /// A human-readable multi-line description (used for `--dry-run`).
     pub(crate) fn describe(&self) -> String {
+        use std::fmt::Write as _;
         let mut out = String::new();
-        out.push_str(&format!(
+        let _ = writeln!(
+            out,
             "radio: backend={} model={} transport={} port={} baud={} host={} tcp_port={} \
-             certified={} reply_timeout_ms={}\n",
+             certified={} reply_timeout_ms={}",
             self.radio.backend,
             self.radio.model,
             self.radio.transport,
@@ -276,24 +278,27 @@ impl Config {
             self.radio.tcp_port,
             self.radio.certified,
             self.radio.reply_timeout_ms,
-        ));
-        out.push_str(&format!(
-            "poll: baseline_ms={} heartbeat_ms={}\n",
+        );
+        let _ = writeln!(
+            out,
+            "poll: baseline_ms={} heartbeat_ms={}",
             self.poll.baseline_ms, self.poll.heartbeat_ms
-        ));
-        out.push_str(&format!("ptt: max_tx_ms={}\n", self.ptt.max_tx_ms));
-        out.push_str(&format!("events: native_push={}\n", self.events.native_push));
+        );
+        let _ = writeln!(out, "ptt: max_tx_ms={}", self.ptt.max_tx_ms);
+        let _ = writeln!(out, "events: native_push={}", self.events.native_push);
         for face in &self.face {
-            out.push_str(&format!(
-                "face: name={} transport={} baud={} dialect={} perms={:?}\n",
+            let _ = writeln!(
+                out,
+                "face: name={} transport={} baud={} dialect={} perms={:?}",
                 face.name, face.transport, face.baud, face.dialect, face.perms
-            ));
+            );
         }
         for ep in &self.hamlib_net {
-            out.push_str(&format!(
-                "hamlib_net: name={} bind={} perms={:?}\n",
+            let _ = writeln!(
+                out,
+                "hamlib_net: name={} bind={} perms={:?}",
                 ep.name, ep.bind, ep.perms
-            ));
+            );
         }
         out
     }

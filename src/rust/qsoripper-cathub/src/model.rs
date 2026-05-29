@@ -165,12 +165,8 @@ impl StateMutation {
             StateMutation::SetMode { vfo, mode } => StateChange::Mode { vfo, mode },
             StateMutation::SetSplit { enabled, tx_vfo } => StateChange::Split { enabled, tx_vfo },
             StateMutation::SetPtt { keyed } => StateChange::Ptt { keyed },
-            StateMutation::SetRit { offset_hz, enabled } => {
-                StateChange::Rit { enabled, offset_hz }
-            }
-            StateMutation::SetXit { offset_hz, enabled } => {
-                StateChange::Xit { enabled, offset_hz }
-            }
+            StateMutation::SetRit { offset_hz, enabled } => StateChange::Rit { enabled, offset_hz },
+            StateMutation::SetXit { offset_hz, enabled } => StateChange::Xit { enabled, offset_hz },
         }
     }
 }
@@ -357,11 +353,7 @@ mod tests {
     #[test]
     fn change_field_keys_are_stable() {
         assert_eq!(
-            StateChange::Freq {
-                vfo: Vfo::B,
-                hz: 1
-            }
-            .field(),
+            StateChange::Freq { vfo: Vfo::B, hz: 1 }.field(),
             Field::Freq(Vfo::B)
         );
         assert_eq!(

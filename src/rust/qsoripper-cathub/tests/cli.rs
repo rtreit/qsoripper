@@ -1,15 +1,13 @@
 //! Public-surface integration tests for the cathub binary's library entry points.
 
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
+
 use std::path::PathBuf;
 
 use qsoripper_cathub::{run, Cli};
 
 fn temp_config(contents: &str, tag: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!(
-        "cathub-cli-{}-{}.toml",
-        std::process::id(),
-        tag
-    ));
+    let path = std::env::temp_dir().join(format!("cathub-cli-{}-{}.toml", std::process::id(), tag));
     std::fs::write(&path, contents).expect("write temp config");
     path
 }

@@ -64,7 +64,10 @@ mod tests {
             Some((b"FA".to_vec(), b"00007050000".to_vec()))
         );
         assert_eq!(parse_command(b"TX;"), Some((b"TX".to_vec(), b"".to_vec())));
-        assert_eq!(parse_command(b"AI2;"), Some((b"AI".to_vec(), b"2".to_vec())));
+        assert_eq!(
+            parse_command(b"AI2;"),
+            Some((b"AI".to_vec(), b"2".to_vec()))
+        );
         assert_eq!(parse_command(b"FA;"), Some((b"FA".to_vec(), b"".to_vec())));
         assert_eq!(parse_command(b";"), None);
     }

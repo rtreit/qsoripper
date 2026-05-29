@@ -81,12 +81,18 @@ impl ClientDialect for Ts590Dialect {
                 }
             }
             b"TX" => reply(
-                ctx.apply_modeled(StateMutation::SetPtt { keyed: true }, CommandClass::PttWrite)
-                    .await,
+                ctx.apply_modeled(
+                    StateMutation::SetPtt { keyed: true },
+                    CommandClass::PttWrite,
+                )
+                .await,
             ),
             b"RX" => reply(
-                ctx.apply_modeled(StateMutation::SetPtt { keyed: false }, CommandClass::PttWrite)
-                    .await,
+                ctx.apply_modeled(
+                    StateMutation::SetPtt { keyed: false },
+                    CommandClass::PttWrite,
+                )
+                .await,
             ),
             b"AI" => {
                 // Auto-information is virtualized per face: it never reaches the radio.
@@ -207,7 +213,10 @@ mod tests {
             b"MD2;".to_vec(),
             "default mode is USB digit 2"
         );
-        assert_eq!(Ts590Dialect::new().handle(b"MD3;", &ctx).await, Vec::<u8>::new());
+        assert_eq!(
+            Ts590Dialect::new().handle(b"MD3;", &ctx).await,
+            Vec::<u8>::new()
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(
             backend.mutations(),

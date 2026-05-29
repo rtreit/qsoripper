@@ -284,7 +284,13 @@ mod tests {
             RadioEventSource::PollDiff,
         );
         let got = rx.try_recv().expect("one change");
-        assert_eq!(got, StateChange::Mode { vfo: Vfo::A, mode: Mode::Cw });
+        assert_eq!(
+            got,
+            StateChange::Mode {
+                vfo: Vfo::A,
+                mode: Mode::Cw
+            }
+        );
         assert!(rx.try_recv().is_err(), "no second frame for the no-op set");
     }
 
@@ -293,18 +299,12 @@ mod tests {
         let state = StateHandle::new();
         assert!(!state.is_native_push_covered(Field::Freq(Vfo::A)));
         state.record(
-            StateChange::Freq {
-                vfo: Vfo::A,
-                hz: 1,
-            },
+            StateChange::Freq { vfo: Vfo::A, hz: 1 },
             RadioEventSource::PollDiff,
         );
         assert!(!state.is_native_push_covered(Field::Freq(Vfo::A)));
         state.record(
-            StateChange::Freq {
-                vfo: Vfo::A,
-                hz: 2,
-            },
+            StateChange::Freq { vfo: Vfo::A, hz: 2 },
             RadioEventSource::NativePush,
         );
         assert!(state.is_native_push_covered(Field::Freq(Vfo::A)));

@@ -100,17 +100,17 @@ impl FaceContext {
                     Err(PttDenied::NotPermitted) => return ApplyOutcome::Denied,
                     Ok(()) => {}
                 }
-                match self
+                if self
                     .radio
                     .submit(self.face_id, Priority::Ptt, OpKind::Apply(mutation))
                     .await
+                    .is_ok()
                 {
-                    Ok(_) => ApplyOutcome::Ok,
-                    Err(_) => {
-                        // The key request never reached the radio: release the lease.
-                        self.ptt.unkey(self.face_id);
-                        ApplyOutcome::Error
-                    }
+                    ApplyOutcome::Ok
+                } else {
+                    // The key request never reached the radio: release the lease.
+                    self.ptt.unkey(self.face_id);
+                    ApplyOutcome::Error
                 }
             }
             (CommandClass::PttWrite, StateMutation::SetPtt { keyed: false }) => {
@@ -119,7 +119,7 @@ impl FaceContext {
                     .submit(self.face_id, Priority::Ptt, OpKind::Apply(mutation))
                     .await;
                 self.ptt.unkey(self.face_id);
-                map_outcome(result)
+                map_outcome(&result)
             }
             _ => {
                 let priority = match class {
@@ -127,7 +127,8 @@ impl FaceContext {
                     _ => Priority::Write,
                 };
                 map_outcome(
-                    self.radio
+                    &self
+                        .radio
                         .submit(self.face_id, priority, OpKind::Apply(mutation))
                         .await,
                 )
@@ -142,7 +143,11 @@ impl FaceContext {
         }
         match self
             .radio
-            .submit(self.face_id, Priority::Read, OpKind::Passthrough(raw.to_vec()))
+            .submit(
+                self.face_id,
+                Priority::Read,
+                OpKind::Passthrough(raw.to_vec()),
+            )
             .await
         {
             Ok(bytes) => bytes,
@@ -175,7 +180,7 @@ impl FaceContext {
     }
 }
 
-fn map_outcome(result: Result<Vec<u8>, BackendError>) -> ApplyOutcome {
+fn map_outcome(result: &Result<Vec<u8>, BackendError>) -> ApplyOutcome {
     match result {
         Ok(_) => ApplyOutcome::Ok,
         Err(BackendError::Unsupported) => ApplyOutcome::Unsupported,
@@ -210,7 +215,10 @@ mod tests {
         let state = StateHandle::new();
         let radio = spawn_scheduler(arc, detached_link(), state.clone());
         let ptt = PttManager::new(Duration::from_secs(300));
-        (FaceContext::new(id, perms, state, radio, ptt, caps), backend)
+        (
+            FaceContext::new(id, perms, state, radio, ptt, caps),
+            backend,
+        )
     }
 
     #[tokio::test]
@@ -251,13 +259,19 @@ mod tests {
         // Share the same radio/ptt by cloning the context with a new face id.
         let ctx2 = ctx1.clone_with_face(2);
         assert_eq!(
-            ctx1.apply_modeled(StateMutation::SetPtt { keyed: true }, CommandClass::PttWrite)
-                .await,
+            ctx1.apply_modeled(
+                StateMutation::SetPtt { keyed: true },
+                CommandClass::PttWrite
+            )
+            .await,
             ApplyOutcome::Ok
         );
         assert_eq!(
-            ctx2.apply_modeled(StateMutation::SetPtt { keyed: true }, CommandClass::PttWrite)
-                .await,
+            ctx2.apply_modeled(
+                StateMutation::SetPtt { keyed: true },
+                CommandClass::PttWrite
+            )
+            .await,
             ApplyOutcome::Busy
         );
     }
@@ -267,7 +281,8 @@ mod tests {
         let (ctx, _b) = ctx_with(FacePermissions::read_only(), 1);
         // A read-only face may not issue a passthrough write.
         assert_eq!(
-            ctx.passthrough(b"EX0050000;", CommandClass::ConfigWrite).await,
+            ctx.passthrough(b"EX0050000;", CommandClass::ConfigWrite)
+                .await,
             b"?;".to_vec()
         );
     }

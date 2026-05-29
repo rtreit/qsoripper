@@ -72,9 +72,7 @@ impl RadioBackend for Ts590Backend {
     async fn poll(&self, link: &RadioLink, state: &StateHandle) -> Result<(), BackendError> {
         for &cmd in POLL_COMMANDS {
             let verb = cmd.get(..2).unwrap_or(cmd).to_vec();
-            let reply = link
-                .submit(cmd.to_vec(), Expect::Reply(vec![verb]))
-                .await?;
+            let reply = link.submit(cmd.to_vec(), Expect::Reply(vec![verb])).await?;
             if let Some(mutation) = self.parse_event(&reply) {
                 state.record(mutation.into_change(), RadioEventSource::PollDiff);
             }
@@ -238,7 +236,10 @@ mod tests {
         assert_eq!(caps.trust, TrustTier::CertifiedNative);
         assert!(caps.native_push);
         assert!(caps.supports_passthrough());
-        assert_eq!(Ts590Backend::new().native_push_enable(), Some(b"AI2;".to_vec()));
+        assert_eq!(
+            Ts590Backend::new().native_push_enable(),
+            Some(b"AI2;".to_vec())
+        );
     }
 
     #[tokio::test]
