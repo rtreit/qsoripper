@@ -45,7 +45,7 @@ use crate::config::{Config, RadioConfig};
 use crate::dialect::kenwood::ts2000::Ts2000Dialect;
 use crate::dialect::kenwood::ts590::Ts590Dialect;
 use crate::dialect::{ClientDialect, FaceContext};
-use crate::events::{enable_native_push, spawn_poller};
+use crate::events::{enable_native_push, spawn_poller, POLLER_FACE};
 use crate::hamlib_net::run_listener;
 use crate::model::StateMutation;
 use crate::ptt::PttManager;
@@ -192,6 +192,25 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
         cfg.baseline_interval(),
         cfg.heartbeat_interval(),
     );
+
+    // Prime the universal state with one awaited poll before any face begins serving, so the
+    // first client read (e.g. HDSDR/OmniRig connecting at startup) sees real radio state
+    // instead of defaults. Best-effort and time-bounded: a slow or absent radio must not
+    // block startup, since the baseline poller keeps retrying afterwards.
+    match tokio::time::timeout(
+        Duration::from_millis(1_000),
+        radio.submit(POLLER_FACE, Priority::Poll, OpKind::Poll),
+    )
+    .await
+    {
+        Ok(Ok(_)) => tracing::info!("primed universal state from initial poll"),
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "initial priming poll failed; serving defaults until next poll");
+        }
+        Err(_) => {
+            tracing::warn!("initial priming poll timed out; serving defaults until next poll")
+        }
+    }
 
     let next_id = Arc::new(AtomicU64::new(1));
 
