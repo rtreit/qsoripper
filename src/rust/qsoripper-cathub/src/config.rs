@@ -189,18 +189,46 @@ pub(crate) struct Config {
     pub(crate) hamlib_net: Vec<HamlibNetConfig>,
 }
 
+/// The table key the daemon's settings live under inside the shared unified `config.toml`.
+const UNIFIED_SECTION: &str = "cat_hub";
+/// Environment override for the shared config path (shared with the engine and launcher).
+const CONFIG_PATH_ENV: &str = "QSORIPPER_CONFIG_PATH";
+/// Per-user config directory name shared across QsoRipper components.
+const SHARED_DIR: &str = "qsoripper";
+/// Shared unified config file name.
+const SHARED_FILE: &str = "config.toml";
+
 impl Config {
-    /// Parse a configuration from a TOML string.
+    /// Parse a configuration from a bare TOML string (top-level `[radio]` … layout).
     pub(crate) fn parse(text: &str) -> Result<Config, ConfigError> {
         let config: Config = toml::from_str(text)?;
         config.validate()?;
         Ok(config)
     }
 
-    /// Load and parse a configuration from a file.
+    /// Parse a configuration from a TOML document that may be either the unified
+    /// `config.toml` (daemon settings nested under `[cat_hub]`, alongside the engine's and
+    /// launcher's own sections) or a standalone cathub config (top-level `[radio]` …).
+    ///
+    /// Detection is by presence of a top-level `cat_hub` table: when present, only that
+    /// subtree is used and every other section is ignored; otherwise the whole document is
+    /// parsed as a standalone config for backward compatibility.
+    pub(crate) fn parse_document(text: &str) -> Result<Config, ConfigError> {
+        let document: toml::Value = toml::from_str(text)?;
+        if let Some(section) = document.get(UNIFIED_SECTION) {
+            let config: Config = section.clone().try_into()?;
+            config.validate()?;
+            Ok(config)
+        } else {
+            Config::parse(text)
+        }
+    }
+
+    /// Load and parse a configuration from a file, accepting either the unified or the
+    /// standalone layout (see [`Config::parse_document`]).
     pub(crate) fn load(path: &std::path::Path) -> Result<Config, ConfigError> {
         let text = std::fs::read_to_string(path)?;
-        Config::parse(&text)
+        Config::parse_document(&text)
     }
 
     /// Validate semantic constraints not captured by the type system.
@@ -303,21 +331,39 @@ impl Config {
         out
     }
 
-    /// The default config path for this platform.
+    /// The default config path: the per-user unified `config.toml` shared with the engine and
+    /// launcher. Resolution mirrors the engine and launcher:
+    ///
+    /// 1. `QSORIPPER_CONFIG_PATH` if set,
+    /// 2. `%APPDATA%\qsoripper\config.toml` (Windows) or
+    ///    `$XDG_CONFIG_HOME/qsoripper/config.toml` → `$HOME/.config/qsoripper/config.toml` (Unix),
+    /// 3. a bare `config.toml` in the working directory as a last resort.
+    ///
+    /// Daemon settings live under the `[cat_hub]` table of that file (see
+    /// [`Config::parse_document`]); a standalone `--config cathub.toml` is still accepted.
     pub(crate) fn default_config_path() -> PathBuf {
+        if let Some(path) = std::env::var_os(CONFIG_PATH_ENV) {
+            return PathBuf::from(path);
+        }
         #[cfg(target_os = "windows")]
         {
-            if let Ok(profile) = std::env::var("USERPROFILE") {
-                return PathBuf::from(profile).join("cathub.toml");
+            if let Some(app_data) = std::env::var_os("APPDATA") {
+                return PathBuf::from(app_data).join(SHARED_DIR).join(SHARED_FILE);
             }
         }
         #[cfg(not(target_os = "windows"))]
         {
-            if let Ok(home) = std::env::var("HOME") {
-                return PathBuf::from(home).join(".config").join("cathub.toml");
+            if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+                return PathBuf::from(xdg).join(SHARED_DIR).join(SHARED_FILE);
+            }
+            if let Some(home) = std::env::var_os("HOME") {
+                return PathBuf::from(home)
+                    .join(".config")
+                    .join(SHARED_DIR)
+                    .join(SHARED_FILE);
             }
         }
-        PathBuf::from("cathub.toml")
+        PathBuf::from(SHARED_FILE)
     }
 }
 
@@ -455,9 +501,77 @@ backend = "loopback"
     }
 
     #[test]
-    fn default_path_is_named_cathub_toml() {
-        assert!(Config::default_config_path()
-            .to_string_lossy()
-            .ends_with("cathub.toml"));
+    fn default_path_is_unified_config_toml() {
+        // With no env override, the default resolves to the shared unified file name and lives
+        // under the shared per-user directory rather than a standalone cathub.toml.
+        let path = Config::default_config_path();
+        let text = path.to_string_lossy();
+        assert!(
+            text.ends_with("config.toml"),
+            "expected config.toml, got {text}"
+        );
+        // The bare last-resort fallback is the only case without the shared dir; on dev/CI
+        // machines APPDATA/HOME are set, so the shared dir should be present.
+        if std::env::var_os(CONFIG_PATH_ENV).is_none() {
+            assert!(
+                text.contains(SHARED_DIR) || text == SHARED_FILE,
+                "expected shared dir or bare fallback, got {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_unified_cat_hub_section() {
+        // A unified config.toml carrying unrelated engine/launcher tables plus a [cat_hub]
+        // subtree must load only the cat_hub subtree and ignore everything else.
+        let text = r#"
+[station_profile]
+callsign = "K7ABC"
+
+[launcher]
+selected = ["engine-rust"]
+
+[cat_hub.radio]
+backend = "ts590"
+transport = "serial"
+port = "COM4"
+baud = 4800
+
+[[cat_hub.face]]
+name = "n1mm"
+transport = "COM11"
+dialect = "ts590"
+perms = ["read", "write", "ptt"]
+
+[[cat_hub.hamlib_net]]
+name = "engine"
+bind = "127.0.0.1:4532"
+perms = ["read"]
+"#;
+        let config = Config::parse_document(text).expect("parse unified");
+        assert_eq!(config.radio.backend, "ts590");
+        assert_eq!(config.radio.port, "COM4");
+        assert_eq!(config.face.len(), 1);
+        assert_eq!(config.hamlib_net.len(), 1);
+        assert!(config.face[0].permissions().ptt);
+    }
+
+    #[test]
+    fn parse_document_falls_back_to_standalone() {
+        // A standalone config without a [cat_hub] table still parses for back-compat.
+        let config = Config::parse_document(SAMPLE).expect("parse standalone");
+        assert_eq!(config.radio.backend, "ts590");
+        assert_eq!(config.radio.port, "COM3");
+        assert_eq!(config.face.len(), 1);
+    }
+
+    #[test]
+    fn parse_document_validates_cat_hub_section() {
+        // Validation still applies to the nested subtree (no endpoints is invalid).
+        let text = r#"
+[cat_hub.radio]
+backend = "loopback"
+"#;
+        assert!(Config::parse_document(text).is_err());
     }
 }

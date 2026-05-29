@@ -1,8 +1,8 @@
 # qsoripper-cathub configuration for this station.
 #
-# One daemon owns the TS-590 on COM3 and fans it out to every application over its
-# native protocol. No application talks to the radio directly, so there is no VFO A/B
-# oscillation, no frequency drift, and no PTT contention.
+# One daemon owns the TS-590 on COM4 (Silicon Labs CP210x USB-UART) and fans it out to
+# every application over its native protocol. No application talks to the radio directly,
+# so there is no VFO A/B oscillation, no frequency drift, and no PTT contention.
 #
 # Validate without touching hardware:
 #   cargo run -p qsoripper-cathub -- --config config/cathub.toml --dry-run
@@ -14,7 +14,7 @@
 backend = "ts590"        # first-class native Kenwood TS-590 driver (no Hamlib linked)
 model = "TS-590SG"
 transport = "serial"
-port = "COM3"
+port = "COM4"
 baud = 115200
 
 [poll]

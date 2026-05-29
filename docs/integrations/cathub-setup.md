@@ -17,12 +17,13 @@ See `docs/design/cathub-multi-client-cat-hub.md` for the architecture and behavi
 ## 1. Retire the legacy chain
 
 The old stack was rigctld + a Python safe-bridge + rigctlcom. Stop all of it before starting
-the hub. Only one process may own the radio's COM port (COM3 on this station).
+the hub. Only one process may own the radio's COM port (COM4 on this station — the
+Silicon Labs CP210x USB-UART bridge that fronts the TS-590's USB CAT port).
 
     Get-Process rigctld, rigctlcom -ErrorAction SilentlyContinue | Stop-Process
-    # also stop any safe-bridge Python process and any app still bound directly to COM3
+    # also stop any safe-bridge Python process and any app still bound directly to COM4
 
-Confirm nothing else holds COM3 before continuing.
+Confirm nothing else holds COM4 before continuing.
 
 ## 2. Create virtual serial pairs (com0com)
 
@@ -50,7 +51,7 @@ the dry run until it is clean.
 
     .\scripts\Start-CatHub.ps1
 
-The daemon opens COM3, enables and owns the TS-590 `AI2;` native push stream, starts the
+The daemon opens COM4, enables and owns the TS-590 `AI2;` native push stream, starts the
 baseline poller (which backs off to heartbeat once push covers a field), opens each serial
 face, and binds each Hamlib NET endpoint. Watch the log in another terminal:
 
@@ -110,7 +111,7 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
 
 ## 7. Troubleshooting
 
-- "Access denied" / port busy on COM3: the legacy chain or another app still owns the radio
+- "Access denied" / port busy on COM4: the legacy chain or another app still owns the radio
   port (step 1).
 - An app sees no data on its serial port: the com0com pair is reversed or the app is on the
   daemon's half of the pair. The app binds the **second** port of each pair (COM11/21/31).

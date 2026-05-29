@@ -208,7 +208,7 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
             tracing::warn!(%error, "initial priming poll failed; serving defaults until next poll");
         }
         Err(_) => {
-            tracing::warn!("initial priming poll timed out; serving defaults until next poll")
+            tracing::warn!("initial priming poll timed out; serving defaults until next poll");
         }
     }
 
