@@ -34,6 +34,19 @@ fn vfo_name(vfo: Vfo) -> &'static str {
     }
 }
 
+/// Parse a `set_freq` argument into whole Hz.
+///
+/// Hamlib clients (WSJT-X, the engine, Log4OM) format frequencies as a double with
+/// `"%f"`, e.g. `F 14040005.000000`, so a plain `u64` parse rejects every real
+/// `set_freq` with `RPRT -1`. Accept either a plain integer or a decimal value and
+/// keep the integer Hz part (frequencies are always whole Hz, so the fraction is `0`).
+fn parse_freq_hz(arg: &str) -> Option<u64> {
+    arg.parse::<u64>().ok().or_else(|| {
+        arg.split_once('.')
+            .and_then(|(whole, _frac)| whole.parse::<u64>().ok())
+    })
+}
+
 fn outcome_rprt(outcome: ApplyOutcome) -> Vec<u8> {
     match outcome {
         ApplyOutcome::Ok => RPRT_OK.to_vec(),
@@ -95,7 +108,7 @@ async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
         "\\chk_vfo" => b"0\n".to_vec(),
 
         // --- writes (require `write`) ---
-        "F" | "\\set_freq" => match parts.next().and_then(|s| s.parse::<u64>().ok()) {
+        "F" | "\\set_freq" => match parts.next().and_then(parse_freq_hz) {
             Some(hz) => outcome_rprt(
                 ctx.apply_modeled(
                     StateMutation::SetVfoFreq {
@@ -229,19 +242,31 @@ pub(crate) async fn serve_conn<S>(stream: S, ctx: FaceContext)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
 {
+    let face_id = ctx.face_id;
     let (reader, mut writer) = tokio::io::split(stream);
     let mut lines = BufReader::new(reader).lines();
     loop {
         match lines.next_line().await {
-            Ok(Some(line)) => match handle_line(&line, &ctx).await {
-                LineResult::Reply(bytes) => {
-                    if !bytes.is_empty() && writer.write_all(&bytes).await.is_err() {
+            Ok(Some(line)) => {
+                tracing::trace!(face_id, req = %line.trim(), "hamlib_net request");
+                match handle_line(&line, &ctx).await {
+                    LineResult::Reply(bytes) => {
+                        tracing::trace!(
+                            face_id,
+                            reply = %String::from_utf8_lossy(&bytes).trim_end(),
+                            "hamlib_net reply"
+                        );
+                        if !bytes.is_empty() && writer.write_all(&bytes).await.is_err() {
+                            return;
+                        }
+                        let _ = writer.flush().await;
+                    }
+                    LineResult::Quit => {
+                        tracing::trace!(face_id, "hamlib_net client quit");
                         return;
                     }
-                    let _ = writer.flush().await;
                 }
-                LineResult::Quit => return,
-            },
+            }
             Ok(None) | Err(_) => return,
         }
     }
@@ -350,6 +375,31 @@ mod tests {
                 hz: 14_074_000
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn set_freq_accepts_hamlib_decimal_format() {
+        // Hamlib (WSJT-X, engine, Log4OM) sends set_freq as a "%f" double, e.g.
+        // "F 14040005.000000". Earlier this was rejected with RPRT -1.
+        let (ctx, backend, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        assert_eq!(reply_of("F 14040005.000000", &ctx).await, RPRT_OK.to_vec());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            backend.mutations(),
+            vec![StateMutation::SetVfoFreq {
+                vfo: Vfo::A,
+                hz: 14_040_005
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_freq_hz_handles_integer_and_decimal() {
+        assert_eq!(parse_freq_hz("14040000"), Some(14_040_000));
+        assert_eq!(parse_freq_hz("14040005.000000"), Some(14_040_005));
+        assert_eq!(parse_freq_hz("0.000000"), Some(0));
+        assert_eq!(parse_freq_hz("abc"), None);
+        assert_eq!(parse_freq_hz(""), None);
     }
 
     #[tokio::test]
