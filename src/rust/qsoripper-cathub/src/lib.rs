@@ -114,6 +114,12 @@ async fn open_transport(radio: &RadioConfig) -> Result<OpenedTransport, CatHubEr
     match radio.transport.as_str() {
         "serial" => {
             let port = serial2_tokio::SerialPort::open(&radio.port, radio.baud)?;
+            // Assert the RTS and DTR modem-control lines. Some radios (notably the Kenwood
+            // TS-590) gate their CAT transmit on RTS and send no replies at all unless it is
+            // high, so without this the daemon opens the port but every poll times out. This
+            // matches the default line state that OmniRig/Hamlib clients use.
+            port.set_rts(true)?;
+            port.set_dtr(true)?;
             Ok(OpenedTransport::Serial(port))
         }
         "tcp" => {

@@ -156,6 +156,10 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
   does not match the radio's PC/CAT port speed. Check TS-590 menu 62 and set `[radio].baud` to
   the same value (e.g. 57600). A client app proves the rig's real baud quickly via a direct
   connection.
+- Daemon starts, the port opens, but every poll times out at the *correct* baud: some radios
+  (notably the Kenwood TS-590) only reply when the **RTS modem-control line is asserted**. The
+  hub now asserts RTS and DTR automatically when it opens a serial radio port, so this should
+  not occur with current builds. If you see it on an older build, update the daemon.
 - An app's COM dropdown does not list the daemon-side port (COM10/20/30): expected. The hub
   holds that port open, so applications only see the partner port. Select COM11/21/31 instead.
 - An app sees no data on its serial port: the com0com pair is reversed or the app is on the
