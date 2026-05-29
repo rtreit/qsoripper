@@ -66,7 +66,7 @@ internal static class SharedSetupConfigPersistence
             }
         }
 
-        var content = Toml.FromModel(BuildModel(config));
+        var content = Toml.FromModel(BuildMergedModel(normalizedPath, config));
         if (OperatingSystem.IsWindows())
         {
             File.WriteAllText(normalizedPath, content, Utf8WithoutBom);
@@ -295,6 +295,58 @@ internal static class SharedSetupConfigPersistence
         }
 
         return config;
+    }
+
+    // Top-level TOML keys owned by the engine setup config. On save these are replaced
+    // wholesale; every other top-level table (for example [cat_hub] written by the CAT hub
+    // daemon and [launcher] written by the launcher) is preserved so the unified config.toml
+    // can be safely shared across all QsoRipper components.
+    private static readonly string[] EngineOwnedConfigKeys =
+    {
+        "logbook",
+        "storage",
+        "station_profile",
+        "station_profiles",
+        "qrz_xml",
+        "qrz_logbook",
+        "sync",
+        "rig_control",
+    };
+
+    // Splice the freshly-serialized engine-owned tables into the existing document (when one
+    // exists) so unknown top-level tables survive an engine setup save. Engine-owned keys are
+    // removed first so tables the wizard intentionally cleared are dropped.
+    private static TomlTable BuildMergedModel(string normalizedPath, SharedPersistedSetupConfig config)
+    {
+        var owned = BuildModel(config);
+        if (!File.Exists(normalizedPath))
+        {
+            return owned;
+        }
+
+        TomlTable root;
+        try
+        {
+            root = Toml.ToModel(File.ReadAllText(normalizedPath)) as TomlTable ?? new TomlTable();
+        }
+        catch (TomlException)
+        {
+            // The existing file is not valid TOML (for example a legacy JSON config being
+            // migrated); fall back to writing only the engine-owned tables.
+            return owned;
+        }
+
+        foreach (var key in EngineOwnedConfigKeys)
+        {
+            root.Remove(key);
+        }
+
+        foreach (var pair in owned)
+        {
+            root[pair.Key] = pair.Value;
+        }
+
+        return root;
     }
 
     private static TomlTable BuildModel(SharedPersistedSetupConfig config)

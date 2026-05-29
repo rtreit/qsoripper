@@ -97,6 +97,53 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
+    public void Save_setup_preserves_unknown_shared_config_tables()
+    {
+        // The unified config.toml is shared with the CAT hub daemon ([cat_hub]) and launcher
+        // ([launcher]); an engine setup save must not clobber those sections.
+        var configPath = Path.Combine(_tempDirectory, "config.toml");
+        File.WriteAllText(
+            configPath,
+            """
+            [cat_hub.radio]
+            backend = "ts590"
+            port = "COM4"
+
+            [[cat_hub.face]]
+            name = "n1mm"
+            transport = "COM11"
+            dialect = "ts590"
+
+            [[cat_hub.hamlib_net]]
+            name = "engine"
+            bind = "127.0.0.1:4532"
+
+            [launcher]
+            engines = [1]
+            """);
+
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87"
+            }
+        });
+
+        var persistedConfig = File.ReadAllText(configPath);
+        Assert.Contains("[cat_hub.radio]", persistedConfig, StringComparison.Ordinal);
+        Assert.Contains("port = \"COM4\"", persistedConfig, StringComparison.Ordinal);
+        Assert.Contains("[[cat_hub.face]]", persistedConfig, StringComparison.Ordinal);
+        Assert.Contains("[[cat_hub.hamlib_net]]", persistedConfig, StringComparison.Ordinal);
+        Assert.Contains("[launcher]", persistedConfig, StringComparison.Ordinal);
+        Assert.Contains("K7RND", persistedConfig, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Log_qso_uses_active_station_context_and_sync_updates_status()
     {
         var state = CreateStateWithSync();
