@@ -47,8 +47,9 @@ use crate::dialect::kenwood::ts590::Ts590Dialect;
 use crate::dialect::{ClientDialect, FaceContext};
 use crate::events::{enable_native_push, spawn_poller};
 use crate::hamlib_net::run_listener;
+use crate::model::StateMutation;
 use crate::ptt::PttManager;
-use crate::radio::{link_channel, run_transport, spawn_scheduler};
+use crate::radio::{link_channel, run_transport, spawn_scheduler, OpKind, Priority};
 use crate::serial_face::{open_serial, run_face};
 use crate::state::StateHandle;
 
@@ -231,13 +232,24 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
         tracing::info!(endpoint = %ep.name, bind = %ep.bind, "hamlib_net endpoint listening");
     }
 
-    // PTT safety watchdog: force-release a transmitter that exceeds the configured ceiling.
+    // PTT safety watchdog: a transmitter that exceeds the configured ceiling is unkeyed at
+    // the radio first, then released, so the ceiling is a real stuck-transmitter backstop
+    // and the lease is never freed while the radio is still keyed.
     {
         let ptt = ptt.clone();
+        let radio = radio.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                if let Some(face) = ptt.safety_release_if_expired() {
+                if let Some(face) = ptt.expired_owner() {
+                    let _ = radio
+                        .submit(
+                            face,
+                            Priority::Ptt,
+                            OpKind::Apply(StateMutation::SetPtt { keyed: false }),
+                        )
+                        .await;
+                    ptt.unkey(face);
                     tracing::warn!(face, "PTT safety ceiling reached; transmitter released");
                 }
             }
@@ -247,6 +259,23 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
     tracing::info!("cathub running; press Ctrl+C to stop");
     tokio::signal::ctrl_c().await?;
     tracing::info!("shutdown requested");
+
+    // Best-effort orderly stop: never leave the transmitter keyed (design §8.5). A hard
+    // crash cannot run this; the ptt_max_tx_ms ceiling and the radio's own TX timeout are
+    // the ultimate backstops.
+    if let Some(owner) = ptt.owner() {
+        let _ = tokio::time::timeout(
+            Duration::from_millis(500),
+            radio.submit(
+                owner,
+                Priority::Ptt,
+                OpKind::Apply(StateMutation::SetPtt { keyed: false }),
+            ),
+        )
+        .await;
+        ptt.unkey(owner);
+        tracing::info!(face = owner, "released PTT on shutdown");
+    }
     Ok(())
 }
 

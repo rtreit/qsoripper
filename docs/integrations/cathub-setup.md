@@ -117,3 +117,18 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
 - A NET client cannot connect: confirm the bind address/port in `config\cathub.toml` matches
   the app, and that the hub log shows the endpoint listening.
 - Set `CATHUB_LOG=debug` before starting for verbose tracing.
+
+## 8. Known v1 limitations
+
+- **No automatic radio reconnect yet.** If the radio transport drops mid-session (USB
+  unplugged, radio powered off), the daemon does not yet retry the serial link or serve a
+  `stale` flag (design §8.7). Restart the hub after restoring the radio. Client faces and
+  NET endpoints are unaffected by this and stay up.
+- **Hamlib NET bind errors surface in the log, not at startup.** A serial face that fails to
+  open aborts startup with a clear error, but a `[[hamlib_net]]` endpoint whose bind address
+  is already in use logs the error from its listener task rather than failing the whole
+  daemon. If a NET client cannot connect, check the log for that endpoint.
+- On shutdown (Ctrl+C) the daemon makes a best-effort `RX;` to unkey the transmitter. A hard
+  crash cannot run that path; the `ptt_max_tx_ms` ceiling and the radio's own TX timeout are
+  the ultimate stuck-transmitter backstops.
+

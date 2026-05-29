@@ -70,23 +70,22 @@ impl PttManager {
     }
 
     /// The current PTT owner, if any.
-    #[cfg(test)]
     pub(crate) fn owner(&self) -> Option<u64> {
         self.lock().owner
     }
 
-    /// Release the lease if the maximum-transmit ceiling has elapsed.
+    /// The current owner iff the maximum-transmit ceiling has elapsed, **without** releasing
+    /// the lease.
     ///
-    /// Returns the face whose transmission was force-released, if any. This is a hard
-    /// transmit-length ceiling, not a CAT-idle timer: a keyed-but-silent client (WSJT-X
-    /// mid-over) is not released until the ceiling.
-    pub(crate) fn safety_release_if_expired(&self) -> Option<u64> {
-        let mut guard = self.lock();
-        let expired = guard.keyed_at.is_some_and(|t| t.elapsed() >= guard.max_tx);
-        if expired {
-            let owner = guard.owner.take();
-            guard.keyed_at = None;
-            owner
+    /// The lease is intentionally held until the caller has actually unkeyed the radio (send
+    /// `RX;` first, then [`unkey`](Self::unkey)). Releasing here would open a window in which
+    /// another face could acquire PTT and then be unkeyed by the caller's delayed `RX;`.
+    /// This is a hard transmit-length ceiling, not a CAT-idle timer: a keyed-but-silent
+    /// client (WSJT-X mid-over) is not reported until the ceiling.
+    pub(crate) fn expired_owner(&self) -> Option<u64> {
+        let guard = self.lock();
+        if guard.keyed_at.is_some_and(|t| t.elapsed() >= guard.max_tx) {
+            guard.owner
         } else {
             None
         }
@@ -139,7 +138,10 @@ mod tests {
     fn safety_ceiling_releases_a_stuck_transmitter() {
         let ptt = PttManager::new(Duration::from_millis(0));
         ptt.try_key(1, true).expect("key");
-        assert_eq!(ptt.safety_release_if_expired(), Some(1));
+        // The ceiling reports the owner but holds the lease until the caller unkeys.
+        assert_eq!(ptt.expired_owner(), Some(1));
+        assert_eq!(ptt.owner(), Some(1));
+        ptt.unkey(1);
         assert_eq!(ptt.owner(), None);
     }
 
@@ -147,7 +149,7 @@ mod tests {
     fn safety_ceiling_does_not_release_before_expiry() {
         let ptt = PttManager::new(Duration::from_secs(300));
         ptt.try_key(1, true).expect("key");
-        assert_eq!(ptt.safety_release_if_expired(), None);
+        assert_eq!(ptt.expired_owner(), None);
         assert_eq!(ptt.owner(), Some(1));
     }
 }
