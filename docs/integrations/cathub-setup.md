@@ -70,6 +70,11 @@ prints the resolved radio, poll, PTT, events, faces, and Hamlib NET endpoints. A
 numbers and baud to match your com0com pairs and the TS-590's CAT baud, then re-run the dry run
 until it is clean.
 
+The `[radio].baud` value **must match the radio's own PC/CAT port speed** (TS-590 menu 62;
+e.g. 57600). If they differ, the daemon opens COM4 but cannot talk to the radio. The
+`[[face]].baud` values are nominal only -- com0com virtual pairs pass data regardless of baud,
+so a client app can use any baud on its side of the pair.
+
 ## 4. Start the hub
 
     .\scripts\Start-CatHub.ps1
@@ -147,6 +152,10 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
 
 - "Access denied" / port busy on COM4: the legacy chain or another app still owns the radio
   port (step 1).
+- Daemon starts but never reads valid data from the radio (timeouts / stale): the `[radio].baud`
+  does not match the radio's PC/CAT port speed. Check TS-590 menu 62 and set `[radio].baud` to
+  the same value (e.g. 57600). A client app proves the rig's real baud quickly via a direct
+  connection.
 - An app's COM dropdown does not list the daemon-side port (COM10/20/30): expected. The hub
   holds that port open, so applications only see the partner port. Select COM11/21/31 instead.
 - An app sees no data on its serial port: the com0com pair is reversed or the app is on the

@@ -15,7 +15,7 @@ backend = "ts590"        # first-class native Kenwood TS-590 driver (no Hamlib l
 model = "TS-590SG"
 transport = "serial"
 port = "COM4"
-baud = 115200
+baud = 57600             # MUST match the radio's PC/CAT port speed (TS-590 menu 62)
 
 [poll]
 baseline_ms = 200        # used only while native push is unavailable
