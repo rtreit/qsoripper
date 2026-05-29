@@ -4,17 +4,17 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use qsoripper_cathub::{run, Cli};
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn temp_config(contents: &str) -> PathBuf {
     let unique = format!(
         "cathub-test-{}-{}.toml",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time after epoch")
-            .as_nanos()
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed),
     );
     let path = std::env::temp_dir().join(unique);
     std::fs::write(&path, contents).expect("write temp config");
