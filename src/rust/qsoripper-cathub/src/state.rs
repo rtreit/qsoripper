@@ -106,8 +106,15 @@ impl Snapshot {
     pub(crate) fn is_redundant(&self, mutation: &StateMutation) -> bool {
         match *mutation {
             StateMutation::SetVfoFreq { vfo, hz } => self.vfo(vfo).freq_hz == hz,
-            // Mode is a single radio-wide value tracked against the receive VFO.
-            StateMutation::SetMode { mode, .. } => self.vfo(self.rx_vfo).mode == mode,
+            // Compare by the digit actually written to the radio, not the enum identity.
+            // WSJT-X asserts "PKTUSB", which maps to Mode::Unknown but is sent as MD2 (USB)
+            // — the same frame the radio already holds. The TS-590 beeps on every mode set it
+            // receives (frequency sets are silent), so suppressing the no-op MD frame is what
+            // keeps it quiet, exactly like a native driver that never re-sends an unchanged
+            // mode. Only Usb/Unknown share a digit, so this never hides a real mode change.
+            StateMutation::SetMode { mode, .. } => {
+                self.vfo(self.rx_vfo).mode.to_kenwood_digit() == mode.to_kenwood_digit()
+            }
             StateMutation::SetSplit { enabled, tx_vfo } => {
                 self.split == enabled && self.tx_vfo == tx_vfo.unwrap_or(self.tx_vfo)
             }
@@ -340,6 +347,12 @@ mod tests {
         assert!(snap.is_redundant(&StateMutation::SetMode {
             vfo: Vfo::A,
             mode: Mode::Usb,
+        }));
+        // WSJT-X "PKTUSB" decodes to Mode::Unknown but is sent as MD2 (USB), the same frame
+        // the radio already holds, so it must be treated as redundant to avoid the mode beep.
+        assert!(snap.is_redundant(&StateMutation::SetMode {
+            vfo: Vfo::A,
+            mode: Mode::Unknown,
         }));
         assert!(!snap.is_redundant(&StateMutation::SetMode {
             vfo: Vfo::A,

@@ -141,17 +141,21 @@ before the launcher starts engines and UIs, so everything connects to the hub's 
 ### TS-590 PC-control beep (fixed in the hub)
 
 Earlier builds made the TS-590 emit a short Morse **"U"** (di-di-dah) tone during WSJT-X
-operation. The cause was the hub forwarding **redundant** CAT sets: clients such as WSJT-X
-re-assert mode and frequency on every poll, and the TS-590 beeps on each set even when the
-value is unchanged. A native Hamlib driver never beeps because it caches state and only sends
-a value when it actually changes.
+operation, most noticeably when switching between modes that share a radio mode (for example
+FT8 and WSPR, which are both DATA-USB). The TS-590 beeps on **every** mode (`MD`) command it
+receives over CAT — frequency sets are silent. WSJT-X re-asserts its mode on every poll and on
+each FT8/WSPR switch, and the hub forwarded each `MD` set to the radio even when the value was
+unchanged, so the radio chirped. A native Hamlib driver never beeps because it caches state and
+sends a mode command only when the mode actually changes.
 
 The hub now does the same: a modeled write (frequency, mode, split, RIT/XIT) is sent to the
-radio **only when it would change the radio**, so re-asserted values are suppressed before
-they reach the wire. PTT is never suppressed — keying and unkeying always reach the radio.
+radio only when it would change the radio. Mode comparison uses the **value written to the
+radio** (the `MD` digit), so WSJT-X's `PKTUSB`/`PKTLSB` — which map to the same wire mode as
+plain USB/LSB — are correctly recognized as no-ops and suppressed. A genuine mode change (for
+example switching to CW) still sends one `MD` command and the radio beeps once, which matches
+native Hamlib behavior. PTT is never suppressed — keying and unkeying always reach the radio.
 
-No radio-menu change is needed. Leave **Beep Volume** at your normal setting; the radio stays
-silent under CAT control because the hub no longer sends no-op commands.
+No radio-menu change is needed. Leave **Beep Volume** at your normal setting.
 
 ### Log4OM
 - CAT interface: Hamlib `NET rigctl`, host **127.0.0.1**, port **4534**.
