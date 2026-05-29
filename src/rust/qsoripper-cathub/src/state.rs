@@ -25,6 +25,8 @@ pub(crate) struct VfoSnapshot {
     pub(crate) freq_hz: u64,
     /// Operating mode.
     pub(crate) mode: Mode,
+    /// Whether the DATA sub-mode flag (TS-590 `DA`) is on for this VFO.
+    pub(crate) data: bool,
     /// IF passband in Hz.
     pub(crate) passband_hz: u32,
 }
@@ -34,6 +36,7 @@ impl Default for VfoSnapshot {
         VfoSnapshot {
             freq_hz: 0,
             mode: Mode::Usb,
+            data: false,
             passband_hz: DEFAULT_PASSBAND_HZ,
         }
     }
@@ -107,14 +110,19 @@ impl Snapshot {
         match *mutation {
             StateMutation::SetVfoFreq { vfo, hz } => self.vfo(vfo).freq_hz == hz,
             // Compare by the digit actually written to the radio, not the enum identity.
-            // WSJT-X asserts "PKTUSB", which maps to Mode::Unknown but is sent as MD2 (USB)
-            // — the same frame the radio already holds. The TS-590 beeps on every mode set it
-            // receives (frequency sets are silent), so suppressing the no-op MD frame is what
-            // keeps it quiet, exactly like a native driver that never re-sends an unchanged
-            // mode. Only Usb/Unknown share a digit, so this never hides a real mode change.
+            // WSJT-X asserts "PKTUSB", which decomposes into a base mode of USB (sent as MD2)
+            // plus a separate DATA flag handled by `SetDataMode` below. The TS-590 beeps on
+            // every mode set it receives (frequency sets are silent), so suppressing the no-op
+            // MD frame is what keeps it quiet, exactly like a native driver that never re-sends
+            // an unchanged mode.
             StateMutation::SetMode { mode, .. } => {
                 self.vfo(self.rx_vfo).mode.to_kenwood_digit() == mode.to_kenwood_digit()
             }
+            // The DATA flag (`DA`) is a separate wire fact from the base mode (`MD`): suppress
+            // a re-assert of the value the radio already holds so toggling, e.g., FT8↔WSPR
+            // (both PKTUSB) writes nothing after the first, and selecting a plain mode only
+            // emits `DA0` when DATA was actually on.
+            StateMutation::SetDataMode { vfo, on } => self.vfo(vfo).data == on,
             StateMutation::SetSplit { enabled, tx_vfo } => {
                 self.split == enabled && self.tx_vfo == tx_vfo.unwrap_or(self.tx_vfo)
             }
@@ -246,6 +254,15 @@ fn apply_change(snap: &mut Snapshot, change: StateChange) -> bool {
                 true
             }
         }
+        StateChange::DataMode { vfo, on } => {
+            let target = vfo_mut(snap, vfo);
+            if target.data == on {
+                false
+            } else {
+                target.data = on;
+                true
+            }
+        }
         StateChange::Split { enabled, tx_vfo } => {
             let new_tx = tx_vfo.unwrap_or(snap.tx_vfo);
             if snap.split == enabled && snap.tx_vfo == new_tx {
@@ -348,8 +365,8 @@ mod tests {
             vfo: Vfo::A,
             mode: Mode::Usb,
         }));
-        // WSJT-X "PKTUSB" decodes to Mode::Unknown but is sent as MD2 (USB), the same frame
-        // the radio already holds, so it must be treated as redundant to avoid the mode beep.
+        // An Unknown mode still writes the USB digit (MD2), so a SetMode(Unknown) on a
+        // USB VFO is the same frame the radio already holds and must be redundant.
         assert!(snap.is_redundant(&StateMutation::SetMode {
             vfo: Vfo::A,
             mode: Mode::Unknown,
@@ -357,6 +374,40 @@ mod tests {
         assert!(!snap.is_redundant(&StateMutation::SetMode {
             vfo: Vfo::A,
             mode: Mode::Cw,
+        }));
+    }
+
+    #[test]
+    fn is_redundant_and_round_trip_for_data_mode() {
+        let state = StateHandle::new();
+        let snap = state.snapshot();
+        // DATA defaults off, so SetDataMode { on: false } is a no-op and on: true is a change.
+        assert!(snap.is_redundant(&StateMutation::SetDataMode {
+            vfo: Vfo::A,
+            on: false,
+        }));
+        assert!(!snap.is_redundant(&StateMutation::SetDataMode {
+            vfo: Vfo::A,
+            on: true,
+        }));
+
+        // Recording the change flips the snapshot and inverts which write is redundant.
+        state.record(
+            StateChange::DataMode {
+                vfo: Vfo::A,
+                on: true,
+            },
+            RadioEventSource::OptimisticWrite,
+        );
+        let snap = state.snapshot();
+        assert!(snap.vfo(Vfo::A).data);
+        assert!(snap.is_redundant(&StateMutation::SetDataMode {
+            vfo: Vfo::A,
+            on: true,
+        }));
+        assert!(!snap.is_redundant(&StateMutation::SetDataMode {
+            vfo: Vfo::A,
+            on: false,
         }));
     }
 

@@ -84,7 +84,12 @@ async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
         }),
         "m" | "\\get_mode" => guard_read(ctx, || {
             let v = snapshot.vfo(snapshot.rx_vfo);
-            format!("{}\n{}\n", v.mode.hamlib_token(), v.passband_hz).into_bytes()
+            format!(
+                "{}\n{}\n",
+                v.mode.hamlib_token_with_data(v.data),
+                v.passband_hz
+            )
+            .into_bytes()
         }),
         "v" | "\\get_vfo" => guard_read(ctx, || {
             format!("{}\n", vfo_name(snapshot.rx_vfo)).into_bytes()
@@ -123,17 +128,36 @@ async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
         },
         "M" | "\\set_mode" => match parts.next() {
             Some(token) => {
-                let mode = Mode::from_hamlib_token(token);
-                outcome_rprt(
-                    ctx.apply_modeled(
+                // The TS-590 splits data operation into a base mode (`MD`) and an
+                // independent DATA flag (`DA`), so a `PKTUSB` request becomes two modeled
+                // writes: the base mode, then the DATA flag. Each is deduped independently,
+                // so re-asserting PKTUSB writes nothing and switching PKTUSB→USB only emits
+                // `DA0`. The base write is applied first; if it fails the data write is
+                // skipped and its error is reported.
+                let (base, data) = Mode::decompose_hamlib_token(token);
+                let mode_outcome = ctx
+                    .apply_modeled(
                         StateMutation::SetMode {
                             vfo: snapshot.rx_vfo,
-                            mode,
+                            mode: base,
                         },
                         CommandClass::ModeledWrite,
                     )
-                    .await,
-                )
+                    .await;
+                if mode_outcome == ApplyOutcome::Ok {
+                    outcome_rprt(
+                        ctx.apply_modeled(
+                            StateMutation::SetDataMode {
+                                vfo: snapshot.rx_vfo,
+                                on: data,
+                            },
+                            CommandClass::ModeledWrite,
+                        )
+                        .await,
+                    )
+                } else {
+                    outcome_rprt(mode_outcome)
+                }
             }
             None => RPRT_EINVAL.to_vec(),
         },
@@ -425,6 +449,66 @@ mod tests {
             .mutations()
             .iter()
             .all(|m| matches!(m, StateMutation::SetVfoFreq { .. })));
+    }
+
+    #[tokio::test]
+    async fn set_mode_pktusb_writes_base_mode_then_data_flag() {
+        // WSJT-X sends PKTUSB/PKTLSB for digital modes. The hub must split it into a base
+        // mode write plus the independent DATA flag. Starting from the default USB/no-data,
+        // PKTLSB is a genuine change on both axes, so both mutations reach the radio in order.
+        let (ctx, backend, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        assert_eq!(reply_of("M PKTLSB 0", &ctx).await, RPRT_OK.to_vec());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            backend.mutations(),
+            vec![
+                StateMutation::SetMode {
+                    vfo: Vfo::A,
+                    mode: Mode::Lsb,
+                },
+                StateMutation::SetDataMode {
+                    vfo: Vfo::A,
+                    on: true,
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn set_mode_plain_clears_data_flag() {
+        // Switching from a data mode to a plain mode must emit DA0. Prime DATA on, then send
+        // plain USB: the base mode is unchanged (deduped) but the DATA-off write lands.
+        let (ctx, backend, state) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        state.record(
+            StateChange::DataMode {
+                vfo: Vfo::A,
+                on: true,
+            },
+            RadioEventSource::PollDiff,
+        );
+        assert_eq!(reply_of("M USB 0", &ctx).await, RPRT_OK.to_vec());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            backend.mutations(),
+            vec![StateMutation::SetDataMode {
+                vfo: Vfo::A,
+                on: false,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn get_mode_composes_pkt_token_when_data_on() {
+        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        state.record(
+            StateChange::DataMode {
+                vfo: Vfo::A,
+                on: true,
+            },
+            RadioEventSource::PollDiff,
+        );
+        // Default base mode is USB; with DATA on a Hamlib client must read PKTUSB.
+        assert_eq!(reply_of("m", &ctx).await, b"PKTUSB\n2400\n".to_vec());
     }
 
     #[tokio::test]

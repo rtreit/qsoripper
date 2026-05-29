@@ -137,6 +137,19 @@ impl RadioBackend for RigctldBackend {
                     .await?;
                 check_rprt(&reply)?;
             }
+            // Compose the DATA flag back onto the current base mode and re-assert the mode
+            // downstream (the bridge target speaks combined Hamlib mode tokens, not a
+            // separate DATA command).
+            StateMutation::SetDataMode { vfo, on } => {
+                let base = state.snapshot().vfo(vfo).mode;
+                let reply = link
+                    .submit(
+                        format!("M {} 0\n", base.hamlib_token_with_data(on)).into_bytes(),
+                        Expect::Lines(1),
+                    )
+                    .await?;
+                check_rprt(&reply)?;
+            }
             StateMutation::SetSplit { enabled, tx_vfo } => {
                 let vfo = match tx_vfo.unwrap_or(Vfo::B) {
                     Vfo::A => "VFOA",

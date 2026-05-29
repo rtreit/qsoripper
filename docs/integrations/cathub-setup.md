@@ -121,13 +121,13 @@ before the launcher starts engines and UIs, so everything connects to the hub's 
 ### WSJT-X
 - Settings > Radio: Rig `Hamlib NET rigctl`, Network Server **127.0.0.1:4533**.
 - PTT method `CAT`. The `wsjtx` endpoint is `perms = ["read", "write", "ptt"]`.
-- **Mode:** set the WSJT-X *Mode* selector to **None** and put the TS-590 in its data
-  position (DATA-USB) on the front panel. The hub speaks the native Kenwood `MD`
-  command set, which exposes SSB/CW/FSK/AM/FM but not the radio's DATA sub-mode, so a
-  WSJT-X *Mode = Data/Pkt* setting would send `PKTUSB`, which the hub can only honor as
-  plain `USB`; the read-back would then disagree with what WSJT-X asked for. *Mode =
-  None* leaves the operator-selected data mode untouched and avoids that mismatch.
-  *Mode = USB* also round-trips cleanly if you prefer WSJT-X to own the SSB mode.
+- **Mode:** set the WSJT-X *Mode* selector to **Data/Pkt** (the default for FT8/WSPR). The
+  hub maps Hamlib's `PKTUSB`/`PKTLSB` to the TS-590's DATA sub-mode by composing the base
+  mode (`MD`) with the radio's independent DATA flag (`DA`): `PKTUSB` -> `MD2;`+`DA1;`,
+  `PKTLSB` -> `MD1;`+`DA1;`, and a plain `USB`/`LSB` clears it with `DA0;`. The mode
+  read-back recomposes the token, so WSJT-X sees `PKTUSB`/`PKTLSB` echoed back and the radio
+  shows its DATA indicator lit. *Mode = None* (operator selects DATA on the front panel) and
+  *Mode = USB* also round-trip cleanly if you prefer to manage the sub-mode yourself.
 - **Split Operation:** `Rig` or `Fake It` both work; the hub tracks split and TX-VFO
   state and never retargets VFO A/B on a poll.
 - **PTT:** WSJT-X keys with Hamlib `RIG_PTT_ON_DATA` (`T 3`). The hub maps the Hamlib PTT
@@ -148,12 +148,14 @@ each FT8/WSPR switch, and the hub forwarded each `MD` set to the radio even when
 unchanged, so the radio chirped. A native Hamlib driver never beeps because it caches state and
 sends a mode command only when the mode actually changes.
 
-The hub now does the same: a modeled write (frequency, mode, split, RIT/XIT) is sent to the
-radio only when it would change the radio. Mode comparison uses the **value written to the
-radio** (the `MD` digit), so WSJT-X's `PKTUSB`/`PKTLSB` — which map to the same wire mode as
-plain USB/LSB — are correctly recognized as no-ops and suppressed. A genuine mode change (for
-example switching to CW) still sends one `MD` command and the radio beeps once, which matches
-native Hamlib behavior. PTT is never suppressed — keying and unkeying always reach the radio.
+The hub now does the same: a modeled write (frequency, mode, DATA sub-mode, split, RIT/XIT)
+is sent to the radio only when it would change the radio. Mode comparison uses the **value
+written to the radio** (the `MD` digit), and the DATA flag (`DA`) is deduped independently, so
+switching between two modes that share the same wire state — for example FT8 and WSPR, which
+are both `PKTUSB` (`MD2`+`DA1`) — is recognized as a no-op and suppressed after the first set.
+A genuine mode change (for example switching to CW, or toggling DATA on/off) still sends one
+command and the radio beeps once, which matches native Hamlib behavior. PTT is never
+suppressed — keying and unkeying always reach the radio.
 
 No radio-menu change is needed. Leave **Beep Volume** at your normal setting.
 
@@ -230,10 +232,4 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
 - On shutdown (Ctrl+C) the daemon makes a best-effort `RX;` to unkey the transmitter. A hard
   crash cannot run that path; the `ptt_max_tx_ms` ceiling and the radio's own TX timeout are
   the ultimate stuck-transmitter backstops.
-- **Data sub-modes (PKTUSB/PKTLSB) are not mapped to the TS-590 DATA mode.** The hub
-  models the native Kenwood `MD` mode set (LSB/USB/CW/CWR/FSK/FSKR/AM/FM). A NET client
-  that requests `PKTUSB`/`PKTLSB` (e.g. WSJT-X with *Mode = Data/Pkt*) is accepted but
-  honored as plain `USB`/`LSB`, so a mode read-back will not echo the data variant.
-  Configure such clients with *Mode = None* (operator selects DATA on the radio) or a
-  plain SSB mode. See the WSJT-X notes in section 5.
 

@@ -109,6 +109,39 @@ impl Mode {
             _ => Mode::Unknown,
         }
     }
+
+    /// Render the mode as a Hamlib token, folding in the radio's DATA sub-mode flag.
+    ///
+    /// The TS-590 models data operation as a base mode (`MD`) plus an independent DATA
+    /// flag (`DA`), so the composed token is what a Hamlib client expects to read back:
+    /// `USB`+data → `PKTUSB`, `LSB`+data → `PKTLSB`, etc. A base mode with no canonical
+    /// `PKT*` token reports its plain token (the DATA flag is still tracked internally).
+    pub(crate) fn hamlib_token_with_data(self, data: bool) -> &'static str {
+        if data {
+            match self {
+                Mode::Usb => "PKTUSB",
+                Mode::Lsb => "PKTLSB",
+                Mode::Fm => "PKTFM",
+                Mode::Am => "PKTAM",
+                _ => self.hamlib_token(),
+            }
+        } else {
+            self.hamlib_token()
+        }
+    }
+
+    /// Split a Hamlib mode token into its base [`Mode`] and DATA sub-mode flag.
+    ///
+    /// A `PKT*` token (WSJT-X sends `PKTUSB` for FT8/WSPR) decomposes into the underlying
+    /// base mode plus `data = true`; every other token is a plain mode with `data = false`,
+    /// so selecting any non-data mode also clears the radio's DATA flag.
+    pub(crate) fn decompose_hamlib_token(token: &str) -> (Mode, bool) {
+        let trimmed = token.trim();
+        match trimmed.strip_prefix("PKT") {
+            Some(base) => (Mode::from_hamlib_token(base), true),
+            None => (Mode::from_hamlib_token(trimmed), false),
+        }
+    }
 }
 
 /// Which transmit audio path a PTT key request selects.
@@ -147,6 +180,13 @@ pub(crate) enum StateMutation {
         /// Mode to set.
         mode: Mode,
     },
+    /// Enable or disable the DATA sub-mode flag (TS-590 `DA`), independent of the base mode.
+    SetDataMode {
+        /// Target VFO.
+        vfo: Vfo,
+        /// Whether the DATA sub-mode is on.
+        on: bool,
+    },
     /// Enable or disable split, optionally choosing the TX VFO.
     SetSplit {
         /// Whether split is enabled.
@@ -183,6 +223,7 @@ impl StateMutation {
         match self {
             StateMutation::SetVfoFreq { vfo, hz } => StateChange::Freq { vfo, hz },
             StateMutation::SetMode { vfo, mode } => StateChange::Mode { vfo, mode },
+            StateMutation::SetDataMode { vfo, on } => StateChange::DataMode { vfo, on },
             StateMutation::SetSplit { enabled, tx_vfo } => StateChange::Split { enabled, tx_vfo },
             StateMutation::SetPtt { keyed, .. } => StateChange::Ptt { keyed },
             StateMutation::SetRit { offset_hz, enabled } => StateChange::Rit { enabled, offset_hz },
@@ -208,6 +249,13 @@ pub(crate) enum StateChange {
         vfo: Vfo,
         /// New mode.
         mode: Mode,
+    },
+    /// A VFO's DATA sub-mode flag changed (TS-590 `DA`).
+    DataMode {
+        /// Affected VFO.
+        vfo: Vfo,
+        /// Whether the DATA sub-mode is on.
+        on: bool,
     },
     /// Split state changed.
     Split {
@@ -242,7 +290,8 @@ impl StateChange {
     pub(crate) fn field(&self) -> Field {
         match *self {
             StateChange::Freq { vfo, .. } => Field::Freq(vfo),
-            StateChange::Mode { vfo, .. } => Field::Mode(vfo),
+            // The DATA flag is part of the composed mode, so it shares the Mode coverage key.
+            StateChange::Mode { vfo, .. } | StateChange::DataMode { vfo, .. } => Field::Mode(vfo),
             StateChange::Split { .. } => Field::Split,
             StateChange::Ptt { .. } => Field::Ptt,
             StateChange::Rit { .. } => Field::Rit,
@@ -332,6 +381,55 @@ mod tests {
             assert_eq!(Mode::from_hamlib_token(mode.hamlib_token()), mode);
         }
         assert_eq!(Mode::from_hamlib_token("WAT"), Mode::Unknown);
+    }
+
+    #[test]
+    fn hamlib_data_tokens_compose_and_decompose() {
+        // Base modes with a canonical PKT token fold in the DATA flag.
+        assert_eq!(Mode::Usb.hamlib_token_with_data(true), "PKTUSB");
+        assert_eq!(Mode::Lsb.hamlib_token_with_data(true), "PKTLSB");
+        assert_eq!(Mode::Fm.hamlib_token_with_data(true), "PKTFM");
+        assert_eq!(Mode::Am.hamlib_token_with_data(true), "PKTAM");
+        // DATA off (or a base with no PKT token) renders the plain token.
+        assert_eq!(Mode::Usb.hamlib_token_with_data(false), "USB");
+        assert_eq!(Mode::Cw.hamlib_token_with_data(true), "CW");
+
+        // WSJT-X sends PKTUSB for FT8/WSPR; it must split into USB + DATA on.
+        assert_eq!(Mode::decompose_hamlib_token("PKTUSB"), (Mode::Usb, true));
+        assert_eq!(Mode::decompose_hamlib_token("PKTLSB"), (Mode::Lsb, true));
+        // Plain tokens decompose to the base mode with DATA cleared.
+        assert_eq!(Mode::decompose_hamlib_token("USB"), (Mode::Usb, false));
+        assert_eq!(Mode::decompose_hamlib_token("CW"), (Mode::Cw, false));
+
+        // Compose/decompose round-trips for the data-capable base modes.
+        for mode in [Mode::Usb, Mode::Lsb, Mode::Fm, Mode::Am] {
+            let token = mode.hamlib_token_with_data(true);
+            assert_eq!(Mode::decompose_hamlib_token(token), (mode, true));
+        }
+    }
+
+    #[test]
+    fn data_mode_mutation_into_change_round_trips() {
+        assert_eq!(
+            StateMutation::SetDataMode {
+                vfo: Vfo::A,
+                on: true,
+            }
+            .into_change(),
+            StateChange::DataMode {
+                vfo: Vfo::A,
+                on: true,
+            }
+        );
+        // DataMode shares the Mode coverage key so native MD/DA pushes can't fight.
+        assert_eq!(
+            StateChange::DataMode {
+                vfo: Vfo::B,
+                on: false,
+            }
+            .field(),
+            Field::Mode(Vfo::B)
+        );
     }
 
     #[test]

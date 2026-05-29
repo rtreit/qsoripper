@@ -18,7 +18,7 @@ use crate::radio::{Expect, RadioLink};
 use crate::state::StateHandle;
 
 /// The baseline poll command set. Read-only queries only: **never** `FR`/`FT` (§8.8).
-const POLL_COMMANDS: &[&[u8]] = &[b"FA;", b"FB;", b"MD;"];
+const POLL_COMMANDS: &[&[u8]] = &[b"FA;", b"FB;", b"MD;", b"DA;"];
 
 /// The native TS-590 backend.
 #[derive(Clone, Default)]
@@ -91,6 +91,16 @@ impl RadioBackend for Ts590Backend {
             StateMutation::SetMode { mode, .. } => {
                 vec![b'M', b'D', mode.to_kenwood_digit(), b';']
             }
+            // The DATA sub-mode is an independent flag on the TS-590, set with `DA1;`/`DA0;`
+            // and read back with `DA;`. It composes with the base `MD` mode so a USB+DATA
+            // (PKTUSB) request is `MD2;` followed by `DA1;`.
+            StateMutation::SetDataMode { on, .. } => {
+                if on {
+                    b"DA1;".to_vec()
+                } else {
+                    b"DA0;".to_vec()
+                }
+            }
             StateMutation::SetPtt { keyed, source } => {
                 if keyed {
                     // Mirror Hamlib's TS-590 mapping so digital clients modulate from the
@@ -153,6 +163,10 @@ impl RadioBackend for Ts590Backend {
             b"MD" => Some(StateMutation::SetMode {
                 vfo: Vfo::A,
                 mode: Mode::from_kenwood_digit(*payload.first()?),
+            }),
+            b"DA" => Some(StateMutation::SetDataMode {
+                vfo: Vfo::A,
+                on: *payload.first()? == b'1',
             }),
             _ => None,
         }
@@ -232,6 +246,20 @@ mod tests {
             Some(StateMutation::SetMode {
                 vfo: Vfo::A,
                 mode: Mode::Cw
+            })
+        );
+        assert_eq!(
+            backend.parse_event(b"DA1;"),
+            Some(StateMutation::SetDataMode {
+                vfo: Vfo::A,
+                on: true
+            })
+        );
+        assert_eq!(
+            backend.parse_event(b"DA0;"),
+            Some(StateMutation::SetDataMode {
+                vfo: Vfo::A,
+                on: false
             })
         );
         assert_eq!(backend.parse_event(b"ZZ;"), None);
@@ -352,6 +380,7 @@ mod tests {
                         b"FA;" => b"FA00007030000;",
                         b"FB;" => b"FB00014250000;",
                         b"MD;" => b"MD3;",
+                        b"DA;" => b"DA1;",
                         _ => b"",
                     };
                     let _ = wr.write_all(answer).await;
@@ -365,6 +394,49 @@ mod tests {
         assert_eq!(snap.vfo(Vfo::A).freq_hz, 7_030_000);
         assert_eq!(snap.vfo(Vfo::B).freq_hz, 14_250_000);
         assert_eq!(snap.vfo(Vfo::A).mode, Mode::Cw);
+        assert!(snap.vfo(Vfo::A).data, "DA; reply should set the DATA flag");
+    }
+
+    #[tokio::test]
+    async fn apply_data_mode_writes_da_frame() {
+        let (link, raw_rx) = link_channel();
+        let backend = Arc::new(Ts590Backend::new());
+        let arc: Arc<dyn RadioBackend> = backend.clone();
+        let state = StateHandle::new();
+        let (mut radio_side, server) = tokio::io::duplex(1024);
+        tokio::spawn(run_transport(server, arc, state.clone(), raw_rx));
+
+        backend
+            .apply(
+                StateMutation::SetDataMode {
+                    vfo: Vfo::A,
+                    on: true,
+                },
+                &link,
+                &state,
+            )
+            .await
+            .expect("set data on");
+        let mut buf = vec![0u8; 4];
+        radio_side.read_exact(&mut buf).await.expect("read da on");
+        assert_eq!(&buf, b"DA1;");
+        assert!(state.snapshot().vfo(Vfo::A).data);
+
+        backend
+            .apply(
+                StateMutation::SetDataMode {
+                    vfo: Vfo::A,
+                    on: false,
+                },
+                &link,
+                &state,
+            )
+            .await
+            .expect("set data off");
+        let mut buf = vec![0u8; 4];
+        radio_side.read_exact(&mut buf).await.expect("read da off");
+        assert_eq!(&buf, b"DA0;");
+        assert!(!state.snapshot().vfo(Vfo::A).data);
     }
 
     #[test]
