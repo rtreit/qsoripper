@@ -227,7 +227,13 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
         );
         let port = open_serial(&face.name, &face.transport, face.baud)?;
         tokio::spawn(run_face(port, dialect, ctx, b';'));
-        tracing::info!(face = %face.name, id, "serial face listening");
+        tracing::info!(
+            face = %face.name,
+            id,
+            hub_port = %face.transport,
+            "serial face listening; hub owns this port -- point the application at the paired \
+             com0com port, not this one"
+        );
     }
 
     for ep in &cfg.hamlib_net {

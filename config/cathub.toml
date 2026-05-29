@@ -48,6 +48,15 @@ bind = "127.0.0.1:4534"
 perms = ["read", "write"]
 
 # --- Serial faces (com0com virtual pairs) ----------------------------------------------
+#
+# IMPORTANT: each com0com pair has TWO port numbers. The daemon binds the port named below
+# (`transport`); your application must connect to the OTHER port in the same pair. Never
+# point an application at the daemon's port -- they cannot both open the same port.
+#
+#   pair                 daemon binds (transport)   application connects to
+#   COM10 <-> COM11      COM10                      COM11  (HDSDR / OmniRig)
+#   COM20 <-> COM21      COM20                      COM21  (N1MM)
+#   COM30 <-> COM31      COM30                      COM31  (ARCP-590)
 
 # HDSDR via OmniRig as a TS-2000-style controller. Read-only: the panadapter follows the
 # radio but never retargets a VFO. The ts2000 dialect rejects VFO-target writes by design.

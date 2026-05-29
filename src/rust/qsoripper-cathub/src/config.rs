@@ -328,6 +328,35 @@ impl Config {
                 ep.name, ep.bind, ep.perms
             );
         }
+        if !self.face.is_empty() || !self.hamlib_net.is_empty() {
+            out.push('\n');
+            let _ = writeln!(
+                out,
+                "Client connection guide -- point each application HERE, never at the radio's own \
+                 port ({}):",
+                self.radio.port
+            );
+            for face in &self.face {
+                let _ = writeln!(
+                    out,
+                    "  - {name}: the hub OWNS serial port {port}. Point {name} at the OTHER port \
+                     of that com0com pair (e.g. com0com COMa<->COMb: hub={port}, app=the paired \
+                     port), {dialect} dialect, {baud} baud.",
+                    name = face.name,
+                    port = face.transport,
+                    dialect = face.dialect,
+                    baud = face.baud,
+                );
+            }
+            for ep in &self.hamlib_net {
+                let _ = writeln!(
+                    out,
+                    "  - {name}: point this application at {bind} as a Hamlib NET (rigctld) device.",
+                    name = ep.name,
+                    bind = ep.bind,
+                );
+            }
+        }
         out
     }
 
@@ -498,6 +527,10 @@ backend = "loopback"
         assert!(text.contains("events: native_push=true"));
         assert!(text.contains("face: name=n1mm"));
         assert!(text.contains("hamlib_net: name=engine"));
+        assert!(text.contains("Client connection guide"));
+        assert!(
+            text.contains("point the application at the paired") || text.contains("OTHER port")
+        );
     }
 
     #[test]

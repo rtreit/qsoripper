@@ -37,6 +37,12 @@ each pair; the application binds the second. Using the com0com "setupc" tool, cr
 WSJT-X, Log4OM, and the QsoRipper engine use the Hamlib NET (TCP) endpoints instead and need
 no serial pair.
 
+Each pair has two COM numbers: a **daemon side** (the lower, even number COM10/20/30 that the
+hub opens via `transport`) and an **application side** (the partner COM11/21/31). Point each
+application at its application-side port. The daemon-side port is held open by the hub, so it
+typically will **not** appear in an application's COM-port dropdown at all -- that is expected,
+and the partner port (COM11/21/31) is the one to select.
+
 ## 3. Configure the daemon
 
 The daemon settings live in the unified per-user `config.toml` shared with the engine and the
@@ -141,6 +147,8 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
 
 - "Access denied" / port busy on COM4: the legacy chain or another app still owns the radio
   port (step 1).
+- An app's COM dropdown does not list the daemon-side port (COM10/20/30): expected. The hub
+  holds that port open, so applications only see the partner port. Select COM11/21/31 instead.
 - An app sees no data on its serial port: the com0com pair is reversed or the app is on the
   daemon's half of the pair. The app binds the **second** port of each pair (COM11/21/31).
 - A NET client cannot connect: confirm the bind address/port in `config\cathub.toml` matches
