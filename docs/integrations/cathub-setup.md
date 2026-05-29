@@ -104,9 +104,10 @@ before the launcher starts engines and UIs, so everything connects to the hub's 
 
 ### HDSDR (via OmniRig)
 - OmniRig: Rig type `Kenwood TS-2000`, port **COM11**, baud 115200, 8-N-1.
-- The `hdsdr-omnirig` face is `dialect = "ts2000"`, `perms = ["read"]`. The panadapter
-  follows the radio; VFO-target writes from the TS-2000 dialect are rejected by design, so
-  HDSDR can never oscillate the TS-590's VFO.
+- The `hdsdr-omnirig` face is `dialect = "ts2000"`, `perms = ["read", "write"]`. The panadapter
+  follows the radio, and click-to-tune on the waterfall sets the radio frequency/mode
+  (`FA`/`FB`/`MD`). VFO-target writes (`FR`/`FT`) from the TS-2000 dialect are still rejected by
+  design, so HDSDR can tune but can never oscillate the TS-590's A/B VFO selection.
 
 ### N1MM Logger+
 - Configurer > Hardware: radio `Kenwood`, port **COM21**, 115200, 8-N-1, no flow control.
@@ -130,6 +131,11 @@ before the launcher starts engines and UIs, so everything connects to the hub's 
 - The TUI and GUI both consume the engine over gRPC; neither talks to the radio directly, so
   both get a consistent view fed by the same hub. TCP allows the engine and any other NET
   client to share an endpoint simultaneously.
+- Keep `[rig_control].stale_threshold_ms` low (e.g. **200**) when reading through cathub. The hub
+  serves reads from its in-memory state cache (kept current by the radio's native AI2 push), so a
+  short freshness window is cheap and makes the GUI/TUI frequency display follow knob turns almost
+  immediately. A large value such as 5000 makes the engine reuse a stale snapshot for that many
+  milliseconds and the UI lags behind the radio by up to that interval.
 
 ## 6. Verify (bench)
 
