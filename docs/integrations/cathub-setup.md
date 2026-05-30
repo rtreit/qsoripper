@@ -92,13 +92,21 @@ Stop the hub with Ctrl+C in its window, or:
 ### Cold-start workflow (build + launch everything)
 
 For a clean start after logon, build all artifacts and then launch the hub together with the
-engines and UIs from one command:
+engines and UIs from the launcher TUI:
 
-    .\build.ps1                  # publishes qsoripper-cathub alongside the engines/UIs
-    .\launcher.ps1 -WithCatHub   # starts the CAT hub first, then the launcher TUI
+    .\build.ps1        # publishes qsoripper-cathub alongside the engines/UIs
+    .\launcher.ps1     # opens the launcher TUI
 
-`-WithCatHub` brings the radio daemon up in its own window (reading the unified `config.toml`)
-before the launcher starts engines and UIs, so everything connects to the hub's rigctld face.
+In the launcher, the first column ("Services") lists the **CAT hub daemon (rigctld :4532)**
+above the engines. Check it with `Space`, then press `Enter`. The launcher starts the hub
+first, waits for its rigctld face on `127.0.0.1:4532`, and only then starts the selected
+engines and UIs so everything connects to the hub. If the hub fails to come up the launcher
+aborts the rest of the launch; check `.\scripts\Get-CatHubLog.ps1 -Follow` for the cause. The
+hub reads the unified `config.toml` when it has a `[cat_hub]` table, otherwise the repo sample
+`config\cathub.toml`. Your selection (including the hub) is remembered for next time.
+
+`.\scripts\Start-CatHub.ps1` remains available as a manual, foreground helper for running the
+hub on its own (for example with `-DryRun` to validate config).
 
 ## 5. Point each application at the hub
 
