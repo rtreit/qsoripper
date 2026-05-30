@@ -212,6 +212,61 @@ function Copy-PublishArtifact {
     }
 }
 
+function Test-FileLocked {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    try {
+        $stream = [System.IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
+        $stream.Close()
+        $stream.Dispose()
+        return $false
+    }
+    catch [System.IO.IOException] {
+        return $true
+    }
+    catch [System.UnauthorizedAccessException] {
+        return $true
+    }
+}
+
+function Clear-LockedPublishArtifacts {
+    param([Parameter(Mandatory)] [string] $DestinationDir)
+
+    # Before `dotnet publish` overwrites an output directory, side-line any files
+    # that are still locked by a running app (common with launcher.ps1 -Rebuild
+    # while the GUI/engine is open). MSBuild's own copy retries then fails hard
+    # (MSB3021/MSB3027) when a published DLL/EXE is in use. On Windows a running
+    # executable or loaded DLL can be renamed but not overwritten, so renaming the
+    # locked file aside frees the path for the fresh publish output. The running
+    # process keeps using the renamed file; the next launch picks up the new build.
+    if (-not (Test-Path -LiteralPath $DestinationDir)) {
+        return
+    }
+
+    Get-ChildItem -LiteralPath $DestinationDir -Recurse -Filter '*.locked-*.old' -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop } catch { }
+        }
+
+    $stamp = [DateTimeOffset]::UtcNow.ToString('yyyyMMddHHmmssfff')
+    Get-ChildItem -LiteralPath $DestinationDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike '*.locked-*.old' } |
+        ForEach-Object {
+            if (Test-FileLocked -Path $_.FullName) {
+                $sidelined = "$($_.FullName).locked-$stamp.old"
+                try {
+                    Move-Item -LiteralPath $_.FullName -Destination $sidelined -Force -ErrorAction Stop
+                    Write-Host "  (side-lined in-use file $($_.Name); previous binary moved aside)" -ForegroundColor DarkYellow
+                }
+                catch { }
+            }
+        }
+}
+
 function Build-Rust {
     $arguments = @('build', '--manifest-path', $RustManifest)
     if ($IsReleaseBuild) {
@@ -338,6 +393,7 @@ function Build-Dotnet {
     if ($needsVcEnv) {
         $arch = if ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq 'Arm64') { 'arm64' } else { 'amd64' }
         Write-Step "Publishing QsoRipper.Cli Native AOT ($Configuration)"
+        Clear-LockedPublishArtifacts -DestinationDir $DotnetCliPublishDir
         cmd /c "call `"$vcvarsAll`" $arch >nul 2>&1 && dotnet $($publishArgs -join ' ')"
         if ($LASTEXITCODE -ne 0) {
             Write-Host "FAILED: Publishing QsoRipper.Cli Native AOT ($Configuration)" -ForegroundColor Red
@@ -345,9 +401,11 @@ function Build-Dotnet {
         }
     }
     else {
+        Clear-LockedPublishArtifacts -DestinationDir $DotnetCliPublishDir
         Invoke-Build "Publishing QsoRipper.Cli Native AOT ($Configuration)" dotnet $publishArgs
     }
 
+    Clear-LockedPublishArtifacts -DestinationDir $DotnetGuiPublishDir
     Invoke-Build "Publishing QsoRipper.Gui ($Configuration)" dotnet @(
         'publish',
         $DotnetGuiProject,
@@ -358,6 +416,7 @@ function Build-Dotnet {
         $DotnetGuiPublishDir
     )
 
+    Clear-LockedPublishArtifacts -DestinationDir $DotnetEnginePublishDir
     Invoke-Build "Publishing QsoRipper.Engine.DotNet ($Configuration)" dotnet @(
         'publish',
         $DotnetEngineProject,
@@ -368,6 +427,7 @@ function Build-Dotnet {
         $DotnetEnginePublishDir
     )
 
+    Clear-LockedPublishArtifacts -DestinationDir $DotnetDebugHostPublishDir
     Invoke-Build "Publishing QsoRipper.DebugHost ($Configuration)" dotnet @(
         'publish',
         $DotnetDebugHostProject,
@@ -379,6 +439,7 @@ function Build-Dotnet {
     )
 
     if (Test-Path $CwScopeGuiProject) {
+        Clear-LockedPublishArtifacts -DestinationDir $CwScopeGuiPublishDir
         Invoke-Build "Publishing CwDecoderGui ($Configuration)" dotnet @(
             'publish',
             $CwScopeGuiProject,
