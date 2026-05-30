@@ -751,7 +751,7 @@ const SUPPORTED_FIELDS: &[ConfigFieldSpec] = &[
         kind: RuntimeConfigValueKind::Integer,
         secret: false,
         allowed_values: &[],
-        default_value: Some("500"),
+        default_value: Some("200"),
     },
 ];
 
