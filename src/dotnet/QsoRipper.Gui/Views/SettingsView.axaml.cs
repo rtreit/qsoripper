@@ -102,6 +102,7 @@ internal sealed partial class SettingsView : Window
             2 => this.FindControl<Control>("SettingsAutoSyncCheckBox"),
             3 => this.FindControl<Control>("SettingsQrzXmlUsernameBox"),
             4 => this.FindControl<Control>("SettingsRigControlEnabledCheckBox"),
+            5 => this.FindControl<Control>("SettingsCatHubBackendBox"),
             _ => null
         };
 
@@ -147,6 +148,11 @@ internal sealed partial class SettingsView : Window
             case Key.D5:
             case Key.NumPad5:
                 vm.SelectRigSectionCommand.Execute(null);
+                e.Handled = true;
+                return true;
+            case Key.D6:
+            case Key.NumPad6:
+                vm.SelectCatHubSectionCommand.Execute(null);
                 e.Handled = true;
                 return true;
             case Key.Tab:
