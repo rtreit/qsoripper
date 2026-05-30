@@ -1273,6 +1273,21 @@ fn load_persisted_config(config_path: &Path) -> Result<Option<PersistedSetupConf
     Ok(Some(config))
 }
 
+/// Top-level TOML keys owned by the engine setup config. On save these are replaced
+/// wholesale; every other top-level table (for example `[cat_hub]` written by the CAT hub
+/// daemon and `[launcher]` written by the launcher) is preserved untouched so the unified
+/// `config.toml` can be safely shared across all `QsoRipper` components.
+const ENGINE_OWNED_CONFIG_KEYS: [&str; 8] = [
+    "logbook",
+    "storage",
+    "station_profile",
+    "station_profiles",
+    "qrz_xml",
+    "qrz_logbook",
+    "sync",
+    "rig_control",
+];
+
 fn write_persisted_config(config_path: &Path, config: &PersistedSetupConfig) -> Result<(), String> {
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
@@ -1283,13 +1298,48 @@ fn write_persisted_config(config_path: &Path, config: &PersistedSetupConfig) -> 
         })?;
     }
 
-    let content = toml::to_string_pretty(config).map_err(|error| {
+    // Serialize only the engine-owned config, then splice it into the existing document so
+    // unknown top-level tables survive. Engine-owned tables are canonicalized (their inline
+    // comments/order are not preserved); unknown tables are preserved verbatim.
+    let owned_text = toml::to_string_pretty(config).map_err(|error| {
         format!(
             "Failed to serialize persisted setup config '{}': {error}",
             config_path.display()
         )
     })?;
-    fs::write(config_path, content).map_err(|error| {
+    let owned_doc: toml_edit::DocumentMut = owned_text.parse().map_err(|error| {
+        format!(
+            "Failed to re-parse serialized setup config '{}': {error}",
+            config_path.display()
+        )
+    })?;
+
+    let mut doc: toml_edit::DocumentMut = match fs::read_to_string(config_path) {
+        Ok(existing) => existing.parse().map_err(|error| {
+            format!(
+                "Failed to parse existing config '{}': {error}",
+                config_path.display()
+            )
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => toml_edit::DocumentMut::new(),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read existing config '{}': {error}",
+                config_path.display()
+            ));
+        }
+    };
+
+    // Drop every engine-owned key (clearing tables the wizard intentionally emptied), then
+    // re-insert exactly the keys the serializer produced.
+    for key in ENGINE_OWNED_CONFIG_KEYS {
+        doc.remove(key);
+    }
+    for (key, item) in owned_doc.iter() {
+        doc.insert(key, item.clone());
+    }
+
+    fs::write(config_path, doc.to_string()).map_err(|error| {
         format!(
             "Failed to write config '{}': {error}",
             config_path.display()
@@ -1820,11 +1870,11 @@ mod tests {
     use super::{
         build_log_file_step, build_qrz_integration_step, build_review_step,
         build_station_profiles_step, build_wizard_steps, default_config_path,
-        suggested_log_file_path, validate_log_file_step, validate_qrz_step,
-        validate_station_profiles_step, PersistedSetupConfig, SetupControlSurface, SetupState,
-        StationProfileControlSurface, DEFAULT_CONFIG_FILE_NAME, RIGCTLD_ENABLED_ENV_VAR,
-        RIGCTLD_HOST_ENV_VAR, RIGCTLD_PORT_ENV_VAR, RIGCTLD_READ_TIMEOUT_MS_ENV_VAR,
-        RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR,
+        load_persisted_config, suggested_log_file_path, validate_log_file_step, validate_qrz_step,
+        validate_station_profiles_step, write_persisted_config, PersistedSetupConfig,
+        SetupControlSurface, SetupState, StationProfileControlSurface, DEFAULT_CONFIG_FILE_NAME,
+        RIGCTLD_ENABLED_ENV_VAR, RIGCTLD_HOST_ENV_VAR, RIGCTLD_PORT_ENV_VAR,
+        RIGCTLD_READ_TIMEOUT_MS_ENV_VAR, RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR,
     };
     use crate::runtime_config::RuntimeConfigManager;
     use qsoripper_core::proto::qsoripper::domain::{ConflictPolicy, StationProfile, SyncConfig};
@@ -3284,6 +3334,91 @@ password = "legacy_secret"
 
         drop(service);
         let config_directory = config_path.parent().expect("config directory");
+        fs::remove_dir_all(config_directory).expect("remove temp config directory");
+    }
+
+    #[test]
+    fn write_persisted_config_preserves_unknown_tables() {
+        // The unified config.toml is shared with the CAT hub daemon ([cat_hub]) and the
+        // launcher ([launcher]); an engine setup save must not clobber those sections.
+        let config_path = unique_config_path();
+        let config_directory = config_path.parent().expect("config directory");
+        fs::create_dir_all(config_directory).expect("create config directory");
+        fs::write(
+            &config_path,
+            r#"[cat_hub.radio]
+backend = "ts590"
+port = "COM4"
+
+[[cat_hub.face]]
+name = "n1mm"
+transport = "COM11"
+dialect = "ts590"
+
+[[cat_hub.hamlib_net]]
+name = "engine"
+bind = "127.0.0.1:4532"
+
+[launcher]
+engines = [1]
+"#,
+        )
+        .expect("seed config");
+
+        let config = PersistedSetupConfig::default();
+        write_persisted_config(&config_path, &config).expect("write");
+
+        let saved = fs::read_to_string(&config_path).expect("read");
+        assert!(saved.contains("[cat_hub.radio]"), "cat_hub.radio: {saved}");
+        assert!(saved.contains("port = \"COM4\""), "radio port: {saved}");
+        assert!(saved.contains("[[cat_hub.face]]"), "cat_hub.face: {saved}");
+        assert!(
+            saved.contains("[[cat_hub.hamlib_net]]"),
+            "cat_hub.hamlib_net: {saved}"
+        );
+        assert!(saved.contains("[launcher]"), "launcher: {saved}");
+
+        // The engine can still load its own config from the merged document.
+        load_persisted_config(&config_path)
+            .expect("load")
+            .expect("config present");
+
+        fs::remove_dir_all(config_directory).expect("remove temp config directory");
+    }
+
+    #[test]
+    fn write_persisted_config_removes_cleared_engine_tables() {
+        // When the wizard clears an engine-owned table, the stale section must be removed,
+        // while unknown sections such as [cat_hub] are preserved.
+        let config_path = unique_config_path();
+        let config_directory = config_path.parent().expect("config directory");
+        fs::create_dir_all(config_directory).expect("create config directory");
+        fs::write(
+            &config_path,
+            r#"[rig_control]
+enabled = true
+host = "127.0.0.1"
+port = 4532
+
+[cat_hub.radio]
+backend = "ts590"
+"#,
+        )
+        .expect("seed config");
+
+        let config = PersistedSetupConfig::default();
+        write_persisted_config(&config_path, &config).expect("write");
+
+        let saved = fs::read_to_string(&config_path).expect("read");
+        assert!(
+            !saved.contains("[rig_control]"),
+            "stale rig_control should be removed: {saved}"
+        );
+        assert!(
+            saved.contains("[cat_hub.radio]"),
+            "cat_hub must survive: {saved}"
+        );
+
         fs::remove_dir_all(config_directory).expect("remove temp config directory");
     }
 }

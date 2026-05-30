@@ -1,0 +1,86 @@
+# qsoripper-cathub configuration for this station.
+#
+# One daemon owns the TS-590 on COM4 (Silicon Labs CP210x USB-UART) and fans it out to
+# every application over its native protocol. No application talks to the radio directly,
+# so there is no VFO A/B oscillation, no frequency drift, and no PTT contention.
+#
+# Validate without touching hardware:
+#   cargo run -p qsoripper-cathub -- --config config/cathub.toml --dry-run
+#
+# Virtual serial pairs (com0com): the daemon binds the first port of each pair, the
+# application binds the second. Create one pair per serial client.
+
+[radio]
+backend = "ts590"        # first-class native Kenwood TS-590 driver (no Hamlib linked)
+model = "TS-590SG"
+transport = "serial"
+port = "COM4"
+baud = 57600             # MUST match the radio's PC/CAT port speed (TS-590 menu 62)
+
+[poll]
+baseline_ms = 200        # used only while native push is unavailable
+heartbeat_ms = 2000      # slow liveness poll once native push covers a field
+
+[ptt]
+max_tx_ms = 300000       # 5-minute hard transmit ceiling (backstop for a crashed client)
+
+[events]
+native_push = true       # daemon enables and owns the TS-590 AI2; stream
+
+# --- Hamlib NET (rigctld-compatible) TCP endpoints -------------------------------------
+
+# Read-only endpoint for the QsoRipper engine's RigctldProvider.
+[[hamlib_net]]
+name = "engine"
+bind = "127.0.0.1:4532"
+perms = ["read"]
+
+# Write + PTT endpoint for WSJT-X (configured as Hamlib NET rigctl).
+[[hamlib_net]]
+name = "wsjtx"
+bind = "127.0.0.1:4533"
+perms = ["read", "write", "ptt"]
+
+# Read/write endpoint for Log4OM (CAT over Hamlib NET rigctl).
+[[hamlib_net]]
+name = "log4om"
+bind = "127.0.0.1:4534"
+perms = ["read", "write"]
+
+# --- Serial faces (com0com virtual pairs) ----------------------------------------------
+#
+# IMPORTANT: each com0com pair has TWO port numbers. The daemon binds the port named below
+# (`transport`); your application must connect to the OTHER port in the same pair. Never
+# point an application at the daemon's port -- they cannot both open the same port.
+#
+#   pair                 daemon binds (transport)   application connects to
+#   COM10 <-> COM11      COM10                      COM11  (HDSDR / OmniRig)
+#   COM20 <-> COM21      COM20                      COM21  (N1MM)
+#   COM30 <-> COM31      COM30                      COM31  (ARCP-590)
+
+# HDSDR via OmniRig as a TS-2000-style controller. Read + write: the panadapter follows the
+# radio, and click-to-tune on the waterfall sets the radio frequency/mode (FA/FB/MD writes).
+# The ts2000 dialect still rejects VFO-target writes (FR/FT) by design, so HDSDR can tune but
+# can never oscillate the TS-590's A/B VFO selection.
+[[face]]
+name = "hdsdr-omnirig"
+transport = "COM10"      # OmniRig binds COM11
+baud = 115200
+dialect = "ts2000"
+perms = ["read", "write"]
+
+# N1MM Logger+ as a native TS-590.
+[[face]]
+name = "n1mm"
+transport = "COM20"      # N1MM binds COM21
+baud = 115200
+dialect = "ts590"
+perms = ["read", "write", "ptt"]
+
+# ARCP-590 control panel: full faceplate control, including EX-menu (config_write).
+[[face]]
+name = "arcp590"
+transport = "COM30"      # ARCP-590 binds COM31
+baud = 115200
+dialect = "ts590"
+perms = ["read", "write", "ptt", "config_write"]
