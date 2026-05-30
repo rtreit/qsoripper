@@ -3,12 +3,16 @@
 use std::collections::BTreeMap;
 
 #[cfg(test)]
+use crate::catalog::DAEMON_CATHUB;
+#[cfg(test)]
 use crate::catalog::ENGINE_DOTNET;
 use crate::catalog::{catalog, ComponentId, ComponentKind, ENGINE_RUST, UI_DEBUGHOST, UI_GUI};
 
 /// User-editable launcher selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Selection {
+    /// Background daemons (e.g. the CAT hub) the user wants started first.
+    pub daemons: Vec<ComponentId>,
     /// Engines the user wants started.
     pub engines: Vec<ComponentId>,
     /// UIs the user wants started.
@@ -19,15 +23,22 @@ pub(crate) struct Selection {
 
 impl Selection {
     /// Default selection: Rust engine + Avalonia GUI + `DebugHost`, both bound to Rust.
+    /// Daemons stay off by default so the launcher never grabs the radio serial
+    /// port on machines without one attached.
     pub(crate) fn default_preset() -> Self {
         let mut bindings = BTreeMap::new();
         bindings.insert(UI_GUI, ENGINE_RUST);
         bindings.insert(UI_DEBUGHOST, ENGINE_RUST);
         Self {
+            daemons: Vec::new(),
             engines: vec![ENGINE_RUST],
             uis: vec![UI_GUI, UI_DEBUGHOST],
             bindings,
         }
+    }
+
+    pub(crate) fn daemon_selected(&self, id: ComponentId) -> bool {
+        self.daemons.contains(&id)
     }
 
     pub(crate) fn engine_selected(&self, id: ComponentId) -> bool {
@@ -38,14 +49,15 @@ impl Selection {
         self.uis.contains(&id)
     }
 
-    /// Toggle membership of `id` in either the engines or UIs list, depending
-    /// on the component kind. UIs that get unchecked keep their binding so it
-    /// is restored if the user toggles them back on.
+    /// Toggle membership of `id` in the daemons, engines, or UIs list,
+    /// depending on the component kind. UIs that get unchecked keep their
+    /// binding so it is restored if the user toggles them back on.
     pub(crate) fn toggle(&mut self, id: ComponentId) {
         let Some(spec) = catalog().into_iter().find(|c| c.id == id) else {
             return;
         };
         let list = match spec.kind {
+            ComponentKind::Daemon => &mut self.daemons,
             ComponentKind::Engine => &mut self.engines,
             ComponentKind::Ui => &mut self.uis,
         };
@@ -126,6 +138,25 @@ mod tests {
         assert!(sel.engine_selected(ENGINE_DOTNET));
         sel.toggle(ENGINE_DOTNET);
         assert!(!sel.engine_selected(ENGINE_DOTNET));
+    }
+
+    #[test]
+    fn toggle_routes_daemon_into_daemons_list() {
+        let mut sel = Selection::default_preset();
+        assert!(sel.daemons.is_empty());
+        sel.toggle(DAEMON_CATHUB);
+        assert!(sel.daemon_selected(DAEMON_CATHUB));
+        assert!(!sel.engine_selected(DAEMON_CATHUB));
+        sel.toggle(DAEMON_CATHUB);
+        assert!(!sel.daemon_selected(DAEMON_CATHUB));
+    }
+
+    #[test]
+    fn set_binding_rejects_daemon_as_engine_target() {
+        let mut sel = Selection::default_preset();
+        // The CAT hub daemon must never be selectable as a UI's engine.
+        sel.set_binding(UI_GUI, DAEMON_CATHUB);
+        assert_eq!(sel.bindings.get(&UI_GUI), Some(&ENGINE_RUST));
     }
 
     #[test]

@@ -10,6 +10,9 @@ pub(crate) type ComponentId = &'static str;
 /// Whether a component is an engine (acts as a gRPC server) or a UI client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ComponentKind {
+    /// Background daemon/service that must be up before engines connect
+    /// (e.g. the CAT hub that owns the radio serial port).
+    Daemon,
     /// Engine that exposes a gRPC endpoint on a known TCP port.
     Engine,
     /// UI client that connects to one of the running engines.
@@ -22,7 +25,8 @@ pub(crate) struct ComponentSpec {
     pub id: ComponentId,
     pub display_name: &'static str,
     pub kind: ComponentKind,
-    /// `Some(port)` for engines that listen on a canonical 127.0.0.1 port.
+    /// Canonical 127.0.0.1 readiness port: an engine's gRPC port, or a
+    /// daemon's primary listening port. `None` for UIs and portless services.
     pub engine_port: Option<u16>,
     /// `true` if the UI honors `QSORIPPER_ENGINE` / `QSORIPPER_ENDPOINT` envs
     /// to pick an engine. Used to decide whether to show a binding picker.
@@ -61,6 +65,7 @@ impl ArtifactSpec {
     }
 }
 
+pub(crate) const DAEMON_CATHUB: ComponentId = "cathub";
 pub(crate) const ENGINE_RUST: ComponentId = "rust-engine";
 pub(crate) const ENGINE_DOTNET: ComponentId = "dotnet-engine";
 pub(crate) const UI_GUI: ComponentId = "gui";
@@ -72,6 +77,18 @@ pub(crate) const UI_WIN32: ComponentId = "win32";
 /// Static list of every component the launcher manages.
 pub(crate) fn catalog() -> Vec<ComponentSpec> {
     vec![
+        ComponentSpec {
+            id: DAEMON_CATHUB,
+            display_name: "CAT hub daemon (rigctld :4532)",
+            kind: ComponentKind::Daemon,
+            engine_port: Some(4532),
+            engine_bindable: false,
+            wants_console: false,
+            artifact: ArtifactSpec {
+                publish_subdir: "qsoripper-cathub",
+                executable_stem: "qsoripper-cathub",
+            },
+        },
         ComponentSpec {
             id: ENGINE_RUST,
             display_name: "Rust engine (qsoripper-server)",
@@ -196,5 +213,23 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), ids.len(), "duplicate component id in catalog");
+    }
+
+    #[test]
+    fn cathub_daemon_is_in_catalog() {
+        let spec = find(DAEMON_CATHUB).expect("cathub daemon in catalog");
+        assert_eq!(spec.kind, ComponentKind::Daemon);
+        assert_eq!(spec.engine_port, Some(4532));
+        assert!(!spec.engine_bindable);
+        assert!(!spec.wants_console);
+        assert_eq!(spec.artifact.publish_subdir, "qsoripper-cathub");
+        assert_eq!(spec.artifact.executable_stem, "qsoripper-cathub");
+    }
+
+    #[test]
+    fn cathub_is_not_an_engine_endpoint() {
+        // The daemon carries a port for readiness probing, but must never be
+        // offered as a gRPC engine endpoint a UI can bind to.
+        assert!(engine_endpoint(DAEMON_CATHUB).is_none());
     }
 }

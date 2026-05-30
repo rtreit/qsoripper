@@ -55,7 +55,7 @@ fn main() -> Result<()> {
         None => config::default_shared_config_path()?,
     };
     let selection = config::load(&config_path)?;
-    let mut app = ui::AppState::new(selection, config_path, artifact_root);
+    let mut app = ui::AppState::new(selection, config_path, artifact_root, repo_root);
     ui::run(&mut app)
 }
 

@@ -1,9 +1,10 @@
 //! Map a [`Selection`] onto concrete spawn arguments + env for each component.
 
 use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use crate::catalog::{
-    engine_endpoint, find, ComponentSpec, ENGINE_DOTNET, ENGINE_RUST, UI_DEBUGHOST,
+    engine_endpoint, find, ComponentSpec, DAEMON_CATHUB, ENGINE_DOTNET, ENGINE_RUST, UI_DEBUGHOST,
 };
 use crate::model::Selection;
 
@@ -62,6 +63,50 @@ pub(crate) fn engine_plan(engine_id: &str) -> Option<LaunchPlan> {
         args: Vec::new(),
         env: Vec::new(),
     })
+}
+
+/// Build the launch plan for a background daemon. The CAT hub is passed an
+/// explicit `--config` so it reads the same file `Start-CatHub.ps1` would: the
+/// unified `config.toml` when it carries a top-level `[cat_hub]` table,
+/// otherwise the repo sample at `<repo_root>/config/cathub.toml`.
+pub(crate) fn daemon_plan(
+    daemon_id: &str,
+    unified_config_path: &Path,
+    repo_root: &Path,
+) -> Option<LaunchPlan> {
+    let spec = find(daemon_id)?;
+    let mut args: Vec<OsString> = Vec::new();
+    if daemon_id == DAEMON_CATHUB {
+        let config = resolve_cathub_config(unified_config_path, repo_root);
+        args.push("--config".into());
+        args.push(config.into_os_string());
+    }
+    Some(LaunchPlan {
+        spec,
+        args,
+        env: Vec::new(),
+    })
+}
+
+/// Choose the cathub config path. Uses the unified config only when it parses
+/// and exposes a top-level `cat_hub` table; any read/parse failure or a missing
+/// table falls back to the repo sample so a malformed unified file never makes
+/// the hub silently mis-parse it as a standalone cathub config.
+fn resolve_cathub_config(unified_config_path: &Path, repo_root: &Path) -> PathBuf {
+    if unified_has_cat_hub(unified_config_path) {
+        return unified_config_path.to_path_buf();
+    }
+    repo_root.join("config").join("cathub.toml")
+}
+
+fn unified_has_cat_hub(unified_config_path: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(unified_config_path) else {
+        return false;
+    };
+    let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else {
+        return false;
+    };
+    doc.get("cat_hub").is_some()
 }
 
 #[cfg(test)]
@@ -128,5 +173,61 @@ mod tests {
             strs,
             vec!["--urls".to_string(), "http://localhost:5082".to_string()]
         );
+    }
+
+    #[test]
+    fn daemon_plan_falls_back_to_repo_sample_without_cat_hub() {
+        let dir = tempfile::tempdir().unwrap();
+        let unified = dir.path().join("config.toml");
+        std::fs::write(&unified, "[launcher]\nengines = [\"rust-engine\"]\n").unwrap();
+        let repo_root = dir.path().join("repo");
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, &repo_root).expect("plan");
+        let strs: Vec<String> = plan
+            .args
+            .into_iter()
+            .map(|a| a.into_string().unwrap())
+            .collect();
+        let expected = repo_root
+            .join("config")
+            .join("cathub.toml")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(strs, vec!["--config".to_string(), expected]);
+    }
+
+    #[test]
+    fn daemon_plan_uses_unified_config_when_it_has_cat_hub() {
+        let dir = tempfile::tempdir().unwrap();
+        let unified = dir.path().join("config.toml");
+        std::fs::write(&unified, "[cat_hub]\n[radio]\nport = \"COM3\"\n").unwrap();
+        let repo_root = dir.path().join("repo");
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, &repo_root).expect("plan");
+        let strs: Vec<String> = plan
+            .args
+            .into_iter()
+            .map(|a| a.into_string().unwrap())
+            .collect();
+        let expected = unified.to_string_lossy().into_owned();
+        assert_eq!(strs, vec!["--config".to_string(), expected]);
+    }
+
+    #[test]
+    fn daemon_plan_falls_back_when_unified_config_is_invalid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let unified = dir.path().join("config.toml");
+        std::fs::write(&unified, "this is = not valid = toml [[[").unwrap();
+        let repo_root = dir.path().join("repo");
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, &repo_root).expect("plan");
+        let strs: Vec<String> = plan
+            .args
+            .into_iter()
+            .map(|a| a.into_string().unwrap())
+            .collect();
+        let expected = repo_root
+            .join("config")
+            .join("cathub.toml")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(strs, vec!["--config".to_string(), expected]);
     }
 }

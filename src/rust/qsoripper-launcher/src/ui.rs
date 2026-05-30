@@ -20,7 +20,7 @@ use crate::catalog::{
 use crate::config;
 use crate::discovery::ArtifactRoot;
 use crate::model::Selection;
-use crate::plan::{engine_plan, ui_plan};
+use crate::plan::{daemon_plan, engine_plan, ui_plan};
 use crate::ports::{is_port_listening, wait_for_port};
 use crate::process::{open_url, spawn, stop_pid, ProcessRegistry};
 use crate::sync::{diff_rows, DialogState, DiffRow, Side, SyncDialog};
@@ -100,6 +100,7 @@ pub(crate) struct AppState {
     pub selection: Selection,
     pub config_path: PathBuf,
     pub artifact_root: ArtifactRoot,
+    repo_root: PathBuf,
     column: Column,
     cursor: BTreeMap<Column, usize>,
     statuses: BTreeMap<ComponentId, Status>,
@@ -115,6 +116,7 @@ impl AppState {
         selection: Selection,
         config_path: PathBuf,
         artifact_root: ArtifactRoot,
+        repo_root: PathBuf,
     ) -> Self {
         let mut cursor = BTreeMap::new();
         cursor.insert(Column::Engines, 0);
@@ -124,6 +126,7 @@ impl AppState {
             selection,
             config_path,
             artifact_root,
+            repo_root,
             column: Column::Engines,
             cursor,
             statuses: BTreeMap::new(),
@@ -192,10 +195,13 @@ impl AppState {
             .filter(|d| matches!(d.state, DialogState::Ready))
     }
 
-    fn engine_components() -> Vec<ComponentId> {
+    /// Components shown in the first column: daemons first (they start first),
+    /// then engines. The CAT hub lives here so it lists above the engines that
+    /// connect to it.
+    fn service_components() -> Vec<ComponentId> {
         catalog()
             .into_iter()
-            .filter(|c| c.kind == ComponentKind::Engine)
+            .filter(|c| matches!(c.kind, ComponentKind::Daemon | ComponentKind::Engine))
             .map(|c| c.id)
             .collect()
     }
@@ -220,7 +226,7 @@ impl AppState {
 
     fn current_list(&self) -> Vec<ComponentId> {
         match self.column {
-            Column::Engines => Self::engine_components(),
+            Column::Engines => Self::service_components(),
             Column::Uis => Self::ui_components(),
             Column::Bindings => self.bindable_uis_selected(),
         }
@@ -272,10 +278,60 @@ impl AppState {
         }
     }
 
-    /// Spawn every selected engine, wait for readiness, then spawn each
-    /// selected UI with the per-UI engine binding env vars.
+    /// Spawn every selected daemon, gating on its readiness port. Returns `false`
+    /// (with `last_message`/status set) if any daemon fails so the caller aborts
+    /// the rest of the launch.
+    fn launch_daemons(&mut self) -> bool {
+        for daemon_id in self.selection.daemons.clone() {
+            let Some(plan) = daemon_plan(daemon_id, &self.config_path, &self.repo_root) else {
+                continue;
+            };
+            let exe = plan.spec.artifact.executable_path(&self.artifact_root);
+            let port = plan.spec.engine_port.unwrap_or(0);
+            if port != 0 && is_port_listening(port, Duration::from_millis(200)) {
+                self.statuses
+                    .insert(daemon_id, Status::listening_external());
+                continue;
+            }
+            self.statuses.insert(daemon_id, Status::starting());
+            let arg_refs: Vec<&std::ffi::OsStr> = plan.args.iter().map(AsRef::as_ref).collect();
+            match spawn(&plan.spec, &exe, &arg_refs, &plan.env, &mut self.registry) {
+                Ok(p) => {
+                    if port != 0
+                        && !wait_for_port(port, Duration::from_secs(15), Duration::from_millis(300))
+                    {
+                        self.statuses.insert(
+                            daemon_id,
+                            Status::failed(&format!("never came up on 127.0.0.1:{port}")),
+                        );
+                        self.last_message = format!(
+                            "Aborted launch: {daemon_id} did not respond on 127.0.0.1:{port}. Check Get-CatHubLog.ps1."
+                        );
+                        return false;
+                    }
+                    self.statuses.insert(daemon_id, Status::running(p.pid));
+                }
+                Err(e) => {
+                    self.statuses
+                        .insert(daemon_id, Status::failed(&e.to_string()));
+                    self.last_message = format!("Aborted launch: failed to start {daemon_id}: {e}");
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Spawn selected daemons, then engines (waiting for readiness on each),
+    /// then every selected UI with its per-UI engine binding env vars.
     fn launch_selected(&mut self) {
-        // Engines first.
+        // Daemons first: the CAT hub must own the radio and expose its rigctld
+        // face before any engine connects. Abort the launch if one fails.
+        if !self.launch_daemons() {
+            return;
+        }
+
+        // Engines next.
         for engine_id in self.selection.engines.clone() {
             let Some(plan) = engine_plan(engine_id) else {
                 continue;
@@ -435,7 +491,7 @@ fn render(frame: &mut ratatui::Frame, app: &AppState) {
         ])
         .areas(body_area);
 
-    render_column(frame, engines_area, app, Column::Engines, "Engines");
+    render_column(frame, engines_area, app, Column::Engines, "Services");
     render_column(frame, uis_area, app, Column::Uis, "UIs");
     render_column(frame, bindings_area, app, Column::Bindings, "Bindings");
 
@@ -621,7 +677,7 @@ fn render_column(
 ) {
     let active = app.column == column;
     let list_ids: Vec<ComponentId> = match column {
-        Column::Engines => AppState::engine_components(),
+        Column::Engines => AppState::service_components(),
         Column::Uis => AppState::ui_components(),
         Column::Bindings => app.bindable_uis_selected(),
     };
@@ -636,7 +692,11 @@ fn render_column(
                 .find(|c| c.id == *id)
                 .map_or(*id, |c| c.display_name);
             let checked = match column {
-                Column::Engines => app.selection.engine_selected(id),
+                // The Services column mixes daemons and engines; an id belongs
+                // to exactly one list, so a logical OR reflects either kind.
+                Column::Engines => {
+                    app.selection.engine_selected(id) || app.selection.daemon_selected(id)
+                }
                 Column::Uis => app.selection.ui_selected(id),
                 Column::Bindings => true,
             };
