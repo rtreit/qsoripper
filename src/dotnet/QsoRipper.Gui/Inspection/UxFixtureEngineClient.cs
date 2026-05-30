@@ -21,6 +21,7 @@ internal sealed class UxFixtureEngineClient : IEngineClient
     private string _logFilePath;
     private string? _qrzXmlUsername;
     private RigControlSettings? _rigControl;
+    private CatHubSettings? _catHub;
     private DateTimeOffset? _lastSyncUtc;
     private bool _configFileExists;
     private bool _setupComplete;
@@ -43,6 +44,7 @@ internal sealed class UxFixtureEngineClient : IEngineClient
         _logFilePath = fixture.ActiveLogFilePath;
         _qrzXmlUsername = fixture.QrzXmlUsername;
         _rigControl = fixture.BuildRigControlSettings();
+        _catHub = fixture.BuildCatHubSettings();
         _lastSyncUtc = fixture.LastSyncUtc;
         _configFileExists = fixture.ConfigFileExists;
         _setupComplete = fixture.SetupComplete;
@@ -209,6 +211,11 @@ internal sealed class UxFixtureEngineClient : IEngineClient
             if (request.RigControl is not null)
             {
                 _rigControl = request.RigControl.Clone();
+            }
+
+            if (request.CatHub is not null)
+            {
+                _catHub = request.CatHub.Clone();
             }
 
             _configFileExists = true;
@@ -605,6 +612,11 @@ internal sealed class UxFixtureEngineClient : IEngineClient
         if (_rigControl is not null)
         {
             status.RigControl = _rigControl.Clone();
+        }
+
+        if (_catHub is not null)
+        {
+            status.CatHub = _catHub.Clone();
         }
 
         if (HasStationProfile())
