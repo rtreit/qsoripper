@@ -265,6 +265,20 @@ fn parse_schedule(
     description: &str,
     source_year: i32,
 ) -> Result<(Timestamp, Timestamp), ContestCalendarProviderError> {
+    if let Some((start_part, end_part)) = split_multi_day(description) {
+        let start_date_time = parse_time_and_date(start_part, source_year)?;
+        let end_date_time = parse_time_and_date(end_part, source_year)?;
+        if end_date_time < start_date_time {
+            return Err(ContestCalendarProviderError::parse(format!(
+                "contest end precedes start in schedule '{description}'"
+            )));
+        }
+        return Ok((
+            timestamp_from_naive(start_date_time),
+            timestamp_from_naive(end_date_time),
+        ));
+    }
+
     let (times, date) = description.split_once(',').ok_or_else(|| {
         ContestCalendarProviderError::parse(format!("missing comma in schedule '{description}'"))
     })?;
@@ -287,6 +301,29 @@ fn parse_schedule(
         timestamp_from_naive(start_date_time),
         timestamp_from_naive(end_date_time),
     ))
+}
+
+fn split_multi_day(description: &str) -> Option<(&str, &str)> {
+    for separator in [" to ", " - ", " thru ", " through "] {
+        if let Some((start_part, end_part)) = description.split_once(separator) {
+            if start_part.contains(',') && end_part.contains(',') {
+                return Some((start_part.trim(), end_part.trim()));
+            }
+        }
+    }
+    None
+}
+
+fn parse_time_and_date(
+    part: &str,
+    source_year: i32,
+) -> Result<chrono::NaiveDateTime, ContestCalendarProviderError> {
+    let (time, date) = part.split_once(',').ok_or_else(|| {
+        ContestCalendarProviderError::parse(format!("missing comma in schedule part '{part}'"))
+    })?;
+    let date = parse_month_day(date.trim(), source_year)?;
+    let time = parse_utc_time(time.trim())?;
+    Ok(date.and_time(time))
 }
 
 fn parse_month_day(value: &str, year: i32) -> Result<NaiveDate, ContestCalendarProviderError> {
@@ -440,5 +477,27 @@ mod tests {
         let (start, end) = parse_schedule("2300Z-0100Z, May 24", 2026).expect("schedule");
 
         assert_eq!(end.seconds - start.seconds, 7_200);
+    }
+
+    #[test]
+    fn parse_schedule_handles_multi_day_range() {
+        let (start, end) =
+            parse_schedule("0000Z, May 30 to 2359Z, May 31", 2026).expect("schedule");
+
+        let expected_start = NaiveDate::from_ymd_opt(2026, 5, 30)
+            .expect("start date")
+            .and_hms_opt(0, 0, 0)
+            .expect("start time")
+            .and_utc()
+            .timestamp();
+        let expected_end = NaiveDate::from_ymd_opt(2026, 5, 31)
+            .expect("end date")
+            .and_hms_opt(23, 59, 0)
+            .expect("end time")
+            .and_utc()
+            .timestamp();
+
+        assert_eq!(start.seconds, expected_start);
+        assert_eq!(end.seconds, expected_end);
     }
 }
