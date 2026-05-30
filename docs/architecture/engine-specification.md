@@ -523,6 +523,15 @@ tables (`[cat_hub]`, `[launcher]`, and any future component sections). A conform
 any language must implement this merge-preserving behavior rather than rewriting the whole
 file, so it never clobbers another component's configuration.
 
+`[cat_hub]` is **conditionally engine-owned**: it is preserved verbatim on every save *unless*
+the `SaveSetup` request explicitly carries a `cat_hub` (`CatHubSettings`) message, in which case
+the engine performs a full-replacement rewrite of the section (see SetupService → SaveSetup). For
+status and wizard display, the engine parses `[cat_hub]` **leniently and separately** from its own
+configuration: a malformed or unknown-schema `[cat_hub]` yields an empty projection (and a logged
+warning) but never fails engine load. A conformant engine must keep this read path isolated so the
+daemon's section can never break engine startup, and must only rewrite `[cat_hub]` when an explicit
+replacement is supplied.
+
 
 
 **Proto file:** `proto/services/space_weather_service.proto`
@@ -596,8 +605,24 @@ Persists setup configuration and station profile.
 3. Apply the configuration to the running engine (activate the station profile, enable integrations).
 4. Mark setup as complete.
 
+**CAT hub (`cat_hub`) management:**
+- The optional `cat_hub` field (`CatHubSettings`) lets a setup UI manage the standalone
+  `qsoripper-cathub` daemon's `[cat_hub]` section without hand-editing TOML.
+- The field is **full-replacement**: when present it is the complete desired `[cat_hub]`
+  section. A `radio` (with a `backend`) is required and at least one endpoint (a `faces` or
+  `hamlib_net` entry) is required; the engine rewrites `[cat_hub]` from it.
+- When `cat_hub` is omitted, the engine leaves any existing `[cat_hub]` section **untouched**
+  (verbatim, including comments and unknown keys). Only an explicit `cat_hub` triggers a
+  rewrite — so a routine save (e.g. updating QRZ credentials) never reserializes the daemon's
+  configuration. This mirrors the conditional-ownership rule in the unified-configuration note.
+- Validation enforces the same constraints the daemon accepts: `backend` ∈ {ts590, rigctld,
+  loopback}; radio `transport` ∈ {serial, tcp}; non-loopback serial radios require a `port`;
+  face `dialect` ∈ {ts590, ts2000}; endpoint names unique across faces and hamlib_net; face
+  transports distinct; hamlib_net binds distinct and in `host:port` form; a face transport may
+  not reuse the radio port. Violations return `INVALID_ARGUMENT`.
+
 **Error semantics:**
-- `INVALID_ARGUMENT` — invalid or missing required setup fields.
+- `INVALID_ARGUMENT` — invalid or missing required setup fields, or an invalid `cat_hub` section.
 - `INTERNAL` — failed to persist configuration.
 
 #### GetSetupWizardState
@@ -606,7 +631,9 @@ Returns the current state of the setup wizard for multi-step UIs.
 
 **Behavior:**
 - Return the list of `SetupWizardStep` values with their completion status (`SetupWizardStepStatus`).
-- Steps include: station profile, QRZ XML credentials, QRZ logbook credentials, storage backend, rig control, space weather.
+- Steps include: station profile, QRZ XML credentials, QRZ logbook credentials, storage backend, rig control, CAT hub, space weather.
+- The CAT hub step (`SETUP_WIZARD_STEP_CAT_HUB`) is optional and always reported complete; it
+  exposes the current `[cat_hub]` projection for display and editing.
 
 #### ValidateSetupStep
 

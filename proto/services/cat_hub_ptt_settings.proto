@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// The CAT hub `[cat_hub.ptt]` section: transmit safety ceiling.
+message CatHubPttSettings {
+  // Maximum continuous transmit time in milliseconds (safety ceiling).
+  optional uint64 max_tx_ms = 1;
+}

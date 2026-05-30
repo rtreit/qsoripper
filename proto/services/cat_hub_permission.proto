@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// A single CAT hub client permission token. These map 1:1 onto the lowercase
+// permission strings the cathub daemon reads from a client endpoint's `perms`
+// array (`read`, `write`, `ptt`, `config_write`).
+enum CatHubPermission {
+  CAT_HUB_PERMISSION_UNSPECIFIED = 0;
+  CAT_HUB_PERMISSION_READ = 1;
+  CAT_HUB_PERMISSION_WRITE = 2;
+  CAT_HUB_PERMISSION_PTT = 3;
+  CAT_HUB_PERMISSION_CONFIG_WRITE = 4;
+}

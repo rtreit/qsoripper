@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -294,6 +295,12 @@ internal static class SharedSetupConfigPersistence
             config.ActiveProfileId = config.StationProfiles[0].ProfileId;
         }
 
+        // Parse `[cat_hub]` SEPARATELY and leniently: a malformed CAT hub section (written by
+        // the standalone cathub daemon, or a future schema the engine does not know about) must
+        // never break engine load. On any failure this yields null and the rest of the engine
+        // config is unaffected.
+        config.CatHub = TryParseCatHubLenient(root);
+
         return config;
     }
 
@@ -317,6 +324,23 @@ internal static class SharedSetupConfigPersistence
     // exists) so unknown top-level tables survive an engine setup save. Engine-owned keys are
     // removed first so tables the wizard intentionally cleared are dropped.
     private static TomlTable BuildMergedModel(string normalizedPath, SharedPersistedSetupConfig config)
+    {
+        var result = BuildMergedOwnedModel(normalizedPath, config);
+
+        // CONDITIONAL OWNERSHIP: only rewrite [cat_hub] when the caller supplied a complete
+        // replacement. Otherwise the existing section (comments, ordering, unknown keys) is
+        // preserved automatically because cat_hub is NOT an engine-owned key.
+        if (config.CatHubWriteOverride is not null)
+        {
+            var catHubTable = BuildCatHubTableOrThrow(config.CatHubWriteOverride);
+            result.Remove("cat_hub");
+            result["cat_hub"] = catHubTable;
+        }
+
+        return result;
+    }
+
+    private static TomlTable BuildMergedOwnedModel(string normalizedPath, SharedPersistedSetupConfig config)
     {
         var owned = BuildModel(config);
         if (!File.Exists(normalizedPath))
@@ -543,6 +567,566 @@ internal static class SharedSetupConfigPersistence
 
         return table;
     }
+
+    // ----- CAT hub (`[cat_hub]`) persistence -------------------------------------------------
+    // Mirrors the Rust engine's setup.rs CAT hub handling exactly: a FULL-REPLACEMENT proto
+    // contract written into the cathub daemon's TOML schema, plus a lenient display projection.
+
+    private static readonly string[] CatHubRadioBackends = { "ts590", "rigctld", "loopback" };
+    private static readonly string[] CatHubRadioTransports = { "serial", "tcp" };
+    private static readonly string[] CatHubFaceDialects = { "ts590", "ts2000" };
+
+    /// <summary>
+    /// Builds a complete, daemon-valid <c>[cat_hub]</c> <see cref="TomlTable"/> from a wizard
+    /// request, applying every from_proto validation rule. Throws
+    /// <see cref="InvalidOperationException"/> (surfaced as gRPC InvalidArgument) on any failure.
+    /// </summary>
+    internal static TomlTable BuildCatHubTableOrThrow(CatHubSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        var radioSettings = settings.Radio
+            ?? throw new InvalidOperationException("CAT hub radio settings are required.");
+        var radioTable = BuildCatHubRadioTableOrThrow(radioSettings, out var radioPort);
+
+        var faces = BuildCatHubFacesOrThrow(settings.Faces, radioPort);
+        var endpoints = BuildCatHubEndpointsOrThrow(settings.HamlibNet);
+
+        if (faces.Count == 0 && endpoints.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "CAT hub configuration requires at least one serial face or hamlib_net endpoint.");
+        }
+
+        var names = faces.Select(face => face.Name).Concat(endpoints.Select(endpoint => endpoint.Name));
+        if (FirstDuplicate(names) is { } duplicateName)
+        {
+            throw new InvalidOperationException($"CAT hub endpoint names must be unique: '{duplicateName}'.");
+        }
+
+        var catHub = new TomlTable
+        {
+            ["radio"] = radioTable,
+        };
+
+        if (settings.Poll is { } poll)
+        {
+            catHub["poll"] = BuildCatHubPollTableOrThrow(poll);
+        }
+
+        if (settings.Ptt is { } ptt)
+        {
+            catHub["ptt"] = BuildCatHubPttTableOrThrow(ptt);
+        }
+
+        if (settings.Events is { } events)
+        {
+            catHub["events"] = BuildCatHubEventsTable(events);
+        }
+
+        if (faces.Count > 0)
+        {
+            var faceArray = new TomlTableArray();
+            foreach (var face in faces)
+            {
+                faceArray.Add(face.Table);
+            }
+
+            catHub["face"] = faceArray;
+        }
+
+        if (endpoints.Count > 0)
+        {
+            var netArray = new TomlTableArray();
+            foreach (var endpoint in endpoints)
+            {
+                netArray.Add(endpoint.Table);
+            }
+
+            catHub["hamlib_net"] = netArray;
+        }
+
+        return catHub;
+    }
+
+    private static TomlTable BuildCatHubRadioTableOrThrow(CatHubRadioSettings radio, out string? port)
+    {
+        var backend = NormalizeOptional(radio.Backend)
+            ?? throw new InvalidOperationException("CAT hub radio backend is required.");
+        backend = ToLowerToken(backend);
+        if (!CatHubRadioBackends.Contains(backend))
+        {
+            throw new InvalidOperationException(
+                $"CAT hub radio backend '{backend}' is not supported (expected one of: {string.Join(", ", CatHubRadioBackends)}).");
+        }
+
+        string? transport = null;
+        var rawTransport = NormalizeOptional(radio.Transport);
+        if (rawTransport is not null)
+        {
+            transport = ToLowerToken(rawTransport);
+            if (!CatHubRadioTransports.Contains(transport))
+            {
+                throw new InvalidOperationException(
+                    $"CAT hub radio transport '{transport}' is not supported (expected one of: {string.Join(", ", CatHubRadioTransports)}).");
+            }
+        }
+
+        port = NormalizeOptional(radio.Port);
+        var effectiveTransport = transport ?? "serial";
+        if (!string.Equals(backend, "loopback", StringComparison.Ordinal)
+            && string.Equals(effectiveTransport, "serial", StringComparison.Ordinal)
+            && port is null)
+        {
+            throw new InvalidOperationException("CAT hub radio requires a serial port for the selected backend.");
+        }
+
+        if (radio.HasTcpPort && (radio.TcpPort == 0 || radio.TcpPort > 65535))
+        {
+            throw new InvalidOperationException("CAT hub radio tcp_port must be between 1 and 65535.");
+        }
+
+        if (radio.HasBaud && radio.Baud == 0)
+        {
+            throw new InvalidOperationException("CAT hub radio baud must be greater than 0.");
+        }
+
+        if (radio.HasReplyTimeoutMs && radio.ReplyTimeoutMs == 0)
+        {
+            throw new InvalidOperationException("CAT hub radio reply_timeout_ms must be greater than 0.");
+        }
+
+        var table = new TomlTable
+        {
+            ["backend"] = backend,
+        };
+        AddIfValue(table, "model", NormalizeOptional(radio.Model));
+        AddIfValue(table, "transport", transport);
+        AddIfValue(table, "port", port);
+        if (radio.HasBaud)
+        {
+            table["baud"] = radio.Baud;
+        }
+
+        AddIfValue(table, "host", NormalizeOptional(radio.Host));
+        if (radio.HasTcpPort)
+        {
+            table["tcp_port"] = radio.TcpPort;
+        }
+
+        if (radio.HasCertified)
+        {
+            table["certified"] = radio.Certified;
+        }
+
+        if (radio.HasReplyTimeoutMs)
+        {
+            table["reply_timeout_ms"] = radio.ReplyTimeoutMs;
+        }
+
+        return table;
+    }
+
+    private static List<CatHubBuiltEntry> BuildCatHubFacesOrThrow(
+        IEnumerable<CatHubSerialFace> faces,
+        string? radioPort)
+    {
+        var result = new List<CatHubBuiltEntry>();
+        var transports = new List<string>();
+        foreach (var face in faces)
+        {
+            var name = NormalizeOptional(face.Name)
+                ?? throw new InvalidOperationException("CAT hub serial face name is required.");
+            var transport = NormalizeOptional(face.Transport)
+                ?? throw new InvalidOperationException($"CAT hub serial face '{name}' requires a transport.");
+            if (radioPort is not null && string.Equals(transport, radioPort, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"CAT hub serial face '{name}' cannot reuse the radio port '{radioPort}'.");
+            }
+
+            var dialect = NormalizeOptional(face.Dialect)
+                ?? throw new InvalidOperationException($"CAT hub serial face '{name}' requires a dialect.");
+            dialect = ToLowerToken(dialect);
+            if (!CatHubFaceDialects.Contains(dialect))
+            {
+                throw new InvalidOperationException(
+                    $"CAT hub serial face '{name}' dialect '{dialect}' is not supported (expected one of: {string.Join(", ", CatHubFaceDialects)}).");
+            }
+
+            var table = new TomlTable
+            {
+                ["name"] = name,
+                ["transport"] = transport,
+            };
+            if (face.Baud != 0)
+            {
+                table["baud"] = face.Baud;
+            }
+
+            table["dialect"] = dialect;
+            var perms = BuildCatHubPermArray(face.Perms);
+            if (perms.Count > 0)
+            {
+                table["perms"] = perms;
+            }
+
+            transports.Add(transport);
+            result.Add(new CatHubBuiltEntry(name, table));
+        }
+
+        if (FirstDuplicate(transports) is { } duplicate)
+        {
+            throw new InvalidOperationException(
+                $"CAT hub serial faces must use distinct transports: '{duplicate}'.");
+        }
+
+        return result;
+    }
+
+    private static List<CatHubBuiltEntry> BuildCatHubEndpointsOrThrow(
+        IEnumerable<CatHubHamlibNetEndpoint> endpoints)
+    {
+        var result = new List<CatHubBuiltEntry>();
+        var binds = new List<string>();
+        foreach (var endpoint in endpoints)
+        {
+            var name = NormalizeOptional(endpoint.Name)
+                ?? throw new InvalidOperationException("CAT hub hamlib_net endpoint name is required.");
+            var bind = NormalizeOptional(endpoint.Bind)
+                ?? throw new InvalidOperationException(
+                    $"CAT hub hamlib_net endpoint '{name}' requires a bind address.");
+            ValidateCatHubBind(bind, name);
+
+            var table = new TomlTable
+            {
+                ["name"] = name,
+                ["bind"] = bind,
+            };
+            var perms = BuildCatHubPermArray(endpoint.Perms);
+            if (perms.Count > 0)
+            {
+                table["perms"] = perms;
+            }
+
+            binds.Add(bind);
+            result.Add(new CatHubBuiltEntry(name, table));
+        }
+
+        if (FirstDuplicate(binds) is { } duplicate)
+        {
+            throw new InvalidOperationException(
+                $"CAT hub hamlib_net endpoints must use distinct bind addresses: '{duplicate}'.");
+        }
+
+        return result;
+    }
+
+    private static void ValidateCatHubBind(string bind, string name)
+    {
+        var separator = bind.LastIndexOf(':');
+        if (separator < 0)
+        {
+            throw new InvalidOperationException(
+                $"CAT hub hamlib_net endpoint '{name}' bind must be in host:port form.");
+        }
+
+        var host = bind[..separator];
+        var portText = bind[(separator + 1)..];
+        if (host.Length == 0)
+        {
+            throw new InvalidOperationException(
+                $"CAT hub hamlib_net endpoint '{name}' bind must include a host.");
+        }
+
+        if (!uint.TryParse(portText, NumberStyles.None, CultureInfo.InvariantCulture, out var portValue))
+        {
+            throw new InvalidOperationException(
+                $"CAT hub hamlib_net endpoint '{name}' bind port is not a number.");
+        }
+
+        if (portValue is 0 or > 65535)
+        {
+            throw new InvalidOperationException(
+                $"CAT hub hamlib_net endpoint '{name}' bind port must be between 1 and 65535.");
+        }
+    }
+
+    private static TomlTable BuildCatHubPollTableOrThrow(CatHubPollSettings poll)
+    {
+        if (poll.HasBaselineMs && poll.BaselineMs == 0)
+        {
+            throw new InvalidOperationException("CAT hub poll baseline_ms must be greater than 0.");
+        }
+
+        if (poll.HasHeartbeatMs && poll.HeartbeatMs == 0)
+        {
+            throw new InvalidOperationException("CAT hub poll heartbeat_ms must be greater than 0.");
+        }
+
+        var table = new TomlTable();
+        if (poll.HasBaselineMs)
+        {
+            table["baseline_ms"] = poll.BaselineMs;
+        }
+
+        if (poll.HasHeartbeatMs)
+        {
+            table["heartbeat_ms"] = poll.HeartbeatMs;
+        }
+
+        return table;
+    }
+
+    private static TomlTable BuildCatHubPttTableOrThrow(CatHubPttSettings ptt)
+    {
+        if (ptt.HasMaxTxMs && ptt.MaxTxMs == 0)
+        {
+            throw new InvalidOperationException("CAT hub ptt max_tx_ms must be greater than 0.");
+        }
+
+        var table = new TomlTable();
+        if (ptt.HasMaxTxMs)
+        {
+            table["max_tx_ms"] = ptt.MaxTxMs;
+        }
+
+        return table;
+    }
+
+    private static TomlTable BuildCatHubEventsTable(CatHubEventSettings events)
+    {
+        var table = new TomlTable();
+        if (events.HasNativePush)
+        {
+            table["native_push"] = events.NativePush;
+        }
+
+        return table;
+    }
+
+    private static TomlArray BuildCatHubPermArray(IEnumerable<CatHubPermission> perms)
+    {
+        var array = new TomlArray();
+        foreach (var perm in perms)
+        {
+            var token = CatHubPermToken(perm);
+            if (token is not null)
+            {
+                array.Add(token);
+            }
+        }
+
+        return array;
+    }
+
+    private static string? CatHubPermToken(CatHubPermission perm)
+    {
+        return perm switch
+        {
+            CatHubPermission.Read => "read",
+            CatHubPermission.Write => "write",
+            CatHubPermission.Ptt => "ptt",
+            CatHubPermission.ConfigWrite => "config_write",
+            _ => null,
+        };
+    }
+
+    private static CatHubPermission? CatHubPermFromToken(string token)
+    {
+        return token switch
+        {
+            "read" => CatHubPermission.Read,
+            "write" => CatHubPermission.Write,
+            "ptt" => CatHubPermission.Ptt,
+            "config_write" => CatHubPermission.ConfigWrite,
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// Projects the persisted <c>[cat_hub]</c> section onto the proto envelope for status and
+    /// wizard display. Deliberately permissive (no from_proto validation) and fully guarded:
+    /// any failure yields null so a malformed section never breaks engine load.
+    /// </summary>
+    private static CatHubSettings? TryParseCatHubLenient(TomlTable root)
+    {
+        try
+        {
+            if (GetTable(root, "cat_hub") is not { } catHub)
+            {
+                return null;
+            }
+
+            var settings = new CatHubSettings();
+            var any = false;
+
+            if (GetTable(catHub, "radio") is { } radioTable)
+            {
+                var radio = new CatHubRadioSettings();
+                AssignIfPresent(GetString(radioTable, "backend"), value => radio.Backend = value);
+                AssignIfPresent(GetString(radioTable, "model"), value => radio.Model = value);
+                AssignIfPresent(GetString(radioTable, "transport"), value => radio.Transport = value);
+                AssignIfPresent(GetString(radioTable, "port"), value => radio.Port = value);
+                AssignIfPresent(GetUInt32(radioTable, "baud"), value => radio.Baud = value);
+                AssignIfPresent(GetString(radioTable, "host"), value => radio.Host = value);
+                AssignIfPresent(GetUInt32(radioTable, "tcp_port"), value => radio.TcpPort = value);
+                AssignIfPresent(GetBoolean(radioTable, "certified"), value => radio.Certified = value);
+                AssignIfPresent(GetUInt64(radioTable, "reply_timeout_ms"), value => radio.ReplyTimeoutMs = value);
+                settings.Radio = radio;
+                any = true;
+            }
+
+            if (GetTable(catHub, "poll") is { } pollTable)
+            {
+                var poll = new CatHubPollSettings();
+                AssignIfPresent(GetUInt64(pollTable, "baseline_ms"), value => poll.BaselineMs = value);
+                AssignIfPresent(GetUInt64(pollTable, "heartbeat_ms"), value => poll.HeartbeatMs = value);
+                settings.Poll = poll;
+                any = true;
+            }
+
+            if (GetTable(catHub, "ptt") is { } pttTable)
+            {
+                var ptt = new CatHubPttSettings();
+                AssignIfPresent(GetUInt64(pttTable, "max_tx_ms"), value => ptt.MaxTxMs = value);
+                settings.Ptt = ptt;
+                any = true;
+            }
+
+            if (GetTable(catHub, "events") is { } eventsTable)
+            {
+                var events = new CatHubEventSettings();
+                AssignIfPresent(GetBoolean(eventsTable, "native_push"), value => events.NativePush = value);
+                settings.Events = events;
+                any = true;
+            }
+
+            var faceArray = GetTableArray(catHub, "face");
+            if (faceArray is not null)
+            {
+                foreach (var faceTable in faceArray.OfType<TomlTable>())
+                {
+                    var face = new CatHubSerialFace
+                    {
+                        Name = GetString(faceTable, "name") ?? string.Empty,
+                        Transport = GetString(faceTable, "transport") ?? string.Empty,
+                        Dialect = GetString(faceTable, "dialect") ?? string.Empty,
+                    };
+                    AssignIfPresent(GetUInt32(faceTable, "baud"), value => face.Baud = value);
+                    face.Perms.AddRange(ParseCatHubPermTokens(GetStringArray(faceTable, "perms")));
+                    settings.Faces.Add(face);
+                    any = true;
+                }
+            }
+
+            var netArray = GetTableArray(catHub, "hamlib_net");
+            if (netArray is not null)
+            {
+                foreach (var netTable in netArray.OfType<TomlTable>())
+                {
+                    var endpoint = new CatHubHamlibNetEndpoint
+                    {
+                        Name = GetString(netTable, "name") ?? string.Empty,
+                        Bind = GetString(netTable, "bind") ?? string.Empty,
+                    };
+                    endpoint.Perms.AddRange(ParseCatHubPermTokens(GetStringArray(netTable, "perms")));
+                    settings.HamlibNet.Add(endpoint);
+                    any = true;
+                }
+            }
+
+            return any ? settings : null;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException or TomlException or InvalidCastException)
+        {
+            return null;
+        }
+    }
+
+    private static IEnumerable<CatHubPermission> ParseCatHubPermTokens(IEnumerable<string> tokens)
+    {
+        foreach (var token in tokens)
+        {
+            if (CatHubPermFromToken(token) is { } perm)
+            {
+                yield return perm;
+            }
+        }
+    }
+
+    private static IEnumerable<string> GetStringArray(TomlTable? table, string key)
+    {
+        if (table is null || !table.TryGetValue(key, out var value) || value is not TomlArray array)
+        {
+            yield break;
+        }
+
+        foreach (var item in array)
+        {
+            if (item is string text && !string.IsNullOrWhiteSpace(text))
+            {
+                yield return text;
+            }
+        }
+    }
+
+    private static void AssignIfPresent(string? value, Action<string> assign)
+    {
+        if (value is not null)
+        {
+            assign(value);
+        }
+    }
+
+    private static void AssignIfPresent(uint? value, Action<uint> assign)
+    {
+        if (value is not null)
+        {
+            assign(value.Value);
+        }
+    }
+
+    private static void AssignIfPresent(ulong? value, Action<ulong> assign)
+    {
+        if (value is not null)
+        {
+            assign(value.Value);
+        }
+    }
+
+    private static void AssignIfPresent(bool? value, Action<bool> assign)
+    {
+        if (value is not null)
+        {
+            assign(value.Value);
+        }
+    }
+
+    private static string? FirstDuplicate(IEnumerable<string> values)
+    {
+        var seen = new List<string>();
+        foreach (var value in values)
+        {
+            if (seen.Any(existing => string.Equals(existing, value, StringComparison.OrdinalIgnoreCase)))
+            {
+                return value;
+            }
+
+            seen.Add(value);
+        }
+
+        return null;
+    }
+
+    private static string ToLowerToken(string value)
+    {
+#pragma warning disable CA1308 // CAT hub tokens intentionally match the daemon's lowercase schema.
+        return value.ToLowerInvariant();
+#pragma warning restore CA1308
+    }
+
+    private readonly record struct CatHubBuiltEntry(string Name, TomlTable Table);
 
     private static StationProfile ParseStationProfile(TomlTable? table)
     {
@@ -942,6 +1526,14 @@ internal sealed class SharedPersistedSetupConfig
     public SyncConfig SyncConfig { get; set; } = new();
 
     public RigControlSettings? RigControl { get; set; }
+
+    // Leniently-parsed projection of the `[cat_hub]` section for STATUS/wizard display only.
+    // Never used to re-serialize the section (that would destroy comments/unknown keys).
+    public CatHubSettings? CatHub { get; set; }
+
+    // Explicit-replacement signal: only set when a SaveSetup request carried a cat_hub message.
+    // This is the ONLY thing that triggers a `[cat_hub]` rewrite (mirrors Rust's cat_hub_update).
+    public CatHubSettings? CatHubWriteOverride { get; set; }
 
     public static SharedPersistedSetupConfig CreateDefault()
     {

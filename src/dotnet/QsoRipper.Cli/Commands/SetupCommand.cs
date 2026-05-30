@@ -57,6 +57,7 @@ internal static class SetupCommand
         Console.WriteLine($"QRZ Logbook key:   {(status.HasQrzLogbookApiKey ? "(configured)" : "(not set)")}");
         Console.WriteLine($"Station profile:   {status.HasStationProfile}");
         Console.WriteLine($"Rig control:       {FormatRigControlSummary(status.RigControl)}");
+        Console.WriteLine($"CAT hub:           {FormatCatHubSummary(status.CatHub)}");
 
         return status.SetupComplete ? 0 : 1;
     }
@@ -699,6 +700,20 @@ internal static class SetupCommand
         }
 
         return settings;
+    }
+
+    private static string FormatCatHubSummary(CatHubSettings? catHub)
+    {
+        if (catHub is null)
+        {
+            return "(not configured)";
+        }
+
+        var backend = catHub.Radio?.Backend;
+        var backendLabel = string.IsNullOrWhiteSpace(backend) ? "unset" : backend;
+        var faceCount = catHub.Faces.Count;
+        var endpointCount = catHub.HamlibNet.Count;
+        return $"{backendLabel} ({faceCount} face(s), {endpointCount} endpoint(s))";
     }
 
     private static string FormatRigControlSummary(RigControlSettings? rigControl)
