@@ -31,6 +31,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private readonly SwitchableEngineClient? _switchableEngine;
     private readonly DispatcherTimer _utcTimer;
     private readonly DispatcherTimer _rigTimer;
+    private bool _rigTickInFlight;
     private readonly DispatcherTimer _spaceWeatherTimer;
     private readonly DispatcherTimer _engineHealthTimer;
     private bool _engineHealthProbeInFlight;
@@ -212,7 +213,12 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         ActiveEngineText = BuildEngineText(engineProfile, endpoint);
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
-        _rigTimer = new DispatcherTimer { Interval = RigPollInterval };
+        // Rig polling must stay responsive even while the UI thread is busy
+        // rendering the CW waterfall/spectrogram or processing a band-change
+        // burst. A default-priority DispatcherTimer is DispatcherPriority.Background
+        // (the lowest non-idle lane) and gets starved for seconds behind that work,
+        // so the displayed frequency lags far behind the radio. Run it at Default.
+        _rigTimer = new DispatcherTimer(DispatcherPriority.Default) { Interval = RigPollInterval };
         _rigTimer.Tick += OnRigTimerTick;
         _spaceWeatherTimer = new DispatcherTimer { Interval = SpaceWeatherRefreshInterval };
         _spaceWeatherTimer.Tick += OnSpaceWeatherTimerTick;
@@ -246,7 +252,9 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
         UpdateUtcClock();
         _utcTimer = CreateUtcTimer();
-        _rigTimer = new DispatcherTimer { Interval = RigPollInterval };
+        // See the primary constructor: Default priority keeps the rig poll from
+        // being starved behind UI rendering/band-change bursts.
+        _rigTimer = new DispatcherTimer(DispatcherPriority.Default) { Interval = RigPollInterval };
         _rigTimer.Tick += OnRigTimerTick;
         _spaceWeatherTimer = new DispatcherTimer { Interval = SpaceWeatherRefreshInterval };
         _spaceWeatherTimer.Tick += OnSpaceWeatherTimerTick;
@@ -1457,6 +1465,15 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 
     private async void OnRigTimerTick(object? sender, EventArgs e)
     {
+        // The tick is async void, so it returns at the first await and the timer
+        // can fire again before the previous poll completes. If the engine ever
+        // stalls, overlapping polls would pile up; guard against reentrancy.
+        if (_rigTickInFlight)
+        {
+            return;
+        }
+
+        _rigTickInFlight = true;
         try
         {
             var response = await _engine.GetRigSnapshotAsync();
@@ -1483,6 +1500,10 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
         catch (ObjectDisposedException)
         {
             RigStatusText = "Rig: unavailable";
+        }
+        finally
+        {
+            _rigTickInFlight = false;
         }
     }
 
