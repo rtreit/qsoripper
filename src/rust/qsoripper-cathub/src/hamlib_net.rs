@@ -62,17 +62,184 @@ enum LineResult {
     Quit,
 }
 
-/// Handle one rigctld protocol line against the universal state.
-#[allow(clippy::too_many_lines)] // A flat protocol dispatch table reads best as one match.
+/// Resolve a short or long command token to its Hamlib long name, used to echo the
+/// received command as the first record of an Extended Response Protocol reply.
+fn long_name(cmd: &str) -> Option<&'static str> {
+    Some(match cmd {
+        "F" | "\\set_freq" => "set_freq",
+        "M" | "\\set_mode" => "set_mode",
+        "V" | "\\set_vfo" => "set_vfo",
+        "T" | "\\set_ptt" => "set_ptt",
+        "S" | "\\set_split_vfo" => "set_split_vfo",
+        "J" | "\\set_rit" => "set_rit",
+        "Z" | "\\set_xit" => "set_xit",
+        "f" | "\\get_freq" => "get_freq",
+        "m" | "\\get_mode" => "get_mode",
+        "v" | "\\get_vfo" => "get_vfo",
+        "t" | "\\get_ptt" => "get_ptt",
+        "s" | "\\get_split_vfo" => "get_split_vfo",
+        "j" | "\\get_rit" => "get_rit",
+        "z" | "\\get_xit" => "get_xit",
+        "\\get_vfo_info" => "get_vfo_info",
+        "\\get_powerstat" => "get_powerstat",
+        "\\chk_vfo" => "chk_vfo",
+        "\\dump_state" => "dump_state",
+        _ => return None,
+    })
+}
+
+/// Detect a leading Extended Response Protocol separator. A command prefixed with `+`
+/// (newline-joined) or `;` / `|` / `,` (single-line, joined by that char) selects the
+/// extended response format. Returns the record separator and the rest of the line.
+fn split_erp(line: &str) -> Option<(char, &str)> {
+    let first = line.chars().next()?;
+    let sep = match first {
+        '+' => '\n',
+        ';' | '|' | ',' => first,
+        _ => return None,
+    };
+    Some((sep, &line[first.len_utf8()..]))
+}
+
+/// Join Extended Response Protocol records (echo header, data records, `RPRT x`) with the
+/// chosen separator and terminate the block with a newline, matching real `rigctld`.
+fn erp_records(sep: char, records: &[String]) -> Vec<u8> {
+    let mut s = records.join(&sep.to_string());
+    s.push('\n');
+    s.into_bytes()
+}
+
+/// Build the extended-response echo header for a command: the long name, a colon, and
+/// (if any) the received arguments, e.g. `set_freq: 14200000` or `get_freq:`.
+fn ext_echo(cmd: &str, args: &[&str]) -> String {
+    let name = long_name(cmd).unwrap_or(cmd);
+    if args.is_empty() {
+        format!("{name}:")
+    } else {
+        format!("{name}: {}", args.join(" "))
+    }
+}
+
+/// Handle one rigctld protocol line against the universal state, dispatching the
+/// Extended Response Protocol (separator-prefixed) path used by Log4OM-NG separately
+/// from the plain protocol used by WSJT-X / N1MM / the engine.
 async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return LineResult::Reply(Vec::new());
     }
+    if let Some((sep, rest)) = split_erp(trimmed) {
+        return LineResult::Reply(handle_ext(sep, rest, ctx).await);
+    }
     let mut parts = trimmed.split_whitespace();
     let Some(cmd) = parts.next() else {
         return LineResult::Reply(Vec::new());
     };
+    let args: Vec<&str> = parts.collect();
+    dispatch_plain(cmd, &args, ctx).await
+}
+
+/// Handle one Extended Response Protocol line. Log4OM-NG opens every session with
+/// `;V ?` (list supported VFOs) and then polls with `+\get_vfo_info VFOA`, so those two
+/// shapes are formatted explicitly; the common labeled gets are also supported, and any
+/// other command (sets, unknown) is wrapped generically as `echo <sep> <plain reply>`.
+async fn handle_ext(sep: char, rest: &str, ctx: &FaceContext) -> Vec<u8> {
+    let trimmed = rest.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let mut parts = trimmed.split_whitespace();
+    let Some(cmd) = parts.next() else {
+        return Vec::new();
+    };
+    let args: Vec<&str> = parts.collect();
+    let snapshot = ctx.snapshot();
+    let reads = ctx.perms.allows(CommandClass::ModeledRead);
+
+    // `?` query on set_vfo: list supported VFOs. This is Log4OM-NG's handshake (`;V ?`).
+    // The supported-token list line is newline-terminated regardless of the separator,
+    // matching real `rigctld`.
+    if matches!(cmd, "V" | "\\set_vfo") && args.first() == Some(&"?") {
+        return format!("set_vfo: ?{sep}VFOA VFOB \nRPRT 0\n").into_bytes();
+    }
+
+    // get_vfo_info: Log4OM-NG's poll command (`+\get_vfo_info VFOA`). Reports the named
+    // VFO's frequency, mode, passband, split, and (always 0) satellite mode.
+    if cmd == "\\get_vfo_info" {
+        if !reads {
+            return erp_records(sep, &[ext_echo(cmd, &args), "RPRT -1".to_string()]);
+        }
+        let vfo = match args.first() {
+            Some(v) if v.eq_ignore_ascii_case("VFOB") => Vfo::B,
+            _ => Vfo::A,
+        };
+        let v = snapshot.vfo(vfo);
+        return erp_records(
+            sep,
+            &[
+                format!("get_vfo_info: {}", vfo_name(vfo)),
+                format!("Freq: {}", v.freq_hz),
+                format!("Mode: {}", v.mode.hamlib_token_with_data(v.data)),
+                format!("Width: {}", v.passband_hz),
+                format!("Split: {}", u8::from(snapshot.split)),
+                "SatMode: 0".to_string(),
+                "RPRT 0".to_string(),
+            ],
+        );
+    }
+
+    // Labeled simple gets, formatted with their Hamlib value labels.
+    let labeled: Option<Vec<String>> = match cmd {
+        "f" | "\\get_freq" if reads => Some(vec![
+            "get_freq:".to_string(),
+            format!("Frequency: {}", snapshot.vfo(snapshot.rx_vfo).freq_hz),
+            "RPRT 0".to_string(),
+        ]),
+        "m" | "\\get_mode" if reads => {
+            let v = snapshot.vfo(snapshot.rx_vfo);
+            Some(vec![
+                "get_mode:".to_string(),
+                format!("Mode: {}", v.mode.hamlib_token_with_data(v.data)),
+                format!("Passband: {}", v.passband_hz),
+                "RPRT 0".to_string(),
+            ])
+        }
+        "v" | "\\get_vfo" if reads => Some(vec![
+            "get_vfo:".to_string(),
+            format!("VFO: {}", vfo_name(snapshot.rx_vfo)),
+            "RPRT 0".to_string(),
+        ]),
+        "t" | "\\get_ptt" if reads => Some(vec![
+            "get_ptt:".to_string(),
+            format!("PTT: {}", u8::from(snapshot.ptt)),
+            "RPRT 0".to_string(),
+        ]),
+        _ => None,
+    };
+    if let Some(records) = labeled {
+        return erp_records(sep, &records);
+    }
+
+    // Generic fallback: sets, permission-denied reads, and unknown commands. Echo the
+    // command then append the plain dispatch reply (e.g. `RPRT 0`) as trailing records.
+    let echo = ext_echo(cmd, &args);
+    match dispatch_plain(cmd, &args, ctx).await {
+        LineResult::Quit => Vec::new(),
+        LineResult::Reply(bytes) => {
+            let mut records = vec![echo];
+            for chunk in String::from_utf8_lossy(&bytes).split('\n') {
+                if !chunk.is_empty() {
+                    records.push(chunk.to_string());
+                }
+            }
+            erp_records(sep, &records)
+        }
+    }
+}
+
+/// Dispatch one plain (non-extended) rigctld protocol command against the universal state.
+#[allow(clippy::too_many_lines)] // A flat protocol dispatch table reads best as one match.
+async fn dispatch_plain(cmd: &str, args: &[&str], ctx: &FaceContext) -> LineResult {
     let snapshot = ctx.snapshot();
 
     let reply: Vec<u8> = match cmd {
@@ -94,6 +261,23 @@ async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
         "v" | "\\get_vfo" => guard_read(ctx, || {
             format!("{}\n", vfo_name(snapshot.rx_vfo)).into_bytes()
         }),
+        // get_vfo_info: report the named VFO's freq/mode/width/split/satmode as bare
+        // values (Freq, Mode, Width, Split, SatMode), matching real `rigctld`.
+        "\\get_vfo_info" => guard_read(ctx, || {
+            let vfo = match args.first() {
+                Some(v) if v.eq_ignore_ascii_case("VFOB") => Vfo::B,
+                _ => Vfo::A,
+            };
+            let v = snapshot.vfo(vfo);
+            format!(
+                "{}\n{}\n{}\n{}\n0\n",
+                v.freq_hz,
+                v.mode.hamlib_token_with_data(v.data),
+                v.passband_hz,
+                u8::from(snapshot.split),
+            )
+            .into_bytes()
+        }),
         "s" | "\\get_split_vfo" => guard_read(ctx, || {
             let tx = if snapshot.split {
                 snapshot.tx_vfo
@@ -113,7 +297,7 @@ async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
         "\\chk_vfo" => b"0\n".to_vec(),
 
         // --- writes (require `write`) ---
-        "F" | "\\set_freq" => match parts.next().and_then(parse_freq_hz) {
+        "F" | "\\set_freq" => match args.first().copied().and_then(parse_freq_hz) {
             Some(hz) => outcome_rprt(
                 ctx.apply_modeled(
                     StateMutation::SetVfoFreq {
@@ -126,7 +310,7 @@ async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
             ),
             None => RPRT_EINVAL.to_vec(),
         },
-        "M" | "\\set_mode" => match parts.next() {
+        "M" | "\\set_mode" => match args.first().copied() {
             Some(token) => {
                 // The TS-590 splits data operation into a base mode (`MD`) and an
                 // independent DATA flag (`DA`), so a `PKTUSB` request becomes two modeled
@@ -162,8 +346,8 @@ async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
             None => RPRT_EINVAL.to_vec(),
         },
         "S" | "\\set_split_vfo" => {
-            let enabled = parts.next().map(str::trim) == Some("1");
-            let tx_vfo = match parts.next() {
+            let enabled = args.first().copied() == Some("1");
+            let tx_vfo = match args.get(1).copied() {
                 Some(v) if v.eq_ignore_ascii_case("VFOB") => Some(Vfo::B),
                 _ => Some(Vfo::A),
             };
@@ -181,7 +365,7 @@ async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
             // source is honored on the wire (TS-590 `TX1;`) to route the DATA/USB audio
             // and avoid the data beep a bare `TX;` produces. Only 0 (or a missing arg)
             // means unkey.
-            let (keyed, source) = match parts.next().map(str::trim) {
+            let (keyed, source) = match args.first().copied() {
                 Some("1") => (true, PttSource::Generic),
                 Some("2") => (true, PttSource::Mic),
                 Some("3") => (true, PttSource::Data),
@@ -224,7 +408,7 @@ async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
         }),
         "J" | "\\set_rit" => {
             if ctx.caps.has_rit {
-                match parts.next().and_then(|s| s.parse::<i32>().ok()) {
+                match args.first().and_then(|s| s.parse::<i32>().ok()) {
                     Some(offset_hz) => outcome_rprt(
                         ctx.apply_modeled(
                             StateMutation::SetRit {
@@ -243,7 +427,7 @@ async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
         }
         "Z" | "\\set_xit" => {
             if ctx.caps.has_xit {
-                match parts.next().and_then(|s| s.parse::<i32>().ok()) {
+                match args.first().and_then(|s| s.parse::<i32>().ok()) {
                     Some(offset_hz) => outcome_rprt(
                         ctx.apply_modeled(
                             StateMutation::SetXit {
@@ -658,5 +842,116 @@ mod tests {
         );
         assert_eq!(reply_of("\\set_rit 100", &ctx).await, RPRT_ENAVAIL.to_vec());
         assert_eq!(reply_of("\\set_xit 100", &ctx).await, RPRT_ENAVAIL.to_vec());
+    }
+
+    // --- Extended Response Protocol (Log4OM-NG) ---
+
+    #[tokio::test]
+    async fn erp_set_vfo_query_lists_supported_vfos() {
+        // Log4OM-NG opens every session with `;V ?` (extended set_vfo query). The reply
+        // must echo the command, list the supported VFOs (newline before RPRT, matching
+        // real rigctld), and end with RPRT 0 — all `;`-separated on one logical block.
+        let (ctx, _b, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        assert_eq!(
+            reply_of(";V ?", &ctx).await,
+            b"set_vfo: ?;VFOA VFOB \nRPRT 0\n".to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn erp_get_vfo_info_reports_active_vfo_block() {
+        // Log4OM-NG polls with `+\get_vfo_info VFOA` (newline-separated extended form).
+        let (ctx, _b, state) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::A,
+                hz: 14_074_000,
+            },
+            RadioEventSource::PollDiff,
+        );
+        state.record(
+            StateChange::Mode {
+                vfo: Vfo::A,
+                mode: Mode::Cw,
+            },
+            RadioEventSource::PollDiff,
+        );
+        assert_eq!(
+            reply_of("+\\get_vfo_info VFOA", &ctx).await,
+            b"get_vfo_info: VFOA\nFreq: 14074000\nMode: CW\nWidth: 2400\nSplit: 0\nSatMode: 0\nRPRT 0\n"
+                .to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_get_vfo_info_reports_bare_values() {
+        // The non-extended form returns just the values (Freq, Mode, Width, Split, SatMode).
+        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::A,
+                hz: 7_030_000,
+            },
+            RadioEventSource::PollDiff,
+        );
+        state.record(
+            StateChange::Mode {
+                vfo: Vfo::A,
+                mode: Mode::Cw,
+            },
+            RadioEventSource::PollDiff,
+        );
+        assert_eq!(
+            reply_of("\\get_vfo_info VFOA", &ctx).await,
+            b"7030000\nCW\n2400\n0\n0\n".to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn erp_generic_set_echoes_command_then_rprt() {
+        // A generic extended set (e.g. `+F`) echoes `set_freq: <arg>` then `RPRT 0`,
+        // newline-separated for the `+` separator.
+        let (ctx, _b, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        assert_eq!(
+            reply_of("+F 14200000", &ctx).await,
+            b"set_freq: 14200000\nRPRT 0\n".to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn erp_set_vfo_with_arg_echoes_on_one_line() {
+        // `;V VFOA` selects the active VFO (never retargets) and replies on one line.
+        let (ctx, _b, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        assert_eq!(
+            reply_of(";V VFOA", &ctx).await,
+            b"set_vfo: VFOA;RPRT 0\n".to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn erp_labeled_get_freq_single_line() {
+        // `;f` returns a single-line labeled extended response.
+        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::A,
+                hz: 14_074_000,
+            },
+            RadioEventSource::PollDiff,
+        );
+        assert_eq!(
+            reply_of(";f", &ctx).await,
+            b"get_freq:;Frequency: 14074000;RPRT 0\n".to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn erp_get_vfo_info_denied_without_read() {
+        // A face without read permission gets an RPRT -1 extended error, not data.
+        let (ctx, _b, _s) = ctx_with(FacePermissions::from_tokens(&["write"]));
+        assert_eq!(
+            reply_of("+\\get_vfo_info VFOA", &ctx).await,
+            b"get_vfo_info: VFOA\nRPRT -1\n".to_vec()
+        );
     }
 }

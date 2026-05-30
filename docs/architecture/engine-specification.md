@@ -500,6 +500,14 @@ endpoint is the cathub daemon or a bare `rigctld`.
 - Operator setup: `docs/integrations/cathub-setup.md`.
 - Implementation: the `qsoripper-cathub` crate under `src/rust/`.
 
+The hub's Hamlib NET faces accept both the plain rigctld protocol (WSJT-X, N1MM, the engine)
+and Hamlib's **Extended Response Protocol** (ERP). An ERP request prefixes the command with a
+separator (`+` joins records with newlines; `;`, `|`, or `,` joins them on one line with that
+character), and the reply echoes the long command name, emits labeled data records, and ends
+with `RPRT x`. Log4OM-NG relies on ERP exclusively — it handshakes with `;V ?` (list supported
+VFOs) and polls with `+\get_vfo_info VFOA` — so a conformant hub must implement ERP framing for
+those shapes, not just the plain protocol, or Log4OM stays offline.
+
 ##### Unified configuration
 
 The CAT hub daemon, the engine, and the launcher share one per-user `config.toml`

@@ -162,6 +162,11 @@ No radio-menu change is needed. Leave **Beep Volume** at your normal setting.
 ### Log4OM
 - CAT interface: Hamlib `NET rigctl`, host **127.0.0.1**, port **4534**.
 - The `log4om` endpoint is `perms = ["read", "write"]`.
+- Log4OM-NG uses Hamlib's **Extended Response Protocol** (ERP): it opens every session with
+  `;V ?` (list supported VFOs) and then polls with `+\get_vfo_info VFOA` (~2 Hz). The hub's
+  `hamlib_net` face parses the ERP separator prefix (`+ ; | ,`) and answers both shapes in the
+  exact byte format real `rigctld` produces, so Log4OM connects and stays **online**. Plain
+  clients (WSJT-X, N1MM, the engine) are unaffected — they never send the ERP prefix.
 
 ### QsoRipper engine (TUI and GUI)
 - The engine's `RigctldProvider` points at the read-only endpoint **127.0.0.1:4532**.
