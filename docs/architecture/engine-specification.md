@@ -287,7 +287,7 @@ Imports QSO records from a client-streamed ADIF payload.
 4. For each parsed QSO, generate a `local_id`, normalize fields, and insert into storage.
 5. Return a summary: total records parsed, records imported, records skipped (duplicates or validation failures), and any error messages.
 
-**Duplicate handling:** The engine should detect duplicates by matching on callsign + UTC timestamp + band + mode and skip them rather than creating duplicate entries.
+**Duplicate handling:** The engine should detect duplicates by matching on station callsign + worked callsign + band + mode + compatible submode/frequency + compatible UTC timestamp and skip them rather than creating duplicate entries. Timestamp matching must handle minute-precision ADIF sources (for example N1MM contest exports) by matching an existing second-precision QSO in the same displayed minute when either side is minute-precision. Small frequency drift between ADIF sources and QRZ-enriched rows should not create a duplicate when the contact identity otherwise matches.
 
 **Error semantics:**
 - `INVALID_ARGUMENT` — ADIF content is malformed or unparseable.

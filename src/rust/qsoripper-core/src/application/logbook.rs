@@ -12,6 +12,9 @@ use prost_types::Timestamp;
 use std::sync::Arc;
 use thiserror::Error;
 
+const ADIF_DUPLICATE_TIME_WINDOW_SECONDS: i64 = 59;
+const ADIF_DUPLICATE_FREQUENCY_TOLERANCE_HZ: u64 = 100;
+
 /// Coordinates QSO CRUD and sync-status reads through a storage backend.
 #[derive(Clone)]
 pub struct LogbookEngine {
@@ -406,7 +409,7 @@ impl LogbookEngine {
             }
 
             warnings.push(format!(
-                "Record {record_number}: duplicate skipped; matched an existing QSO on station_callsign, worked_callsign, utc_timestamp, band, mode, and compatible submode/frequency."
+                "Record {record_number}: duplicate skipped; matched an existing QSO on station_callsign, worked_callsign, compatible utc_timestamp, band, mode, and compatible submode/frequency."
             ));
             return Ok(AdifImportOutcome {
                 kind: AdifImportOutcomeKind::Skipped,
@@ -435,8 +438,14 @@ impl LogbookEngine {
             .storage
             .logbook()
             .list_qsos(&QsoListQuery {
-                after: Some(timestamp),
-                before: Some(timestamp),
+                after: Some(offset_timestamp_seconds(
+                    timestamp,
+                    -ADIF_DUPLICATE_TIME_WINDOW_SECONDS,
+                )),
+                before: Some(offset_timestamp_seconds(
+                    timestamp,
+                    ADIF_DUPLICATE_TIME_WINDOW_SECONDS,
+                )),
                 callsign_filter,
                 ..QsoListQuery::default()
             })
@@ -768,7 +777,29 @@ fn merge_optional_timestamp(target: &mut Option<Timestamp>, source: Option<Times
 }
 
 fn timestamps_match(left: Option<&Timestamp>, right: Option<&Timestamp>) -> bool {
-    left == right
+    match (left, right) {
+        (Some(left), Some(right)) if left == right => true,
+        (Some(left), Some(right)) => {
+            timestamp_minute_bucket(left) == timestamp_minute_bucket(right)
+                && (timestamp_is_minute_precision(left) || timestamp_is_minute_precision(right))
+        }
+        _ => false,
+    }
+}
+
+fn timestamp_minute_bucket(timestamp: &Timestamp) -> i64 {
+    timestamp.seconds.div_euclid(60)
+}
+
+fn timestamp_is_minute_precision(timestamp: &Timestamp) -> bool {
+    timestamp.seconds.rem_euclid(60) == 0 && timestamp.nanos == 0
+}
+
+fn offset_timestamp_seconds(timestamp: Timestamp, offset_seconds: i64) -> Timestamp {
+    Timestamp {
+        seconds: timestamp.seconds.saturating_add(offset_seconds),
+        nanos: timestamp.nanos,
+    }
 }
 
 fn strings_equal_ignore_ascii_case(left: &str, right: &str) -> bool {
@@ -793,12 +824,12 @@ fn optional_u64_compatible(left: Option<u64>, right: Option<u64>) -> bool {
 }
 
 /// Compare frequencies for duplicate matching.
-/// When both sides have Hz fields, compare exactly.
+/// When both sides have Hz fields, allow small source-format drift.
 /// When one or both lack Hz, fall back to kHz compatibility.
 #[allow(deprecated)]
 fn frequencies_compatible(existing: &QsoRecord, candidate: &QsoRecord) -> bool {
     match (existing.frequency_hz, candidate.frequency_hz) {
-        (Some(a), Some(b)) => a == b,
+        (Some(a), Some(b)) => a.abs_diff(b) <= ADIF_DUPLICATE_FREQUENCY_TOLERANCE_HZ,
         _ => optional_u64_compatible(existing.frequency_khz, candidate.frequency_khz),
     }
 }

@@ -572,9 +572,13 @@ mod tests {
         let groups = find_duplicate_groups(&[keeper, loser], &options());
 
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].keeper.local_id, "keeper");
-        assert_eq!(groups[0].losers.len(), 1);
-        assert_eq!(groups[0].losers[0].local_id, "loser");
+        let [group] = groups.as_slice() else { return };
+        assert_eq!(group.keeper.local_id, "keeper");
+        assert_eq!(group.losers.len(), 1);
+        let [loser] = group.losers.as_slice() else {
+            return;
+        };
+        assert_eq!(loser.local_id, "loser");
     }
 
     #[test]
@@ -599,9 +603,13 @@ mod tests {
         let groups = find_duplicate_groups(&[keeper, loser], &options());
 
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].keeper.local_id, "keeper");
-        assert_eq!(groups[0].losers.len(), 1);
-        assert_eq!(groups[0].losers[0].local_id, "loser");
+        let [group] = groups.as_slice() else { return };
+        assert_eq!(group.keeper.local_id, "keeper");
+        assert_eq!(group.losers.len(), 1);
+        let [loser] = group.losers.as_slice() else {
+            return;
+        };
+        assert_eq!(loser.local_id, "loser");
     }
 
     #[test]
@@ -630,6 +638,10 @@ mod tests {
         let groups = find_duplicate_groups(&[keeper, loser], &options());
 
         assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].losers[0].local_id, "loser");
+        let [group] = groups.as_slice() else { return };
+        let [loser] = group.losers.as_slice() else {
+            return;
+        };
+        assert_eq!(loser.local_id, "loser");
     }
 }
