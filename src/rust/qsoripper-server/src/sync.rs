@@ -946,8 +946,10 @@ async fn merge_with_local(
         }
         Ok(SyncStatus::LocalOnly) => {
             // The QSO was already on QRZ (e.g. uploaded outside QsoRipper).
-            // Link it and mark synced to avoid a duplicate upload in Phase 2.
+            // Link it and mark synced to avoid a duplicate upload in Phase 2,
+            // while filling blank local enrichment from QRZ's ADIF copy.
             let mut linked = local.clone();
+            fill_missing_remote_enrichment(&mut linked, remote);
             linked.sync_status = SyncStatus::Synced as i32;
             if let Some(logid) = remote_logid {
                 linked.qrz_logid = Some(logid.to_string());
@@ -970,6 +972,82 @@ async fn merge_with_local(
         }
         _ => {
             // Conflict or unknown — leave untouched.
+        }
+    }
+}
+
+fn fill_missing_remote_enrichment(target: &mut QsoRecord, remote: &QsoRecord) {
+    copy_string_if_missing(
+        &mut target.worked_operator_callsign,
+        remote.worked_operator_callsign.as_deref(),
+    );
+    copy_string_if_missing(
+        &mut target.worked_operator_name,
+        remote.worked_operator_name.as_deref(),
+    );
+    copy_string_if_missing(&mut target.worked_grid, remote.worked_grid.as_deref());
+    copy_string_if_missing(&mut target.worked_country, remote.worked_country.as_deref());
+    copy_u32_if_missing(&mut target.worked_dxcc, remote.worked_dxcc);
+    copy_string_if_missing(&mut target.worked_state, remote.worked_state.as_deref());
+    copy_u32_if_missing(&mut target.worked_cq_zone, remote.worked_cq_zone);
+    copy_u32_if_missing(&mut target.worked_itu_zone, remote.worked_itu_zone);
+    copy_string_if_missing(&mut target.worked_county, remote.worked_county.as_deref());
+    copy_string_if_missing(&mut target.worked_iota, remote.worked_iota.as_deref());
+    copy_string_if_missing(
+        &mut target.worked_continent,
+        remote.worked_continent.as_deref(),
+    );
+    copy_string_if_missing(
+        &mut target.worked_arrl_section,
+        remote.worked_arrl_section.as_deref(),
+    );
+    copy_string_if_missing(&mut target.skcc, remote.skcc.as_deref());
+    copy_f64_if_missing(&mut target.worked_latitude, remote.worked_latitude);
+    copy_f64_if_missing(&mut target.worked_longitude, remote.worked_longitude);
+    copy_f64_if_missing(
+        &mut target.worked_altitude_meters,
+        remote.worked_altitude_meters,
+    );
+    copy_string_if_missing(
+        &mut target.worked_gridsquare_ext,
+        remote.worked_gridsquare_ext.as_deref(),
+    );
+
+    for (key, value) in &remote.extra_fields {
+        if !value.trim().is_empty()
+            && target
+                .extra_fields
+                .get(key)
+                .is_none_or(|existing| existing.trim().is_empty())
+        {
+            target.extra_fields.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+fn copy_string_if_missing(target: &mut Option<String>, remote: Option<&str>) {
+    if target
+        .as_deref()
+        .is_none_or(|value| value.trim().is_empty())
+    {
+        if let Some(value) = remote.map(str::trim).filter(|value| !value.is_empty()) {
+            *target = Some(value.to_owned());
+        }
+    }
+}
+
+fn copy_u32_if_missing(target: &mut Option<u32>, remote: Option<u32>) {
+    if target.is_none_or(|value| value == 0) {
+        if let Some(value) = remote.filter(|value| *value > 0) {
+            *target = Some(value);
+        }
+    }
+}
+
+fn copy_f64_if_missing(target: &mut Option<f64>, remote: Option<f64>) {
+    if target.is_none_or(|value| !value.is_finite()) {
+        if let Some(value) = remote.filter(|value| value.is_finite()) {
+            *target = Some(value);
         }
     }
 }
@@ -2151,6 +2229,73 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].sync_status, SyncStatus::Synced as i32);
         assert_eq!(all[0].qrz_logid.as_deref(), Some("QRZ600"));
+    }
+
+    #[tokio::test]
+    async fn local_only_linked_to_remote_fills_missing_qrz_enrichment_without_overwriting_local_values(
+    ) {
+        let store = MemoryStorage::new();
+
+        let mut local = make_qso("W1AW", "K7LINK", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        local.worked_country = Some("Existing Country".into());
+        local.contest_id = Some("ARRL-FIELD-DAY".into());
+        local.exchange_received = Some("1D WWA".into());
+        store.insert_qso(&local).await.unwrap();
+
+        let mut remote = make_qso("W1AW", "K7LINK", Band::Band20m, Mode::Ft8, 1_700_000_010);
+        remote.qrz_logid = Some("QRZ-ENRICHED".into());
+        remote.worked_grid = Some("FN31".into());
+        remote.worked_country = Some("United States".into());
+        remote.worked_dxcc = Some(291);
+        remote.worked_state = Some("CT".into());
+        remote.worked_county = Some("Hartford".into());
+        remote.worked_cq_zone = Some(5);
+        remote.worked_itu_zone = Some(8);
+        remote.worked_continent = Some("NA".into());
+        remote.worked_latitude = Some(41.0);
+        remote.worked_longitude = Some(-72.7);
+        remote
+            .extra_fields
+            .insert("QRZ_ENRICHED_ONLY".into(), "yes".into());
+        remote.contest_id = Some("QRZ-CONTEST".into());
+        remote.exchange_received = Some("REMOTE".into());
+
+        let api = MockQrzApi::new(Ok(vec![remote]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.downloaded_records, 1);
+        assert_eq!(final_msg.uploaded_records, 0);
+        assert!(final_msg.error.is_none());
+
+        let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
+        assert_eq!(all.len(), 1);
+        let saved = &all[0];
+        assert_eq!(saved.sync_status, SyncStatus::Synced as i32);
+        assert_eq!(saved.qrz_logid.as_deref(), Some("QRZ-ENRICHED"));
+        assert_eq!(saved.worked_grid.as_deref(), Some("FN31"));
+        assert_eq!(saved.worked_country.as_deref(), Some("Existing Country"));
+        assert_eq!(saved.worked_dxcc, Some(291));
+        assert_eq!(saved.worked_state.as_deref(), Some("CT"));
+        assert_eq!(saved.worked_county.as_deref(), Some("Hartford"));
+        assert_eq!(saved.worked_cq_zone, Some(5));
+        assert_eq!(saved.worked_itu_zone, Some(8));
+        assert_eq!(saved.worked_continent.as_deref(), Some("NA"));
+        assert_eq!(saved.worked_latitude, Some(41.0));
+        assert_eq!(saved.worked_longitude, Some(-72.7));
+        assert_eq!(
+            saved
+                .extra_fields
+                .get("QRZ_ENRICHED_ONLY")
+                .map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(saved.contest_id.as_deref(), Some("ARRL-FIELD-DAY"));
+        assert_eq!(saved.exchange_received.as_deref(), Some("1D WWA"));
     }
 
     #[tokio::test]
