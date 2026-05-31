@@ -237,8 +237,9 @@ fn clusters_for_key(qsos: &[QsoRecord], indexes: &[usize], time_window_ms: i64) 
 
 fn qsos_match(left: &QsoRecord, right: &QsoRecord, time_window_ms: i64) -> bool {
     timestamp_delta_ms(left, right).is_some_and(|delta| delta <= time_window_ms)
-        && optional_strings_compatible(left.submode.as_deref(), right.submode.as_deref())
-        && frequencies_compatible(left, right)
+        && (same_non_empty_logid(left, right)
+            || (optional_strings_compatible(left.submode.as_deref(), right.submode.as_deref())
+                && frequencies_compatible(left, right)))
 }
 
 fn timestamp_delta_ms(left: &QsoRecord, right: &QsoRecord) -> Option<i64> {
@@ -289,6 +290,11 @@ fn is_safe_loser(
     options: &Options,
 ) -> bool {
     let row_score = score(row);
+    if same_non_empty_logid(keeper, row) {
+        return keeper_score.record_quality > row_score.record_quality
+            && created_in_range(row, options);
+    }
+
     !has_logid(row)
         && row.sync_status == SyncStatus::LocalOnly as i32
         && keeper_score > row_score
@@ -322,6 +328,16 @@ fn has_logid(qso: &QsoRecord) -> bool {
     qso.qrz_logid
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn same_non_empty_logid(left: &QsoRecord, right: &QsoRecord) -> bool {
+    match (
+        non_empty_trimmed(left.qrz_logid.as_deref()),
+        non_empty_trimmed(right.qrz_logid.as_deref()),
+    ) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
 }
 
 fn enrichment_count(qso: &QsoRecord) -> u16 {
@@ -569,5 +585,51 @@ mod tests {
         let groups = find_duplicate_groups(&[first, second], &options());
 
         assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn finds_less_enriched_synced_loser_when_qrz_logid_matches() {
+        let mut keeper = qso("keeper", SyncStatus::Synced, 100);
+        keeper.qrz_logid = Some("QRZ1".to_string());
+        keeper.worked_grid = Some("FN31".to_string());
+        keeper.worked_country = Some("United States".to_string());
+        let mut loser = qso("loser", SyncStatus::Synced, 200);
+        loser.qrz_logid = Some("QRZ1".to_string());
+
+        let groups = find_duplicate_groups(&[keeper, loser], &options());
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].keeper.local_id, "keeper");
+        assert_eq!(groups[0].losers.len(), 1);
+        assert_eq!(groups[0].losers[0].local_id, "loser");
+    }
+
+    #[test]
+    fn skips_matching_qrz_logid_rows_when_quality_is_tied() {
+        let mut first = qso("first", SyncStatus::Synced, 100);
+        first.qrz_logid = Some("QRZ1".to_string());
+        let mut second = qso("second", SyncStatus::Synced, 200);
+        second.qrz_logid = Some("QRZ1".to_string());
+
+        let groups = find_duplicate_groups(&[first, second], &options());
+
+        assert!(groups.is_empty());
+    }
+
+    #[test]
+    fn matching_qrz_logid_overrides_frequency_difference() {
+        let mut keeper = qso("keeper", SyncStatus::Synced, 100);
+        keeper.qrz_logid = Some("QRZ1".to_string());
+        keeper.worked_grid = Some("FN31".to_string());
+        keeper.worked_country = Some("United States".to_string());
+        keeper.frequency_hz = Some(14_043_600);
+        let mut loser = qso("loser", SyncStatus::Synced, 120);
+        loser.qrz_logid = Some("QRZ1".to_string());
+        loser.frequency_hz = Some(14_044_000);
+
+        let groups = find_duplicate_groups(&[keeper, loser], &options());
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].losers[0].local_id, "loser");
     }
 }
