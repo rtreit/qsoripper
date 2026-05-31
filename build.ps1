@@ -497,6 +497,11 @@ function Build-Win32 {
     }
 
     $null = New-Item -ItemType Directory -Force -Path $Win32PublishDir
+    # The MSVC linker writes qsoripper-win32.exe directly into the publish dir and
+    # fails with LNK1104 if a previously built instance is still running (common
+    # with launcher.ps1 -Rebuild). Side-line any in-use outputs first so the link
+    # can create a fresh exe; the running process keeps its renamed handle.
+    Clear-LockedPublishArtifacts -DestinationDir $Win32PublishDir
     $optFlags = if ($IsReleaseBuild) { '/O2' } else { '/Od /Zi' }
     $exe = Join-Path $Win32PublishDir 'qsoripper-win32.exe'
 
