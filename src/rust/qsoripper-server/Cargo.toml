@@ -21,5 +21,8 @@ toml = "0.8"
 toml_edit = "0.22"
 tonic = { workspace = true }
 
+[dev-dependencies]
+qsoripper-cathub = { path = "../qsoripper-cathub", version = "0.1.0" }
+
 [lints]
 workspace = true

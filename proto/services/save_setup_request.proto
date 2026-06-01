@@ -6,6 +6,7 @@ option csharp_namespace = "QsoRipper.Services";
 
 import "domain/station_profile.proto";
 import "domain/sync_config.proto";
+import "services/cat_hub_settings.proto";
 import "services/rig_control_settings.proto";
 import "services/setup_field_value.proto";
 import "services/storage_backend.proto";
@@ -27,4 +28,6 @@ message SaveSetupRequest {
   optional RigControlSettings rig_control = 9;
   // Engine-neutral persistence fields for the setup step.
   repeated SetupFieldValue persistence_values = 10;
+  // CAT hub (`[cat_hub]`) configuration. Omit to leave unchanged.
+  optional CatHubSettings cat_hub = 11;
 }

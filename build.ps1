@@ -175,6 +175,98 @@ $CwDecoderRustTargetDir = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'ta
 $CwDecoderRustBinary = if ($IsWindows) { 'cw-decoder.exe' } else { 'cw-decoder' }
 $CwDecoderEvalBinary = if ($IsWindows) { 'eval.exe' } else { 'eval' }
 
+function Copy-PublishArtifact {
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $DestinationDir
+    )
+
+    $fileName = Split-Path -Path $Path -Leaf
+    $destination = Join-Path $DestinationDir $fileName
+
+    try {
+        Copy-Item -Path $Path -Destination $destination -Force -ErrorAction Stop
+        return
+    }
+    catch {
+        # The destination is likely locked because a published binary is still
+        # running (common with launcher.ps1 -Rebuild while the app is open). On
+        # Windows a running executable or loaded DLL can be renamed but not
+        # overwritten, so move the locked file aside and copy the fresh build
+        # into place. The running process keeps using the renamed file; the next
+        # launch picks up the new binary.
+        if (-not (Test-Path -LiteralPath $destination)) {
+            throw
+        }
+
+        Get-ChildItem -LiteralPath $DestinationDir -Filter '*.locked-*.old' -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop } catch { }
+            }
+
+        $stamp = [DateTimeOffset]::UtcNow.ToString('yyyyMMddHHmmssfff')
+        $sidelined = "$destination.locked-$stamp.old"
+        Move-Item -LiteralPath $destination -Destination $sidelined -Force -ErrorAction Stop
+        Copy-Item -Path $Path -Destination $destination -Force -ErrorAction Stop
+        Write-Host "  (replaced in-use file; previous binary moved aside as $(Split-Path -Leaf $sidelined))" -ForegroundColor DarkYellow
+    }
+}
+
+function Test-FileLocked {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    try {
+        $stream = [System.IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
+        $stream.Close()
+        $stream.Dispose()
+        return $false
+    }
+    catch [System.IO.IOException] {
+        return $true
+    }
+    catch [System.UnauthorizedAccessException] {
+        return $true
+    }
+}
+
+function Clear-LockedPublishArtifacts {
+    param([Parameter(Mandatory)] [string] $DestinationDir)
+
+    # Before `dotnet publish` overwrites an output directory, side-line any files
+    # that are still locked by a running app (common with launcher.ps1 -Rebuild
+    # while the GUI/engine is open). MSBuild's own copy retries then fails hard
+    # (MSB3021/MSB3027) when a published DLL/EXE is in use. On Windows a running
+    # executable or loaded DLL can be renamed but not overwritten, so renaming the
+    # locked file aside frees the path for the fresh publish output. The running
+    # process keeps using the renamed file; the next launch picks up the new build.
+    if (-not (Test-Path -LiteralPath $DestinationDir)) {
+        return
+    }
+
+    Get-ChildItem -LiteralPath $DestinationDir -Recurse -Filter '*.locked-*.old' -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop } catch { }
+        }
+
+    $stamp = [DateTimeOffset]::UtcNow.ToString('yyyyMMddHHmmssfff')
+    Get-ChildItem -LiteralPath $DestinationDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike '*.locked-*.old' } |
+        ForEach-Object {
+            if (Test-FileLocked -Path $_.FullName) {
+                $sidelined = "$($_.FullName).locked-$stamp.old"
+                try {
+                    Move-Item -LiteralPath $_.FullName -Destination $sidelined -Force -ErrorAction Stop
+                    Write-Host "  (side-lined in-use file $($_.Name); previous binary moved aside)" -ForegroundColor DarkYellow
+                }
+                catch { }
+            }
+        }
+}
+
 function Build-Rust {
     $arguments = @('build', '--manifest-path', $RustManifest)
     if ($IsReleaseBuild) {
@@ -187,7 +279,7 @@ function Build-Rust {
     if (Test-Path $tuiSrc) {
         Write-Step "Publishing qsoripper-tui ($Configuration)"
         $null = New-Item -ItemType Directory -Force -Path $TuiPublishDir
-        Copy-Item -Path $tuiSrc -Destination $TuiPublishDir -Force
+        Copy-PublishArtifact -Path $tuiSrc -DestinationDir $TuiPublishDir
         Write-Host "  -> $TuiPublishDir"
     }
 
@@ -195,7 +287,7 @@ function Build-Rust {
     if (Test-Path $stressTuiSrc) {
         Write-Step "Publishing qsoripper-stress-tui ($Configuration)"
         $null = New-Item -ItemType Directory -Force -Path $StressTuiPublishDir
-        Copy-Item -Path $stressTuiSrc -Destination $StressTuiPublishDir -Force
+        Copy-PublishArtifact -Path $stressTuiSrc -DestinationDir $StressTuiPublishDir
         Write-Host "  -> $StressTuiPublishDir"
     }
 
@@ -203,7 +295,7 @@ function Build-Rust {
     if (Test-Path $serverSrc) {
         Write-Step "Publishing qsoripper-server ($Configuration)"
         $null = New-Item -ItemType Directory -Force -Path $ServerPublishDir
-        Copy-Item -Path $serverSrc -Destination $ServerPublishDir -Force
+        Copy-PublishArtifact -Path $serverSrc -DestinationDir $ServerPublishDir
         Write-Host "  -> $ServerPublishDir"
     }
 
@@ -211,7 +303,7 @@ function Build-Rust {
     if (Test-Path $catHubSrc) {
         Write-Step "Publishing qsoripper-cathub ($Configuration)"
         $null = New-Item -ItemType Directory -Force -Path $CatHubPublishDir
-        Copy-Item -Path $catHubSrc -Destination $CatHubPublishDir -Force
+        Copy-PublishArtifact -Path $catHubSrc -DestinationDir $CatHubPublishDir
         Write-Host "  -> $CatHubPublishDir"
     }
 
@@ -223,9 +315,9 @@ function Build-Rust {
             Write-Step "Publishing qsoripper-ffi ($Configuration)"
             $ffiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-ffi' | Join-Path -ChildPath $Configuration
             $null = New-Item -ItemType Directory -Force -Path $ffiPublishDir
-            Copy-Item -Path $ffiDll -Destination $ffiPublishDir -Force
+            Copy-PublishArtifact -Path $ffiDll -DestinationDir $ffiPublishDir
             if (Test-Path $ffiLib) {
-                Copy-Item -Path $ffiLib -Destination $ffiPublishDir -Force
+                Copy-PublishArtifact -Path $ffiLib -DestinationDir $ffiPublishDir
             }
             Write-Host "  -> $ffiPublishDir"
         }
@@ -301,6 +393,7 @@ function Build-Dotnet {
     if ($needsVcEnv) {
         $arch = if ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq 'Arm64') { 'arm64' } else { 'amd64' }
         Write-Step "Publishing QsoRipper.Cli Native AOT ($Configuration)"
+        Clear-LockedPublishArtifacts -DestinationDir $DotnetCliPublishDir
         cmd /c "call `"$vcvarsAll`" $arch >nul 2>&1 && dotnet $($publishArgs -join ' ')"
         if ($LASTEXITCODE -ne 0) {
             Write-Host "FAILED: Publishing QsoRipper.Cli Native AOT ($Configuration)" -ForegroundColor Red
@@ -308,9 +401,11 @@ function Build-Dotnet {
         }
     }
     else {
+        Clear-LockedPublishArtifacts -DestinationDir $DotnetCliPublishDir
         Invoke-Build "Publishing QsoRipper.Cli Native AOT ($Configuration)" dotnet $publishArgs
     }
 
+    Clear-LockedPublishArtifacts -DestinationDir $DotnetGuiPublishDir
     Invoke-Build "Publishing QsoRipper.Gui ($Configuration)" dotnet @(
         'publish',
         $DotnetGuiProject,
@@ -321,6 +416,7 @@ function Build-Dotnet {
         $DotnetGuiPublishDir
     )
 
+    Clear-LockedPublishArtifacts -DestinationDir $DotnetEnginePublishDir
     Invoke-Build "Publishing QsoRipper.Engine.DotNet ($Configuration)" dotnet @(
         'publish',
         $DotnetEngineProject,
@@ -331,6 +427,7 @@ function Build-Dotnet {
         $DotnetEnginePublishDir
     )
 
+    Clear-LockedPublishArtifacts -DestinationDir $DotnetDebugHostPublishDir
     Invoke-Build "Publishing QsoRipper.DebugHost ($Configuration)" dotnet @(
         'publish',
         $DotnetDebugHostProject,
@@ -342,6 +439,7 @@ function Build-Dotnet {
     )
 
     if (Test-Path $CwScopeGuiProject) {
+        Clear-LockedPublishArtifacts -DestinationDir $CwScopeGuiPublishDir
         Invoke-Build "Publishing CwDecoderGui ($Configuration)" dotnet @(
             'publish',
             $CwScopeGuiProject,
@@ -399,6 +497,11 @@ function Build-Win32 {
     }
 
     $null = New-Item -ItemType Directory -Force -Path $Win32PublishDir
+    # The MSVC linker writes qsoripper-win32.exe directly into the publish dir and
+    # fails with LNK1104 if a previously built instance is still running (common
+    # with launcher.ps1 -Rebuild). Side-line any in-use outputs first so the link
+    # can create a fresh exe; the running process keeps its renamed handle.
+    Clear-LockedPublishArtifacts -DestinationDir $Win32PublishDir
     $optFlags = if ($IsReleaseBuild) { '/O2' } else { '/Od /Zi' }
     $exe = Join-Path $Win32PublishDir 'qsoripper-win32.exe'
 
@@ -425,7 +528,7 @@ cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" /I"$Win32Reso
 
     # Copy FFI DLL alongside the win32 executable
     if (Test-Path $ffiDll) {
-        Copy-Item -Path $ffiDll -Destination $Win32PublishDir -Force
+        Copy-PublishArtifact -Path $ffiDll -DestinationDir $Win32PublishDir
     }
 
     # Clean intermediate files

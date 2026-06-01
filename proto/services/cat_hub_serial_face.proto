@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/cat_hub_permission.proto";
+
+// A CAT hub `[[cat_hub.face]]` endpoint: a serial face (com0com virtual pair)
+// that a client application (HDSDR/OmniRig, N1MM, ARCP-590, ...) connects to.
+message CatHubSerialFace {
+  // A label for logging and identification (unique across all faces/endpoints).
+  string name = 1;
+  // The serial port the hub binds for this face (a com0com / tty path). The
+  // application connects to the OTHER port of the same pair.
+  string transport = 2;
+  // Baud rate for the face port.
+  uint32 baud = 3;
+  // Dialect spoken to the client: `ts590` or `ts2000`.
+  string dialect = 4;
+  // Permission tokens granted to clients of this face.
+  repeated CatHubPermission perms = 5;
+}

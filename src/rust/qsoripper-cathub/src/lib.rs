@@ -55,6 +55,22 @@ use crate::state::StateHandle;
 
 pub use crate::error::CatHubError;
 
+/// Validate that a unified `config.toml` body contains a `[cat_hub]` section the
+/// cathub daemon will accept. This is exposed for the QsoRipper engine's setup
+/// wizard tests so a regression in the engine's CAT hub writer is caught against
+/// the daemon's real parser/validator rather than a hand-maintained copy.
+///
+/// # Errors
+///
+/// Returns a [`CatHubError`] if the document cannot be parsed or the resulting
+/// `[cat_hub]` configuration fails the daemon's semantic validation.
+#[doc(hidden)]
+pub fn validate_cat_hub_toml(text: &str) -> Result<(), CatHubError> {
+    Config::parse_document(text)
+        .map(|_| ())
+        .map_err(CatHubError::Config)
+}
+
 /// Command-line arguments.
 #[derive(Debug, Parser)]
 #[command(
