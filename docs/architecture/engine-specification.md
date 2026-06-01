@@ -287,7 +287,7 @@ Imports QSO records from a client-streamed ADIF payload.
 4. For each parsed QSO, generate a `local_id`, normalize fields, and insert into storage.
 5. Return a summary: total records parsed, records imported, records skipped (duplicates or validation failures), and any error messages.
 
-**Duplicate handling:** The engine should detect duplicates by matching on callsign + UTC timestamp + band + mode and skip them rather than creating duplicate entries.
+**Duplicate handling:** The engine should detect duplicates by matching on station callsign + worked callsign + band + mode + compatible submode/frequency + compatible UTC timestamp and skip them rather than creating duplicate entries. Timestamp matching must handle minute-precision ADIF sources (for example N1MM contest exports) by matching an existing second-precision QSO in the same displayed minute when either side is minute-precision. Small frequency drift between ADIF sources and QRZ-enriched rows should not create a duplicate when the contact identity otherwise matches.
 
 **Error semantics:**
 - `INVALID_ARGUMENT` — ADIF content is malformed or unparseable.
@@ -1333,6 +1333,7 @@ This pre-download upload prevents a stale QRZ copy from being downloaded first a
        - `CONFLICT_POLICY_LAST_WRITE_WINS` — treat the remote record as authoritative and overwrite local fields; mark the merged row as `SYNCED`.
        - `CONFLICT_POLICY_FLAG_FOR_REVIEW` — when the local row was locally edited (`sync_status = MODIFIED`), preserve the local fields, set `sync_status = CONFLICT`, and increment the sync result's conflict counter so operators can reconcile manually. When the local row is already `SYNCED`, remote wins (no conflict).
        - `CONFLICT_POLICY_UNSPECIFIED` — engines MUST treat the zero value as `FLAG_FOR_REVIEW` (the safe, non-destructive default) per §6.3.
+       - When the matched local row is `SYNC_STATUS_LOCAL_ONLY`, engines MUST link the QRZ identity and mark it `SYNCED` without overwriting locally logged contest/contact fields. Engines MUST fill missing worked-station enrichment fields from the remote QRZ ADIF record (for example `GRIDSQUARE`, `COUNTRY`, `DXCC`, `STATE`, `CNTY`, `CQZ`, `ITUZ`, `CONT`, worked-station lat/lon/altitude, and other remote-only ADIF extras) so QSOs uploaded by external loggers can adopt QRZ Logbook enrichment on the next sync.
     e. If unmatched, insert as a new local record with `sync_status = SYNCED` and populate `qrz_logid` from the remote record.
 4. Filter ghost records: remote QSOs missing required fields (callsign, timestamp) are skipped without incrementing any counter.
 5. **Soft-delete suppression:** before matching, engines MUST load the full local record set including soft-deleted rows (see §7.8) and build the set of `qrz_logid` values associated with locally soft-deleted QSOs. Any remote QSO whose `qrz_logid` is in that set MUST be skipped (no insert, no merge), and the engine MUST increment the `deletes_skipped_remote` counter on the sync result. This prevents resurrection of QSOs the operator has trashed locally before the queued remote-delete (Phase 2.5) has propagated.

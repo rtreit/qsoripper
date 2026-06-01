@@ -523,6 +523,47 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
+    public void Import_adif_skips_minute_precision_duplicate_with_small_frequency_drift()
+    {
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87"
+            }
+        });
+
+        state.LogQso(new LogQsoRequest
+        {
+            Qso = new QsoRecord
+            {
+                WorkedCallsign = "W1AW",
+                Band = Band._15M,
+                Mode = Mode.Cw,
+                FrequencyHz = 21_028_340,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2025-01-02T01:02:32Z", System.Globalization.CultureInfo.InvariantCulture)),
+                WorkedCountry = "United States",
+                WorkedGrid = "FN31pr"
+            }
+        });
+
+        var response = state.ImportAdif(
+            Utf8("<CALL:4>W1AW<STATION_CALLSIGN:5>K7RND<QSO_DATE:8>20250102<TIME_ON:4>0102<BAND:3>15M<MODE:2>CW<FREQ:8>21.02830<EOR>\n"),
+            refresh: false);
+        var stored = state.ListQsos(new ListQsosRequest()).Single();
+
+        Assert.Equal(0u, response.RecordsImported);
+        Assert.Equal(1u, response.RecordsSkipped);
+        Assert.Contains(response.Warnings, warning => warning.Contains("duplicate skipped", StringComparison.Ordinal));
+        Assert.Equal("United States", stored.WorkedCountry);
+        Assert.Equal("FN31pr", stored.WorkedGrid);
+    }
+
+    [Fact]
     public void Import_adif_refresh_updates_existing_record_and_preserves_absent_fields()
     {
         var state = CreateState();

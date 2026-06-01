@@ -2571,6 +2571,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn adif_import_skips_minute_precision_duplicate_with_small_frequency_drift() {
+        let service = test_logbook_service(test_runtime_config_with_logbook(
+            StorageBackendKind::Memory,
+            None,
+            true,
+        ));
+        let (mut client, server_handle) = grpc_logbook_client(service).await;
+        let existing_timestamp = chrono::NaiveDate::from_ymd_opt(2025, 1, 2)
+            .expect("date")
+            .and_hms_opt(1, 2, 32)
+            .expect("time")
+            .and_utc()
+            .timestamp();
+        let existing = QsoRecord {
+            station_callsign: "K1ABC".to_string(),
+            worked_callsign: "W1AW".to_string(),
+            utc_timestamp: Some(Timestamp {
+                seconds: existing_timestamp,
+                nanos: 0,
+            }),
+            band: Band::Band15m as i32,
+            mode: Mode::Cw as i32,
+            frequency_hz: Some(21_028_340),
+            worked_country: Some("United States".to_string()),
+            worked_grid: Some("FN31pr".to_string()),
+            ..QsoRecord::default()
+        };
+        let _ = client
+            .log_qso(Request::new(LogQsoRequest {
+                qso: Some(existing),
+                sync_to_qrz: false,
+            }))
+            .await
+            .expect("log response");
+
+        let payload = b"<CALL:4>W1AW<STATION_CALLSIGN:5>K1ABC<QSO_DATE:8>20250102<TIME_ON:4>0102<BAND:3>15M<MODE:2>CW<FREQ:8>21.02830<EOR>\n";
+        let result = import_adif_payload(&mut client, vec![payload.to_vec()]).await;
+
+        assert_eq!(0, result.records_imported);
+        assert_eq!(1, result.records_skipped);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("duplicate skipped")));
+
+        let stored = client
+            .list_qsos(Request::new(ListQsosRequest {
+                limit: 10,
+                sort: QsoSortOrder::OldestFirst as i32,
+                ..ListQsosRequest::default()
+            }))
+            .await
+            .expect("list response")
+            .into_inner()
+            .map(|result| result.expect("list item").qso.expect("listed qso payload"))
+            .collect::<Vec<_>>()
+            .await;
+
+        assert_eq!(1, stored.len());
+        let stored = stored.first().expect("stored qso");
+        assert_eq!(Some("United States"), stored.worked_country.as_deref());
+        assert_eq!(Some("FN31pr"), stored.worked_grid.as_deref());
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
     async fn adif_import_uses_active_station_profile_only_as_explicit_fallback() {
         let service = test_logbook_service(test_runtime_config_with_logbook(
             StorageBackendKind::Memory,

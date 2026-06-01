@@ -577,10 +577,16 @@ public sealed class QrzSyncEngine
 
         // Happy path: local was already Synced (never edited since last sync) or the
         // QSO is LocalOnly with no prior remote link. Remote wins for previously-synced
-        // rows (they reflect authoritative QRZ state), local is kept otherwise.
+        // rows (they reflect authoritative QRZ state). For LocalOnly rows, keep the
+        // locally logged contest/contact data but import QRZ's enrichment into blanks.
         if (!localHasUnsyncedEdits)
         {
             var nonConflict = local.SyncStatus == SyncStatus.Synced ? remote.Clone() : local.Clone();
+            if (local.SyncStatus == SyncStatus.LocalOnly)
+            {
+                FillMissingRemoteEnrichment(nonConflict, remote);
+            }
+
             nonConflict.LocalId = local.LocalId;
             nonConflict.SyncStatus = SyncStatus.Synced;
             nonConflict.QrzLogid = remoteLogid ?? local.QrzLogid;
@@ -616,6 +622,165 @@ public sealed class QrzSyncEngine
 
         merged.QrzLogid = remoteLogid ?? local.QrzLogid;
         return (merged, requiresReview);
+    }
+
+    private static void FillMissingRemoteEnrichment(QsoRecord target, QsoRecord remote)
+    {
+        CopyStringIfMissing(
+            target.HasWorkedOperatorCallsign,
+            target.WorkedOperatorCallsign,
+            remote.HasWorkedOperatorCallsign,
+            remote.WorkedOperatorCallsign,
+            value => target.WorkedOperatorCallsign = value);
+        CopyStringIfMissing(
+            target.HasWorkedOperatorName,
+            target.WorkedOperatorName,
+            remote.HasWorkedOperatorName,
+            remote.WorkedOperatorName,
+            value => target.WorkedOperatorName = value);
+        CopyStringIfMissing(
+            target.HasWorkedGrid,
+            target.WorkedGrid,
+            remote.HasWorkedGrid,
+            remote.WorkedGrid,
+            value => target.WorkedGrid = value);
+        CopyStringIfMissing(
+            target.HasWorkedCountry,
+            target.WorkedCountry,
+            remote.HasWorkedCountry,
+            remote.WorkedCountry,
+            value => target.WorkedCountry = value);
+        CopyUInt32IfMissing(
+            target.HasWorkedDxcc,
+            target.WorkedDxcc,
+            remote.HasWorkedDxcc,
+            remote.WorkedDxcc,
+            value => target.WorkedDxcc = value);
+        CopyStringIfMissing(
+            target.HasWorkedState,
+            target.WorkedState,
+            remote.HasWorkedState,
+            remote.WorkedState,
+            value => target.WorkedState = value);
+        CopyUInt32IfMissing(
+            target.HasWorkedCqZone,
+            target.WorkedCqZone,
+            remote.HasWorkedCqZone,
+            remote.WorkedCqZone,
+            value => target.WorkedCqZone = value);
+        CopyUInt32IfMissing(
+            target.HasWorkedItuZone,
+            target.WorkedItuZone,
+            remote.HasWorkedItuZone,
+            remote.WorkedItuZone,
+            value => target.WorkedItuZone = value);
+        CopyStringIfMissing(
+            target.HasWorkedCounty,
+            target.WorkedCounty,
+            remote.HasWorkedCounty,
+            remote.WorkedCounty,
+            value => target.WorkedCounty = value);
+        CopyStringIfMissing(
+            target.HasWorkedIota,
+            target.WorkedIota,
+            remote.HasWorkedIota,
+            remote.WorkedIota,
+            value => target.WorkedIota = value);
+        CopyStringIfMissing(
+            target.HasWorkedContinent,
+            target.WorkedContinent,
+            remote.HasWorkedContinent,
+            remote.WorkedContinent,
+            value => target.WorkedContinent = value);
+        CopyStringIfMissing(
+            target.HasWorkedArrlSection,
+            target.WorkedArrlSection,
+            remote.HasWorkedArrlSection,
+            remote.WorkedArrlSection,
+            value => target.WorkedArrlSection = value);
+        CopyStringIfMissing(
+            target.HasSkcc,
+            target.Skcc,
+            remote.HasSkcc,
+            remote.Skcc,
+            value => target.Skcc = value);
+        CopyDoubleIfMissing(
+            target.HasWorkedLatitude,
+            target.WorkedLatitude,
+            remote.HasWorkedLatitude,
+            remote.WorkedLatitude,
+            value => target.WorkedLatitude = value);
+        CopyDoubleIfMissing(
+            target.HasWorkedLongitude,
+            target.WorkedLongitude,
+            remote.HasWorkedLongitude,
+            remote.WorkedLongitude,
+            value => target.WorkedLongitude = value);
+        CopyDoubleIfMissing(
+            target.HasWorkedAltitudeMeters,
+            target.WorkedAltitudeMeters,
+            remote.HasWorkedAltitudeMeters,
+            remote.WorkedAltitudeMeters,
+            value => target.WorkedAltitudeMeters = value);
+        CopyStringIfMissing(
+            target.HasWorkedGridsquareExt,
+            target.WorkedGridsquareExt,
+            remote.HasWorkedGridsquareExt,
+            remote.WorkedGridsquareExt,
+            value => target.WorkedGridsquareExt = value);
+
+        foreach (var pair in remote.ExtraFields)
+        {
+            if (!string.IsNullOrWhiteSpace(pair.Value)
+                && (!target.ExtraFields.TryGetValue(pair.Key, out var existing)
+                    || string.IsNullOrWhiteSpace(existing)))
+            {
+                target.ExtraFields[pair.Key] = pair.Value;
+            }
+        }
+    }
+
+    private static void CopyStringIfMissing(
+        bool targetHasValue,
+        string targetValue,
+        bool remoteHasValue,
+        string remoteValue,
+        Action<string> setter)
+    {
+        if ((!targetHasValue || string.IsNullOrWhiteSpace(targetValue))
+            && remoteHasValue
+            && !string.IsNullOrWhiteSpace(remoteValue))
+        {
+            setter(remoteValue.Trim());
+        }
+    }
+
+    private static void CopyUInt32IfMissing(
+        bool targetHasValue,
+        uint targetValue,
+        bool remoteHasValue,
+        uint remoteValue,
+        Action<uint> setter)
+    {
+        if ((!targetHasValue || targetValue == 0) && remoteHasValue && remoteValue > 0)
+        {
+            setter(remoteValue);
+        }
+    }
+
+    private static void CopyDoubleIfMissing(
+        bool targetHasValue,
+        double targetValue,
+        bool remoteHasValue,
+        double remoteValue,
+        Action<double> setter)
+    {
+        if ((!targetHasValue || !double.IsFinite(targetValue))
+            && remoteHasValue
+            && double.IsFinite(remoteValue))
+        {
+            setter(remoteValue);
+        }
     }
 
     private static string? FormatSinceDate(SyncMetadata metadata)

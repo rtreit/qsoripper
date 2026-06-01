@@ -879,7 +879,7 @@ internal sealed class ManagedEngineState
                     {
                         response.RecordsSkipped++;
                         response.Warnings.Add(
-                            $"Record {recordNumber}: duplicate skipped; matched an existing QSO on station_callsign, worked_callsign, utc_timestamp, band, mode, and compatible submode/frequency.");
+                            $"Record {recordNumber}: duplicate skipped; matched an existing QSO on station_callsign, worked_callsign, compatible utc_timestamp, band, mode, and compatible submode/frequency.");
                     }
 
                     continue;
