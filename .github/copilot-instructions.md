@@ -73,8 +73,9 @@ Primary goals:
 - Before pushing commits to a branch that has an associated PR, check the PR status with `gh pr view` first. The PR may have already been merged or closed. If so, create a new PR.
 - When creating PRs, use a plain text description. Avoid heavy markdown with lists, headings, and bullet points.
 - When creating feature branches, use `u/<alias>/BranchName` as the convention.
-- After creating a PR, arm it for auto-merge unless the user explicitly says not to: `gh pr merge --auto --squash`. The repository is configured with a merge queue, so an armed PR will enter the queue automatically when all required checks pass. Do not poll or babysit the PR after arming auto-merge.
-- The helper function `New-AutoPR` in `scripts/profile-helpers.ps1` (created via `git push -u origin HEAD; gh pr create --base main --fill; gh pr merge --auto --squash`) is the canonical one-shot flow.
+- After creating a PR, do NOT arm auto-merge by default. The PR requires at least one approval before it can merge. Leave it for a reviewer unless the user explicitly asks to enable autocomplete behavior.
+- To opt in to autocomplete behavior (merges automatically once approved and all checks pass), explicitly arm it after creating: `gh pr merge --auto --squash`. The merge queue takes over once the PR is approved and checks are green.
+- The helper function `New-PR` in `scripts/profile-helpers.ps1` (created via `git push -u origin HEAD; gh pr create --base main --fill`) is the default one-shot flow. Use `New-AutoPR` only when the user explicitly wants autocomplete behavior.
 - Squash is the only allowed merge method on `main`. Always pass `--squash` to `gh pr merge`.
 - Do not click or invoke "Update branch" on PRs. Branch protection no longer requires PRs to be up to date with `main` before merging; the merge queue handles speculative-merge testing automatically.
 - When a PR implements only part of a GitHub issue, do not reference the parent issue with a closing keyword (`Closes`, `Fixes`, `Resolves`). Instead, create a sub-issue scoped to the work in the PR, reference that sub-issue with a closing keyword in the PR, and add a comment on the parent issue linking to the PR and the sub-issue so progress is traceable. This prevents a partial merge from auto-closing an issue that still has open work.
