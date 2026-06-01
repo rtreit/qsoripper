@@ -176,7 +176,9 @@ impl RadioBackend for RigctldBackend {
                     .await?;
                 check_rprt(&reply)?;
             }
-            StateMutation::SetRit { .. } | StateMutation::SetXit { .. } => {
+            StateMutation::SetRxVfo { .. }
+            | StateMutation::SetRit { .. }
+            | StateMutation::SetXit { .. } => {
                 return Err(BackendError::Unsupported);
             }
         }
