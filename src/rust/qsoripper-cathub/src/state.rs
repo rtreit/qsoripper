@@ -108,6 +108,7 @@ impl Snapshot {
     /// unkeying must always reach the radio and participate in the single-owner lease.
     pub(crate) fn is_redundant(&self, mutation: &StateMutation) -> bool {
         match *mutation {
+            StateMutation::SetRxVfo { vfo } => self.rx_vfo == vfo,
             StateMutation::SetVfoFreq { vfo, hz } => self.vfo(vfo).freq_hz == hz,
             // Compare by the digit actually written to the radio, not the enum identity.
             // WSJT-X asserts "PKTUSB", which decomposes into a base mode of USB (sent as MD2)
@@ -236,6 +237,14 @@ impl StateHandle {
 /// Apply a change to the snapshot, returning whether any value actually changed.
 fn apply_change(snap: &mut Snapshot, change: StateChange) -> bool {
     match change {
+        StateChange::RxVfo { vfo } => {
+            if snap.rx_vfo == vfo {
+                false
+            } else {
+                snap.rx_vfo = vfo;
+                true
+            }
+        }
         StateChange::Freq { vfo, hz } => {
             let target = vfo_mut(snap, vfo);
             if target.freq_hz == hz {

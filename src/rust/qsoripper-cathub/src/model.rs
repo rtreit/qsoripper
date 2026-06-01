@@ -166,6 +166,11 @@ pub(crate) enum PttSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)] // The `Set` prefix names the write intent uniformly.
 pub(crate) enum StateMutation {
+    /// Set the active receive VFO.
+    SetRxVfo {
+        /// Active receive VFO.
+        vfo: Vfo,
+    },
     /// Set a VFO's frequency in Hz.
     SetVfoFreq {
         /// Target VFO.
@@ -221,6 +226,7 @@ impl StateMutation {
     /// The observable [`StateChange`] this mutation produces once applied.
     pub(crate) fn into_change(self) -> StateChange {
         match self {
+            StateMutation::SetRxVfo { vfo } => StateChange::RxVfo { vfo },
             StateMutation::SetVfoFreq { vfo, hz } => StateChange::Freq { vfo, hz },
             StateMutation::SetMode { vfo, mode } => StateChange::Mode { vfo, mode },
             StateMutation::SetDataMode { vfo, on } => StateChange::DataMode { vfo, on },
@@ -236,6 +242,11 @@ impl StateMutation {
 /// fan-out and recorded into the [`Snapshot`](crate::state::Snapshot).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StateChange {
+    /// The active receive VFO changed.
+    RxVfo {
+        /// Active receive VFO.
+        vfo: Vfo,
+    },
     /// A VFO frequency changed.
     Freq {
         /// Affected VFO.
@@ -289,6 +300,7 @@ impl StateChange {
     /// The coverage [`Field`] this change updates.
     pub(crate) fn field(&self) -> Field {
         match *self {
+            StateChange::RxVfo { .. } => Field::RxVfo,
             StateChange::Freq { vfo, .. } => Field::Freq(vfo),
             // The DATA flag is part of the composed mode, so it shares the Mode coverage key.
             StateChange::Mode { vfo, .. } | StateChange::DataMode { vfo, .. } => Field::Mode(vfo),
@@ -304,6 +316,8 @@ impl StateChange {
 /// radio's native push stream covers a field (so the baseline poller can back off).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Field {
+    /// Active receive VFO.
+    RxVfo,
     /// A VFO frequency.
     Freq(Vfo),
     /// A VFO mode.
