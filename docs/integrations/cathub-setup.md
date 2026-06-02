@@ -234,10 +234,14 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
 
 ## 8. Known v1 limitations
 
-- **No automatic radio reconnect yet.** If the radio transport drops mid-session (USB
-  unplugged, radio powered off), the daemon does not yet retry the serial link or serve a
-  `stale` flag (design §8.7). Restart the hub after restoring the radio. Client faces and
-  NET endpoints are unaffected by this and stay up.
+- **Automatic radio reconnect.** If the radio transport drops mid-session (USB unplugged,
+  radio powered off, cable hiccup, or a write error), the daemon now reopens the serial/TCP
+  link automatically with capped exponential backoff (0.5 s up to 5 s) and resumes serving the
+  same client command queue — you no longer need to restart the hub. On each reconnect it also
+  re-arms the radio's native push (auto-info) state, which a power-cycled radio forgets (design
+  §8.4/§8.7). Client faces and NET endpoints stay up throughout. Note: clients that hold their
+  own CAT session above the hub (e.g. HDSDR via OmniRig) may still need their own
+  OmniRig/session restart if they latched onto the dead link before the hub recovered.
 - **Hamlib NET bind errors surface in the log, not at startup.** A serial face that fails to
   open aborts startup with a clear error, but a `[[hamlib_net]]` endpoint whose bind address
   is already in use logs the error from its listener task rather than failing the whole

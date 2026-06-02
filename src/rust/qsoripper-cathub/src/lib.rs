@@ -40,16 +40,19 @@ use tracing_appender::non_blocking::WorkerGuard;
 use crate::backend::kenwood::ts590::Ts590Backend;
 use crate::backend::loopback::LoopbackBackend;
 use crate::backend::rigctld::RigctldBackend;
-use crate::backend::RadioBackend;
+use crate::backend::{BackendError, RadioBackend};
 use crate::config::{Config, RadioConfig};
 use crate::dialect::kenwood::ts2000::Ts2000Dialect;
 use crate::dialect::kenwood::ts590::Ts590Dialect;
 use crate::dialect::{ClientDialect, FaceContext};
-use crate::events::{enable_native_push, spawn_poller, POLLER_FACE};
+use crate::events::{spawn_poller, POLLER_FACE};
 use crate::hamlib_net::run_listener;
 use crate::model::StateMutation;
 use crate::ptt::PttManager;
-use crate::radio::{link_channel, run_transport, spawn_scheduler, OpKind, Priority};
+use crate::radio::{
+    link_channel, run_transport_supervised, spawn_scheduler, OpKind, Priority, RECONNECT_INITIAL,
+    RECONNECT_MAX,
+};
 use crate::serial_face::{open_serial, run_face};
 use crate::state::StateHandle;
 
@@ -128,24 +131,30 @@ enum OpenedTransport {
 /// Open the radio transport described by the `[radio]` section.
 async fn open_transport(radio: &RadioConfig) -> Result<OpenedTransport, CatHubError> {
     match radio.transport.as_str() {
-        "serial" => {
-            let port = serial2_tokio::SerialPort::open(&radio.port, radio.baud)?;
-            // Assert the RTS and DTR modem-control lines. Some radios (notably the Kenwood
-            // TS-590) gate their CAT transmit on RTS and send no replies at all unless it is
-            // high, so without this the daemon opens the port but every poll times out. This
-            // matches the default line state that OmniRig/Hamlib clients use.
-            port.set_rts(true)?;
-            port.set_dtr(true)?;
-            Ok(OpenedTransport::Serial(port))
-        }
-        "tcp" => {
-            let stream = TcpStream::connect((radio.host.as_str(), radio.tcp_port)).await?;
-            Ok(OpenedTransport::Tcp(stream))
-        }
+        "serial" => Ok(OpenedTransport::Serial(open_radio_serial(radio)?)),
+        "tcp" => Ok(OpenedTransport::Tcp(open_radio_tcp(radio).await?)),
         other => Err(CatHubError::Backend(format!(
             "unknown radio.transport '{other}'"
         ))),
     }
+}
+
+/// Open and condition the radio serial port.
+///
+/// Assert the RTS and DTR modem-control lines. Some radios (notably the Kenwood TS-590) gate
+/// their CAT transmit on RTS and send no replies at all unless it is high, so without this the
+/// daemon opens the port but every poll times out. This matches the default line state that
+/// OmniRig/Hamlib clients use.
+fn open_radio_serial(radio: &RadioConfig) -> std::io::Result<serial2_tokio::SerialPort> {
+    let port = serial2_tokio::SerialPort::open(&radio.port, radio.baud)?;
+    port.set_rts(true)?;
+    port.set_dtr(true)?;
+    Ok(port)
+}
+
+/// Connect the radio TCP transport (a `tcp` radio or a rigctld bridge endpoint).
+async fn open_radio_tcp(radio: &RadioConfig) -> std::io::Result<TcpStream> {
+    TcpStream::connect((radio.host.as_str(), radio.tcp_port)).await
 }
 
 /// Run the daemon to completion (until Ctrl+C).
@@ -180,33 +189,69 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
 
     // Wire the transport to the serialized radio link. The loopback backend needs no real
     // transport (it never submits raw bytes), so we just drop the receiver in that case.
+    //
+    // Native push is "in play" whenever the operator enabled it and the backend has a push
+    // command. The supervisor (below) actually issues the enable on the first connect and
+    // re-issues it on every reconnect, so the poller can use this flag to decide back-off.
     let (link, raw_rx) = link_channel();
+    let native_push_active = cfg.radio.backend != "loopback"
+        && cfg.events.native_push
+        && backend.native_push_enable().is_some();
     if cfg.radio.backend == "loopback" {
         drop(raw_rx);
     } else {
+        // The transport is supervised: if the serial/TCP link drops (unplug, radio
+        // power-cycle, write error) the daemon reopens it with backoff and keeps serving the
+        // same command queue, instead of leaving every client wired to a dead radio link until
+        // the whole daemon is restarted.
+        let push_link = native_push_active.then(|| link.clone());
+        let backend_t = backend.clone();
+        let state_t = state.clone();
         match open_transport(&cfg.radio).await? {
             OpenedTransport::Serial(port) => {
-                tokio::spawn(run_transport(port, backend.clone(), state.clone(), raw_rx));
+                let radio_cfg = cfg.radio.clone();
+                tokio::spawn(run_transport_supervised(
+                    port,
+                    raw_rx,
+                    backend_t,
+                    state_t,
+                    push_link,
+                    move || {
+                        let radio_cfg = radio_cfg.clone();
+                        async move {
+                            open_radio_serial(&radio_cfg)
+                                .map_err(|e| BackendError::Transport(e.to_string()))
+                        }
+                    },
+                    RECONNECT_INITIAL,
+                    RECONNECT_MAX,
+                ));
             }
             OpenedTransport::Tcp(stream) => {
-                tokio::spawn(run_transport(
+                let radio_cfg = cfg.radio.clone();
+                tokio::spawn(run_transport_supervised(
                     stream,
-                    backend.clone(),
-                    state.clone(),
                     raw_rx,
+                    backend_t,
+                    state_t,
+                    push_link,
+                    move || {
+                        let radio_cfg = radio_cfg.clone();
+                        async move {
+                            open_radio_tcp(&radio_cfg)
+                                .await
+                                .map_err(|e| BackendError::Transport(e.to_string()))
+                        }
+                    },
+                    RECONNECT_INITIAL,
+                    RECONNECT_MAX,
                 ));
             }
         }
     }
 
-    let push_link = link.clone();
     let radio = spawn_scheduler(backend.clone(), link, state.clone());
 
-    let native_push_active = if cfg.events.native_push {
-        enable_native_push(&backend, &push_link).await
-    } else {
-        false
-    };
     spawn_poller(
         radio.clone(),
         state.clone(),
