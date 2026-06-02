@@ -5,8 +5,10 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use std::time::UNIX_EPOCH;
+
 use anyhow::{bail, Context, Result};
-use sysinfo::{Pid, ProcessRefreshKind, Signal, System};
+use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System, UpdateKind};
 
 use crate::catalog::{ComponentId, ComponentSpec};
 
@@ -320,6 +322,103 @@ pub(crate) fn stop_pid(pid: u32) -> bool {
         .unwrap_or_else(|| proc_handle.kill())
 }
 
+/// Decide whether a running process is a stale copy of the published binary at
+/// `target_exe`. "Stale" means: it is the same executable we manage (same
+/// directory and either the same file name or its side-lined
+/// `<name>.locked-*.old` variant left behind by a rebuild) AND it was started
+/// before the binary on disk was last built (`built_secs`, seconds since the
+/// Unix epoch). A process running a different executable, or one started after
+/// the current build, is never considered stale.
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "comparing a known side-lined suffix, not a real file extension; casing is normalized on Windows and intentionally exact on Unix"
+)]
+fn is_stale_published_copy(
+    proc_exe: &Path,
+    proc_start_secs: u64,
+    target_exe: &Path,
+    built_secs: u64,
+) -> bool {
+    if proc_start_secs >= built_secs {
+        return false;
+    }
+    let (Some(proc_parent), Some(target_parent)) = (proc_exe.parent(), target_exe.parent()) else {
+        return false;
+    };
+    if canonical_or(proc_parent) != canonical_or(target_parent) {
+        return false;
+    }
+    let (Some(proc_name), Some(target_name)) = (proc_exe.file_name(), target_exe.file_name())
+    else {
+        return false;
+    };
+    if proc_name == target_name {
+        return true;
+    }
+    // A rebuild side-lines an in-use binary as "<name>.locked-<ts>.old" before
+    // dropping the fresh file at the original path; the still-running stale
+    // process keeps that side-lined image path.
+    let proc_name = proc_name.to_string_lossy();
+    let target_name = target_name.to_string_lossy();
+    if cfg!(windows) {
+        // Windows paths are case-insensitive and sysinfo may report different
+        // casing than the catalog-derived path.
+        if proc_name.eq_ignore_ascii_case(&target_name) {
+            return true;
+        }
+        let prefix = format!("{}.locked-", target_name.to_ascii_lowercase());
+        let lowered = proc_name.to_ascii_lowercase();
+        lowered.starts_with(&prefix) && lowered.ends_with(".old")
+    } else {
+        proc_name.starts_with(&format!("{target_name}.locked-")) && proc_name.ends_with(".old")
+    }
+}
+
+fn canonical_or(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Stop any process that is a stale copy of the published binary at `exe`
+/// (see [`is_stale_published_copy`]). This frees a held engine/daemon port so
+/// the next launch spawns fresh code instead of attaching to outdated code left
+/// running by an earlier launcher session or rebuild. Genuinely external
+/// engines (a different executable, or a build newer than what is on disk) are
+/// left untouched. Best-effort: returns the number of stale copies stopped, or
+/// `0` if the binary's build time cannot be read.
+pub(crate) fn reap_stale_published_copies(exe: &Path) -> usize {
+    let built_secs = match std::fs::metadata(exe).and_then(|m| m.modified()) {
+        Ok(modified) => match modified.duration_since(UNIX_EPOCH) {
+            Ok(delta) => delta.as_secs(),
+            Err(_) => return 0,
+        },
+        Err(_) => return 0,
+    };
+
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
+    );
+
+    let mut stopped = 0usize;
+    for proc_handle in sys.processes().values() {
+        let Some(proc_exe) = proc_handle.exe() else {
+            continue;
+        };
+        if !is_stale_published_copy(proc_exe, proc_handle.start_time(), exe, built_secs) {
+            continue;
+        }
+        let killed = proc_handle
+            .kill_with(Signal::Term)
+            .unwrap_or_else(|| proc_handle.kill());
+        if killed {
+            stopped += 1;
+        }
+    }
+    stopped
+}
+
 #[cfg(test)]
 #[allow(
     clippy::expect_used,
@@ -397,5 +496,51 @@ mod tests {
         assert_eq!(reg.get(ENGINE_RUST).map(|p| p.pid), Some(1234));
         assert!(reg.remove(ENGINE_RUST).is_some());
         assert!(reg.get(ENGINE_RUST).is_none());
+    }
+
+    #[test]
+    fn stale_copy_matches_same_exe_started_before_build() {
+        let target = PathBuf::from("/publish/Release/qsoripper-server.exe");
+        // Started at t=100, binary built at t=200 -> stale.
+        assert!(is_stale_published_copy(&target, 100, &target, 200));
+    }
+
+    #[test]
+    fn fresh_copy_started_after_build_is_not_stale() {
+        let target = PathBuf::from("/publish/Release/qsoripper-server.exe");
+        // Started at t=300, binary built at t=200 -> current, keep it.
+        assert!(!is_stale_published_copy(&target, 300, &target, 200));
+        // Started exactly at the build second -> treat as current (keep).
+        assert!(!is_stale_published_copy(&target, 200, &target, 200));
+    }
+
+    #[test]
+    fn side_lined_locked_variant_in_same_dir_is_stale() {
+        let target = PathBuf::from("/publish/Release/qsoripper-server.exe");
+        let side_lined = PathBuf::from("/publish/Release/qsoripper-server.exe.locked-20260530.old");
+        assert!(is_stale_published_copy(&side_lined, 100, &target, 200));
+    }
+
+    #[test]
+    fn different_executable_is_never_stale() {
+        let target = PathBuf::from("/publish/Release/qsoripper-server.exe");
+        // Different file name in the same directory.
+        let other_name = PathBuf::from("/publish/Release/qsoripper-cathub.exe");
+        assert!(!is_stale_published_copy(&other_name, 100, &target, 200));
+        // Same file name but a different directory (e.g. a dev `cargo run`).
+        let other_dir = PathBuf::from("/debug/qsoripper-server.exe");
+        assert!(!is_stale_published_copy(&other_dir, 100, &target, 200));
+    }
+
+    #[test]
+    fn unrelated_locked_prefix_is_not_matched() {
+        let target = PathBuf::from("/publish/Release/qsoripper-server.exe");
+        // A file that merely starts with the same stem but is not the
+        // "<name>.locked-...old" side-lined form must not match.
+        let unrelated = PathBuf::from("/publish/Release/qsoripper-server.exe.bak");
+        assert!(!is_stale_published_copy(&unrelated, 100, &target, 200));
+        // The ".locked-" prefix without the ".old" suffix is also rejected.
+        let no_old = PathBuf::from("/publish/Release/qsoripper-server.exe.locked-20260530");
+        assert!(!is_stale_published_copy(&no_old, 100, &target, 200));
     }
 }

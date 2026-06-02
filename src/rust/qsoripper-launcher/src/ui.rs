@@ -21,8 +21,8 @@ use crate::config;
 use crate::discovery::ArtifactRoot;
 use crate::model::Selection;
 use crate::plan::{daemon_plan, engine_plan, ui_plan};
-use crate::ports::{is_port_listening, wait_for_port};
-use crate::process::{open_url, spawn, stop_pid, ProcessRegistry};
+use crate::ports::{is_port_listening, wait_for_port, wait_for_port_release};
+use crate::process::{open_url, reap_stale_published_copies, spawn, stop_pid, ProcessRegistry};
 use crate::sync::{diff_rows, DialogState, DiffRow, Side, SyncDialog};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -289,9 +289,18 @@ impl AppState {
             let exe = plan.spec.artifact.executable_path(&self.artifact_root);
             let port = plan.spec.engine_port.unwrap_or(0);
             if port != 0 && is_port_listening(port, Duration::from_millis(200)) {
-                self.statuses
-                    .insert(daemon_id, Status::listening_external());
-                continue;
+                // Something owns the port. If it is a stale copy of our own
+                // published binary left by an earlier session/rebuild, reclaim
+                // the port so the restart spawns fresh code; otherwise respect
+                // a genuinely external owner.
+                if reap_stale_published_copies(&exe) > 0 {
+                    wait_for_port_release(port, Duration::from_secs(3));
+                }
+                if is_port_listening(port, Duration::from_millis(200)) {
+                    self.statuses
+                        .insert(daemon_id, Status::listening_external());
+                    continue;
+                }
             }
             self.statuses.insert(daemon_id, Status::starting());
             let arg_refs: Vec<&std::ffi::OsStr> = plan.args.iter().map(AsRef::as_ref).collect();
@@ -339,9 +348,18 @@ impl AppState {
             let exe = plan.spec.artifact.executable_path(&self.artifact_root);
             let port = plan.spec.engine_port.unwrap_or(0);
             if port != 0 && is_port_listening(port, Duration::from_millis(200)) {
-                self.statuses
-                    .insert(engine_id, Status::listening_external());
-                continue;
+                // Something owns the port. If it is a stale copy of our own
+                // published binary left by an earlier session/rebuild, reclaim
+                // the port so the restart spawns fresh code; otherwise respect
+                // a genuinely external owner.
+                if reap_stale_published_copies(&exe) > 0 {
+                    wait_for_port_release(port, Duration::from_secs(3));
+                }
+                if is_port_listening(port, Duration::from_millis(200)) {
+                    self.statuses
+                        .insert(engine_id, Status::listening_external());
+                    continue;
+                }
             }
             self.statuses.insert(engine_id, Status::starting());
             let arg_refs: Vec<&std::ffi::OsStr> = plan.args.iter().map(AsRef::as_ref).collect();
