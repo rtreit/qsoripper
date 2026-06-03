@@ -23,6 +23,12 @@ Silicon Labs CP210x USB-UART bridge that fronts the TS-590's USB CAT port).
     Get-Process rigctld, rigctlcom -ErrorAction SilentlyContinue | Stop-Process
     # also stop any safe-bridge Python process and any app still bound directly to COM4
 
+Remove or disable any legacy startup hooks that relaunch `rigctld.exe`; otherwise it can
+reclaim the radio COM port after you stop QsoRipper/cathub. Check scheduled tasks first:
+
+    Get-ScheduledTask -TaskName QsoRipper-rigctld -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName QsoRipper-rigctld -Confirm:$false
+
 Confirm nothing else holds COM4 before continuing.
 
 ## 2. Create virtual serial pairs (com0com)
@@ -204,6 +210,9 @@ With the hub running and all six apps connected:
 Live transmit verification requires the operator and real hardware; do not key the
 transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
 
+For opt-in hardware regression tests against a real TS-590, see
+`docs/integrations/cathub-live-radio-tests.md`.
+
 ## 7. Troubleshooting
 
 - "Access denied" / port busy on COM4: the legacy chain or another app still owns the radio
@@ -249,4 +258,3 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
 - On shutdown (Ctrl+C) the daemon makes a best-effort `RX;` to unkey the transmitter. A hard
   crash cannot run that path; the `ptt_max_tx_ms` ceiling and the radio's own TX timeout are
   the ultimate stuck-transmitter backstops.
-
