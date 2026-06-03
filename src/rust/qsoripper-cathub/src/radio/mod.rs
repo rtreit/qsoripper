@@ -388,9 +388,7 @@ pub(crate) async fn run_transport_supervised<T, F, Fut>(
 /// faces (which consume the CAT stream directly) keep features like the radio's noise
 /// blanker and front-panel changes in sync.
 fn route_event(backend: &Arc<dyn RadioBackend>, state: &StateHandle, frame: &[u8]) {
-    if let Some(mutation) = backend.parse_event(frame) {
-        state.record(mutation.into_change(), RadioEventSource::NativePush);
-    } else {
+    if !backend.record_event(frame, state, RadioEventSource::NativePush) {
         tracing::trace!(
             frame = %String::from_utf8_lossy(frame),
             "relaying unmodeled unsolicited radio frame to native pass-through faces"
@@ -524,6 +522,8 @@ async fn execute(
 )]
 mod tests {
     use super::*;
+    use crate::backend::kenwood::ts590::Ts590Backend;
+    use crate::model::{Mode, Vfo};
 
     #[test]
     fn framer_splits_on_semicolons() {
@@ -546,6 +546,21 @@ mod tests {
     fn verb_matching_uses_prefix() {
         assert!(frame_matches(b"FA00007030000;", &[b"FA".to_vec()]));
         assert!(!frame_matches(b"MD3;", &[b"FA".to_vec()]));
+    }
+
+    #[test]
+    fn route_event_records_full_ts590_if_status() {
+        let backend: Arc<dyn RadioBackend> = Arc::new(Ts590Backend::new());
+        let state = StateHandle::new();
+
+        route_event(&backend, &state, b"IF000140343201234-0000012345121019999;");
+
+        let snap = state.snapshot();
+        assert_eq!(snap.rx_vfo, Vfo::B);
+        assert_eq!(snap.vfo(Vfo::B).freq_hz, 14_034_320);
+        assert_eq!(snap.vfo(Vfo::B).mode, Mode::Usb);
+        assert!(snap.ptt);
+        assert!(snap.split);
     }
 
     #[test]

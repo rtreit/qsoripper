@@ -90,36 +90,30 @@ fn parse_if_status(frame: &[u8]) -> Option<IfStatus> {
     })
 }
 
-fn record_if_status(state: &StateHandle, status: IfStatus) {
-    state.record(
-        StateChange::RxVfo { vfo: status.rx_vfo },
-        RadioEventSource::PollDiff,
-    );
+fn record_if_status(state: &StateHandle, status: IfStatus, source: RadioEventSource) {
     state.record(
         StateChange::Freq {
             vfo: status.rx_vfo,
             hz: status.freq_hz,
         },
-        RadioEventSource::PollDiff,
+        source,
     );
     state.record(
         StateChange::Mode {
             vfo: status.rx_vfo,
             mode: status.mode,
         },
-        RadioEventSource::PollDiff,
+        source,
     );
-    state.record(
-        StateChange::Ptt { keyed: status.ptt },
-        RadioEventSource::PollDiff,
-    );
+    state.record(StateChange::Ptt { keyed: status.ptt }, source);
     state.record(
         StateChange::Split {
             enabled: status.split,
             tx_vfo: None,
         },
-        RadioEventSource::PollDiff,
+        source,
     );
+    state.record(StateChange::RxVfo { vfo: status.rx_vfo }, source);
 }
 
 /// Build an `FA`/`FB` frequency set frame.
@@ -129,6 +123,15 @@ fn freq_set(vfo: Vfo, hz: u64) -> Vec<u8> {
         Vfo::B => "FB",
     };
     format!("{verb}{hz:011};").into_bytes()
+}
+
+/// Build an `FR` receive-VFO select frame.
+fn rx_vfo_set(vfo: Vfo) -> Vec<u8> {
+    let digit = match vfo {
+        Vfo::A => b'0',
+        Vfo::B => b'1',
+    };
+    vec![b'F', b'R', digit, b';']
 }
 
 /// Whether a passthrough frame is a query (bare verb then `;`) versus a set.
@@ -143,7 +146,7 @@ impl RadioBackend for Ts590Backend {
             let verb = cmd.get(..2).unwrap_or(cmd).to_vec();
             let reply = link.submit(cmd.to_vec(), Expect::Reply(vec![verb])).await?;
             if let Some(status) = parse_if_status(&reply) {
-                record_if_status(state, status);
+                record_if_status(state, status, RadioEventSource::PollDiff);
             } else if let Some(mutation) = self.parse_event(&reply) {
                 state.record(mutation.into_change(), RadioEventSource::PollDiff);
             }
@@ -158,7 +161,18 @@ impl RadioBackend for Ts590Backend {
         state: &StateHandle,
     ) -> Result<(), BackendError> {
         let bytes = match mutation {
-            StateMutation::SetRxVfo { .. } => return Err(BackendError::Unsupported),
+            StateMutation::SetRxVfo { vfo } => {
+                let mut bytes = rx_vfo_set(vfo);
+                let snap = state.snapshot();
+                if snap.split {
+                    let tx = match snap.tx_vfo {
+                        Vfo::A => b'0',
+                        Vfo::B => b'1',
+                    };
+                    bytes.extend_from_slice(&[b'F', b'T', tx, b';']);
+                }
+                bytes
+            }
             StateMutation::SetVfoFreq { vfo, hz } => freq_set(vfo, hz),
             StateMutation::SetMode { mode, .. } => {
                 vec![b'M', b'D', mode.to_kenwood_digit(), b';']
@@ -247,6 +261,18 @@ impl RadioBackend for Ts590Backend {
                 parse_if_status(frame).map(|status| StateMutation::SetRxVfo { vfo: status.rx_vfo })
             }
             _ => None,
+        }
+    }
+
+    fn record_event(&self, frame: &[u8], state: &StateHandle, source: RadioEventSource) -> bool {
+        if let Some(status) = parse_if_status(frame) {
+            record_if_status(state, status, source);
+            true
+        } else if let Some(mutation) = self.parse_event(frame) {
+            state.record(mutation.into_change(), source);
+            true
+        } else {
+            false
         }
     }
 
@@ -410,6 +436,56 @@ mod tests {
         radio_side.read_exact(&mut buf).await.expect("read frame");
         assert_eq!(&buf, b"FA00007030000;");
         assert_eq!(state.snapshot().vfo(Vfo::A).freq_hz, 7_030_000);
+    }
+
+    #[tokio::test]
+    async fn apply_rx_vfo_writes_fr_and_updates_state() {
+        let (link, raw_rx) = link_channel();
+        let backend = Arc::new(Ts590Backend::new());
+        let arc: Arc<dyn RadioBackend> = backend.clone();
+        let state = StateHandle::new();
+        let (mut radio_side, server) = tokio::io::duplex(1024);
+        tokio::spawn(run_transport(server, arc, state.clone(), raw_rx));
+
+        backend
+            .apply(StateMutation::SetRxVfo { vfo: Vfo::B }, &link, &state)
+            .await
+            .expect("apply");
+
+        let mut buf = vec![0u8; 4];
+        radio_side.read_exact(&mut buf).await.expect("read frame");
+        assert_eq!(&buf, b"FR1;");
+        assert_eq!(state.snapshot().rx_vfo, Vfo::B);
+    }
+
+    #[tokio::test]
+    async fn apply_rx_vfo_preserves_split_tx_vfo() {
+        let (link, raw_rx) = link_channel();
+        let backend = Arc::new(Ts590Backend::new());
+        let arc: Arc<dyn RadioBackend> = backend.clone();
+        let state = StateHandle::new();
+        state.record(
+            StateChange::Split {
+                enabled: true,
+                tx_vfo: Some(Vfo::B),
+            },
+            RadioEventSource::PollDiff,
+        );
+        let (mut radio_side, server) = tokio::io::duplex(1024);
+        tokio::spawn(run_transport(server, arc, state.clone(), raw_rx));
+
+        backend
+            .apply(StateMutation::SetRxVfo { vfo: Vfo::A }, &link, &state)
+            .await
+            .expect("apply");
+
+        let mut buf = vec![0u8; 8];
+        radio_side.read_exact(&mut buf).await.expect("read frame");
+        assert_eq!(&buf, b"FR0;FT1;");
+        let snap = state.snapshot();
+        assert_eq!(snap.rx_vfo, Vfo::A);
+        assert!(snap.split);
+        assert_eq!(snap.tx_vfo, Vfo::B);
     }
 
     #[tokio::test]

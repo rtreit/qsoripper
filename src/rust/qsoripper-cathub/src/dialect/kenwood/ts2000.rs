@@ -119,6 +119,7 @@ impl ClientDialect for Ts2000Dialect {
             StateChange::Mode { vfo: Vfo::A, mode } => {
                 Some(vec![b'M', b'D', mode_to_digit(mode), b';'])
             }
+            StateChange::RxVfo { .. } => Some(synth_if(&ctx.snapshot())),
             _ => None,
         }
     }
@@ -204,6 +205,41 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(20)).await;
         // Crucially: no split mutation reached the radio.
         assert!(backend.mutations().is_empty());
+    }
+
+    #[tokio::test]
+    async fn rx_vfo_change_notifies_with_current_if_status() {
+        let (ctx, _backend) = ctx_with(FacePermissions::read_only());
+        ctx.set_ai(true);
+        ctx.state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 14_034_320,
+            },
+            RadioEventSource::NativePush,
+        );
+        ctx.state.record(
+            StateChange::Mode {
+                vfo: Vfo::B,
+                mode: crate::model::Mode::Usb,
+            },
+            RadioEventSource::NativePush,
+        );
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::NativePush,
+        );
+
+        let notification = Ts2000Dialect::new()
+            .format_notification(&StateChange::RxVfo { vfo: Vfo::B }, &ctx)
+            .expect("IF notification");
+
+        assert!(notification.starts_with(b"IF00014034320"));
+        assert_eq!(
+            *notification.get(30).expect("VFO field"),
+            b'1',
+            "TS-2000 IF VFO field should report VFO B"
+        );
     }
 
     #[tokio::test]

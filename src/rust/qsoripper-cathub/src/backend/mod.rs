@@ -12,7 +12,7 @@ pub(crate) mod rigctld;
 use async_trait::async_trait;
 
 pub(crate) use crate::error::BackendError;
-use crate::model::StateMutation;
+use crate::model::{RadioEventSource, StateMutation};
 use crate::radio::RadioLink;
 use crate::state::StateHandle;
 
@@ -131,6 +131,16 @@ pub(crate) trait RadioBackend: Send + Sync {
 
     /// Parse an unsolicited (native push) frame into a mutation, if recognized.
     fn parse_event(&self, frame: &[u8]) -> Option<StateMutation>;
+
+    /// Record an unsolicited (native push) frame into the universal state, if recognized.
+    fn record_event(&self, frame: &[u8], state: &StateHandle, source: RadioEventSource) -> bool {
+        if let Some(mutation) = self.parse_event(frame) {
+            state.record(mutation.into_change(), source);
+            true
+        } else {
+            false
+        }
+    }
 
     /// Forward a raw native command, returning the raw reply.
     async fn passthrough(&self, raw: &[u8], link: &RadioLink) -> Result<Vec<u8>, BackendError>;
