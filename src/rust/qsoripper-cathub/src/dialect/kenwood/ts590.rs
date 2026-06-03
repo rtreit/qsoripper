@@ -137,6 +137,7 @@ impl ClientDialect for Ts590Dialect {
             StateChange::Mode { vfo: Vfo::A, mode } => {
                 Some(vec![b'M', b'D', mode_to_digit(mode), b';'])
             }
+            StateChange::RxVfo { .. } => Some(synth_if(&ctx.snapshot())),
             _ => None,
         }
     }

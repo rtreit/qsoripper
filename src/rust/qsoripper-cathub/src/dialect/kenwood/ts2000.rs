@@ -57,7 +57,9 @@ impl ClientDialect for Ts2000Dialect {
                 if read {
                     return freq_frame(b"FA", ctx.snapshot().vfo(Vfo::A).freq_hz);
                 }
-                set_freq(ctx, Vfo::A, &payload).await
+                // OmniRig/HDSDR uses FA writes for the displayed tune target. Preserve the
+                // no-retargeting invariant by applying that tune to the currently active VFO.
+                set_freq(ctx, ctx.snapshot().rx_vfo, &payload).await
             }
             b"FB" => {
                 if read {
@@ -67,16 +69,18 @@ impl ClientDialect for Ts2000Dialect {
             }
             b"MD" => {
                 if read {
-                    let d = mode_to_digit(ctx.snapshot().vfo(Vfo::A).mode);
+                    let snap = ctx.snapshot();
+                    let d = mode_to_digit(snap.vfo(snap.rx_vfo).mode);
                     return vec![b'M', b'D', d, b';'];
                 }
                 let Some(&d) = payload.first() else {
                     return ERR.to_vec();
                 };
+                let vfo = ctx.snapshot().rx_vfo;
                 reply(
                     ctx.apply_modeled(
                         StateMutation::SetMode {
-                            vfo: Vfo::A,
+                            vfo,
                             mode: mode_from_digit(d),
                         },
                         CommandClass::ModeledWrite,
@@ -119,6 +123,7 @@ impl ClientDialect for Ts2000Dialect {
             StateChange::Mode { vfo: Vfo::A, mode } => {
                 Some(vec![b'M', b'D', mode_to_digit(mode), b';'])
             }
+            StateChange::RxVfo { .. } => Some(synth_if(&ctx.snapshot())),
             _ => None,
         }
     }
@@ -207,6 +212,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rx_vfo_change_notifies_with_current_if_status() {
+        let (ctx, _backend) = ctx_with(FacePermissions::read_only());
+        ctx.set_ai(true);
+        ctx.state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 14_034_320,
+            },
+            RadioEventSource::NativePush,
+        );
+        ctx.state.record(
+            StateChange::Mode {
+                vfo: Vfo::B,
+                mode: crate::model::Mode::Usb,
+            },
+            RadioEventSource::NativePush,
+        );
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::NativePush,
+        );
+
+        let notification = Ts2000Dialect::new()
+            .format_notification(&StateChange::RxVfo { vfo: Vfo::B }, &ctx)
+            .expect("IF notification");
+
+        assert!(notification.starts_with(b"IF00014034320"));
+        assert_eq!(
+            *notification.get(30).expect("VFO field"),
+            b'1',
+            "TS-2000 IF VFO field should report VFO B"
+        );
+    }
+
+    #[tokio::test]
     async fn answers_id_as_ts2000() {
         let (ctx, _b) = ctx_with(FacePermissions::read_only());
         assert_eq!(
@@ -244,6 +284,69 @@ mod tests {
         assert_eq!(
             Ts2000Dialect::new().handle(b"FA;", &ctx).await,
             b"FA00021200000;".to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn fa_write_tunes_active_vfo_b() {
+        let (ctx, backend) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::NativePush,
+        );
+
+        assert_eq!(
+            Ts2000Dialect::new().handle(b"FA00014074000;", &ctx).await,
+            Vec::<u8>::new()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        assert_eq!(
+            backend.mutations(),
+            vec![StateMutation::SetVfoFreq {
+                vfo: Vfo::B,
+                hz: 14_074_000
+            }],
+            "HDSDR/OmniRig FA set-frequency writes express the displayed active frequency"
+        );
+    }
+
+    #[tokio::test]
+    async fn md_read_and_write_use_active_vfo_b() {
+        let (ctx, backend) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        ctx.state.record(
+            StateChange::Mode {
+                vfo: Vfo::A,
+                mode: crate::model::Mode::Lsb,
+            },
+            RadioEventSource::NativePush,
+        );
+        ctx.state.record(
+            StateChange::Mode {
+                vfo: Vfo::B,
+                mode: crate::model::Mode::Cw,
+            },
+            RadioEventSource::NativePush,
+        );
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::NativePush,
+        );
+
+        assert_eq!(Ts2000Dialect::new().handle(b"MD;", &ctx).await, b"MD3;");
+        assert_eq!(
+            Ts2000Dialect::new().handle(b"MD2;", &ctx).await,
+            Vec::<u8>::new()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        assert_eq!(
+            backend.mutations(),
+            vec![StateMutation::SetMode {
+                vfo: Vfo::B,
+                mode: crate::model::Mode::Usb
+            }],
+            "HDSDR/OmniRig MD writes express the displayed active mode"
         );
     }
 }

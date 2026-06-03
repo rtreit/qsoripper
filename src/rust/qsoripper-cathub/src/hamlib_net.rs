@@ -570,6 +570,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_freq_and_mode_follow_active_vfo_b() {
+        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 14_034_320,
+            },
+            RadioEventSource::PollDiff,
+        );
+        state.record(
+            StateChange::Mode {
+                vfo: Vfo::B,
+                mode: Mode::Cw,
+            },
+            RadioEventSource::PollDiff,
+        );
+        state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::PollDiff,
+        );
+
+        assert_eq!(reply_of("f", &ctx).await, b"14034320\n".to_vec());
+        assert_eq!(reply_of("m", &ctx).await, b"CW\n2400\n".to_vec());
+        assert_eq!(reply_of("v", &ctx).await, b"VFOB\n".to_vec());
+    }
+
+    #[tokio::test]
     async fn read_only_endpoint_rejects_set_freq() {
         let (ctx, backend, _s) = ctx_with(FacePermissions::read_only());
         assert_eq!(reply_of("F 14074000", &ctx).await, RPRT_EINVAL.to_vec());

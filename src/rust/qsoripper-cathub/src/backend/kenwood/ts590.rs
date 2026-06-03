@@ -69,6 +69,14 @@ fn parse_u64(bytes: &[u8]) -> Option<u64> {
     std::str::from_utf8(bytes).ok()?.trim().parse::<u64>().ok()
 }
 
+fn parse_rx_vfo_digit(bytes: &[u8]) -> Option<Vfo> {
+    match *bytes.first()? {
+        b'0' => Some(Vfo::A),
+        b'1' => Some(Vfo::B),
+        _ => None,
+    }
+}
+
 fn parse_if_status(frame: &[u8]) -> Option<IfStatus> {
     let (verb, payload) = split_frame(frame)?;
     if verb != b"IF" {
@@ -90,36 +98,30 @@ fn parse_if_status(frame: &[u8]) -> Option<IfStatus> {
     })
 }
 
-fn record_if_status(state: &StateHandle, status: IfStatus) {
-    state.record(
-        StateChange::RxVfo { vfo: status.rx_vfo },
-        RadioEventSource::PollDiff,
-    );
+fn record_if_status(state: &StateHandle, status: IfStatus, source: RadioEventSource) {
     state.record(
         StateChange::Freq {
             vfo: status.rx_vfo,
             hz: status.freq_hz,
         },
-        RadioEventSource::PollDiff,
+        source,
     );
     state.record(
         StateChange::Mode {
             vfo: status.rx_vfo,
             mode: status.mode,
         },
-        RadioEventSource::PollDiff,
+        source,
     );
-    state.record(
-        StateChange::Ptt { keyed: status.ptt },
-        RadioEventSource::PollDiff,
-    );
+    state.record(StateChange::Ptt { keyed: status.ptt }, source);
     state.record(
         StateChange::Split {
             enabled: status.split,
             tx_vfo: None,
         },
-        RadioEventSource::PollDiff,
+        source,
     );
+    state.record(StateChange::RxVfo { vfo: status.rx_vfo }, source);
 }
 
 /// Build an `FA`/`FB` frequency set frame.
@@ -129,6 +131,15 @@ fn freq_set(vfo: Vfo, hz: u64) -> Vec<u8> {
         Vfo::B => "FB",
     };
     format!("{verb}{hz:011};").into_bytes()
+}
+
+/// Build an `FR` receive-VFO select frame.
+fn rx_vfo_set(vfo: Vfo) -> Vec<u8> {
+    let digit = match vfo {
+        Vfo::A => b'0',
+        Vfo::B => b'1',
+    };
+    vec![b'F', b'R', digit, b';']
 }
 
 /// Whether a passthrough frame is a query (bare verb then `;`) versus a set.
@@ -142,11 +153,7 @@ impl RadioBackend for Ts590Backend {
         for &cmd in POLL_COMMANDS {
             let verb = cmd.get(..2).unwrap_or(cmd).to_vec();
             let reply = link.submit(cmd.to_vec(), Expect::Reply(vec![verb])).await?;
-            if let Some(status) = parse_if_status(&reply) {
-                record_if_status(state, status);
-            } else if let Some(mutation) = self.parse_event(&reply) {
-                state.record(mutation.into_change(), RadioEventSource::PollDiff);
-            }
+            let _ = self.record_event(&reply, state, RadioEventSource::PollDiff);
         }
         Ok(())
     }
@@ -158,7 +165,18 @@ impl RadioBackend for Ts590Backend {
         state: &StateHandle,
     ) -> Result<(), BackendError> {
         let bytes = match mutation {
-            StateMutation::SetRxVfo { .. } => return Err(BackendError::Unsupported),
+            StateMutation::SetRxVfo { vfo } => {
+                let mut bytes = rx_vfo_set(vfo);
+                let snap = state.snapshot();
+                if snap.split {
+                    let tx = match snap.tx_vfo {
+                        Vfo::A => b'0',
+                        Vfo::B => b'1',
+                    };
+                    bytes.extend_from_slice(&[b'F', b'T', tx, b';']);
+                }
+                bytes
+            }
             StateMutation::SetVfoFreq { vfo, hz } => freq_set(vfo, hz),
             StateMutation::SetMode { mode, .. } => {
                 vec![b'M', b'D', mode.to_kenwood_digit(), b';']
@@ -247,6 +265,54 @@ impl RadioBackend for Ts590Backend {
                 parse_if_status(frame).map(|status| StateMutation::SetRxVfo { vfo: status.rx_vfo })
             }
             _ => None,
+        }
+    }
+
+    fn record_event(&self, frame: &[u8], state: &StateHandle, source: RadioEventSource) -> bool {
+        if let Some(status) = parse_if_status(frame) {
+            record_if_status(state, status, source);
+            return true;
+        }
+
+        let Some((verb, payload)) = split_frame(frame) else {
+            return false;
+        };
+        match verb {
+            b"FA" => parse_u64(payload).is_some_and(|hz| {
+                state.record(StateChange::Freq { vfo: Vfo::A, hz }, source);
+                true
+            }),
+            b"FB" => parse_u64(payload).is_some_and(|hz| {
+                state.record(StateChange::Freq { vfo: Vfo::B, hz }, source);
+                true
+            }),
+            b"FR" => parse_rx_vfo_digit(payload).is_some_and(|vfo| {
+                state.record(StateChange::RxVfo { vfo }, source);
+                true
+            }),
+            b"MD" => payload.first().is_some_and(|digit| {
+                let vfo = state.snapshot().rx_vfo;
+                state.record(
+                    StateChange::Mode {
+                        vfo,
+                        mode: Mode::from_kenwood_digit(*digit),
+                    },
+                    source,
+                );
+                true
+            }),
+            b"DA" => payload.first().is_some_and(|digit| {
+                let vfo = state.snapshot().rx_vfo;
+                state.record(
+                    StateChange::DataMode {
+                        vfo,
+                        on: *digit == b'1',
+                    },
+                    source,
+                );
+                true
+            }),
+            _ => false,
         }
     }
 
@@ -374,6 +440,32 @@ mod tests {
     }
 
     #[test]
+    fn native_fr_then_md_records_mode_on_active_vfo() {
+        let backend = Ts590Backend::new();
+        let state = StateHandle::new();
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 14_034_320,
+            },
+            RadioEventSource::PollDiff,
+        );
+
+        assert!(backend.record_event(b"FR1;", &state, RadioEventSource::NativePush));
+        assert!(backend.record_event(b"MD3;", &state, RadioEventSource::NativePush));
+
+        let snap = state.snapshot();
+        assert_eq!(snap.rx_vfo, Vfo::B);
+        assert_eq!(snap.vfo(Vfo::B).freq_hz, 14_034_320);
+        assert_eq!(snap.vfo(Vfo::B).mode, Mode::Cw);
+        assert_eq!(
+            snap.vfo(Vfo::A).mode,
+            Mode::Usb,
+            "VFO B mode push must not be recorded against VFO A"
+        );
+    }
+
+    #[test]
     fn capabilities_are_certified_native_with_push() {
         let caps = Ts590Backend::new().capabilities();
         assert_eq!(caps.trust, TrustTier::CertifiedNative);
@@ -410,6 +502,56 @@ mod tests {
         radio_side.read_exact(&mut buf).await.expect("read frame");
         assert_eq!(&buf, b"FA00007030000;");
         assert_eq!(state.snapshot().vfo(Vfo::A).freq_hz, 7_030_000);
+    }
+
+    #[tokio::test]
+    async fn apply_rx_vfo_writes_fr_and_updates_state() {
+        let (link, raw_rx) = link_channel();
+        let backend = Arc::new(Ts590Backend::new());
+        let arc: Arc<dyn RadioBackend> = backend.clone();
+        let state = StateHandle::new();
+        let (mut radio_side, server) = tokio::io::duplex(1024);
+        tokio::spawn(run_transport(server, arc, state.clone(), raw_rx));
+
+        backend
+            .apply(StateMutation::SetRxVfo { vfo: Vfo::B }, &link, &state)
+            .await
+            .expect("apply");
+
+        let mut buf = vec![0u8; 4];
+        radio_side.read_exact(&mut buf).await.expect("read frame");
+        assert_eq!(&buf, b"FR1;");
+        assert_eq!(state.snapshot().rx_vfo, Vfo::B);
+    }
+
+    #[tokio::test]
+    async fn apply_rx_vfo_preserves_split_tx_vfo() {
+        let (link, raw_rx) = link_channel();
+        let backend = Arc::new(Ts590Backend::new());
+        let arc: Arc<dyn RadioBackend> = backend.clone();
+        let state = StateHandle::new();
+        state.record(
+            StateChange::Split {
+                enabled: true,
+                tx_vfo: Some(Vfo::B),
+            },
+            RadioEventSource::PollDiff,
+        );
+        let (mut radio_side, server) = tokio::io::duplex(1024);
+        tokio::spawn(run_transport(server, arc, state.clone(), raw_rx));
+
+        backend
+            .apply(StateMutation::SetRxVfo { vfo: Vfo::A }, &link, &state)
+            .await
+            .expect("apply");
+
+        let mut buf = vec![0u8; 8];
+        radio_side.read_exact(&mut buf).await.expect("read frame");
+        assert_eq!(&buf, b"FR0;FT1;");
+        let snap = state.snapshot();
+        assert_eq!(snap.rx_vfo, Vfo::A);
+        assert!(snap.split);
+        assert_eq!(snap.tx_vfo, Vfo::B);
     }
 
     #[tokio::test]
@@ -543,7 +685,56 @@ mod tests {
         let snap = state.snapshot();
         assert_eq!(snap.rx_vfo, Vfo::B);
         assert_eq!(snap.vfo(snap.rx_vfo).freq_hz, 14_034_320);
-        assert_eq!(snap.vfo(snap.rx_vfo).mode, Mode::Usb);
+        assert_eq!(snap.vfo(snap.rx_vfo).mode, Mode::Cw);
+    }
+
+    #[tokio::test]
+    async fn poll_records_md_and_da_on_active_vfo() {
+        let (link, raw_rx) = link_channel();
+        let backend = Arc::new(Ts590Backend::new());
+        let arc: Arc<dyn RadioBackend> = backend.clone();
+        let state = StateHandle::new();
+        let (radio_side, server) = tokio::io::duplex(1024);
+        tokio::spawn(run_transport(server, arc, state.clone(), raw_rx));
+
+        tokio::spawn(async move {
+            let (mut rd, mut wr) = tokio::io::split(radio_side);
+            let mut frame = Vec::new();
+            let mut byte = [0u8; 1];
+            loop {
+                if rd.read(&mut byte).await.unwrap_or(0) == 0 {
+                    break;
+                }
+                frame.push(byte[0]);
+                if byte[0] == b';' {
+                    let answer: &[u8] = match frame.as_slice() {
+                        b"FA;" => b"FA00003020950;",
+                        b"FB;" => b"FB00014034320;",
+                        b"IF;" => b"IF000140343201234-0000012345021009999;",
+                        b"MD;" => b"MD3;",
+                        b"DA;" => b"DA1;",
+                        _ => b"",
+                    };
+                    let _ = wr.write_all(answer).await;
+                    frame.clear();
+                }
+            }
+        });
+
+        backend.poll(&link, &state).await.expect("poll");
+        let snap = state.snapshot();
+        assert_eq!(snap.rx_vfo, Vfo::B);
+        assert_eq!(snap.vfo(Vfo::B).mode, Mode::Cw);
+        assert!(snap.vfo(Vfo::B).data);
+        assert_eq!(
+            snap.vfo(Vfo::A).mode,
+            Mode::Usb,
+            "active VFO B MD reply must not update VFO A"
+        );
+        assert!(
+            !snap.vfo(Vfo::A).data,
+            "active VFO B DA reply must not update VFO A"
+        );
     }
 
     #[tokio::test]

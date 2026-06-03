@@ -24,6 +24,7 @@ use crate::dialect::kenwood::ts2000::Ts2000Dialect;
 use crate::dialect::kenwood::ts590::Ts590Dialect;
 use crate::dialect::{ClientDialect, FaceContext};
 use crate::hamlib_net::serve_conn;
+use crate::model::{RadioEventSource, StateChange, StateMutation, Vfo};
 use crate::permissions::FacePermissions;
 use crate::ptt::PttManager;
 use crate::radio::{detached_link, spawn_scheduler, OpKind, Priority, RadioHandle};
@@ -169,6 +170,35 @@ async fn ts2000_face_never_retargets_vfo() {
     assert!(
         rig.backend.mutations().is_empty(),
         "no status read or VFO-select should mutate the radio"
+    );
+    assert!(rig.backend.passthroughs().is_empty());
+}
+
+/// HDSDR/OmniRig click-to-tune uses the TS-2000 face's FA write as "set the displayed
+/// active frequency". When the real radio is on VFO B, that write must tune VFO B without
+/// emitting a VFO-retarget command.
+#[tokio::test]
+async fn ts2000_face_fa_write_tunes_active_vfo_b() {
+    let rig = rig();
+    let mut omni = rig.face(
+        ts2000(),
+        FacePermissions::from_tokens(&["read", "write"]),
+        1,
+    );
+    rig.state.record(
+        StateChange::RxVfo { vfo: Vfo::B },
+        RadioEventSource::NativePush,
+    );
+
+    omni.write_all(b"FA00014074000;").await.expect("write");
+    tokio::time::sleep(Duration::from_millis(30)).await;
+
+    assert_eq!(
+        rig.backend.mutations(),
+        vec![StateMutation::SetVfoFreq {
+            vfo: Vfo::B,
+            hz: 14_074_000
+        }]
     );
     assert!(rig.backend.passthroughs().is_empty());
 }
