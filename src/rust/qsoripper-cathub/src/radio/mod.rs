@@ -9,6 +9,7 @@
 //!   operation by priority across the ready heads, never reordering one face's stream.
 
 use std::collections::VecDeque;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,6 +17,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::backend::{BackendError, Framing, RadioBackend};
+use crate::events::enable_native_push;
 use crate::model::{RadioEventSource, StateMutation};
 use crate::state::StateHandle;
 
@@ -144,6 +146,28 @@ fn frame_matches(frame: &[u8], verbs: &[Vec<u8>]) -> bool {
     verbs.iter().any(|v| frame.starts_with(v))
 }
 
+/// Why the byte transport stopped, and whether the link should reconnect.
+pub(crate) enum TransportOutcome {
+    /// The command channel closed (every [`RadioLink`] was dropped): the daemon is shutting
+    /// down, so the supervisor must stop and not reopen the radio.
+    Shutdown,
+    /// The byte transport closed or errored (serial unplug, radio power-cycle, write error).
+    /// The command receiver is handed back so the supervisor can reopen and resume serving
+    /// queued commands without dropping the rest of the daemon.
+    Disconnected(mpsc::Receiver<RawCommand>),
+}
+
+/// Internal reason a [`run_transport`] loop exited, before the receiver is reattached.
+enum ExitReason {
+    Shutdown,
+    Disconnected,
+}
+
+/// Default backoff before the first reconnect attempt after a transport drop.
+pub(crate) const RECONNECT_INITIAL: Duration = Duration::from_millis(500);
+/// Ceiling for the exponential reconnect backoff.
+pub(crate) const RECONNECT_MAX: Duration = Duration::from_secs(5);
+
 /// Run the transport task to completion (until the stream closes or errors).
 ///
 /// `transport` is any duplex byte stream (a serial port, a TCP socket, or an in-memory
@@ -154,7 +178,8 @@ pub(crate) async fn run_transport<T>(
     backend: Arc<dyn RadioBackend>,
     state: StateHandle,
     mut raw_rx: mpsc::Receiver<RawCommand>,
-) where
+) -> TransportOutcome
+where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
 {
     let framing = backend.capabilities().framing;
@@ -181,14 +206,16 @@ pub(crate) async fn run_transport<T>(
     });
 
     let mut pending: Option<(Matcher, ReplyTx)> = None;
+    let reason: ExitReason;
 
     loop {
         if pending.is_none() {
             tokio::select! {
                 cmd = raw_rx.recv() => {
-                    let Some(cmd) = cmd else { break };
+                    let Some(cmd) = cmd else { reason = ExitReason::Shutdown; break };
                     if let Err(e) = writer.write_all(&cmd.bytes).await {
                         let _ = cmd.reply.send(Err(BackendError::Transport(e.to_string())));
+                        reason = ExitReason::Disconnected;
                         break;
                     }
                     let _ = writer.flush().await;
@@ -213,7 +240,7 @@ pub(crate) async fn run_transport<T>(
                     }
                 }
                 frame = frame_rx.recv() => {
-                    let Some(frame) = frame else { break };
+                    let Some(frame) = frame else { reason = ExitReason::Disconnected; break };
                     tracing::trace!(rx = %String::from_utf8_lossy(&frame), "radio rx (idle)");
                     route_event(&backend, &state, &frame);
                 }
@@ -235,7 +262,10 @@ pub(crate) async fn run_transport<T>(
                         let _ = reply.send(Err(BackendError::Timeout));
                     }
                 }
-                Ok(None) => break,
+                Ok(None) => {
+                    reason = ExitReason::Disconnected;
+                    break;
+                }
                 Ok(Some(frame)) => {
                     tracing::trace!(rx = %String::from_utf8_lossy(&frame), "radio rx (pending)");
                     pending = match pending.take() {
@@ -275,6 +305,80 @@ pub(crate) async fn run_transport<T>(
         let _ = reply.send(Err(BackendError::Transport("transport closed".into())));
     }
     reader_task.abort();
+    match reason {
+        ExitReason::Shutdown => TransportOutcome::Shutdown,
+        ExitReason::Disconnected => TransportOutcome::Disconnected(raw_rx),
+    }
+}
+
+/// Supervise a radio transport: run it, and when it drops (serial unplug, radio power-cycle,
+/// write error) reopen it with capped exponential backoff and resume serving the same command
+/// queue. Without this, a single transport hiccup would leave every client (HDSDR/OmniRig,
+/// N1MM, WSJT-X, Log4OM, the engine) connected to a dead radio link until the whole daemon was
+/// restarted. The loop ends only when the command channel closes (daemon shutdown).
+///
+/// `first` is the already-open transport from startup. `reopen` produces a fresh transport of
+/// the same kind on each reconnect. When `push_link` is `Some`, the radio's native push stream
+/// is re-armed after every (re)connect, because a power-cycled radio forgets its auto-info
+/// state (design §8.4: "At startup and on reconnect").
+#[expect(
+    clippy::too_many_arguments,
+    reason = "transport, queue, backend, state, push-link, reopen, and two backoff bounds are all distinct supervision inputs"
+)]
+pub(crate) async fn run_transport_supervised<T, F, Fut>(
+    first: T,
+    mut raw_rx: mpsc::Receiver<RawCommand>,
+    backend: Arc<dyn RadioBackend>,
+    state: StateHandle,
+    push_link: Option<RadioLink>,
+    mut reopen: F,
+    backoff_initial: Duration,
+    backoff_max: Duration,
+) where
+    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: Future<Output = Result<T, BackendError>> + Send,
+{
+    let mut transport = Some(first);
+    let mut backoff = backoff_initial;
+    loop {
+        let t = match transport.take() {
+            Some(t) => t,
+            None => match reopen().await {
+                Ok(t) => {
+                    tracing::info!("radio transport reconnected");
+                    backoff = backoff_initial;
+                    t
+                }
+                Err(error) => {
+                    tracing::warn!(%error, ?backoff, "radio reopen failed; retrying");
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(backoff_max);
+                    continue;
+                }
+            },
+        };
+
+        // Re-arm the radio's native push now that a transport is live. This is spawned because
+        // it submits through the same command queue that `run_transport` (started just below)
+        // services; awaiting it here would deadlock against a not-yet-running transport.
+        if let Some(link) = &push_link {
+            let backend = backend.clone();
+            let link = link.clone();
+            tokio::spawn(async move {
+                enable_native_push(&backend, &link).await;
+            });
+        }
+
+        match run_transport(t, backend.clone(), state.clone(), raw_rx).await {
+            TransportOutcome::Shutdown => return,
+            TransportOutcome::Disconnected(rx) => {
+                raw_rx = rx;
+                tracing::warn!("radio transport closed; reconnecting");
+                tokio::time::sleep(backoff).await;
+            }
+        }
+    }
 }
 
 /// Route an unsolicited frame into the universal state as a native push event.
@@ -449,5 +553,116 @@ mod tests {
         assert!(Priority::Ptt < Priority::Write);
         assert!(Priority::Write < Priority::Read);
         assert!(Priority::Read < Priority::Poll);
+    }
+
+    #[tokio::test]
+    async fn supervisor_reconnects_after_transport_drop() {
+        use crate::backend::kenwood::ts590::Ts590Backend;
+
+        let backend: Arc<dyn RadioBackend> = Arc::new(Ts590Backend::new());
+        let state = StateHandle::new();
+        let (link, raw_rx) = link_channel();
+
+        // First transport: a duplex whose client end we drop to force a disconnect.
+        let (radio1, server1) = tokio::io::duplex(1024);
+        // Second transport: handed out by `reopen` on the first reconnect.
+        let (radio2, server2) = tokio::io::duplex(1024);
+
+        let pending = Arc::new(tokio::sync::Mutex::new(Some(server2)));
+        let pending_for_reopen = pending.clone();
+        let reopen = move || {
+            let pending = pending_for_reopen.clone();
+            async move {
+                pending
+                    .lock()
+                    .await
+                    .take()
+                    .ok_or_else(|| BackendError::Transport("no more transports".into()))
+            }
+        };
+
+        tokio::spawn(run_transport_supervised(
+            server1,
+            raw_rx,
+            backend.clone(),
+            state.clone(),
+            None,
+            reopen,
+            Duration::from_millis(10),
+            Duration::from_millis(50),
+        ));
+
+        // Kill the first transport so the supervisor must reconnect.
+        drop(radio1);
+
+        // A fake radio on the reconnected transport answers an FA read.
+        tokio::spawn(async move {
+            let (mut rd, mut wr) = tokio::io::split(radio2);
+            let mut buf = [0u8; 64];
+            loop {
+                let n = match rd.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => n,
+                };
+                if buf.get(..n).unwrap_or(&[]).starts_with(b"FA") {
+                    let _ = wr.write_all(b"FA00014047470;").await;
+                }
+            }
+        });
+
+        // After reconnection, the same link must serve commands again.
+        let reply = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let Ok(reply) = link
+                    .submit(b"FA;".to_vec(), Expect::Reply(vec![b"FA".to_vec()]))
+                    .await
+                {
+                    return reply;
+                }
+                tokio::time::sleep(Duration::from_millis(15)).await;
+            }
+        })
+        .await
+        .expect("reconnected transport should answer an FA read");
+
+        assert!(reply.starts_with(b"FA"), "reply should be an FA frame");
+    }
+
+    #[tokio::test]
+    async fn supervisor_stops_when_command_channel_closes() {
+        use crate::backend::kenwood::ts590::Ts590Backend;
+
+        let backend: Arc<dyn RadioBackend> = Arc::new(Ts590Backend::new());
+        let state = StateHandle::new();
+        let (link, raw_rx) = link_channel();
+
+        // Keep the radio side alive so the only way out is the command channel closing.
+        let (radio1, server1) = tokio::io::duplex(1024);
+
+        // `reopen` should never be called on this path.
+        let reopen = || async {
+            Err::<tokio::io::DuplexStream, _>(BackendError::Transport("unexpected reopen".into()))
+        };
+
+        let handle = tokio::spawn(run_transport_supervised(
+            server1,
+            raw_rx,
+            backend,
+            state,
+            None,
+            reopen,
+            Duration::from_millis(10),
+            Duration::from_millis(50),
+        ));
+
+        // Dropping the last link closes the command channel: the supervisor must exit.
+        drop(link);
+
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("supervisor should exit when the command channel closes")
+            .expect("supervisor task should not panic");
+
+        drop(radio1);
     }
 }
