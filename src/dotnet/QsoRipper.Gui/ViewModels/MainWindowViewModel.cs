@@ -23,7 +23,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
 {
     private static readonly TimeSpan PreferredEngineSwitchTimeout = TimeSpan.FromSeconds(1.5);
     private static readonly TimeSpan SpaceWeatherRefreshInterval = TimeSpan.FromHours(1);
-    private static readonly TimeSpan RigPollInterval = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan RigPollInterval = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan EngineHealthPollInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan EngineHealthProbeTimeout = TimeSpan.FromMilliseconds(1500);
 

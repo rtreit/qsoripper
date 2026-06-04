@@ -28,6 +28,14 @@ public sealed class AsyncVoidHandlerSafetyTests
     }
 
     [Fact]
+    public void MainWindowViewModel_rig_timer_stays_interactive()
+    {
+        var source = File.ReadAllText(GetSourcePath("src", "dotnet", "QsoRipper.Gui", "ViewModels", "MainWindowViewModel.cs"));
+
+        Assert.Contains("RigPollInterval = TimeSpan.FromMilliseconds(100)", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void MainWindowViewModel_space_weather_periodic_refresh_preserves_stale_data_on_failure()
     {
         var source = File.ReadAllText(GetSourcePath("src", "dotnet", "QsoRipper.Gui", "ViewModels", "MainWindowViewModel.cs"));
