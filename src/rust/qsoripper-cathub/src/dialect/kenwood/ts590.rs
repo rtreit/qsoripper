@@ -62,16 +62,21 @@ impl ClientDialect for Ts590Dialect {
             }
             b"MD" => {
                 if read {
-                    let d = mode_to_digit(ctx.snapshot().vfo(Vfo::A).mode);
+                    // A real TS-590 `MD;` reports the *active* VFO's mode. Reading VFO A
+                    // unconditionally froze N1MM/Log4OM on VFO B's mode display.
+                    let snap = ctx.snapshot();
+                    let d = mode_to_digit(snap.vfo(snap.rx_vfo).mode);
                     vec![b'M', b'D', d, b';']
                 } else {
                     let Some(&d) = payload.first() else {
                         return ERR.to_vec();
                     };
+                    // `MD<n>;` writes the *active* VFO's mode, matching real-radio semantics.
+                    let vfo = ctx.snapshot().rx_vfo;
                     reply(
                         ctx.apply_modeled(
                             StateMutation::SetMode {
-                                vfo: Vfo::A,
+                                vfo,
                                 mode: mode_from_digit(d),
                             },
                             CommandClass::ModeledWrite,
@@ -131,13 +136,30 @@ impl ClientDialect for Ts590Dialect {
         if !ctx.ai_on() {
             return None;
         }
+        let snap = ctx.snapshot();
         match *change {
-            StateChange::Freq { vfo: Vfo::A, hz } => Some(freq_frame(b"FA", hz)),
-            StateChange::Freq { vfo: Vfo::B, hz } => Some(freq_frame(b"FB", hz)),
-            StateChange::Mode { vfo: Vfo::A, mode } => {
-                Some(vec![b'M', b'D', mode_to_digit(mode), b';'])
+            StateChange::Freq { vfo, hz } => {
+                // Always emit the explicit per-VFO frame for VFO-specific trackers.
+                let label: &[u8] = if vfo == Vfo::A { b"FA" } else { b"FB" };
+                let mut frame = freq_frame(label, hz);
+                // When the change is on the *active* VFO, also emit the operating-status
+                // `IF` frame. Operating-frequency trackers (N1MM Logger+, Log4OM-as-TS590)
+                // read the displayed frequency from `IF;`/`FA`, not from a bare `FB`, so an
+                // FB-only push made frequency updates silently stop whenever the rig was on
+                // VFO B. Appending `IF` makes VFO B behave exactly like VFO A.
+                if vfo == snap.rx_vfo {
+                    frame.extend_from_slice(&synth_if(&snap));
+                }
+                Some(frame)
             }
-            StateChange::RxVfo { .. } => Some(synth_if(&ctx.snapshot())),
+            StateChange::Mode { vfo, mode } if vfo == snap.rx_vfo => {
+                // `MD` reflects the active VFO on a real TS-590; emit it plus the operating
+                // `IF` so mode trackers follow the active VFO regardless of A/B.
+                let mut frame = vec![b'M', b'D', mode_to_digit(mode), b';'];
+                frame.extend_from_slice(&synth_if(&snap));
+                Some(frame)
+            }
+            StateChange::RxVfo { .. } => Some(synth_if(&snap)),
             _ => None,
         }
     }
@@ -286,7 +308,104 @@ mod tests {
             },
             &ctx,
         );
-        assert_eq!(note, Some(b"FA00014074000;".to_vec()));
+        // The active VFO is A by default, so an active-VFO frequency change must push the
+        // per-VFO `FA` frame *and* the operating-status `IF` frame so clients that track the
+        // operating frequency (N1MM, Log4OM-as-TS590) follow the change.
+        let mut expected = b"FA00014074000;".to_vec();
+        expected.extend_from_slice(&synth_if(&ctx.snapshot()));
+        assert_eq!(note, Some(expected));
+    }
+
+    /// Regression repro for the N1MM "frequency stops tracking on VFO B" bug.
+    ///
+    /// On VFO A, a frequency change pushed an `FA` frame and N1MM updated. On VFO B the hub
+    /// pushed only a bare `FB` frame, which operating-frequency trackers ignore, so the
+    /// displayed frequency silently froze. The active-VFO change must also push the
+    /// operating-status `IF` frame regardless of which VFO is active.
+    #[tokio::test]
+    async fn notification_for_active_vfo_b_freq_pushes_operating_if() {
+        let (ctx, _b) = ctx_with(FacePermissions::read_only());
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::PollDiff,
+        );
+        ctx.state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 14_034_320,
+            },
+            RadioEventSource::PollDiff,
+        );
+        ctx.set_ai(true);
+        let note = Ts590Dialect::new()
+            .format_notification(
+                &StateChange::Freq {
+                    vfo: Vfo::B,
+                    hz: 14_034_320,
+                },
+                &ctx,
+            )
+            .expect("active-VFO freq change must notify");
+        let synth = synth_if(&ctx.snapshot());
+        assert!(
+            note.windows(synth.len()).any(|w| w == synth.as_slice()),
+            "VFO B active-freq notification must include the operating IF frame; got {:?}",
+            String::from_utf8_lossy(&note)
+        );
+        // The IF frame must report VFO B (rx_vfo field == '1') and B's frequency.
+        assert!(
+            note.windows(2).any(|w| w == b"IF"),
+            "notification must contain an IF status frame"
+        );
+        assert!(
+            note.windows(b"FB00014034320;".len())
+                .any(|w| w == b"FB00014034320;"),
+            "notification must still include the per-VFO FB frame"
+        );
+    }
+
+    #[tokio::test]
+    async fn mode_read_follows_active_vfo_b() {
+        let (ctx, _b) = ctx_with(FacePermissions::read_only());
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::PollDiff,
+        );
+        ctx.state.record(
+            StateChange::Mode {
+                vfo: Vfo::B,
+                mode: Mode::Cw,
+            },
+            RadioEventSource::PollDiff,
+        );
+        // A real TS-590 `MD;` reports the *active* VFO's mode, so with VFO B active and set
+        // to CW the read must return the CW digit (3), not VFO A's default USB (2).
+        assert_eq!(
+            Ts590Dialect::new().handle(b"MD;", &ctx).await,
+            b"MD3;".to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn mode_write_targets_active_vfo_b() {
+        let (ctx, backend) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::PollDiff,
+        );
+        assert_eq!(
+            Ts590Dialect::new().handle(b"MD3;", &ctx).await,
+            Vec::<u8>::new()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        // The write must target the active VFO (B), not be hardcoded to VFO A.
+        assert_eq!(
+            backend.mutations(),
+            vec![StateMutation::SetMode {
+                vfo: Vfo::B,
+                mode: Mode::Cw
+            }]
+        );
     }
 
     #[tokio::test]

@@ -136,6 +136,58 @@ impl Snapshot {
             StateMutation::SetPtt { .. } => false,
         }
     }
+
+    /// Decompose this snapshot into the full ordered list of [`StateChange`]s that
+    /// reconstruct it.
+    ///
+    /// Used to re-synchronize a face that fell behind the broadcast ring
+    /// ([`RecvError::Lagged`](tokio::sync::broadcast::error::RecvError::Lagged)): replaying
+    /// these through the dialect's notification formatter restores the client to the current
+    /// radio state even when a one-shot event (a mode or VFO change) was evicted from the
+    /// ring before the face read it. `RxVfo` is emitted last so a foreign dialect's
+    /// VFO-switch frame (which leads with the active `FA`/`MD`) reflects the final state.
+    pub(crate) fn as_changes(&self) -> Vec<StateChange> {
+        vec![
+            StateChange::Freq {
+                vfo: Vfo::A,
+                hz: self.a.freq_hz,
+            },
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: self.b.freq_hz,
+            },
+            StateChange::Mode {
+                vfo: Vfo::A,
+                mode: self.a.mode,
+            },
+            StateChange::Mode {
+                vfo: Vfo::B,
+                mode: self.b.mode,
+            },
+            StateChange::DataMode {
+                vfo: Vfo::A,
+                on: self.a.data,
+            },
+            StateChange::DataMode {
+                vfo: Vfo::B,
+                on: self.b.data,
+            },
+            StateChange::Split {
+                enabled: self.split,
+                tx_vfo: Some(self.tx_vfo),
+            },
+            StateChange::Rit {
+                enabled: self.rit_enabled,
+                offset_hz: self.rit_offset_hz,
+            },
+            StateChange::Xit {
+                enabled: self.xit_enabled,
+                offset_hz: self.xit_offset_hz,
+            },
+            StateChange::Ptt { keyed: self.ptt },
+            StateChange::RxVfo { vfo: self.rx_vfo },
+        ]
+    }
 }
 
 /// An ordered radio-output event delivered to faces for auto-information fan-out.

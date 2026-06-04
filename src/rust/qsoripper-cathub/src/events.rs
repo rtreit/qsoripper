@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::backend::RadioBackend;
-use crate::model::{Field, Vfo};
+use crate::model::Field;
 use crate::radio::{Expect, OpKind, Priority, RadioHandle, RadioLink};
 use crate::state::StateHandle;
 
@@ -40,7 +40,12 @@ pub(crate) fn next_interval(
     baseline: Duration,
     heartbeat: Duration,
 ) -> Duration {
-    if native_push_active && state.is_native_push_covered(Field::Freq(Vfo::A)) {
+    // Back off only when native push covers the frequency of the *currently active* receive
+    // VFO. Probing a fixed `Vfo::A` meant that while the radio sat on VFO B the poller saw
+    // no coverage and never backed off (over-polling on B), and conversely could back off on
+    // A's coverage while B's frequency was the live one. Track the active VFO instead.
+    let active = state.snapshot().rx_vfo;
+    if native_push_active && state.is_native_push_covered(Field::Freq(active)) {
         heartbeat
     } else {
         baseline
@@ -73,7 +78,7 @@ mod tests {
     use super::*;
     use crate::backend::kenwood::ts590::Ts590Backend;
     use crate::backend::loopback::LoopbackBackend;
-    use crate::model::{RadioEventSource, StateChange};
+    use crate::model::{RadioEventSource, StateChange, Vfo};
     use crate::radio::{detached_link, spawn_scheduler};
 
     #[tokio::test]
@@ -124,6 +129,32 @@ mod tests {
 
         // With native push disabled, always baseline regardless of coverage.
         assert_eq!(next_interval(&state, false, baseline, heartbeat), baseline);
+    }
+
+    #[test]
+    fn back_off_follows_the_active_vfo_not_a_fixed_vfo_a() {
+        // Native push covers VFO B's frequency while the radio sits on VFO B. The poller must
+        // recognize coverage of the *active* VFO and back off, instead of over-polling
+        // because it only ever probed VFO A.
+        let state = StateHandle::new();
+        let baseline = Duration::from_millis(200);
+        let heartbeat = Duration::from_millis(2_000);
+
+        // Make VFO B the active receive VFO.
+        state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::NativePush,
+        );
+        // Native push covers VFO B's frequency.
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 14_074_000,
+            },
+            RadioEventSource::NativePush,
+        );
+        // Coverage of the active VFO (B) must drive the back-off.
+        assert_eq!(next_interval(&state, true, baseline, heartbeat), heartbeat);
     }
 
     #[tokio::test]

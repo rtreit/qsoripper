@@ -133,6 +133,16 @@ impl Framer {
         let delim = self.delimiter();
         let mut frames = Vec::new();
         for &b in bytes {
+            // Bound the partial-frame buffer. A radio (or a noisy line) that streams bytes
+            // without ever producing the delimiter must not grow this buffer without limit.
+            // Drop the malformed partial frame and resynchronize on the next delimiter.
+            if self.buf.len() >= MAX_RADIO_FRAME_LEN {
+                tracing::warn!(
+                    "radio frame exceeded {MAX_RADIO_FRAME_LEN} bytes without a delimiter; \
+                     discarding partial frame"
+                );
+                self.buf.clear();
+            }
             self.buf.push(b);
             if b == delim {
                 frames.push(std::mem::take(&mut self.buf));
@@ -141,6 +151,10 @@ impl Framer {
         frames
     }
 }
+
+/// Maximum bytes buffered for a single in-progress radio frame before the partial frame is
+/// discarded. Real CAT frames are tens of bytes; this only bounds a stuck or noisy link.
+const MAX_RADIO_FRAME_LEN: usize = 4096;
 
 fn frame_matches(frame: &[u8], verbs: &[Vec<u8>]) -> bool {
     verbs.iter().any(|v| frame.starts_with(v))
@@ -539,6 +553,20 @@ mod tests {
         let mut framer = Framer::new(Framing::SemicolonTerminated);
         assert!(framer.push(b"FA0000703").is_empty());
         let frames = framer.push(b"0000;");
+        assert_eq!(frames, vec![b"FA00007030000;".to_vec()]);
+    }
+
+    #[test]
+    fn framer_discards_overlong_partial_frame_and_resyncs() {
+        let mut framer = Framer::new(Framing::SemicolonTerminated);
+        // Stream more than the cap without ever sending a delimiter.
+        let junk = vec![b'X'; MAX_RADIO_FRAME_LEN + 64];
+        assert!(framer.push(&junk).is_empty());
+        // The partial buffer must have been bounded, not grown unbounded.
+        assert!(framer.buf.len() <= MAX_RADIO_FRAME_LEN);
+        // Flush whatever junk remains with a delimiter, then a clean frame parses correctly.
+        framer.push(b";");
+        let frames = framer.push(b"FA00007030000;");
         assert_eq!(frames, vec![b"FA00007030000;".to_vec()]);
     }
 
