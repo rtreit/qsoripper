@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
 use crate::dialect::{ApplyOutcome, FaceContext};
@@ -232,6 +232,13 @@ async fn handle_ext(sep: char, rest: &str, ctx: &FaceContext) -> Vec<u8> {
                     records.push(chunk.to_string());
                 }
             }
+            // An ERP client reads until it sees a terminating `RPRT` record. Plain gets
+            // (e.g. `\get_split_vfo`, `\get_powerstat`, `\chk_vfo`, rit/xit) return data
+            // only, with no `RPRT`, so a client falling through this generic path would
+            // block waiting for a terminator that never arrives. Guarantee one.
+            if !records.iter().any(|r| r.starts_with("RPRT")) {
+                records.push("RPRT 0".to_string());
+            }
             erp_records(sep, &records)
         }
     }
@@ -319,6 +326,12 @@ async fn dispatch_plain(cmd: &str, args: &[&str], ctx: &FaceContext) -> LineResu
                 // `DA0`. The base write is applied first; if it fails the data write is
                 // skipped and its error is reported.
                 let (base, data) = Mode::decompose_hamlib_token(token);
+                // An unrecognized mode token decodes to `Mode::Unknown`, which renders as
+                // USB. Silently applying it would retune the radio to USB while reporting
+                // `RPRT 0` (false success). Reject it so the client sees the error.
+                if base == Mode::Unknown {
+                    return LineResult::Reply(RPRT_EINVAL.to_vec());
+                }
                 let mode_outcome = ctx
                     .apply_modeled(
                         StateMutation::SetMode {
@@ -465,33 +478,71 @@ where
 {
     let face_id = ctx.face_id;
     let (reader, mut writer) = tokio::io::split(stream);
-    let mut lines = BufReader::new(reader).lines();
-    loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => {
-                tracing::trace!(face_id, req = %line.trim(), "hamlib_net request");
-                match handle_line(&line, &ctx).await {
-                    LineResult::Reply(bytes) => {
-                        tracing::trace!(
+    let mut reader = BufReader::new(reader);
+    let mut line: Vec<u8> = Vec::with_capacity(64);
+    let mut byte = [0u8; 1];
+
+    'serve: loop {
+        // Read one line manually with a hard length cap so a client that never sends a
+        // newline cannot grow the buffer without bound (OOM/DoS via `BufReader::lines`,
+        // which has no upper limit). An over-long line is discarded and the connection
+        // closed.
+        line.clear();
+        let eof = loop {
+            match reader.read(&mut byte).await {
+                Ok(0) | Err(_) => break true,
+                Ok(_) => {
+                    if byte[0] == b'\n' {
+                        break false;
+                    }
+                    if line.len() >= MAX_LINE_LEN {
+                        tracing::warn!(
                             face_id,
-                            reply = %String::from_utf8_lossy(&bytes).trim_end(),
-                            "hamlib_net reply"
+                            "hamlib_net request exceeded {MAX_LINE_LEN} bytes without a \
+                             newline; closing connection"
                         );
-                        if !bytes.is_empty() && writer.write_all(&bytes).await.is_err() {
-                            return;
-                        }
-                        let _ = writer.flush().await;
+                        break 'serve;
                     }
-                    LineResult::Quit => {
-                        tracing::trace!(face_id, "hamlib_net client quit");
-                        return;
-                    }
+                    line.push(byte[0]);
                 }
             }
-            Ok(None) | Err(_) => return,
+        };
+        if eof {
+            break 'serve;
+        }
+
+        // Trim a trailing CR so CRLF clients are handled.
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+        let text = String::from_utf8_lossy(&line).into_owned();
+        tracing::trace!(face_id, req = %text.trim(), "hamlib_net request");
+        match handle_line(&text, &ctx).await {
+            LineResult::Reply(bytes) => {
+                tracing::trace!(
+                    face_id,
+                    reply = %String::from_utf8_lossy(&bytes).trim_end(),
+                    "hamlib_net reply"
+                );
+                if !bytes.is_empty() && writer.write_all(&bytes).await.is_err() {
+                    break 'serve;
+                }
+                let _ = writer.flush().await;
+            }
+            LineResult::Quit => {
+                tracing::trace!(face_id, "hamlib_net client quit");
+                break 'serve;
+            }
         }
     }
+
+    // The connection closed: never leave the radio keyed on behalf of a vanished client.
+    ctx.release_ptt_on_disconnect().await;
 }
+
+/// Maximum bytes buffered for a single rigctld request line before the connection is
+/// closed. Real rigctld commands are short; this only bounds a misbehaving client.
+const MAX_LINE_LEN: usize = 4096;
 
 /// Bind a Hamlib net endpoint and serve connections. Each connection gets a fresh
 /// [`FaceContext`] sharing the same state/radio/ptt but its own face id and the
@@ -973,12 +1024,95 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn erp_get_vfo_info_denied_without_read() {
-        // A face without read permission gets an RPRT -1 extended error, not data.
-        let (ctx, _b, _s) = ctx_with(FacePermissions::from_tokens(&["write"]));
+    async fn erp_get_split_terminates_with_rprt() {
+        // `\get_split_vfo` returns data only in the plain protocol. Through the ERP generic
+        // fallback it must still end with an `RPRT` record so an ERP client (Log4OM-NG)
+        // reading until the terminator does not block.
+        let (ctx, _b, _s) = ctx_with(FacePermissions::read_only());
         assert_eq!(
-            reply_of("+\\get_vfo_info VFOA", &ctx).await,
-            b"get_vfo_info: VFOA\nRPRT -1\n".to_vec()
+            reply_of("+\\get_split_vfo", &ctx).await,
+            b"get_split_vfo:\n0\nVFOA\nRPRT 0\n".to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn set_mode_rejects_unknown_token() {
+        // An unrecognized mode token must be rejected (RPRT -1), never silently applied as
+        // USB with a false `RPRT 0`.
+        let (ctx, backend, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        assert_eq!(reply_of("M WAT", &ctx).await, RPRT_EINVAL.to_vec());
+        // And nothing was written to the radio.
+        assert!(
+            backend.mutations().is_empty(),
+            "an unknown mode must not mutate the radio"
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_a_keyed_hamlib_client_releases_the_ptt_lease() {
+        // A rigctld client keys PTT then its TCP connection drops. The hub must release the
+        // lease immediately, not hold the transmitter up until the safety ceiling.
+        let backend = LoopbackBackend::new();
+        let caps = backend.capabilities();
+        let arc: Arc<dyn RadioBackend> = Arc::new(backend);
+        let state = StateHandle::new();
+        let radio = spawn_scheduler(arc, detached_link(), state.clone());
+        let ptt = PttManager::new(Duration::from_secs(300));
+        let perms = FacePermissions::from_tokens(&["read", "ptt"]);
+        let ctx = FaceContext::new(7, perms, state.clone(), radio, ptt.clone(), caps);
+        let (client, server) = tokio::io::duplex(1024);
+        let handle = tokio::spawn(serve_conn(server, ctx));
+
+        let (mut cr, mut cw) = tokio::io::split(client);
+        cw.write_all(b"T 1\n").await.expect("write");
+        // Drain the RPRT reply so the key has been processed.
+        let mut buf = [0u8; 32];
+        let _ = tokio::time::timeout(Duration::from_secs(2), cr.read(&mut buf)).await;
+        for _ in 0..50 {
+            if ptt.owner() == Some(7) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(ptt.owner(), Some(7), "client should hold the PTT lease");
+
+        // Drop the transport.
+        drop(cr);
+        drop(cw);
+        let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
+        assert_eq!(
+            ptt.owner(),
+            None,
+            "PTT lease must release when a keyed rigctld client disconnects"
+        );
+    }
+
+    #[tokio::test]
+    async fn overlong_request_without_newline_closes_the_connection() {
+        // A client that streams bytes without ever sending a newline must not grow the
+        // line buffer without bound; the hub caps it and closes the connection.
+        let backend = LoopbackBackend::new();
+        let caps = backend.capabilities();
+        let arc: Arc<dyn RadioBackend> = Arc::new(backend);
+        let state = StateHandle::new();
+        let radio = spawn_scheduler(arc, detached_link(), state.clone());
+        let ptt = PttManager::new(Duration::from_secs(300));
+        let perms = FacePermissions::from_tokens(&["read"]);
+        let ctx = FaceContext::new(9, perms, state.clone(), radio, ptt.clone(), caps);
+        let (client, server) = tokio::io::duplex(8192);
+        let handle = tokio::spawn(serve_conn(server, ctx));
+
+        let (_cr, mut cw) = tokio::io::split(client);
+        // Send well over the cap with no newline. Ignore write errors that occur once the
+        // server side has already closed.
+        let flood = vec![b'f'; MAX_LINE_LEN + 256];
+        let _ = cw.write_all(&flood).await;
+
+        // The serve task must terminate (connection closed) rather than hang or OOM.
+        let joined = tokio::time::timeout(Duration::from_secs(2), handle).await;
+        assert!(
+            joined.is_ok(),
+            "serve_conn must close the connection on an overlong line"
         );
     }
 }

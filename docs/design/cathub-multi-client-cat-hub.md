@@ -228,6 +228,8 @@ All real-radio I/O goes through the single radio task. No two commands are ever 
 
 A client-driven status read of a **modeled** field is answered from `state` when the relevant field's `last_polled` is within its TTL. Otherwise the request waits for the next baseline poll cycle (or, when AI is active, the most recent pushed value). The result is that N concurrent client reads of `IF;` produce at most one real `IF;` to the radio per TTL window, regardless of how many client faces are active. Reads of **unmodeled** fields go through passthrough (§8.6) and are coalesced only by the optional passthrough response cache, so a controller that polls unmodeled fields hard will generate proportional real-radio traffic; the priority scheme keeps that traffic from starving interactive writes.
 
+Poll back-off keys off native-push coverage of the **currently active** receive VFO, not a fixed VFO A. The baseline poller asks whether the active VFO's frequency is covered by `NativePush` before slowing down; if it tested a hard-coded VFO A while the radio sat on VFO B, it would needlessly over-poll a VFO whose pushes already keep state fresh.
+
 ### 8.3 Write atomicity
 
 Kenwood set commands do not all return an acknowledgment — many are "set and no reply." The daemon therefore classifies each modeled command's reply behavior in the backend command table as one of:
@@ -263,6 +265,10 @@ Downstream fan-out is identical regardless of source, so a station with a non-pu
 
 **Push ordering and backpressure.** Each face's outbound push queue is bounded. Pushes are interleaved with that face's solicited replies at frame boundaries (never mid-frame). If a slow client lets its queue fill, the daemon **coalesces** superseded updates (keeping only the latest value per field) rather than blocking the shared broadcast or growing unboundedly; a sustained overflow is logged. Event fan-out must never apply backpressure to the radio task or to other faces.
 
+**VFO-switch fan-out must lead with a frequency frame.** When the active receive VFO changes (e.g. an operator or client switches VFO A→B), the dialect that synthesizes the notification for a panadapter-class client (TS-2000 translator used by HDSDR/OmniRig) **must emit the new active VFO's `FA` frequency frame (and `MD` mode) first**, not only an `IF` status frame. HDSDR/OmniRig retune the panadapter exclusively from `FA`; an `IF`-only notification leaves the display stuck on the old VFO's frequency even though the cache is correct. The native TS-590 dialect is unaffected because native clients read the frequency out of the `IF` frame. This is the wire-level fix for the HDSDR "lost rig control on A/B switch" failure.
+
+**Lagged-subscriber resync.** The change-notification broadcast ring is bounded, so a momentarily slow face can miss intermediate one-shot changes (a single Mode or VFO toggle that is evicted before the face drains the channel). When a face observes a broadcast *lag* it must **not** simply skip ahead — that would leave the client rendering permanently stale state until the next coincidental change. Instead the face replays the current `state` snapshot as a full set of field notifications through its dialect (which still gates on the face's own auto-info subscription, so an auto-info-off face emits nothing), with the active-VFO selection applied last so the client ends on the correct receive VFO.
+
 ### 8.4.1 Auto-info mode granularity
 
 The auto-info command is virtualized per face, but for Kenwood `AI1` (post-command echo) and `AI2` (spontaneous updates) are not identical semantics (other vendors have analogous distinctions). v1 may collapse them to a single per-face push subscription; if it does, that limitation is documented and ARCP-590 and N1MM are tested specifically to confirm they tolerate the collapse before either is claimed as first-class. If a tested client depends on the distinction, the finer model is implemented for that dialect.
@@ -275,6 +281,7 @@ Multiple clients are now PTT-capable (N1MM CAT PTT, WSJT-X `T 1`, ARCP-590). The
 - The first capable face to key acquires the **PTT lease** and becomes the PTT owner. While the lease is held, PTT writes from any other face are rejected (Hamlib `RPRT` busy / native error) and logged, so two apps cannot key the transmitter into contention.
 - The lease releases when the owner sends `RX;`/`T 0` (normal release), or after a configurable **maximum-transmit safety duration** (`ptt_max_tx_ms`) as a backstop against a client that keys and crashes. This timeout is a hard transmit-length ceiling, *not* a generic "no CAT activity" idle timer: WSJT-X keys PTT and then sends no CAT traffic for the length of a transmission, so an activity-based timeout would unkey it mid-over. `ptt_max_tx_ms` defaults above the longest expected digital-mode transmission and any safety release is logged loudly.
 - The shutdown handler attempts to emit `RX;` to the radio on Ctrl+C and SIGTERM so an orderly stop never leaves the transmitter keyed. A panic or hard crash cannot reliably perform async serial I/O, so the daemon also relies on `ptt_max_tx_ms` and the radio's own TX timeout as the ultimate stuck-transmitter guards rather than promising the shutdown write always runs.
+- A face that **disconnects while it holds the PTT lease** (TCP drop, client crash, EOF, or a protocol-violating over-long frame that forces the face closed) releases the lease as part of face teardown: the daemon unkeys the radio (`RX;`/`T 0`) and frees the lease so the next client can key, rather than holding the transmitter up until the `ptt_max_tx_ms` ceiling. Teardown releases **only** when the disconnecting face is the current lease owner, so it never disturbs another face's active transmission.
 
 In a normal station the operator drives one mode at a time, so the lease is almost never contended; its job is to make contention safe rather than to support simultaneous transmit.
 
@@ -301,6 +308,13 @@ The structural guarantee against the original bug is stated at the **wire level*
 - The optional in-process libhamlib (FFI) backend carries the same per-rig certification requirement and the additional in-process state-bug surface, which is exactly why the out-of-process bridge is preferred and FFI is deferred (§7.1).
 
 The invariant is enforced by a per-backend certification soak, not by a blanket "no Hamlib anywhere" rule, so the design can honor both a dependency-free certified driver and a trusted external `rigctld` without weakening the guarantee.
+
+### 8.9 Input bounds and malformed-input handling
+
+A multi-client hub accepts bytes from several long-lived, independently-failing endpoints plus the radio link itself, so every byte-accumulating buffer is explicitly bounded and every parsed field is validated rather than trusted:
+
+- **Frame/line length caps.** Each in-progress accumulation buffer — the serial-face partial-frame buffer, the radio task's frame reassembler, and the `hamlib_net` request-line reader — is capped (4096 bytes). A delimiter-less stream that would otherwise grow a buffer without limit is treated as a fault: the radio/serial reassembler discards the malformed partial frame and resynchronizes on the next delimiter, while the `hamlib_net` reader closes the offending connection (and releases its PTT lease, §8.5). The cap bounds only in-progress *requests*; long multi-line *replies* such as `\dump_state` are unaffected. The `hamlib_net` line reader is a length-bounded manual reader, not an unbounded `lines()` adapter.
+- **Reject, never silently coerce.** A command that decodes to an unrecognized value must be rejected with the protocol's error reply, never quietly substituted with a plausible default that would mis-drive the radio. In particular, a Hamlib `set_mode` (`M`) with an unrecognized mode token returns `RPRT -EINVAL` and writes nothing to the radio, instead of resolving the unknown token to a default mode and falsely reporting `RPRT 0`.
 
 ## 9. Configuration
 

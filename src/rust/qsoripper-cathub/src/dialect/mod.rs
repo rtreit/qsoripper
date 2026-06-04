@@ -184,6 +184,34 @@ impl FaceContext {
             ai: Arc::new(AtomicBool::new(false)),
         }
     }
+
+    /// Release the PTT lease if this face currently holds it, unkeying the radio first.
+    ///
+    /// Called when a face's transport closes. A client that keys the transmitter and then
+    /// disconnects (crash, cable pull, app kill) would otherwise leave the radio keyed until
+    /// the `ptt_max_tx_ms` safety ceiling fires — minutes of unintended transmission. This
+    /// drops TX immediately on disconnect (design §8.5), mirroring the orderly-shutdown path.
+    pub(crate) async fn release_ptt_on_disconnect(&self) {
+        if self.ptt.owner() != Some(self.face_id) {
+            return;
+        }
+        let _ = self
+            .radio
+            .submit(
+                self.face_id,
+                Priority::Ptt,
+                OpKind::Apply(StateMutation::SetPtt {
+                    keyed: false,
+                    source: crate::model::PttSource::Generic,
+                }),
+            )
+            .await;
+        self.ptt.unkey(self.face_id);
+        tracing::warn!(
+            face = self.face_id,
+            "client disconnected while keyed; transmitter released"
+        );
+    }
 }
 
 fn map_outcome(result: &Result<Vec<u8>, BackendError>) -> ApplyOutcome {

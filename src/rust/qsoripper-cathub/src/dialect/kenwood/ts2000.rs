@@ -126,7 +126,20 @@ impl ClientDialect for Ts2000Dialect {
             StateChange::Mode { vfo, mode } if vfo == ctx.snapshot().rx_vfo => {
                 Some(vec![b'M', b'D', mode_to_digit(mode), b';'])
             }
-            StateChange::RxVfo { .. } => Some(synth_if(&ctx.snapshot())),
+            StateChange::RxVfo { .. } => {
+                // HDSDR/OmniRig retune the panadapter from an `FA` frame, never from `IF`.
+                // A VFO A<->B switch changes the active frequency and mode, but those land
+                // on the inactive VFO's cache (so their Freq/Mode events are suppressed as
+                // redundant) and only this single `RxVfo` event is broadcast. Emitting just
+                // `IF` left HDSDR parked on the old frequency. Lead with the new active
+                // VFO's `FA`/`MD` so the foreign client actually follows the displayed VFO.
+                let snap = ctx.snapshot();
+                let active = snap.vfo(snap.rx_vfo);
+                let mut frame = freq_frame(b"FA", active.freq_hz);
+                frame.extend_from_slice(&[b'M', b'D', mode_to_digit(active.mode), b';']);
+                frame.extend_from_slice(&synth_if(&snap));
+                Some(frame)
+            }
             _ => None,
         }
     }
@@ -241,11 +254,62 @@ mod tests {
             .format_notification(&StateChange::RxVfo { vfo: Vfo::B }, &ctx)
             .expect("IF notification");
 
-        assert!(notification.starts_with(b"IF00014034320"));
+        // The notification still carries the full `IF` status so split/PTT stay in sync.
+        let if_at = notification
+            .windows(2)
+            .position(|w| w == b"IF")
+            .expect("IF segment present");
         assert_eq!(
-            *notification.get(30).expect("VFO field"),
+            &notification[if_at..if_at + 13],
+            b"IF00014034320",
+            "embedded IF status reports the new active frequency"
+        );
+        assert_eq!(
+            *notification.get(if_at + 30).expect("VFO field"),
             b'1',
             "TS-2000 IF VFO field should report VFO B"
+        );
+    }
+
+    #[tokio::test]
+    async fn vfo_switch_pushes_fa_for_new_active_frequency() {
+        // Regression for the HDSDR VFO-switch bug: a VFO A->B switch must push an `FA`
+        // (and `MD`) frame for the new active VFO so HDSDR/OmniRig retunes the panadapter.
+        let (ctx, _backend) = ctx_with(FacePermissions::read_only());
+        ctx.set_ai(true);
+        ctx.state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 7_034_320,
+            },
+            RadioEventSource::NativePush,
+        );
+        ctx.state.record(
+            StateChange::Mode {
+                vfo: Vfo::B,
+                mode: crate::model::Mode::Cw,
+            },
+            RadioEventSource::NativePush,
+        );
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::NativePush,
+        );
+
+        let notification = Ts2000Dialect::new()
+            .format_notification(&StateChange::RxVfo { vfo: Vfo::B }, &ctx)
+            .expect("notification");
+
+        assert!(
+            notification.starts_with(b"FA00007034320;"),
+            "VFO switch must lead with FA for the new active frequency, got {}",
+            String::from_utf8_lossy(&notification)
+        );
+        assert!(
+            notification
+                .windows(4)
+                .any(|w| w == [b'M', b'D', mode_to_digit(crate::model::Mode::Cw), b';']),
+            "VFO switch must also push the new active mode (MD)"
         );
     }
 
