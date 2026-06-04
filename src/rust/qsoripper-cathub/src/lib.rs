@@ -42,6 +42,7 @@ use crate::backend::loopback::LoopbackBackend;
 use crate::backend::rigctld::RigctldBackend;
 use crate::backend::{BackendError, RadioBackend};
 use crate::config::{Config, RadioConfig};
+use crate::dialect::kenwood::transparent::TransparentTs590Dialect;
 use crate::dialect::kenwood::ts2000::Ts2000Dialect;
 use crate::dialect::kenwood::ts590::Ts590Dialect;
 use crate::dialect::{ClientDialect, FaceContext};
@@ -115,6 +116,7 @@ fn build_backend(cfg: &Config) -> Result<Arc<dyn RadioBackend>, CatHubError> {
 fn dialect_for(name: &str) -> Result<Arc<dyn ClientDialect>, CatHubError> {
     match name {
         "ts590" => Ok(Arc::new(Ts590Dialect::new())),
+        "ts590-transparent" => Ok(Arc::new(TransparentTs590Dialect::new())),
         "ts2000" => Ok(Arc::new(Ts2000Dialect::new())),
         other => Err(CatHubError::Backend(format!("unknown dialect '{other}'"))),
     }

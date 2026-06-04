@@ -83,6 +83,9 @@ pub(crate) async fn run_face<T>(
                                 dialect.format_notification(change, &ctx)
                             }
                             RadioEvent::Raw(raw) => dialect.format_passthrough(raw, &ctx),
+                            RadioEvent::RawNative(raw) => {
+                                dialect.format_native_passthrough(raw, &ctx)
+                            }
                         };
                         if let Some(bytes) = bytes {
                             tracing::trace!(
@@ -110,11 +113,9 @@ pub(crate) async fn run_face<T>(
                             "face lagged the broadcast ring; re-syncing full snapshot"
                         );
                         let snapshot = ctx.snapshot();
-                        for change in snapshot.as_changes() {
-                            if let Some(bytes) = dialect.format_notification(&change, &ctx) {
-                                if writer.write_all(&bytes).await.is_err() {
-                                    break 'serve;
-                                }
+                        for bytes in dialect.resync(&snapshot, &ctx) {
+                            if writer.write_all(&bytes).await.is_err() {
+                                break 'serve;
                             }
                         }
                         let _ = writer.flush().await;

@@ -27,6 +27,17 @@ impl fmt::Display for Vfo {
     }
 }
 
+impl Vfo {
+    /// The other of the two VFOs. On a two-VFO radio the transmit VFO during split is always
+    /// the one that is not receiving, so this derives the TX VFO from the RX VFO.
+    pub(crate) fn other(self) -> Vfo {
+        match self {
+            Vfo::A => Vfo::B,
+            Vfo::B => Vfo::A,
+        }
+    }
+}
+
 /// Operating mode, normalized across radio families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Mode {

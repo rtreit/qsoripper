@@ -282,10 +282,21 @@ impl Config {
             }
         }
         for face in &self.face {
-            if !matches!(face.dialect.as_str(), "ts590" | "ts2000") {
+            if !matches!(
+                face.dialect.as_str(),
+                "ts590" | "ts590-transparent" | "ts2000"
+            ) {
                 return Err(ConfigError::Invalid(format!(
-                    "face '{}' has unknown dialect '{}' (expected ts590 or ts2000)",
+                    "face '{}' has unknown dialect '{}' (expected ts590, ts590-transparent, or ts2000)",
                     face.name, face.dialect
+                )));
+            }
+            if face.dialect == "ts590-transparent" && face.single_vfo {
+                return Err(ConfigError::Invalid(format!(
+                    "face '{}' combines dialect 'ts590-transparent' with single_vfo = true; a \
+                     transparent mirror face relays the radio's real dual-VFO stream verbatim and \
+                     cannot virtualize the operating VFO",
+                    face.name
                 )));
             }
         }

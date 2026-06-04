@@ -519,7 +519,35 @@ requested VFO to the operating VFO and reports `Split: 0`; `get_split_vfo` repor
 `set_split_vfo 1` is **rejected** (`RPRT -11`) because the presentation cannot model a real
 split (use WSJT-X "Fake It"); and `\set_vfo ?` advertises only `VFOA`. Reads and writes already
 target the operating VFO, so the frequency/mode are real on either physical VFO. The engine's
-read-only endpoint leaves `single_vfo = false` so it logs the true operating VFO.
+read-only endpoint leaves `single_vfo = false` so it logs the true operating VFO. Plain
+`get_freq` / `get_mode` already read the operating VFO on every face, which is why a logger that
+polls only `f` (WSJT-X) tracks A/B even without virtualization, whereas one that polls
+`get_vfo_info VFOA` (Log4OM) requires it.
+
+Native TS-590 controllers that speak the radio's exact protocol — notably **ARCP-590**, Kenwood's
+own control panel — get a dedicated **transparent mirror** dialect (`dialect = "ts590-transparent"`)
+instead of the virtualizing `ts590` dialect. A transparent face behaves as if it were wired
+directly to the rig: every request except PTT and auto-information is forwarded to the radio
+verbatim (`format_notification` returns nothing — the face never consumes a synthesized frame),
+and the radio's entire CAT stream — both modeled frames and unmodeled ones — is relayed back
+byte-for-byte whenever the face has auto-information enabled. Because the rig runs in AI2 and
+echoes every change any client makes through the hub, a transparent controller stays perfectly in
+sync with the radio's true VFO/frequency/mode/split state, eliminating the synthesis/snapshot
+drift (stale A/B, frozen frequency) that a virtualizing view can accumulate for a client that
+already knows the native protocol. The hub still owns the single physical port, so three things
+stay hub-mediated even on a mirror face: PTT (`TX`/`RX`) routes through the shared single-owner
+lease; auto-information (`AI`) is virtualized per face (the rig itself stays in hub-owned AI2);
+and identity/keepalive reads (`ID;`/`PS;`) are answered locally so the controller's steady-state
+heartbeat generates zero radio traffic. A lagged mirror face is re-synced by re-presenting the
+full current state as raw frames (`FA`/`FB`/`FR`/`FT`/`MD`/`IF`). `ts590-transparent` is
+mutually exclusive with `single_vfo = true` (a mirror relays the radio's real dual-VFO stream and
+cannot virtualize the operating VFO); the daemon rejects that combination at config validation.
+
+To support transparent relay, the hub broadcasts a modeled native frame **twice** on its internal
+event bus: once as a coalesced modeled change (consumed by virtualizing faces) and once as a
+verbatim raw-native event (consumed only by transparent faces). Unmodeled frames continue to
+broadcast as a single verbatim raw event. This keeps existing virtualizing dialects byte-for-byte
+unchanged while giving a mirror face the radio's exact stream.
 
 The hub's Hamlib NET faces accept both the plain rigctld protocol (WSJT-X, N1MM, the engine)
 and Hamlib's **Extended Response Protocol** (ERP). An ERP request prefixes the command with a
@@ -638,7 +666,7 @@ Persists setup configuration and station profile.
   configuration. This mirrors the conditional-ownership rule in the unified-configuration note.
 - Validation enforces the same constraints the daemon accepts: `backend` ∈ {ts590, rigctld,
   loopback}; radio `transport` ∈ {serial, tcp}; non-loopback serial radios require a `port`;
-  face `dialect` ∈ {ts590, ts2000}; endpoint names unique across faces and hamlib_net; face
+  face `dialect` ∈ {ts590, ts590-transparent, ts2000}; endpoint names unique across faces and hamlib_net; face
   transports distinct; hamlib_net binds distinct and in `host:port` form; a face transport may
   not reuse the radio port. Violations return `INVALID_ARGUMENT`.
 

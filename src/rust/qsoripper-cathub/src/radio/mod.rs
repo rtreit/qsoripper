@@ -402,7 +402,12 @@ pub(crate) async fn run_transport_supervised<T, F, Fut>(
 /// faces (which consume the CAT stream directly) keep features like the radio's noise
 /// blanker and front-panel changes in sync.
 fn route_event(backend: &Arc<dyn RadioBackend>, state: &StateHandle, frame: &[u8]) {
-    if !backend.record_event(frame, state, RadioEventSource::NativePush) {
+    if backend.record_event(frame, state, RadioEventSource::NativePush) {
+        // The frame was modeled: the snapshot is updated and a coalesced `Change` is
+        // broadcast for virtualizing faces. Also relay the verbatim frame so transparent
+        // mirror faces (ARCP-590) track the radio's real CAT stream instead of a synthesis.
+        state.record_raw_native(frame);
+    } else {
         tracing::trace!(
             frame = %String::from_utf8_lossy(frame),
             "relaying unmodeled unsolicited radio frame to native pass-through faces"
@@ -532,12 +537,14 @@ async fn execute(
     clippy::expect_used,
     clippy::unwrap_used,
     clippy::indexing_slicing,
+    clippy::panic,
     clippy::similar_names
 )]
 mod tests {
     use super::*;
     use crate::backend::kenwood::ts590::Ts590Backend;
     use crate::model::{Mode, Vfo};
+    use crate::state::RadioEvent;
 
     #[test]
     fn framer_splits_on_semicolons() {
@@ -589,6 +596,57 @@ mod tests {
         assert_eq!(snap.vfo(Vfo::B).mode, Mode::Usb);
         assert!(snap.ptt);
         assert!(snap.split);
+    }
+
+    #[test]
+    fn route_event_relays_modeled_frame_as_raw_native_for_mirror_faces() {
+        let backend: Arc<dyn RadioBackend> = Arc::new(Ts590Backend::new());
+        let state = StateHandle::new();
+        let mut rx = state.subscribe();
+
+        route_event(&backend, &state, b"FA00014035000;");
+
+        // A modeled frame must broadcast BOTH the coalesced Change (for virtualizing faces)
+        // and the verbatim RawNative (for transparent mirror faces like ARCP-590).
+        let mut saw_change = false;
+        let mut saw_raw_native = false;
+        while let Ok(evt) = rx.try_recv() {
+            match evt {
+                RadioEvent::Change(_) => saw_change = true,
+                RadioEvent::RawNative(bytes) => {
+                    assert_eq!(&*bytes, b"FA00014035000;");
+                    saw_raw_native = true;
+                }
+                RadioEvent::Raw(_) => panic!("a modeled frame must not broadcast as Raw"),
+            }
+        }
+        assert!(
+            saw_change,
+            "modeled frame must broadcast a coalesced Change"
+        );
+        assert!(
+            saw_raw_native,
+            "modeled frame must also relay verbatim as RawNative"
+        );
+    }
+
+    #[test]
+    fn route_event_relays_unmodeled_frame_as_raw_only() {
+        let backend: Arc<dyn RadioBackend> = Arc::new(Ts590Backend::new());
+        let state = StateHandle::new();
+        let mut rx = state.subscribe();
+
+        route_event(&backend, &state, b"NB1;");
+
+        let evt = rx.try_recv().expect("one event");
+        assert!(
+            matches!(&evt, RadioEvent::Raw(bytes) if &**bytes == b"NB1;"),
+            "an unmodeled frame must relay as Raw only, got {evt:?}"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "no second event for an unmodeled frame"
+        );
     }
 
     #[test]

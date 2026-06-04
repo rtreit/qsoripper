@@ -4,6 +4,7 @@
 //! Log4OM-as-TS590). [`Ts2000Dialect`](ts2000::Ts2000Dialect) is the OmniRig/HDSDR translator.
 //! Both share the small frame helpers below.
 
+pub(crate) mod transparent;
 pub(crate) mod ts2000;
 pub(crate) mod ts590;
 
