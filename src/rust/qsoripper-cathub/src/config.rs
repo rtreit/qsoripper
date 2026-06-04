@@ -168,6 +168,12 @@ pub(crate) struct HamlibNetConfig {
     /// Permission tokens (`read`, `write`, `ptt`, `config_write`).
     #[serde(default)]
     pub(crate) perms: Vec<String>,
+    /// When true, this face is virtualized as a single-VFO radio: the operating
+    /// (receive) VFO is always presented as `VFOA`, split is hidden, and the radio's
+    /// physical A/B identity never leaks. Single-VFO loggers (N1MM SO1V, Log4OM)
+    /// then track the operating VFO seamlessly across A/B swaps.
+    #[serde(default)]
+    pub(crate) single_vfo: bool,
 }
 
 impl HamlibNetConfig {

@@ -315,7 +315,8 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
             radio.clone(),
             ptt.clone(),
             caps.clone(),
-        );
+        )
+        .with_single_vfo(ep.single_vfo);
         let bind = ep.bind.clone();
         let name = ep.name.clone();
         let ids = next_id.clone();

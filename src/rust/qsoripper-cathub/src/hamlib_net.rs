@@ -16,6 +16,7 @@ use tokio::net::TcpListener;
 use crate::dialect::{ApplyOutcome, FaceContext};
 use crate::model::{Mode, PttSource, StateMutation, Vfo};
 use crate::permissions::CommandClass;
+use crate::state::Snapshot;
 
 /// The capability dump served for `\dump_state`. Captured verbatim from Hamlib 4.7.0
 /// `rigctld` (protocol version 1) so the WSJT-X / engine Hamlib clients parse it exactly.
@@ -31,6 +32,44 @@ fn vfo_name(vfo: Vfo) -> &'static str {
     match vfo {
         Vfo::A => "VFOA",
         Vfo::B => "VFOB",
+    }
+}
+
+/// The VFO whose data this face presents when a client requests `requested`.
+///
+/// Single-VFO faces (N1MM SO1V, Log4OM) always present the operating (receive) VFO so
+/// the radio's physical A/B identity never leaks; dual-VFO faces honor the literal
+/// requested VFO. This is the chokepoint that makes single-VFO loggers follow A/B swaps.
+fn presented_vfo(ctx: &FaceContext, snapshot: &Snapshot, requested: Vfo) -> Vfo {
+    if ctx.single_vfo() {
+        snapshot.rx_vfo
+    } else {
+        requested
+    }
+}
+
+/// The VFO name this face advertises for the real VFO `real`. Single-VFO faces always
+/// claim `VFOA` (the operating VFO is virtualized as A); dual-VFO faces report the real
+/// name.
+fn presented_vfo_name(ctx: &FaceContext, real: Vfo) -> &'static str {
+    if ctx.single_vfo() {
+        "VFOA"
+    } else {
+        vfo_name(real)
+    }
+}
+
+/// The split flag this face exposes. Single-VFO faces always hide split (they know only
+/// the operating VFO), matching the single-VFO virtualization contract.
+fn presented_split(ctx: &FaceContext, snapshot: &Snapshot) -> bool {
+    !ctx.single_vfo() && snapshot.split
+}
+
+/// Parse a requested VFO name argument into a [`Vfo`], defaulting to `VFOA`.
+fn parse_vfo_arg(arg: Option<&&str>) -> Vfo {
+    match arg {
+        Some(v) if v.eq_ignore_ascii_case("VFOB") => Vfo::B,
+        _ => Vfo::A,
     }
 }
 
@@ -160,7 +199,12 @@ async fn handle_ext(sep: char, rest: &str, ctx: &FaceContext) -> Vec<u8> {
     // The supported-token list line is newline-terminated regardless of the separator,
     // matching real `rigctld`.
     if matches!(cmd, "V" | "\\set_vfo") && args.first() == Some(&"?") {
-        return format!("set_vfo: ?{sep}VFOA VFOB \nRPRT 0\n").into_bytes();
+        let vfos = if ctx.single_vfo() {
+            "VFOA "
+        } else {
+            "VFOA VFOB "
+        };
+        return format!("set_vfo: ?{sep}{vfos}\nRPRT 0\n").into_bytes();
     }
 
     // get_vfo_info: Log4OM-NG's poll command (`+\get_vfo_info VFOA`). Reports the named
@@ -169,19 +213,16 @@ async fn handle_ext(sep: char, rest: &str, ctx: &FaceContext) -> Vec<u8> {
         if !reads {
             return erp_records(sep, &[ext_echo(cmd, &args), "RPRT -1".to_string()]);
         }
-        let vfo = match args.first() {
-            Some(v) if v.eq_ignore_ascii_case("VFOB") => Vfo::B,
-            _ => Vfo::A,
-        };
+        let vfo = presented_vfo(ctx, &snapshot, parse_vfo_arg(args.first()));
         let v = snapshot.vfo(vfo);
         return erp_records(
             sep,
             &[
-                format!("get_vfo_info: {}", vfo_name(vfo)),
+                format!("get_vfo_info: {}", presented_vfo_name(ctx, vfo)),
                 format!("Freq: {}", v.freq_hz),
                 format!("Mode: {}", v.mode.hamlib_token_with_data(v.data)),
                 format!("Width: {}", v.passband_hz),
-                format!("Split: {}", u8::from(snapshot.split)),
+                format!("Split: {}", u8::from(presented_split(ctx, &snapshot))),
                 "SatMode: 0".to_string(),
                 "RPRT 0".to_string(),
             ],
@@ -206,7 +247,7 @@ async fn handle_ext(sep: char, rest: &str, ctx: &FaceContext) -> Vec<u8> {
         }
         "v" | "\\get_vfo" if reads => Some(vec![
             "get_vfo:".to_string(),
-            format!("VFO: {}", vfo_name(snapshot.rx_vfo)),
+            format!("VFO: {}", presented_vfo_name(ctx, snapshot.rx_vfo)),
             "RPRT 0".to_string(),
         ]),
         "t" | "\\get_ptt" if reads => Some(vec![
@@ -266,32 +307,30 @@ async fn dispatch_plain(cmd: &str, args: &[&str], ctx: &FaceContext) -> LineResu
             .into_bytes()
         }),
         "v" | "\\get_vfo" => guard_read(ctx, || {
-            format!("{}\n", vfo_name(snapshot.rx_vfo)).into_bytes()
+            format!("{}\n", presented_vfo_name(ctx, snapshot.rx_vfo)).into_bytes()
         }),
         // get_vfo_info: report the named VFO's freq/mode/width/split/satmode as bare
         // values (Freq, Mode, Width, Split, SatMode), matching real `rigctld`.
         "\\get_vfo_info" => guard_read(ctx, || {
-            let vfo = match args.first() {
-                Some(v) if v.eq_ignore_ascii_case("VFOB") => Vfo::B,
-                _ => Vfo::A,
-            };
+            let vfo = presented_vfo(ctx, &snapshot, parse_vfo_arg(args.first()));
             let v = snapshot.vfo(vfo);
             format!(
                 "{}\n{}\n{}\n{}\n0\n",
                 v.freq_hz,
                 v.mode.hamlib_token_with_data(v.data),
                 v.passband_hz,
-                u8::from(snapshot.split),
+                u8::from(presented_split(ctx, &snapshot)),
             )
             .into_bytes()
         }),
         "s" | "\\get_split_vfo" => guard_read(ctx, || {
-            let tx = if snapshot.split {
+            let split = presented_split(ctx, &snapshot);
+            let tx = if split {
                 snapshot.tx_vfo
             } else {
                 snapshot.rx_vfo
             };
-            format!("{}\n{}\n", u8::from(snapshot.split), vfo_name(tx)).into_bytes()
+            format!("{}\n{}\n", u8::from(split), presented_vfo_name(ctx, tx)).into_bytes()
         }),
         "t" | "\\get_ptt" => {
             guard_read(ctx, || format!("{}\n", u8::from(snapshot.ptt)).into_bytes())
@@ -359,18 +398,27 @@ async fn dispatch_plain(cmd: &str, args: &[&str], ctx: &FaceContext) -> LineResu
             None => RPRT_EINVAL.to_vec(),
         },
         "S" | "\\set_split_vfo" => {
-            let enabled = args.first().copied() == Some("1");
-            let tx_vfo = match args.get(1).copied() {
-                Some(v) if v.eq_ignore_ascii_case("VFOB") => Some(Vfo::B),
-                _ => Some(Vfo::A),
-            };
-            outcome_rprt(
-                ctx.apply_modeled(
-                    StateMutation::SetSplit { enabled, tx_vfo },
-                    CommandClass::ModeledWrite,
+            if !ctx.perms.allows(CommandClass::ModeledWrite) {
+                RPRT_EINVAL.to_vec()
+            } else if ctx.single_vfo() {
+                // Single-VFO faces virtualize away split entirely. Absorb the request
+                // without mutating real radio split so reads stay consistent (Split: 0)
+                // and a single-VFO client never desyncs the radio's true split state.
+                RPRT_OK.to_vec()
+            } else {
+                let enabled = args.first().copied() == Some("1");
+                let tx_vfo = match args.get(1).copied() {
+                    Some(v) if v.eq_ignore_ascii_case("VFOB") => Some(Vfo::B),
+                    _ => Some(Vfo::A),
+                };
+                outcome_rprt(
+                    ctx.apply_modeled(
+                        StateMutation::SetSplit { enabled, tx_vfo },
+                        CommandClass::ModeledWrite,
+                    )
+                    .await,
                 )
-                .await,
-            )
+            }
         }
         "T" | "\\set_ptt" => {
             // Hamlib PTT values: 0 = RX, 1 = TX (generic), 2 = TX on mic, 3 = TX on data.
@@ -585,6 +633,58 @@ mod tests {
         let ptt = PttManager::new(Duration::from_secs(300));
         let ctx = FaceContext::new(1, perms, state.clone(), radio, ptt, caps);
         (ctx, backend, state)
+    }
+
+    /// A single-VFO-virtualized face: the operating VFO is always presented as `VFOA`,
+    /// split is hidden, and physical A/B identity never leaks (N1MM SO1V, Log4OM).
+    fn ctx_single_vfo(perms: FacePermissions) -> (FaceContext, LoopbackBackend, StateHandle) {
+        let (ctx, backend, state) = ctx_with(perms);
+        (ctx.with_single_vfo(true), backend, state)
+    }
+
+    /// Put the radio on physical VFO B (14.074 USB) with VFO A on 14.035 CW, split on
+    /// with TX on the inactive VFO — the classic state a single-VFO logger must collapse
+    /// to "operating VFO is VFOA".
+    fn operating_on_b(state: &StateHandle) {
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::A,
+                hz: 14_035_000,
+            },
+            RadioEventSource::PollDiff,
+        );
+        state.record(
+            StateChange::Mode {
+                vfo: Vfo::A,
+                mode: Mode::Cw,
+            },
+            RadioEventSource::PollDiff,
+        );
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 14_074_000,
+            },
+            RadioEventSource::PollDiff,
+        );
+        state.record(
+            StateChange::Mode {
+                vfo: Vfo::B,
+                mode: Mode::Usb,
+            },
+            RadioEventSource::PollDiff,
+        );
+        state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::PollDiff,
+        );
+        state.record(
+            StateChange::Split {
+                enabled: true,
+                tx_vfo: Some(Vfo::A),
+            },
+            RadioEventSource::PollDiff,
+        );
     }
 
     async fn reply_of(line: &str, ctx: &FaceContext) -> Vec<u8> {
@@ -1142,6 +1242,95 @@ mod tests {
         assert!(
             joined.is_ok(),
             "serve_conn must close the connection on an overlong line"
+        );
+    }
+
+    // --- single-VFO virtualization (N1MM SO1V, Log4OM) ---
+
+    #[tokio::test]
+    async fn single_vfo_erp_get_vfo_info_follows_operating_vfo_as_vfoa() {
+        // Log4OM bug: it polls `+\get_vfo_info VFOA` and must see the OPERATING VFO (B),
+        // presented as VFOA, with split hidden — not stale physical VFO A.
+        let (ctx, _b, state) = ctx_single_vfo(FacePermissions::from_tokens(&["read", "write"]));
+        operating_on_b(&state);
+        assert_eq!(
+            reply_of("+\\get_vfo_info VFOA", &ctx).await,
+            b"get_vfo_info: VFOA\nFreq: 14074000\nMode: USB\nWidth: 2400\nSplit: 0\nSatMode: 0\nRPRT 0\n"
+                .to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn single_vfo_plain_get_vfo_info_follows_operating_vfo() {
+        let (ctx, _b, state) = ctx_single_vfo(FacePermissions::read_only());
+        operating_on_b(&state);
+        // Bare values: operating VFO B's freq/mode/width, split forced to 0.
+        assert_eq!(
+            reply_of("\\get_vfo_info VFOA", &ctx).await,
+            b"14074000\nUSB\n2400\n0\n0\n".to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn single_vfo_get_vfo_always_reports_vfoa() {
+        let (ctx, _b, state) = ctx_single_vfo(FacePermissions::read_only());
+        operating_on_b(&state);
+        // Even operating on physical B, a single-VFO face claims VFOA.
+        assert_eq!(reply_of("v", &ctx).await, b"VFOA\n".to_vec());
+    }
+
+    #[tokio::test]
+    async fn single_vfo_get_split_vfo_hides_split() {
+        let (ctx, _b, state) = ctx_single_vfo(FacePermissions::read_only());
+        operating_on_b(&state);
+        // Radio is split, but a single-VFO face reports no split and TX on VFOA.
+        assert_eq!(reply_of("s", &ctx).await, b"0\nVFOA\n".to_vec());
+    }
+
+    #[tokio::test]
+    async fn single_vfo_erp_set_vfo_query_lists_only_vfoa() {
+        let (ctx, _b, _s) = ctx_single_vfo(FacePermissions::from_tokens(&["read", "write"]));
+        assert_eq!(
+            reply_of(";V ?", &ctx).await,
+            b"set_vfo: ?;VFOA \nRPRT 0\n".to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn single_vfo_set_split_is_absorbed_without_mutating_radio() {
+        let (ctx, backend, _s) = ctx_single_vfo(FacePermissions::from_tokens(&["read", "write"]));
+        // A single-VFO client must never desync the radio's real split state.
+        assert_eq!(reply_of("S 1 VFOB", &ctx).await, RPRT_OK.to_vec());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            backend.mutations().is_empty(),
+            "single-VFO set_split_vfo must not mutate real radio split"
+        );
+    }
+
+    #[tokio::test]
+    async fn single_vfo_read_only_set_split_is_denied() {
+        let (ctx, _b, _s) = ctx_single_vfo(FacePermissions::read_only());
+        assert_eq!(reply_of("S 1 VFOB", &ctx).await, RPRT_EINVAL.to_vec());
+    }
+
+    #[tokio::test]
+    async fn dual_vfo_get_vfo_info_still_reports_literal_physical_vfo() {
+        // Regression guard: a non-single-VFO face (e.g. the engine endpoint) keeps the
+        // faithful dual-VFO view — `get_vfo_info VFOA` returns physical VFO A even when
+        // operating on B, and real split is reported.
+        let (ctx, _b, state) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        operating_on_b(&state);
+        assert_eq!(
+            reply_of("+\\get_vfo_info VFOA", &ctx).await,
+            b"get_vfo_info: VFOA\nFreq: 14035000\nMode: CW\nWidth: 2400\nSplit: 1\nSatMode: 0\nRPRT 0\n"
+                .to_vec()
+        );
+        // And VFOB explicitly is still addressable.
+        assert_eq!(
+            reply_of("+\\get_vfo_info VFOB", &ctx).await,
+            b"get_vfo_info: VFOB\nFreq: 14074000\nMode: USB\nWidth: 2400\nSplit: 1\nSatMode: 0\nRPRT 0\n"
+                .to_vec()
         );
     }
 }

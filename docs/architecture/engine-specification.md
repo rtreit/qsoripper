@@ -510,6 +510,19 @@ which otherwise warns "You should not use VFO B when configured for SO1V" and fr
 the radio seamlessly across A/B switches. It is **off by default** and must stay off for genuine
 dual-VFO faceplates such as ARCP-590. See design §8.4.2.
 
+`single_vfo` is equally a per-face policy on **Hamlib NET faces** (`[[cat_hub.hamlib_net]]`), used
+for SO1V/single-VFO loggers that poll over rigctld — notably **Log4OM**, which polls
+`+\get_vfo_info VFOA`. A single-VFO Hamlib face presents the same virtualized view: every
+VFO-identity read resolves to the operating (receive) VFO rather than the literal requested VFO,
+so `get_vfo_info VFOA`, `get_vfo`, and `get_split_vfo` all follow the radio across an A/B switch.
+The face always labels the presented VFO `VFOA`, forces `Split` to `0`, advertises only `VFOA` in
+the `;V ?` handshake, and absorbs `set_split_vfo` without mutating the radio's real split (so the
+client never desyncs the rig). Faithful dual-VFO Hamlib faces (the engine read endpoint) leave
+`single_vfo` off and keep reporting the literal physical VFO and real split. Plain `get_freq` /
+`get_mode` already read the operating VFO on every face, which is why a logger that polls only `f`
+(WSJT-X) tracks A/B even without virtualization, whereas one that polls `get_vfo_info VFOA`
+(Log4OM) requires it.
+
 Native TS-590 controllers that speak the radio's exact protocol — notably **ARCP-590**, Kenwood's
 own control panel — get a dedicated **transparent mirror** dialect (`dialect = "ts590-transparent"`)
 instead of the virtualizing `ts590` dialect. A transparent face behaves as if it were wired
