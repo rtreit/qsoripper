@@ -760,6 +760,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_freq_and_mode_target_active_vfo_b() {
+        // WSJT-X / Log4OM write through the hamlib_net face. When the rig is on VFO B, a
+        // set_freq / set_mode must land on VFO B (the active VFO), never be forced to A.
+        let (ctx, backend, state) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::PollDiff,
+        );
+        assert_eq!(reply_of("F 14034320", &ctx).await, RPRT_OK.to_vec());
+        assert_eq!(reply_of("M CW 0", &ctx).await, RPRT_OK.to_vec());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let muts = backend.mutations();
+        assert!(
+            muts.contains(&StateMutation::SetVfoFreq {
+                vfo: Vfo::B,
+                hz: 14_034_320,
+            }),
+            "set_freq must target active VFO B, got {muts:?}"
+        );
+        assert!(
+            muts.contains(&StateMutation::SetMode {
+                vfo: Vfo::B,
+                mode: Mode::Cw,
+            }),
+            "set_mode must target active VFO B, got {muts:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn get_mode_composes_pkt_token_when_data_on() {
         let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
         state.record(
