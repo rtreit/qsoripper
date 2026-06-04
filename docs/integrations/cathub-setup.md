@@ -140,7 +140,13 @@ hub on its own (for example with `-DryRun` to validate config).
 
 ### WSJT-X
 - Settings > Radio: Rig `Hamlib NET rigctl`, Network Server **127.0.0.1:4533**.
-- PTT method `CAT`. The `wsjtx` endpoint is `perms = ["read", "write", "ptt"]`.
+- PTT method `CAT`. The `wsjtx` endpoint is `perms = ["read", "write", "ptt"]`, `single_vfo = true`.
+- **`single_vfo = true` keeps WSJT-X decoding on either VFO.** WSJT-X fundamentally expects to
+  receive on VFO A and stops decoding if the hub reports the operator is on VFO B. With
+  `single_vfo = true` the endpoint always presents whichever VFO the radio is actually on as
+  VFO A (`get_vfo` -> `VFOA`, with the live operating frequency/mode), so WSJT-X decodes
+  whether the rig is on A or B. The frequency is always real; only the VFO *letter* is
+  virtualized.
 - **Mode:** set the WSJT-X *Mode* selector to **Data/Pkt** (the default for FT8/WSPR). The
   hub maps Hamlib's `PKTUSB`/`PKTLSB` to the TS-590's DATA sub-mode by composing the base
   mode (`MD`) with the radio's independent DATA flag (`DA`): `PKTUSB` -> `MD2;`+`DA1;`,
@@ -148,8 +154,10 @@ hub on its own (for example with `-DryRun` to validate config).
   read-back recomposes the token, so WSJT-X sees `PKTUSB`/`PKTLSB` echoed back and the radio
   shows its DATA indicator lit. *Mode = None* (operator selects DATA on the front panel) and
   *Mode = USB* also round-trip cleanly if you prefer to manage the sub-mode yourself.
-- **Split Operation:** `Rig` or `Fake It` both work; the hub tracks split and TX-VFO
-  state and never retargets VFO A/B on a poll.
+- **Split Operation:** use **`Fake It`** (not `Rig`). A `single_vfo` endpoint presents a
+  single operating VFO and cannot model a real A/B split, so it **rejects** rig split-enable
+  (`RPRT -11`); "Fake It" QSYs the single VFO at TX time and works correctly on either VFO.
+  If you genuinely need real `Rig` split, point WSJT-X at a non-virtualized endpoint instead.
 - **PTT:** WSJT-X keys with Hamlib `RIG_PTT_ON_DATA` (`T 3`). The hub maps the Hamlib PTT
   family faithfully to the TS-590 — `T 1` -> `TX;`, `T 2` (mic) -> `TX0;`, `T 3` (data) ->
   `TX1;`, `T 0` -> `RX;`. `TX1;` keys with modulation from the DATA/USB audio path, which is
@@ -181,15 +189,21 @@ No radio-menu change is needed. Leave **Beep Volume** at your normal setting.
 
 ### Log4OM
 - CAT interface: Hamlib `NET rigctl`, host **127.0.0.1**, port **4534**.
-- The `log4om` endpoint is `perms = ["read", "write"]`.
+- The `log4om` endpoint is `perms = ["read", "write"]`, `single_vfo = true`.
 - Log4OM-NG uses Hamlib's **Extended Response Protocol** (ERP): it opens every session with
   `;V ?` (list supported VFOs) and then polls with `+\get_vfo_info VFOA` (~2 Hz). The hub's
   `hamlib_net` face parses the ERP separator prefix (`+ ; | ,`) and answers both shapes in the
   exact byte format real `rigctld` produces, so Log4OM connects and stays **online**. Plain
   clients (WSJT-X, N1MM, the engine) are unaffected — they never send the ERP prefix.
+- **`single_vfo = true` makes Log4OM log the live frequency on either VFO.** Because Log4OM
+  polls the fixed VFO `VFOA`, without virtualization it would read the *inactive* VFO A's
+  stale frequency whenever the operator works on VFO B. With `single_vfo = true` the endpoint
+  resolves the `VFOA` poll to whichever VFO is actually operating, so Log4OM tracks the real
+  dial on both VFOs (and `;V ?` advertises only `VFOA`).
 
 ### QsoRipper engine (TUI and GUI)
-- The engine's `RigctldProvider` points at the read-only endpoint **127.0.0.1:4532**.
+- The engine's `RigctldProvider` points at the read-only endpoint **127.0.0.1:4532**
+  (`single_vfo = false`, so the engine sees and logs the true operating VFO letter).
 - The TUI and GUI both consume the engine over gRPC; neither talks to the radio directly, so
   both get a consistent view fed by the same hub. TCP allows the engine and any other NET
   client to share an endpoint simultaneously.

@@ -36,15 +36,23 @@ bind = "127.0.0.1:4532"
 perms = ["read"]
 
 # Write + PTT endpoint for WSJT-X (configured as Hamlib NET rigctl).
+# single_vfo: WSJT-X expects to receive on VFO A and stops decoding if the hub reports the
+# operator is on VFO B. Present the operating VFO as VFO A so WSJT-X decodes on either VFO.
+# Use WSJT-X's "Fake It" split mode (Settings -> Radio -> Split Operation) with this endpoint;
+# real "Rig" split is rejected because a single-VFO presentation cannot model an A/B split.
 [[hamlib_net]]
 name = "wsjtx"
 bind = "127.0.0.1:4533"
+single_vfo = true
 perms = ["read", "write", "ptt"]
 
 # Read/write endpoint for Log4OM (CAT over Hamlib NET rigctl).
+# single_vfo: Log4OM polls `\get_vfo_info VFOA`. Presenting the operating VFO as VFO A makes
+# Log4OM log the live frequency/mode on either VFO instead of the stale inactive VFO A.
 [[hamlib_net]]
 name = "log4om"
 bind = "127.0.0.1:4534"
+single_vfo = true
 perms = ["read", "write"]
 
 # --- Serial faces (com0com virtual pairs) ----------------------------------------------
