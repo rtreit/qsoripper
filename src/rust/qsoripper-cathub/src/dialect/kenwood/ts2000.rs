@@ -55,7 +55,8 @@ impl ClientDialect for Ts2000Dialect {
             b"IF" if read => synth_if(&ctx.snapshot()),
             b"FA" => {
                 if read {
-                    return freq_frame(b"FA", ctx.snapshot().vfo(Vfo::A).freq_hz);
+                    let snap = ctx.snapshot();
+                    return freq_frame(b"FA", snap.vfo(snap.rx_vfo).freq_hz);
                 }
                 // OmniRig/HDSDR uses FA writes for the displayed tune target. Preserve the
                 // no-retargeting invariant by applying that tune to the currently active VFO.
@@ -118,9 +119,11 @@ impl ClientDialect for Ts2000Dialect {
             return None;
         }
         match *change {
-            StateChange::Freq { vfo: Vfo::A, hz } => Some(freq_frame(b"FA", hz)),
+            StateChange::Freq { vfo, hz } if vfo == ctx.snapshot().rx_vfo => {
+                Some(freq_frame(b"FA", hz))
+            }
             StateChange::Freq { vfo: Vfo::B, hz } => Some(freq_frame(b"FB", hz)),
-            StateChange::Mode { vfo: Vfo::A, mode } => {
+            StateChange::Mode { vfo, mode } if vfo == ctx.snapshot().rx_vfo => {
                 Some(vec![b'M', b'D', mode_to_digit(mode), b';'])
             }
             StateChange::RxVfo { .. } => Some(synth_if(&ctx.snapshot())),
@@ -309,6 +312,57 @@ mod tests {
             }],
             "HDSDR/OmniRig FA set-frequency writes express the displayed active frequency"
         );
+    }
+
+    #[tokio::test]
+    async fn fa_read_reports_active_vfo_b_frequency() {
+        let (ctx, _backend) = ctx_with(FacePermissions::read_only());
+        ctx.state.record(
+            StateChange::Freq {
+                vfo: Vfo::A,
+                hz: 14_062_820,
+            },
+            RadioEventSource::NativePush,
+        );
+        ctx.state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 14_074_000,
+            },
+            RadioEventSource::NativePush,
+        );
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::NativePush,
+        );
+
+        assert_eq!(
+            Ts2000Dialect::new().handle(b"FA;", &ctx).await,
+            b"FA00014074000;".to_vec(),
+            "HDSDR/OmniRig FA reads track the displayed active frequency"
+        );
+    }
+
+    #[tokio::test]
+    async fn active_vfo_b_frequency_notifies_as_fa() {
+        let (ctx, _backend) = ctx_with(FacePermissions::read_only());
+        ctx.set_ai(true);
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::NativePush,
+        );
+
+        let notification = Ts2000Dialect::new()
+            .format_notification(
+                &StateChange::Freq {
+                    vfo: Vfo::B,
+                    hz: 14_074_000,
+                },
+                &ctx,
+            )
+            .expect("active VFO B frequency notification");
+
+        assert_eq!(notification, b"FA00014074000;".to_vec());
     }
 
     #[tokio::test]

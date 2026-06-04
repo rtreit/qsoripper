@@ -203,6 +203,39 @@ async fn ts2000_face_fa_write_tunes_active_vfo_b() {
     assert!(rig.backend.passthroughs().is_empty());
 }
 
+/// HDSDR/OmniRig polls `IF;`, `FA;`, and `FB;`. On active VFO B, `FA;` must report the
+/// displayed active frequency, not stale inactive VFO A, because HDSDR treats FA as its main
+/// panadapter frequency.
+#[tokio::test]
+async fn ts2000_face_fa_read_reports_active_vfo_b() {
+    let rig = rig();
+    let mut omni = rig.face(ts2000(), FacePermissions::read_only(), 1);
+    rig.state.record(
+        StateChange::Freq {
+            vfo: Vfo::A,
+            hz: 14_062_820,
+        },
+        RadioEventSource::NativePush,
+    );
+    rig.state.record(
+        StateChange::Freq {
+            vfo: Vfo::B,
+            hz: 14_074_000,
+        },
+        RadioEventSource::NativePush,
+    );
+    rig.state.record(
+        StateChange::RxVfo { vfo: Vfo::B },
+        RadioEventSource::NativePush,
+    );
+
+    assert!(request(&mut omni, b"IF;")
+        .await
+        .starts_with(b"IF00014074000"));
+    assert_eq!(request(&mut omni, b"FA;").await, b"FA00014074000;");
+    assert_eq!(request(&mut omni, b"FB;").await, b"FB00014074000;");
+}
+
 /// A simulated front-panel change (a poll-diff from the backend's truth) fans out to every
 /// auto-info-subscribed face without any client having polled.
 #[tokio::test]
