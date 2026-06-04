@@ -401,10 +401,17 @@ async fn dispatch_plain(cmd: &str, args: &[&str], ctx: &FaceContext) -> LineResu
             if !ctx.perms.allows(CommandClass::ModeledWrite) {
                 RPRT_EINVAL.to_vec()
             } else if ctx.single_vfo() {
-                // Single-VFO faces virtualize away split entirely. Absorb the request
-                // without mutating real radio split so reads stay consistent (Split: 0)
-                // and a single-VFO client never desyncs the radio's true split state.
-                RPRT_OK.to_vec()
+                // Single-VFO faces present one operating VFO and cannot model a real A/B
+                // split. Accept "split off" as a no-op success, but reject "split on" with
+                // RPRT_ENAVAIL so a client (e.g. WSJT-X "Rig" split) sees split is
+                // unavailable and falls back to "Fake It" instead of believing a false
+                // success that would route TX to the wrong frequency. Either way the real
+                // radio split is never mutated, so single-VFO reads stay consistent.
+                if args.first().copied() == Some("1") {
+                    RPRT_ENAVAIL.to_vec()
+                } else {
+                    RPRT_OK.to_vec()
+                }
             } else {
                 let enabled = args.first().copied() == Some("1");
                 let tx_vfo = match args.get(1).copied() {
@@ -1297,10 +1304,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn single_vfo_set_split_is_absorbed_without_mutating_radio() {
+    async fn single_vfo_set_split_on_is_rejected_without_mutating_radio() {
         let (ctx, backend, _s) = ctx_single_vfo(FacePermissions::from_tokens(&["read", "write"]));
-        // A single-VFO client must never desync the radio's real split state.
-        assert_eq!(reply_of("S 1 VFOB", &ctx).await, RPRT_OK.to_vec());
+        // A single-VFO client must never desync the radio's real split state. "Split on"
+        // is rejected (RPRT_ENAVAIL) so WSJT-X falls back to "Fake It"; "split off" is an
+        // accepted no-op. Neither path mutates the real radio.
+        assert_eq!(reply_of("S 1 VFOB", &ctx).await, RPRT_ENAVAIL.to_vec());
+        assert_eq!(reply_of("S 0 VFOA", &ctx).await, RPRT_OK.to_vec());
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(
             backend.mutations().is_empty(),

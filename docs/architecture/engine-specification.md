@@ -510,18 +510,19 @@ which otherwise warns "You should not use VFO B when configured for SO1V" and fr
 the radio seamlessly across A/B switches. It is **off by default** and must stay off for genuine
 dual-VFO faceplates such as ARCP-590. See design §8.4.2.
 
-`single_vfo` is equally a per-face policy on **Hamlib NET faces** (`[[cat_hub.hamlib_net]]`), used
-for SO1V/single-VFO loggers that poll over rigctld — notably **Log4OM**, which polls
-`+\get_vfo_info VFOA`. A single-VFO Hamlib face presents the same virtualized view: every
-VFO-identity read resolves to the operating (receive) VFO rather than the literal requested VFO,
-so `get_vfo_info VFOA`, `get_vfo`, and `get_split_vfo` all follow the radio across an A/B switch.
-The face always labels the presented VFO `VFOA`, forces `Split` to `0`, advertises only `VFOA` in
-the `;V ?` handshake, and absorbs `set_split_vfo` without mutating the radio's real split (so the
-client never desyncs the rig). Faithful dual-VFO Hamlib faces (the engine read endpoint) leave
-`single_vfo` off and keep reporting the literal physical VFO and real split. Plain `get_freq` /
-`get_mode` already read the operating VFO on every face, which is why a logger that polls only `f`
-(WSJT-X) tracks A/B even without virtualization, whereas one that polls `get_vfo_info VFOA`
-(Log4OM) requires it.
+The **same `single_vfo` policy is available on `[[hamlib_net]]` (rigctld) endpoints** for
+rigctld clients that, like N1MM SO1V, expect to receive on VFO A: WSJT-X stops decoding when
+it sees VFO B as the active VFO, and Log4OM polls the fixed `\get_vfo_info VFOA` and would log
+the inactive VFO's stale frequency on VFO B. On a `single_vfo` Hamlib NET endpoint the face
+uses a **strict** single-VFO contract: `get_vfo` reports `VFOA`; `get_vfo_info` resolves any
+requested VFO to the operating VFO and reports `Split: 0`; `get_split_vfo` reports `0`/`VFOA`;
+`set_split_vfo 1` is **rejected** (`RPRT -11`) because the presentation cannot model a real
+split (use WSJT-X "Fake It"); and `\set_vfo ?` advertises only `VFOA`. Reads and writes already
+target the operating VFO, so the frequency/mode are real on either physical VFO. The engine's
+read-only endpoint leaves `single_vfo = false` so it logs the true operating VFO. Plain
+`get_freq` / `get_mode` already read the operating VFO on every face, which is why a logger that
+polls only `f` (WSJT-X) tracks A/B even without virtualization, whereas one that polls
+`get_vfo_info VFOA` (Log4OM) requires it.
 
 Native TS-590 controllers that speak the radio's exact protocol — notably **ARCP-590**, Kenwood's
 own control panel — get a dedicated **transparent mirror** dialect (`dialect = "ts590-transparent"`)

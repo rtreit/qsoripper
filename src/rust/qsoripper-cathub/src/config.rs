@@ -168,10 +168,17 @@ pub(crate) struct HamlibNetConfig {
     /// Permission tokens (`read`, `write`, `ptt`, `config_write`).
     #[serde(default)]
     pub(crate) perms: Vec<String>,
-    /// When true, this face is virtualized as a single-VFO radio: the operating
-    /// (receive) VFO is always presented as `VFOA`, split is hidden, and the radio's
-    /// physical A/B identity never leaks. Single-VFO loggers (N1MM SO1V, Log4OM)
-    /// then track the operating VFO seamlessly across A/B swaps.
+    /// Present the *operating* VFO as VFO A to this endpoint (operating-VFO virtualization).
+    ///
+    /// Single-VFO rigctld clients (notably WSJT-X, which expects to receive on VFO A, and
+    /// Log4OM, which polls `\get_vfo_info VFOA`) misbehave when the hub reports the true
+    /// VFO B as the active receive VFO: WSJT-X stops decoding and Log4OM logs the inactive
+    /// VFO A's stale frequency. With `single_vfo = true` the endpoint always presents
+    /// whichever VFO the operator is actually using as VFO A (`get_vfo` -> `VFOA`,
+    /// `get_vfo_info` answers from the operating VFO with `Split: 0`, `get_split_vfo` is
+    /// `0/VFOA`, and `set_split_vfo 1` is rejected so a client never believes a real A/B
+    /// split was armed). Leave this `false` for true dual-VFO control endpoints that must
+    /// see and address real VFO A and B independently.
     #[serde(default)]
     pub(crate) single_vfo: bool,
 }
@@ -351,8 +358,8 @@ impl Config {
         for ep in &self.hamlib_net {
             let _ = writeln!(
                 out,
-                "hamlib_net: name={} bind={} perms={:?}",
-                ep.name, ep.bind, ep.perms
+                "hamlib_net: name={} bind={} perms={:?} single_vfo={}",
+                ep.name, ep.bind, ep.perms, ep.single_vfo
             );
         }
         if !self.face.is_empty() || !self.hamlib_net.is_empty() {
