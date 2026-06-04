@@ -15,6 +15,14 @@ public sealed class RigControlMonitorTests
     }
 
     [Fact]
+    public void DefaultStaleThresholdStaysInteractive()
+    {
+        Assert.True(
+            RigControlMonitor.DefaultStaleThresholdMs <= 100,
+            "Default rig snapshot caching must stay fast enough for CAT changes to feel immediate.");
+    }
+
+    [Fact]
     public void CurrentSnapshotReturnsCachedWithinThreshold()
     {
         var callCount = 0;

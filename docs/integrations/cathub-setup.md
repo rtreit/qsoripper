@@ -207,7 +207,7 @@ No radio-menu change is needed. Leave **Beep Volume** at your normal setting.
 - The TUI and GUI both consume the engine over gRPC; neither talks to the radio directly, so
   both get a consistent view fed by the same hub. TCP allows the engine and any other NET
   client to share an endpoint simultaneously.
-- Keep `[rig_control].stale_threshold_ms` low (e.g. **200**) when reading through cathub. The hub
+- Keep `[rig_control].stale_threshold_ms` low (e.g. **100**) when reading through cathub. The hub
   serves reads from its in-memory state cache (kept current by the radio's native AI2 push), so a
   short freshness window is cheap and makes the GUI/TUI frequency display follow knob turns almost
   immediately. A large value such as 5000 makes the engine reuse a stale snapshot for that many
