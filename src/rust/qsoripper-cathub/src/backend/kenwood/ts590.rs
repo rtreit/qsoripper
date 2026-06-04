@@ -114,10 +114,19 @@ fn record_if_status(state: &StateHandle, status: IfStatus, source: RadioEventSou
         source,
     );
     state.record(StateChange::Ptt { keyed: status.ptt }, source);
+    // The IF frame carries the split bit and the receive VFO but not the transmit VFO. On a
+    // two-VFO radio the transmit VFO during split is always the non-receiving VFO, so derive
+    // it here. This keeps the hub's notion of split/TX-VFO authoritative from the rig itself
+    // and propagates the real state to every attached program.
+    let tx_vfo = if status.split {
+        status.rx_vfo.other()
+    } else {
+        status.rx_vfo
+    };
     state.record(
         StateChange::Split {
             enabled: status.split,
-            tx_vfo: None,
+            tx_vfo: Some(tx_vfo),
         },
         source,
     );
@@ -164,17 +173,25 @@ impl RadioBackend for Ts590Backend {
         link: &RadioLink,
         state: &StateHandle,
     ) -> Result<(), BackendError> {
+        let snap = state.snapshot();
         let bytes = match mutation {
             StateMutation::SetRxVfo { vfo } => {
                 let mut bytes = rx_vfo_set(vfo);
-                let snap = state.snapshot();
-                if snap.split {
-                    let tx = match snap.tx_vfo {
-                        Vfo::A => b'0',
-                        Vfo::B => b'1',
-                    };
-                    bytes.extend_from_slice(&[b'F', b'T', tx, b';']);
-                }
+                let tx = if snap.split {
+                    // Preserve a deliberate split: move only the receive VFO, keep the
+                    // operator's transmit VFO untouched.
+                    snap.tx_vfo
+                } else {
+                    // Switching the operating VFO must move RX *and* TX together. Sending a
+                    // bare `FR` would leave the transmit VFO behind and silently create an
+                    // accidental reverse-split (RX=new, TX=old).
+                    vfo
+                };
+                let tx_digit = match tx {
+                    Vfo::A => b'0',
+                    Vfo::B => b'1',
+                };
+                bytes.extend_from_slice(&[b'F', b'T', tx_digit, b';']);
                 bytes
             }
             StateMutation::SetVfoFreq { vfo, hz } => freq_set(vfo, hz),
@@ -236,6 +253,19 @@ impl RadioBackend for Ts590Backend {
         // Kenwood sets are not acknowledged: fire and forget.
         link.submit(bytes, Expect::NoReply).await?;
         state.record(mutation.into_change(), RadioEventSource::OptimisticWrite);
+        // A non-split operating-VFO switch also moves TX, so reflect the cleared split and
+        // the new transmit VFO in the snapshot (the bare RxVfo change above cannot).
+        if let StateMutation::SetRxVfo { vfo } = mutation {
+            if !snap.split {
+                state.record(
+                    StateChange::Split {
+                        enabled: false,
+                        tx_vfo: Some(vfo),
+                    },
+                    RadioEventSource::OptimisticWrite,
+                );
+            }
+        }
         Ok(())
     }
 
@@ -288,6 +318,21 @@ impl RadioBackend for Ts590Backend {
             }),
             b"FR" => parse_rx_vfo_digit(payload).is_some_and(|vfo| {
                 state.record(StateChange::RxVfo { vfo }, source);
+                true
+            }),
+            // A raw `FT` from a client (e.g. ARCP-590/N1MM split control) selects the
+            // transmit VFO. Observe it so the snapshot's split/tx_vfo track reality instead
+            // of going stale: split is active whenever the transmit VFO differs from the
+            // receive VFO.
+            b"FT" => parse_rx_vfo_digit(payload).is_some_and(|tx_vfo| {
+                let rx_vfo = state.snapshot().rx_vfo;
+                state.record(
+                    StateChange::Split {
+                        enabled: rx_vfo != tx_vfo,
+                        tx_vfo: Some(tx_vfo),
+                    },
+                    source,
+                );
                 true
             }),
             b"MD" => payload.first().is_some_and(|digit| {
@@ -440,6 +485,56 @@ mod tests {
     }
 
     #[test]
+    fn if_poll_derives_tx_vfo_from_split_and_rx_vfo() {
+        let backend = Ts590Backend::new();
+
+        // RX=VFO B with split set -> TX must be derived as the non-receiving VFO (A).
+        let split = StateHandle::new();
+        assert!(backend.record_event(
+            b"IF000140343201234-0000012345121019999;",
+            &split,
+            RadioEventSource::PollDiff,
+        ));
+        let snap = split.snapshot();
+        assert_eq!(snap.rx_vfo, Vfo::B);
+        assert!(snap.split);
+        assert_eq!(snap.tx_vfo, Vfo::A, "split TX VFO is the non-RX VFO");
+
+        // RX=VFO B with split clear -> TX tracks the operating (RX) VFO.
+        let simplex = StateHandle::new();
+        assert!(backend.record_event(
+            b"IF000140343201234-0000012345021009999;",
+            &simplex,
+            RadioEventSource::PollDiff,
+        ));
+        let snap = simplex.snapshot();
+        assert_eq!(snap.rx_vfo, Vfo::B);
+        assert!(!snap.split);
+        assert_eq!(snap.tx_vfo, Vfo::B, "simplex TX VFO equals the RX VFO");
+    }
+
+    #[test]
+    fn native_ft_records_split_and_tx_vfo() {
+        let backend = Ts590Backend::new();
+        let state = StateHandle::new();
+
+        // Operator on VFO B; a client (ARCP-590) then commands transmit on VFO A -> the
+        // radio is in reverse-split and the snapshot must reflect it.
+        assert!(backend.record_event(b"FR1;", &state, RadioEventSource::NativePush));
+        assert!(backend.record_event(b"FT0;", &state, RadioEventSource::NativePush));
+        let snap = state.snapshot();
+        assert_eq!(snap.rx_vfo, Vfo::B);
+        assert!(snap.split, "FR=B / FT=A must register as split");
+        assert_eq!(snap.tx_vfo, Vfo::A);
+
+        // Re-aligning the transmit VFO to the receive VFO clears the split.
+        assert!(backend.record_event(b"FT1;", &state, RadioEventSource::NativePush));
+        let snap = state.snapshot();
+        assert!(!snap.split, "FR=B / FT=B must clear split");
+        assert_eq!(snap.tx_vfo, Vfo::B);
+    }
+
+    #[test]
     fn native_fr_then_md_records_mode_on_active_vfo() {
         let backend = Ts590Backend::new();
         let state = StateHandle::new();
@@ -505,7 +600,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_rx_vfo_writes_fr_and_updates_state() {
+    async fn apply_rx_vfo_switches_operating_vfo_with_fr_and_ft() {
         let (link, raw_rx) = link_channel();
         let backend = Arc::new(Ts590Backend::new());
         let arc: Arc<dyn RadioBackend> = backend.clone();
@@ -518,10 +613,15 @@ mod tests {
             .await
             .expect("apply");
 
-        let mut buf = vec![0u8; 4];
+        // A non-split operating-VFO switch must move RX and TX together so the radio is
+        // never left in an accidental reverse-split (RX=B, TX=A).
+        let mut buf = vec![0u8; 8];
         radio_side.read_exact(&mut buf).await.expect("read frame");
-        assert_eq!(&buf, b"FR1;");
-        assert_eq!(state.snapshot().rx_vfo, Vfo::B);
+        assert_eq!(&buf, b"FR1;FT1;");
+        let snap = state.snapshot();
+        assert_eq!(snap.rx_vfo, Vfo::B);
+        assert!(!snap.split, "operating-VFO switch must not be split");
+        assert_eq!(snap.tx_vfo, Vfo::B);
     }
 
     #[tokio::test]
