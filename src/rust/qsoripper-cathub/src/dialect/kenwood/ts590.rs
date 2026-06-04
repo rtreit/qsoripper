@@ -26,14 +26,26 @@ impl Ts590Dialect {
 }
 
 /// Synthesize a Kenwood `IF;` status answer (38 bytes) from the universal state.
-fn synth_if(snapshot: &Snapshot) -> Vec<u8> {
+///
+/// When `single_vfo` is true (operating-VFO virtualization) the operating VFO is always
+/// presented as VFO A with no split, so a single-VFO logger (N1MM SO1V) never sees VFO B
+/// in the P10 field and never warns about it.
+fn synth_if(snapshot: &Snapshot, single_vfo: bool) -> Vec<u8> {
     let freq = snapshot.vfo(snapshot.rx_vfo).freq_hz;
     let tx = u8::from(snapshot.ptt);
     let mode = mode_to_digit(snapshot.vfo(snapshot.rx_vfo).mode) - b'0';
-    let split = u8::from(snapshot.split);
-    let rx_vfo = match snapshot.rx_vfo {
-        Vfo::A => 0u8,
-        Vfo::B => 1u8,
+    let split = if single_vfo {
+        0
+    } else {
+        u8::from(snapshot.split)
+    };
+    let rx_vfo = if single_vfo {
+        0u8
+    } else {
+        match snapshot.rx_vfo {
+            Vfo::A => 0u8,
+            Vfo::B => 1u8,
+        }
     };
     format!("IF{freq:011}0000+0000000000{tx}{mode}{rx_vfo}0{split}0000;").into_bytes()
 }
@@ -45,19 +57,44 @@ impl ClientDialect for Ts590Dialect {
             return ERR.to_vec();
         };
         let read = payload.is_empty();
+        // In operating-VFO virtualization, every VFO-addressed read/write targets the
+        // operating (rx) VFO so the face only ever sees a single VFO presented as VFO A.
+        let single_vfo = ctx.single_vfo();
+        let op_vfo = ctx.snapshot().rx_vfo;
         match verb.as_slice() {
             b"FA" => {
+                let target = if single_vfo { op_vfo } else { Vfo::A };
                 if read {
-                    freq_frame(b"FA", ctx.snapshot().vfo(Vfo::A).freq_hz)
+                    freq_frame(b"FA", ctx.snapshot().vfo(target).freq_hz)
                 } else {
-                    set_freq(ctx, Vfo::A, &payload).await
+                    set_freq(ctx, target, &payload).await
                 }
             }
             b"FB" => {
+                // For a single-VFO face the "other" VFO is hidden: FB mirrors the operating
+                // VFO so no path exposes physical VFO B. Dual-VFO faces address real B.
+                let target = if single_vfo { op_vfo } else { Vfo::B };
                 if read {
-                    freq_frame(b"FB", ctx.snapshot().vfo(Vfo::B).freq_hz)
+                    freq_frame(b"FB", ctx.snapshot().vfo(target).freq_hz)
                 } else {
-                    set_freq(ctx, Vfo::B, &payload).await
+                    set_freq(ctx, target, &payload).await
+                }
+            }
+            // A single-VFO face must never see the receive/transmit VFO selectors expose
+            // VFO B (they would otherwise fall through to a raw passthrough). Present the
+            // operating VFO as VFO A and swallow attempts to select a VFO.
+            b"FR" if single_vfo => {
+                if read {
+                    b"FR0;".to_vec()
+                } else {
+                    Vec::new()
+                }
+            }
+            b"FT" if single_vfo => {
+                if read {
+                    b"FT0;".to_vec()
+                } else {
+                    Vec::new()
                 }
             }
             b"MD" => {
@@ -119,7 +156,7 @@ impl ClientDialect for Ts590Dialect {
             }
             b"ID" if read => b"ID021;".to_vec(),
             b"PS" if read => b"PS1;".to_vec(),
-            b"IF" if read => synth_if(&ctx.snapshot()),
+            b"IF" if read => synth_if(&ctx.snapshot(), single_vfo),
             // Any other native command is forwarded as a permission-gated passthrough.
             _ => {
                 let class = if read {
@@ -137,6 +174,9 @@ impl ClientDialect for Ts590Dialect {
             return None;
         }
         let snap = ctx.snapshot();
+        if ctx.single_vfo() {
+            return single_vfo_notification(change, &snap);
+        }
         match *change {
             StateChange::Freq { vfo, hz } => {
                 // Always emit the explicit per-VFO frame for VFO-specific trackers.
@@ -148,7 +188,7 @@ impl ClientDialect for Ts590Dialect {
                 // FB-only push made frequency updates silently stop whenever the rig was on
                 // VFO B. Appending `IF` makes VFO B behave exactly like VFO A.
                 if vfo == snap.rx_vfo {
-                    frame.extend_from_slice(&synth_if(&snap));
+                    frame.extend_from_slice(&synth_if(&snap, false));
                 }
                 Some(frame)
             }
@@ -156,15 +196,21 @@ impl ClientDialect for Ts590Dialect {
                 // `MD` reflects the active VFO on a real TS-590; emit it plus the operating
                 // `IF` so mode trackers follow the active VFO regardless of A/B.
                 let mut frame = vec![b'M', b'D', mode_to_digit(mode), b';'];
-                frame.extend_from_slice(&synth_if(&snap));
+                frame.extend_from_slice(&synth_if(&snap, false));
                 Some(frame)
             }
-            StateChange::RxVfo { .. } => Some(synth_if(&snap)),
+            StateChange::RxVfo { .. } => Some(synth_if(&snap, false)),
             _ => None,
         }
     }
 
     fn format_passthrough(&self, raw: &[u8], ctx: &FaceContext) -> Option<Vec<u8>> {
+        // A single-VFO face sees a curated, virtualized view: never relay the radio's raw
+        // CAT stream, which can carry FA/FB/FR/IF frames that would leak physical VFO B and
+        // break the "operating VFO is always VFO A" illusion.
+        if ctx.single_vfo() {
+            return None;
+        }
         // A certified-native client that enabled auto-information expects the radio's CAT
         // stream verbatim. Relaying unmodeled frames (NB/NR/AG/front-panel changes, ...)
         // keeps its client-side feature state machines in sync; without this, a client like
@@ -174,6 +220,35 @@ impl ClientDialect for Ts590Dialect {
         } else {
             None
         }
+    }
+}
+
+/// Build the operating-VFO-virtualized notification: the operating VFO is always presented
+/// as VFO A, inactive-VFO churn is suppressed, and an A/B switch re-presents the new
+/// operating VFO as VFO A (FA+MD+IF) so a single-VFO logger seamlessly retunes.
+fn single_vfo_notification(change: &StateChange, snap: &Snapshot) -> Option<Vec<u8>> {
+    match *change {
+        StateChange::Freq { vfo, hz } if vfo == snap.rx_vfo => {
+            let mut frame = freq_frame(b"FA", hz);
+            frame.extend_from_slice(&synth_if(snap, true));
+            Some(frame)
+        }
+        StateChange::Mode { vfo, mode } if vfo == snap.rx_vfo => {
+            let mut frame = vec![b'M', b'D', mode_to_digit(mode), b';'];
+            frame.extend_from_slice(&synth_if(snap, true));
+            Some(frame)
+        }
+        StateChange::RxVfo { .. } => {
+            // The operator pressed A/B: re-present the new operating VFO as VFO A so the
+            // logger retunes exactly as if VFO A had jumped to the new frequency and mode.
+            let op = snap.vfo(snap.rx_vfo);
+            let mut frame = freq_frame(b"FA", op.freq_hz);
+            frame.extend_from_slice(&[b'M', b'D', mode_to_digit(op.mode), b';']);
+            frame.extend_from_slice(&synth_if(snap, true));
+            Some(frame)
+        }
+        // Inactive-VFO frequency/mode churn is invisible to a single-VFO face.
+        _ => None,
     }
 }
 
@@ -223,6 +298,13 @@ mod tests {
         let radio = spawn_scheduler(arc, detached_link(), state.clone());
         let ptt = PttManager::new(Duration::from_secs(300));
         (FaceContext::new(5, perms, state, radio, ptt, caps), backend)
+    }
+
+    /// Like [`ctx_with`] but the face uses operating-VFO virtualization (single-VFO
+    /// presentation), as configured for N1MM SO1V.
+    fn single_vfo_ctx(perms: FacePermissions) -> (FaceContext, LoopbackBackend) {
+        let (ctx, backend) = ctx_with(perms);
+        (ctx.with_single_vfo(true), backend)
     }
 
     #[tokio::test]
@@ -312,7 +394,7 @@ mod tests {
         // per-VFO `FA` frame *and* the operating-status `IF` frame so clients that track the
         // operating frequency (N1MM, Log4OM-as-TS590) follow the change.
         let mut expected = b"FA00014074000;".to_vec();
-        expected.extend_from_slice(&synth_if(&ctx.snapshot()));
+        expected.extend_from_slice(&synth_if(&ctx.snapshot(), false));
         assert_eq!(note, Some(expected));
     }
 
@@ -346,7 +428,7 @@ mod tests {
                 &ctx,
             )
             .expect("active-VFO freq change must notify");
-        let synth = synth_if(&ctx.snapshot());
+        let synth = synth_if(&ctx.snapshot(), false);
         assert!(
             note.windows(synth.len()).any(|w| w == synth.as_slice()),
             "VFO B active-freq notification must include the operating IF frame; got {:?}",
@@ -467,5 +549,221 @@ mod tests {
         assert_eq!(reply, b"RM;".to_vec());
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(backend.passthroughs(), vec![b"RM;".to_vec()]);
+    }
+
+    // --- Operating-VFO virtualization (single_vfo) -----------------------------------
+
+    /// With the rig on VFO B, a single-VFO face must see the operating frequency presented
+    /// as VFO A: `IF;` reports P10 == '0' (not '1') so N1MM SO1V never warns, and the
+    /// frequency is VFO B's operating frequency.
+    #[tokio::test]
+    async fn single_vfo_if_presents_operating_vfo_b_as_vfo_a() {
+        let (ctx, _b) = single_vfo_ctx(FacePermissions::read_only());
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::PollDiff,
+        );
+        ctx.state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 14_034_320,
+            },
+            RadioEventSource::PollDiff,
+        );
+        let reply = Ts590Dialect::new().handle(b"IF;", &ctx).await;
+        assert_eq!(reply.len(), 38);
+        // P10 (the active-VFO digit) is at index 30 in the 38-byte IF answer.
+        assert_eq!(reply[30], b'0', "operating VFO must be presented as VFO A");
+        assert!(
+            reply.windows(11).any(|w| w == b"00014034320"),
+            "IF must carry the operating (VFO B) frequency; got {}",
+            String::from_utf8_lossy(&reply)
+        );
+    }
+
+    /// A single-VFO face reads the operating VFO's frequency via `FA;`, even when the rig
+    /// is physically on VFO B.
+    #[tokio::test]
+    async fn single_vfo_fa_read_returns_operating_vfo_b_freq() {
+        let (ctx, _b) = single_vfo_ctx(FacePermissions::read_only());
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::PollDiff,
+        );
+        ctx.state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 14_034_320,
+            },
+            RadioEventSource::PollDiff,
+        );
+        assert_eq!(
+            Ts590Dialect::new().handle(b"FA;", &ctx).await,
+            b"FA00014034320;".to_vec()
+        );
+    }
+
+    /// An `FA` write from a single-VFO face must tune the operating VFO (B), not VFO A.
+    #[tokio::test]
+    async fn single_vfo_fa_write_tunes_operating_vfo_b() {
+        let (ctx, backend) = single_vfo_ctx(FacePermissions::from_tokens(&["read", "write"]));
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::PollDiff,
+        );
+        assert_eq!(
+            Ts590Dialect::new().handle(b"FA00014050000;", &ctx).await,
+            Vec::<u8>::new()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(
+            backend.mutations(),
+            vec![StateMutation::SetVfoFreq {
+                vfo: Vfo::B,
+                hz: 14_050_000
+            }]
+        );
+    }
+
+    /// The receive-VFO selector never exposes VFO B to a single-VFO face: `FR;` reports
+    /// VFO A and a `FR1;` select is swallowed (not forwarded to the radio).
+    #[tokio::test]
+    async fn single_vfo_fr_is_virtualized_to_vfo_a() {
+        let (ctx, backend) = single_vfo_ctx(FacePermissions::from_tokens(&["read", "write"]));
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::PollDiff,
+        );
+        assert_eq!(
+            Ts590Dialect::new().handle(b"FR;", &ctx).await,
+            b"FR0;".to_vec()
+        );
+        assert_eq!(
+            Ts590Dialect::new().handle(b"FR1;", &ctx).await,
+            Vec::<u8>::new()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(
+            backend.passthroughs().is_empty(),
+            "FR must never reach the radio as a passthrough on a single-VFO face"
+        );
+    }
+
+    /// Switching the operating VFO (A->B) must re-present the new operating VFO as VFO A:
+    /// the push carries `FA`(new freq) + `MD`(new mode) + an `IF` with P10 == '0', so a
+    /// single-VFO logger seamlessly retunes with no SO1V warning.
+    #[tokio::test]
+    async fn single_vfo_rxvfo_switch_re_presents_operating_as_vfo_a() {
+        let (ctx, _b) = single_vfo_ctx(FacePermissions::read_only());
+        ctx.state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 21_205_000,
+            },
+            RadioEventSource::PollDiff,
+        );
+        ctx.state.record(
+            StateChange::Mode {
+                vfo: Vfo::B,
+                mode: Mode::Cw,
+            },
+            RadioEventSource::PollDiff,
+        );
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::PollDiff,
+        );
+        ctx.set_ai(true);
+        let note = Ts590Dialect::new()
+            .format_notification(&StateChange::RxVfo { vfo: Vfo::B }, &ctx)
+            .expect("A/B switch must notify a single-VFO face");
+        assert!(
+            note.windows(b"FA00021205000;".len())
+                .any(|w| w == b"FA00021205000;"),
+            "switch must push the new operating frequency as FA; got {}",
+            String::from_utf8_lossy(&note)
+        );
+        assert!(
+            note.windows(4).any(|w| w == b"MD3;"),
+            "switch must push the new operating mode (CW=3); got {}",
+            String::from_utf8_lossy(&note)
+        );
+        // The trailing IF must present VFO A (P10 == '0'), never VFO B.
+        let if_pos = note
+            .windows(2)
+            .position(|w| w == b"IF")
+            .expect("notification must contain an IF frame");
+        assert_eq!(
+            note[if_pos + 30],
+            b'0',
+            "the operating VFO must be presented as VFO A in the IF frame"
+        );
+    }
+
+    /// An active-VFO (B) frequency change pushes `FA` (not `FB`) plus an `IF` presenting
+    /// VFO A, so N1MM SO1V tracks the change. Inactive-VFO churn is suppressed.
+    #[tokio::test]
+    async fn single_vfo_active_freq_change_pushes_fa_as_vfo_a() {
+        let (ctx, _b) = single_vfo_ctx(FacePermissions::read_only());
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::B },
+            RadioEventSource::PollDiff,
+        );
+        ctx.state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 14_034_320,
+            },
+            RadioEventSource::PollDiff,
+        );
+        ctx.set_ai(true);
+        let note = Ts590Dialect::new()
+            .format_notification(
+                &StateChange::Freq {
+                    vfo: Vfo::B,
+                    hz: 14_034_320,
+                },
+                &ctx,
+            )
+            .expect("active-VFO freq change must notify");
+        assert!(
+            note.starts_with(b"FA00014034320;"),
+            "active VFO-B change must be presented as an FA frame; got {}",
+            String::from_utf8_lossy(&note)
+        );
+        assert!(
+            !note.windows(2).any(|w| w == b"FB"),
+            "a single-VFO face must never receive an FB frame; got {}",
+            String::from_utf8_lossy(&note)
+        );
+        let if_pos = note.windows(2).position(|w| w == b"IF").expect("IF frame");
+        assert_eq!(note[if_pos + 30], b'0', "IF must present VFO A");
+    }
+
+    /// A frequency change on the *inactive* VFO is invisible to a single-VFO face.
+    #[tokio::test]
+    async fn single_vfo_inactive_freq_change_is_suppressed() {
+        let (ctx, _b) = single_vfo_ctx(FacePermissions::read_only());
+        // Operating on VFO A; a change on VFO B must not be pushed.
+        ctx.set_ai(true);
+        let note = Ts590Dialect::new().format_notification(
+            &StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 7_000_000,
+            },
+            &ctx,
+        );
+        assert_eq!(note, None);
+    }
+
+    /// A single-VFO face never receives raw passthrough frames (which could leak VFO B).
+    #[tokio::test]
+    async fn single_vfo_suppresses_raw_passthrough() {
+        let (ctx, _b) = single_vfo_ctx(FacePermissions::read_only());
+        ctx.set_ai(true);
+        assert_eq!(
+            Ts590Dialect::new().format_passthrough(b"FB00014000000;", &ctx),
+            None
+        );
     }
 }

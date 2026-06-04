@@ -500,6 +500,16 @@ endpoint is the cathub daemon or a bare `rigctld`.
 - Operator setup: `docs/integrations/cathub-setup.md`.
 - Implementation: the `qsoripper-cathub` crate under `src/rust/`.
 
+Native `ts590` faces support an opt-in, per-face **single-VFO operating-VFO virtualization**
+policy (`single_vfo = true`). When enabled, the face never exposes the physical VFO letter:
+it always presents the operating (receive) VFO as VFO A, mirroring `FA`/`FB` reads and writes
+onto whichever VFO the radio is on, intercepting `FR`/`FT` VFO-select verbs, forcing the `IF;`
+active-VFO digit (P10) and split to `0`, and re-presenting an A/B switch by pushing the new
+operating VFO's `FA` + `MD` + `IF`. This makes single-VFO loggers — N1MM Logger+ in SO1V mode,
+which otherwise warns "You should not use VFO B when configured for SO1V" and freezes — track
+the radio seamlessly across A/B switches. It is **off by default** and must stay off for genuine
+dual-VFO faceplates such as ARCP-590. See design §8.4.2.
+
 The hub's Hamlib NET faces accept both the plain rigctld protocol (WSJT-X, N1MM, the engine)
 and Hamlib's **Extended Response Protocol** (ERP). An ERP request prefixes the command with a
 separator (`+` joins records with newlines; `;`, `|`, or `,` joins them on one line with that

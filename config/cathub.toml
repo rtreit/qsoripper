@@ -70,14 +70,20 @@ dialect = "ts2000"
 perms = ["read", "write"]
 
 # N1MM Logger+ as a native TS-590.
+# N1MM in SO1V mode rejects VFO B ("You should not use VFO B when configured for SO1V"),
+# so present the operating VFO as VFO A. The hub mirrors reads/writes/notifications onto
+# whichever VFO the radio is actually on, so A/B switching tracks seamlessly.
 [[face]]
 name = "n1mm"
 transport = "COM20"      # N1MM binds COM21
 baud = 115200
 dialect = "ts590"
+single_vfo = true
 perms = ["read", "write", "ptt"]
 
 # ARCP-590 control panel: full faceplate control, including EX-menu (config_write).
+# ARCP-590 is a genuine dual-VFO faceplate: it must see the real VFO A/B, so leave
+# single_vfo off (the default).
 [[face]]
 name = "arcp590"
 transport = "COM30"      # ARCP-590 binds COM31

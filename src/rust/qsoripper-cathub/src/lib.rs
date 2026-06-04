@@ -291,7 +291,8 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
             radio.clone(),
             ptt.clone(),
             caps.clone(),
-        );
+        )
+        .with_single_vfo(face.single_vfo);
         let port = open_serial(&face.name, &face.transport, face.baud)?;
         tokio::spawn(run_face(port, dialect, ctx, b';'));
         tracing::info!(
