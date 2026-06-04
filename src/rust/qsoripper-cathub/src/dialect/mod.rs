@@ -260,6 +260,31 @@ pub(crate) trait ClientDialect: Send + Sync {
     fn format_passthrough(&self, _raw: &[u8], _ctx: &FaceContext) -> Option<Vec<u8>> {
         None
     }
+
+    /// Render a *modeled* native frame (one the backend parsed into a state change) as a
+    /// verbatim relay for this face, if it applies. Returns the bytes to push, or `None`.
+    ///
+    /// The default suppresses it: a virtualizing face consumes the coalesced
+    /// [`StateChange`](crate::model::StateChange) via [`Self::format_notification`] instead.
+    /// A transparent mirror dialect overrides this to forward the radio's real CAT stream
+    /// byte-for-byte, so the client never diverges from the rig.
+    fn format_native_passthrough(&self, _raw: &[u8], _ctx: &FaceContext) -> Option<Vec<u8>> {
+        None
+    }
+
+    /// Re-present the full current state to a face that lagged the broadcast ring and lost
+    /// one or more events. Returns the frames to write, in order.
+    ///
+    /// The default replays the snapshot through [`Self::format_notification`], which restores
+    /// a virtualizing face to live state. A transparent mirror dialect overrides this to emit
+    /// the radio's state as raw frames (it never consumes synthesized notifications).
+    fn resync(&self, snapshot: &Snapshot, ctx: &FaceContext) -> Vec<Vec<u8>> {
+        snapshot
+            .as_changes()
+            .iter()
+            .filter_map(|change| self.format_notification(change, ctx))
+            .collect()
+    }
 }
 
 #[cfg(test)]

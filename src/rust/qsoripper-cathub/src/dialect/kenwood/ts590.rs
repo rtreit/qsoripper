@@ -30,7 +30,7 @@ impl Ts590Dialect {
 /// When `single_vfo` is true (operating-VFO virtualization) the operating VFO is always
 /// presented as VFO A with no split, so a single-VFO logger (N1MM SO1V) never sees VFO B
 /// in the P10 field and never warns about it.
-fn synth_if(snapshot: &Snapshot, single_vfo: bool) -> Vec<u8> {
+pub(crate) fn synth_if(snapshot: &Snapshot, single_vfo: bool) -> Vec<u8> {
     let freq = snapshot.vfo(snapshot.rx_vfo).freq_hz;
     let tx = u8::from(snapshot.ptt);
     let mode = mode_to_digit(snapshot.vfo(snapshot.rx_vfo).mode) - b'0';
@@ -274,6 +274,23 @@ fn reply(outcome: ApplyOutcome) -> Vec<u8> {
         ApplyOutcome::Ok => Vec::new(),
         _ => ERR.to_vec(),
     }
+}
+
+/// Build the full set of raw TS-590 frames that re-present the current state to a native
+/// controller: both VFO frequencies, the receive/transmit VFO selectors, the active mode,
+/// and the operating-status `IF`. Used to re-sync a transparent mirror face that lagged the
+/// broadcast ring, restoring it to the radio's true state without a reconnect.
+pub(crate) fn snapshot_resync_frames(snap: &Snapshot) -> Vec<Vec<u8>> {
+    let rx = if snap.rx_vfo == Vfo::A { b'0' } else { b'1' };
+    let tx = if snap.tx_vfo == Vfo::A { b'0' } else { b'1' };
+    vec![
+        freq_frame(b"FA", snap.vfo(Vfo::A).freq_hz),
+        freq_frame(b"FB", snap.vfo(Vfo::B).freq_hz),
+        vec![b'F', b'R', rx, b';'],
+        vec![b'F', b'T', tx, b';'],
+        vec![b'M', b'D', mode_to_digit(snap.vfo(snap.rx_vfo).mode), b';'],
+        synth_if(snap, false),
+    ]
 }
 
 #[cfg(test)]

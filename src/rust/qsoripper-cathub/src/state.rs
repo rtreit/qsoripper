@@ -203,6 +203,11 @@ pub(crate) enum RadioEvent {
     /// native pass-through faces so client-side feature state machines (for example
     /// ARCP-590's NB on/NB1/NB2/off cycle) and front-panel changes stay in sync.
     Raw(Arc<[u8]>),
+    /// A native frame the backend *did* model, forwarded verbatim for transparent mirror
+    /// faces (ARCP-590). Virtualizing faces ignore it — they consume the coalesced
+    /// [`RadioEvent::Change`] instead — but a transparent face relays it so it tracks the
+    /// radio's real CAT stream rather than a synthesis, eliminating push/snapshot drift.
+    RawNative(Arc<[u8]>),
 }
 
 struct Inner {
@@ -220,7 +225,11 @@ pub(crate) struct StateHandle {
 impl StateHandle {
     /// Create an empty state at its defaults.
     pub(crate) fn new() -> Self {
-        let (tx, _rx) = broadcast::channel(256);
+        // Capacity headroom: a modeled native frame now broadcasts both a coalesced `Change`
+        // and a verbatim `RawNative`, so the bus carries up to two events per radio frame.
+        // A larger ring keeps a momentarily busy face (notably a transparent mirror during a
+        // contest-rate tuning sweep) from lagging and having to re-sync.
+        let (tx, _rx) = broadcast::channel(1024);
         StateHandle {
             inner: Arc::new(Inner {
                 snapshot: RwLock::new(Snapshot::default()),
@@ -260,6 +269,15 @@ impl StateHandle {
     /// native-push coverage set; it is a transparent relay of the radio's CAT stream.
     pub(crate) fn record_raw(&self, frame: &[u8]) {
         let _ = self.inner.tx.send(RadioEvent::Raw(Arc::from(frame)));
+    }
+
+    /// Broadcast a *modeled* native frame verbatim for transparent mirror faces. The caller
+    /// has already recorded the modeled change (updating the snapshot and broadcasting a
+    /// coalesced [`RadioEvent::Change`]); this additionally relays the original bytes so a
+    /// transparent face mirrors the radio's exact CAT stream. Non-transparent faces ignore
+    /// this event. It does not touch the snapshot or the native-push coverage set.
+    pub(crate) fn record_raw_native(&self, frame: &[u8]) {
+        let _ = self.inner.tx.send(RadioEvent::RawNative(Arc::from(frame)));
     }
 
     /// A consistent point-in-time view of the radio.
@@ -561,6 +579,22 @@ mod tests {
             "expected RadioEvent::Raw(NB1;), got {evt:?}"
         );
         // A raw relay must not mark native-push coverage.
+        assert!(!state.is_native_push_covered(Field::Freq(Vfo::A)));
+    }
+
+    #[tokio::test]
+    async fn record_raw_native_broadcasts_verbatim_without_touching_snapshot() {
+        let state = StateHandle::new();
+        let mut rx = state.subscribe();
+        state.record_raw_native(b"FA00014035000;");
+        let evt = rx.try_recv().expect("one raw-native event");
+        assert!(
+            matches!(&evt, RadioEvent::RawNative(bytes) if &**bytes == b"FA00014035000;"),
+            "expected RadioEvent::RawNative(FA...), got {evt:?}"
+        );
+        // Relaying the verbatim frame must not itself mutate the snapshot or coverage; the
+        // caller has already recorded the modeled change.
+        assert_eq!(state.snapshot().vfo(Vfo::A).freq_hz, 0);
         assert!(!state.is_native_push_covered(Field::Freq(Vfo::A)));
     }
 
