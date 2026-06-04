@@ -510,6 +510,17 @@ which otherwise warns "You should not use VFO B when configured for SO1V" and fr
 the radio seamlessly across A/B switches. It is **off by default** and must stay off for genuine
 dual-VFO faceplates such as ARCP-590. See design §8.4.2.
 
+The **same `single_vfo` policy is available on `[[hamlib_net]]` (rigctld) endpoints** for
+rigctld clients that, like N1MM SO1V, expect to receive on VFO A: WSJT-X stops decoding when
+it sees VFO B as the active VFO, and Log4OM polls the fixed `\get_vfo_info VFOA` and would log
+the inactive VFO's stale frequency on VFO B. On a `single_vfo` Hamlib NET endpoint the face
+uses a **strict** single-VFO contract: `get_vfo` reports `VFOA`; `get_vfo_info` resolves any
+requested VFO to the operating VFO and reports `Split: 0`; `get_split_vfo` reports `0`/`VFOA`;
+`set_split_vfo 1` is **rejected** (`RPRT -11`) because the presentation cannot model a real
+split (use WSJT-X "Fake It"); and `\set_vfo ?` advertises only `VFOA`. Reads and writes already
+target the operating VFO, so the frequency/mode are real on either physical VFO. The engine's
+read-only endpoint leaves `single_vfo = false` so it logs the true operating VFO.
+
 The hub's Hamlib NET faces accept both the plain rigctld protocol (WSJT-X, N1MM, the engine)
 and Hamlib's **Extended Response Protocol** (ERP). An ERP request prefixes the command with a
 separator (`+` joins records with newlines; `;`, `|`, or `,` joins them on one line with that

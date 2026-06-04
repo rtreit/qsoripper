@@ -290,6 +290,19 @@ The fix is a per-face, opt-in **operating-VFO virtualization** policy (`single_v
 
 This policy is **opt-in per face and off by default**. It is enabled only for genuine single-VFO loggers (N1MM SO1V). Dual-VFO faceplates such as **ARCP-590 must leave it off** (`single_vfo = false`), because they legitimately control and display the real VFO A and VFO B. Split-aware clients are out of scope for this simplification: a single-VFO face always sees split = `0`. SO2V is an N1MM-side workaround, not a substitute for this hub-side virtualization.
 
+#### `single_vfo` on Hamlib NET (rigctld) faces
+
+The same virtualization is available on `[[hamlib_net]]` endpoints (`single_vfo = true`) for rigctld-protocol clients that, like N1MM SO1V, fundamentally expect to receive on VFO A. **WSJT-X** stops decoding when the hub reports the operator is on VFO B, and **Log4OM** polls `\get_vfo_info VFOA`, so on VFO B it logs the stale inactive VFO A frequency. With `single_vfo = true` the rigctld face presents the operating VFO as VFO A using a **strict** single-VFO contract — the inactive VFO is never exposed:
+
+- **`v` / `\get_vfo`** always report `VFOA`.
+- **`\get_vfo_info <vfo>`** resolves *any* requested VFO to the operating VFO and reports `Split: 0`; the inactive VFO's data is never returned (a `VFOB` request also answers with the operating VFO).
+- **`s` / `\get_split_vfo`** report `0` / `VFOA`.
+- **`f`/`m` reads** and **`F`/`M` writes** already target the operating (receive) VFO, so the frequency/mode are real on either physical VFO and a `set_freq` tunes the VFO the operator is actually using.
+- **`S 1` / `\set_split_vfo 1`** (enable split) is **rejected** (`RPRT -11`) because a single-VFO presentation cannot model a real A/B split; `S 0` is accepted as a no-op. WSJT-X must therefore use **"Fake It"** split (which QSYs the single VFO at TX time), not **"Rig"** split, on a `single_vfo` endpoint.
+- **`V ?` / `\set_vfo ?`** advertise only `VFOA`, so a client never targets the inactive VFO.
+
+The QsoRipper engine endpoint leaves `single_vfo = false` so the engine logs the true operating VFO letter.
+
 ### 8.5 PTT ownership and arbitration
 
 Multiple clients are now PTT-capable (N1MM CAT PTT, WSJT-X `T 1`, ARCP-590). The daemon arbitrates with a single-owner lease:
