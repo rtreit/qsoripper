@@ -125,7 +125,13 @@ hub on its own (for example with `-DryRun` to validate config).
 
 ### N1MM Logger+
 - Configurer > Hardware: radio `Kenwood`, port **COM21**, 115200, 8-N-1, no flow control.
-- The `n1mm` face is `dialect = "ts590"`, `perms = ["read", "write", "ptt"]`.
+- The `n1mm` face is `dialect = "ts590"`, `single_vfo = true`, `perms = ["read", "write", "ptt"]`.
+- **`single_vfo = true` is required for SO1V.** N1MM in single-VFO (SO1V) mode refuses VFO B
+  ("You should not use VFO B when configured for SO1V") and freezes its frequency display when
+  the radio is on VFO B. With `single_vfo = true` the hub presents whichever VFO the radio is
+  on as VFO A, so N1MM tracks the radio across A/B switches with no warning. If you run N1MM in
+  SO2V instead, you may set `single_vfo = false`; for SO1V leave it on (the shipped default for
+  this face). See design §8.4.2.
 
 ### ARCP-590
 - Set ARCP-590's COM port to **COM31**, 115200, 8-N-1.

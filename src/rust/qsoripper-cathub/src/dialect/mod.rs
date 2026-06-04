@@ -56,6 +56,10 @@ pub(crate) struct FaceContext {
     pub(crate) ptt: PttManager,
     /// This face's virtualized auto-information flag (never reaches the radio).
     ai: Arc<AtomicBool>,
+    /// When true, present the *operating* VFO as VFO A to this face (operating-VFO
+    /// virtualization). Set from `[[face]] single_vfo` for single-VFO loggers such as
+    /// N1MM SO1V; left false for true dual-VFO control faces such as ARCP-590.
+    single_vfo: bool,
 }
 
 impl FaceContext {
@@ -76,7 +80,16 @@ impl FaceContext {
             radio,
             ptt,
             ai: Arc::new(AtomicBool::new(false)),
+            single_vfo: false,
         }
+    }
+
+    /// Enable operating-VFO virtualization for this face (builder style so existing
+    /// call sites are unaffected). When enabled, the face always sees the operating VFO
+    /// presented as VFO A. Returns `self` for chaining.
+    pub(crate) fn with_single_vfo(mut self, single_vfo: bool) -> Self {
+        self.single_vfo = single_vfo;
+        self
     }
 
     /// A consistent point-in-time view of the radio.
@@ -171,6 +184,12 @@ impl FaceContext {
         self.ai.load(Ordering::SeqCst)
     }
 
+    /// Whether this face uses operating-VFO virtualization (operating VFO presented as
+    /// VFO A). True for single-VFO loggers (N1MM SO1V); false for dual-VFO faces.
+    pub(crate) fn single_vfo(&self) -> bool {
+        self.single_vfo
+    }
+
     /// A clone of this context for a new connection: same shared state/radio/ptt and
     /// permissions, but a distinct face id and a fresh (off) auto-information flag.
     pub(crate) fn clone_with_face(&self, face_id: u64) -> FaceContext {
@@ -182,6 +201,8 @@ impl FaceContext {
             radio: self.radio.clone(),
             ptt: self.ptt.clone(),
             ai: Arc::new(AtomicBool::new(false)),
+            // A new connection to the same face keeps that face's VFO-presentation policy.
+            single_vfo: self.single_vfo,
         }
     }
 

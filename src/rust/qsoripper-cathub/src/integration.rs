@@ -75,6 +75,27 @@ impl Rig {
         tokio::spawn(run_face(server, dialect, ctx, b';'));
         client
     }
+
+    /// A single-VFO face (e.g. N1MM in SO1V) that virtualizes the operating VFO as VFO A.
+    fn single_vfo_face(
+        &self,
+        dialect: Arc<dyn ClientDialect>,
+        perms: FacePermissions,
+        id: u64,
+    ) -> DuplexStream {
+        let ctx = FaceContext::new(
+            id,
+            perms,
+            self.state.clone(),
+            self.radio.clone(),
+            self.ptt.clone(),
+            self.caps.clone(),
+        )
+        .with_single_vfo(true);
+        let (client, server) = tokio::io::duplex(1024);
+        tokio::spawn(run_face(server, dialect, ctx, b';'));
+        client
+    }
 }
 
 fn ts590() -> Arc<dyn ClientDialect> {
@@ -258,6 +279,79 @@ async fn front_panel_change_fans_out_to_all_subscribed_faces() {
 
     assert_eq!(read_frame(&mut a).await, b"FA00007123000;");
     assert_eq!(read_frame(&mut b).await, b"FA00007123000;");
+}
+
+/// End-to-end N1MM SO1V regression: when the operator switches the radio to VFO B, a
+/// single-VFO face must keep tracking. The hub re-presents the operating VFO as VFO A, so
+/// the face receives an `FA`(operating freq) + `MD` + `IF` (with the active-VFO digit '0')
+/// and never an `FB` or an `IF` reporting VFO B (which trips N1MM's "do not use VFO B"
+/// guard and freezes its frequency display).
+#[tokio::test]
+async fn single_vfo_face_tracks_an_a_to_b_switch_without_leaking_vfo_b() {
+    let rig = rig();
+    let mut n1mm = rig.single_vfo_face(ts590(), FacePermissions::read_only(), 1);
+
+    // N1MM enables auto-info.
+    n1mm.write_all(b"AI2;").await.expect("write");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    // The radio already knows VFO B's frequency and mode (primed by the initial poll).
+    rig.state.record(
+        StateChange::Freq {
+            vfo: Vfo::B,
+            hz: 14_034_320,
+        },
+        RadioEventSource::PollDiff,
+    );
+    rig.state.record(
+        StateChange::Mode {
+            vfo: Vfo::B,
+            mode: crate::model::Mode::Cw,
+        },
+        RadioEventSource::PollDiff,
+    );
+
+    // Operator switches the radio to VFO B.
+    rig.state.record(
+        StateChange::RxVfo { vfo: Vfo::B },
+        RadioEventSource::PollDiff,
+    );
+
+    // Collect the re-presentation push (FA + MD + IF) and assert it never exposes VFO B.
+    let mut pushed = Vec::new();
+    for _ in 0..3 {
+        let frame = match tokio::time::timeout(Duration::from_secs(1), read_frame(&mut n1mm)).await
+        {
+            Ok(frame) if !frame.is_empty() => frame,
+            _ => break,
+        };
+        pushed.extend_from_slice(&frame);
+        if pushed.windows(2).any(|w| w == b"IF") {
+            break;
+        }
+    }
+
+    assert!(
+        pushed
+            .windows(b"FA00014034320;".len())
+            .any(|w| w == b"FA00014034320;"),
+        "the switch must push the operating frequency as FA; got {}",
+        String::from_utf8_lossy(&pushed)
+    );
+    assert!(
+        !pushed.windows(2).any(|w| w == b"FB"),
+        "a single-VFO face must never receive an FB frame; got {}",
+        String::from_utf8_lossy(&pushed)
+    );
+    let if_pos = pushed
+        .windows(2)
+        .position(|w| w == b"IF")
+        .expect("the push must include an IF frame");
+    assert_eq!(
+        pushed[if_pos + 30],
+        b'0',
+        "the IF frame must present the operating VFO as VFO A (P10 == '0')"
+    );
 }
 
 /// Writes fanned in from several faces are strictly serialized through the one radio task.

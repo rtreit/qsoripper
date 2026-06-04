@@ -275,6 +275,21 @@ Downstream fan-out is identical regardless of source, so a station with a non-pu
 
 The auto-info command is virtualized per face, but for Kenwood `AI1` (post-command echo) and `AI2` (spontaneous updates) are not identical semantics (other vendors have analogous distinctions). v1 may collapse them to a single per-face push subscription; if it does, that limitation is documented and ARCP-590 and N1MM are tested specifically to confirm they tolerate the collapse before either is claimed as first-class. If a tested client depends on the distinction, the finer model is implemented for that dialect.
 
+### 8.4.2 Single-VFO operating-VFO virtualization
+
+Some loggers run as single-VFO controllers and actively reject the inactive VFO. N1MM Logger+ in **SO1V** mode is the canonical case: when the radio reports VFO B as the active receive VFO (Kenwood `IF;` field P10 = `1`), N1MM raises *"You should not use VFO B when configured for SO1V"* and **freezes its frequency display**, so an operator working on VFO B sees a stuck frequency even though the hub's cache is correct. Faithfully reporting P10 = `1` (§8.4 native active-VFO rule) is *correct* radio behavior, but it defeats the hub's goal of seamless A/B operation for this class of client.
+
+The fix is a per-face, opt-in **operating-VFO virtualization** policy (`single_vfo = true` on a `ts590` face). When enabled, the face never exposes the physical VFO letter; it always presents whichever VFO the radio is actually on (the operating / receive VFO) **as VFO A**:
+
+- **`IF;` reads** report P10 = `0` (VFO A) and split = `0`, carrying the operating VFO's frequency and mode. The 38-byte frame length is unchanged; only the active-VFO and split digits are rewritten.
+- **`FA;` reads** return the operating VFO's frequency; **`FA` writes** tune the operating VFO (so a "set VFO A" from the logger tunes physical VFO B when the rig is on B).
+- **`FB`** is mirrored onto the operating VFO rather than leaking physical VFO B, and split-on-B never reaches the face.
+- **`FR`/`FT`** (receive/transmit VFO select) are intercepted: reads return VFO A; a select write is swallowed (never forwarded to the radio), so the logger can never drive an A/B retarget.
+- **Notifications** are re-presented: an operating-VFO frequency change pushes `FA` (never `FB`) plus the synthesized operating `IF`; a mode change pushes `MD` + `IF`; and an **A→B (or B→A) switch re-presents the new operating VFO** by pushing its `FA` + `MD` + an `IF` with P10 = `0`, so the logger seamlessly retunes with no SO1V warning. Inactive-VFO churn is suppressed.
+- **Raw passthrough** frames are suppressed for a single-VFO face, since a verbatim native frame could leak a physical VFO-B verb.
+
+This policy is **opt-in per face and off by default**. It is enabled only for genuine single-VFO loggers (N1MM SO1V). Dual-VFO faceplates such as **ARCP-590 must leave it off** (`single_vfo = false`), because they legitimately control and display the real VFO A and VFO B. Split-aware clients are out of scope for this simplification: a single-VFO face always sees split = `0`. SO2V is an N1MM-side workaround, not a substitute for this hub-side virtualization.
+
 ### 8.5 PTT ownership and arbitration
 
 Multiple clients are now PTT-capable (N1MM CAT PTT, WSJT-X `T 1`, ARCP-590). The daemon arbitrates with a single-owner lease:

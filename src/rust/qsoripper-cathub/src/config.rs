@@ -139,6 +139,16 @@ pub(crate) struct FaceConfig {
     /// Permission tokens (`read`, `write`, `ptt`, `config_write`).
     #[serde(default)]
     pub(crate) perms: Vec<String>,
+    /// Present the *operating* VFO as VFO A to this face (operating-VFO virtualization).
+    ///
+    /// Single-VFO loggers (notably N1MM Logger+ in SO1V) read the active VFO from the
+    /// Kenwood `IF;` answer and refuse to track VFO B ("You should not use VFO B when
+    /// configured for SO1V"). With `single_vfo = true` the hub always presents whichever
+    /// VFO the operator is actually using as VFO A, so the logger follows A/B switches
+    /// seamlessly with no warning. Leave this `false` for true dual-VFO control faces such
+    /// as ARCP-590, which must see and address real VFO A and B independently.
+    #[serde(default)]
+    pub(crate) single_vfo: bool,
 }
 
 impl FaceConfig {
@@ -317,8 +327,8 @@ impl Config {
         for face in &self.face {
             let _ = writeln!(
                 out,
-                "face: name={} transport={} baud={} dialect={} perms={:?}",
-                face.name, face.transport, face.baud, face.dialect, face.perms
+                "face: name={} transport={} baud={} dialect={} perms={:?} single_vfo={}",
+                face.name, face.transport, face.baud, face.dialect, face.perms, face.single_vfo
             );
         }
         for ep in &self.hamlib_net {
@@ -425,6 +435,7 @@ transport = "COM11"
 baud = 4800
 dialect = "ts590"
 perms = ["read", "write", "ptt"]
+single_vfo = true
 
 [[hamlib_net]]
 name = "engine"
@@ -440,6 +451,7 @@ perms = ["read"]
         assert_eq!(config.face.len(), 1);
         assert_eq!(config.hamlib_net.len(), 1);
         assert!(config.face[0].permissions().ptt);
+        assert!(config.face[0].single_vfo, "single_vfo parses as true");
         assert!(config.hamlib_net[0].permissions().read);
         assert!(!config.hamlib_net[0].permissions().write);
         assert_eq!(config.baseline_interval(), Duration::from_millis(200));
@@ -464,6 +476,10 @@ dialect = "ts590"
         assert_eq!(config.ptt.max_tx_ms, 300_000);
         assert!(config.events.native_push);
         assert_eq!(config.face[0].baud, 4_800);
+        assert!(
+            !config.face[0].single_vfo,
+            "single_vfo defaults to false (native dual-VFO presentation)"
+        );
     }
 
     #[test]
