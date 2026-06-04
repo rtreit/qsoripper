@@ -219,15 +219,15 @@ mod tests {
         }
     }
 
-    /// Regression test for the cathub rig-status lag: a live GUI polls rig state
-    /// roughly every 500 ms, so the default staleness threshold must surface a
-    /// frequency change within one poll window rather than masking it behind a
+    /// Regression test for cathub rig-status lag: an interactive UI polls rig state
+    /// at a fast cadence, so the default staleness threshold must surface a
+    /// frequency change within that budget rather than masking it behind a
     /// multi-second cached snapshot.
     #[tokio::test]
     async fn default_threshold_reflects_rig_changes_within_interactive_budget() {
         use crate::rig_control::rigctld::DEFAULT_RIGCTLD_STALE_THRESHOLD_MS;
 
-        const INTERACTIVE_BUDGET_MS: u64 = 300;
+        const INTERACTIVE_BUDGET_MS: u64 = 150;
 
         let provider = Arc::new(MutableProvider::new(14_074_000));
         let monitor = RigControlMonitor::new(

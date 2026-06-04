@@ -1233,7 +1233,7 @@ All configuration is driven by environment variables prefixed with `QSORIPPER_`.
 | `QSORIPPER_RIGCTLD_HOST` | String | `localhost` | rigctld TCP host |
 | `QSORIPPER_RIGCTLD_PORT` | Integer | `4532` | rigctld TCP port |
 | `QSORIPPER_RIGCTLD_READ_TIMEOUT_MS` | Integer | `2000` | Per-command read timeout |
-| `QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS` | Integer | `200` | Snapshot staleness threshold (kept below a typical interactive poll interval so live UIs surface rig changes within one poll) |
+| `QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS` | Integer | `100` | Snapshot staleness threshold (kept at the fast interactive poll cadence so live UIs surface rig changes in the next refresh) |
 
 #### Space Weather
 

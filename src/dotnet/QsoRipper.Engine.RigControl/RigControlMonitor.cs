@@ -20,7 +20,7 @@ namespace QsoRipper.Engine.RigControl;
 public sealed class RigControlMonitor
 {
     /// <summary>Default stale threshold in milliseconds.</summary>
-    public const int DefaultStaleThresholdMs = 500;
+    public const int DefaultStaleThresholdMs = 100;
 
     private readonly IRigControlProvider _provider;
     private readonly TimeSpan _staleThreshold;

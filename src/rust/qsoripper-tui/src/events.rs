@@ -14,7 +14,7 @@ use crate::app::{CallsignInfo, EngineStatus, RecentQso, RigInfo, SpaceWeatherInf
 use crate::grpc;
 
 const SPACE_WEATHER_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
-const RIG_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const RIG_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const ENGINE_HEALTH_INTERVAL: Duration = Duration::from_secs(5);
 const ENGINE_HEALTH_TIMEOUT: Duration = Duration::from_millis(1500);
 
@@ -159,7 +159,7 @@ pub(crate) fn spawn_space_weather_task(
     });
 }
 
-/// Spawn a rig control polling task that fetches rig snapshots every 500ms.
+/// Spawn a rig control polling task that fetches rig snapshots every 100 ms.
 ///
 /// The poll is gated by `enabled_rx`: when the value is `false`, the task pauses
 /// polling and sends `None` snapshots. This avoids leaking multiple poll loops on toggle.
@@ -175,6 +175,7 @@ pub(crate) fn spawn_rig_poll_task(
             if event_tx.is_closed() {
                 break;
             }
+
             let enabled = *enabled_rx.borrow_and_update();
             if !enabled {
                 continue;
@@ -227,4 +228,17 @@ pub(crate) fn spawn_engine_health_task(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rig_poll_interval_stays_interactive() {
+        assert!(
+            RIG_POLL_INTERVAL <= Duration::from_millis(100),
+            "TUI rig polling must stay fast enough for CAT changes to feel immediate"
+        );
+    }
 }
