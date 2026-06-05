@@ -25,6 +25,10 @@ constexpr wchar_t kWindowTitle[] = L"CatHub Native Frequency Probe";
 constexpr UINT kUpdateMessage = WM_APP + 1;
 constexpr int kPollMilliseconds = 100;
 constexpr int kMaxLogLines = 8;
+constexpr int kDefaultWindowWidth = 1100;
+constexpr int kDefaultWindowHeight = 700;
+constexpr int kMinWindowWidth = 1000;
+constexpr int kMinWindowHeight = 660;
 
 constexpr COLORREF kBackground = RGB(10, 6, 1);
 constexpr COLORREF kPanel = RGB(18, 11, 2);
@@ -276,6 +280,36 @@ HFONT MakeFont(int height, int weight = FW_NORMAL) {
                        FIXED_PITCH | FF_MODERN, L"Cascadia Mono");
 }
 
+int RectWidth(const RECT& rect) {
+    return std::max(0, static_cast<int>(rect.right - rect.left));
+}
+
+int RectHeight(const RECT& rect) {
+    return std::max(0, static_cast<int>(rect.bottom - rect.top));
+}
+
+int ChooseFittingFontHeight(HDC dc, const std::wstring& text, const RECT& rect,
+                            int minimum_height, int maximum_height, int weight) {
+    const int available_width = std::max(0, RectWidth(rect) - 8);
+    const int available_height = std::max(0, RectHeight(rect) - 14);
+
+    for (int height = maximum_height; height >= minimum_height; --height) {
+        const auto font = MakeFont(height, weight);
+        const auto old_font = SelectObject(dc, font);
+        SIZE size{};
+        const auto measured = GetTextExtentPoint32W(
+            dc, text.c_str(), static_cast<int>(text.size()), &size);
+        SelectObject(dc, old_font);
+        DeleteObject(font);
+
+        if (measured && size.cx <= available_width && size.cy <= available_height) {
+            return height;
+        }
+    }
+
+    return minimum_height;
+}
+
 void DrawTextInRect(HDC dc, const std::wstring& text, const RECT& rect, HFONT font,
                     COLORREF color, UINT format) {
     const auto old_font = SelectObject(dc, font);
@@ -309,11 +343,12 @@ void DrawTile(HDC dc, const RECT& rect, const std::wstring& label, const std::ws
     StrokeRoundRect(dc, rect, RGB(111, 71, 0), kPanelDark, 10, 1);
 
     const auto label_font = MakeFont(14, FW_BOLD);
-    const auto value_font = MakeFont(30, FW_BOLD);
-    RECT label_rect{rect.left + 18, rect.top + 14, rect.right - 14, rect.top + 38};
-    RECT value_rect{rect.left + 18, rect.top + 46, rect.right - 14, rect.bottom - 10};
+    const auto value_font = MakeFont(28, FW_BOLD);
+    RECT label_rect{rect.left + 18, rect.top + 16, rect.right - 14, rect.top + 40};
+    RECT value_rect{rect.left + 18, rect.top + 48, rect.right - 14, rect.bottom - 12};
     DrawTextInRect(dc, label, label_rect, label_font, kAmberDim, DT_LEFT | DT_TOP | DT_SINGLELINE);
-    DrawTextInRect(dc, value, value_rect, value_font, kAmber, DT_LEFT | DT_TOP | DT_SINGLELINE);
+    DrawTextInRect(dc, value, value_rect, value_font, kAmber,
+                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     DeleteObject(label_font);
     DeleteObject(value_font);
 }
@@ -358,12 +393,9 @@ void Paint(HWND hwnd, HDC target) {
     SelectObject(memory, old_pen);
     DeleteObject(line_pen);
 
-    const int footer_height = 52;
-    const int log_height = 170;
-    RECT card{34, 152, width - 34, height - footer_height - log_height - 58};
-    if (card.bottom < card.top + 280) {
-        card.bottom = card.top + 280;
-    }
+    const int footer_height = 44;
+    const int log_height = std::max(120, std::min(150, height / 5));
+    RECT card{34, 138, width - 34, height - footer_height - log_height - 42};
     StrokeRoundRect(memory, card, kAmberBorder, kPanel, 26, 2);
 
     const auto label_font = MakeFont(20, FW_BOLD);
@@ -371,24 +403,26 @@ void Paint(HWND hwnd, HDC target) {
     DrawTextInRect(memory, L"LIVE RADIO FREQUENCY", live_label, label_font, kAmberDim,
                    DT_LEFT | DT_TOP | DT_SINGLELINE);
 
-    const int card_height = static_cast<int>(card.bottom - card.top);
-    const int freq_font_size = std::max(70, std::min(156, card_height / 3));
-    const auto freq_font = MakeFont(freq_font_size, FW_HEAVY);
-    const auto mhz_font = MakeFont(42, FW_BOLD);
-    RECT frequency_rect{card.left + 42, card.top + 86, card.right - 160, card.top + 215};
-    RECT mhz_rect{card.right - 160, card.top + 150, card.right - 34, card.top + 215};
+    const int tile_height = 92;
+    const int tile_bottom = card.bottom - 28;
+    const int tile_top = tile_bottom - tile_height;
+    const int gap = 14;
+    const int tile_width = (card.right - card.left - 84 - (gap * 3)) / 4;
+
+    const int frequency_top = card.top + 84;
+    const int frequency_bottom = std::max(frequency_top + 44, tile_top - 20);
     const auto frequency = snapshot.connected && snapshot.frequency_hz != 0
         ? snapshot.frequency
         : L"--.---.--";
-    DrawTextInRect(memory, frequency, frequency_rect, freq_font, kAmber,
+    const auto frequency_display = frequency + L" MHz";
+    RECT frequency_rect{card.left + 42, frequency_top, card.right - 42, frequency_bottom};
+    const int freq_font_size =
+        ChooseFittingFontHeight(memory, frequency_display, frequency_rect, 38, 96, FW_HEAVY);
+    const auto freq_font = MakeFont(freq_font_size, FW_HEAVY);
+    DrawTextInRect(memory, frequency_display, frequency_rect, freq_font, kAmber,
                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    DrawTextInRect(memory, L"MHz", mhz_rect, mhz_font, RGB(216, 137, 0),
-                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    const int tile_top = card.bottom - 118;
-    const int gap = 18;
-    const int tile_width = (card.right - card.left - 84 - (gap * 3)) / 4;
-    RECT tile{card.left + 42, tile_top, card.left + 42 + tile_width, card.bottom - 38};
+    RECT tile{card.left + 42, tile_top, card.left + 42 + tile_width, tile_bottom};
     DrawTile(memory, tile, L"VFO", snapshot.vfo.empty() ? L"--" : snapshot.vfo);
     OffsetRect(&tile, tile_width + gap, 0);
     DrawTile(memory, tile, L"MODE", snapshot.mode.empty() ? L"--" : snapshot.mode);
@@ -398,13 +432,16 @@ void Paint(HWND hwnd, HDC target) {
     DrawTile(memory, tile, L"CHANGE GAP",
              snapshot.change_gap_ms ? std::to_wstring(*snapshot.change_gap_ms) + L" ms" : L"-- ms");
 
-    RECT log_box{34, height - footer_height - log_height - 26, width - 34, height - footer_height - 24};
+    RECT log_box{34, height - footer_height - log_height - 16, width - 34, height - footer_height - 12};
     StrokeRoundRect(memory, log_box, RGB(111, 71, 0), kPanelDark, 0, 1);
     RECT log_path_rect{log_box.left + 18, log_box.top + 14, log_box.right - 18, log_box.top + 36};
     DrawTextInRect(memory, L"log: " + log_path.wstring(), log_path_rect, small_font, kAmberDim,
                    DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
     int y = log_box.top + 46;
     for (const auto& line : log_lines) {
+        if (y + 19 > log_box.bottom - 10) {
+            break;
+        }
         RECT line_rect{log_box.left + 18, y, log_box.right - 18, y + 19};
         DrawTextInRect(memory, line, line_rect, small_font, RGB(255, 209, 102),
                        DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -428,7 +465,6 @@ void Paint(HWND hwnd, HDC target) {
     DeleteObject(footer_font);
     DeleteObject(label_font);
     DeleteObject(freq_font);
-    DeleteObject(mhz_font);
     SelectObject(memory, old_bitmap);
     DeleteObject(bitmap);
     DeleteDC(memory);
@@ -520,6 +556,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpara
     case WM_SIZE:
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
+    case WM_GETMINMAXINFO: {
+        auto* min_max = reinterpret_cast<MINMAXINFO*>(lparam);
+        min_max->ptMinTrackSize.x = kMinWindowWidth;
+        min_max->ptMinTrackSize.y = kMinWindowHeight;
+        return 0;
+    }
     case WM_DESTROY:
         g_running = false;
         PostQuitMessage(0);
@@ -550,10 +592,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
         kWindowClassName,
         kWindowTitle,
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT,
-        CW_USEDEFAULT,
-        1500,
-        760,
+        40,
+        40,
+        kDefaultWindowWidth,
+        kDefaultWindowHeight,
         nullptr,
         nullptr,
         instance,
