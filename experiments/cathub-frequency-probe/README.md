@@ -15,7 +15,7 @@ dotnet run --project experiments\cathub-frequency-probe\CatHubFrequencyProbe.csp
 Publish the Native AOT executable from the repository root:
 
 ```powershell
-dotnet publish experiments\cathub-frequency-probe\CatHubFrequencyProbe.csproj -c Release -o artifacts\publish\cathub-frequency-probe-aot\Release
+dotnet publish experiments\cathub-frequency-probe\CatHubFrequencyProbe.csproj -c Release -p:PublishAot=true -o artifacts\publish\cathub-frequency-probe-aot\Release
 ```
 
 Native AOT executable:
