@@ -18,6 +18,8 @@
 #include <thread>
 #include <vector>
 
+#include "qsoripper_ffi.h"
+
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"CatHubFrequencyProbeNativeWindow";
@@ -44,6 +46,9 @@ struct Snapshot {
     std::wstring mode;
     long long query_ms{};
     std::optional<long long> change_gap_ms;
+    std::optional<std::uint64_t> engine_frequency_hz;
+    std::optional<long long> engine_query_ms;
+    std::wstring engine_error;
     bool connected{};
     std::wstring error;
 };
@@ -91,6 +96,45 @@ std::wstring FormatFrequency(std::uint64_t frequency_hz) {
                  static_cast<unsigned long long>(khz),
                  static_cast<unsigned long long>(ten_hz));
     return buffer;
+}
+
+std::wstring FormatSkew(std::uint64_t direct_frequency_hz,
+                        std::optional<std::uint64_t> engine_frequency_hz) {
+    if (!engine_frequency_hz) {
+        return L"--";
+    }
+
+    const auto skew = static_cast<long long>(*engine_frequency_hz) -
+                      static_cast<long long>(direct_frequency_hz);
+    if (skew > 0) {
+        return L"+" + std::to_wstring(skew) + L" Hz";
+    }
+    if (skew < 0) {
+        return std::to_wstring(skew) + L" Hz";
+    }
+    return L"0 Hz";
+}
+
+std::string FixedBufferToString(const std::uint8_t* buffer, std::size_t size) {
+    const auto end = std::find(buffer, buffer + size, 0);
+    return std::string(reinterpret_cast<const char*>(buffer),
+                       reinterpret_cast<const char*>(end));
+}
+
+std::uint64_t ParseMhzToHz(const std::string& mhz) {
+    const auto dot = mhz.find('.');
+    const auto whole_text = dot == std::string::npos ? mhz : mhz.substr(0, dot);
+    auto fractional = dot == std::string::npos ? std::string{} : mhz.substr(dot + 1);
+    while (fractional.size() < 6) {
+        fractional.push_back('0');
+    }
+    if (fractional.size() > 6) {
+        fractional.resize(6);
+    }
+
+    const auto whole = whole_text.empty() ? 0ULL : std::stoull(whole_text);
+    const auto frac = fractional.empty() ? 0ULL : std::stoull(fractional);
+    return (whole * 1'000'000ULL) + frac;
 }
 
 std::wstring NowTime() {
@@ -274,6 +318,149 @@ private:
     }
 };
 
+class EngineClient {
+public:
+    EngineClient() {
+        Load();
+    }
+
+    ~EngineClient() {
+        if (client_ != nullptr && disconnect_ != nullptr) {
+            disconnect_(client_);
+            client_ = nullptr;
+        }
+        if (library_ != nullptr) {
+            FreeLibrary(library_);
+        }
+    }
+
+    EngineClient(const EngineClient&) = delete;
+    EngineClient& operator=(const EngineClient&) = delete;
+
+    struct Result {
+        std::optional<std::uint64_t> frequency_hz;
+        long long query_ms{};
+        std::wstring error;
+    };
+
+    Result ReadSnapshot() {
+        Result result;
+        const auto start = std::chrono::steady_clock::now();
+
+        if (!available_) {
+            result.error = error_;
+            return result;
+        }
+
+        EnsureConnected();
+        if (client_ == nullptr) {
+            result.error = error_;
+            return result;
+        }
+
+        QsrRigStatus status{};
+        if (get_rig_status_(client_, &status) != 0) {
+            const auto message = last_error_ == nullptr ? nullptr : last_error_();
+            error_ = L"engine snapshot failed";
+            if (message != nullptr && message[0] != '\0') {
+                error_ += L": " + WidenAscii(message);
+            }
+            result.error = error_;
+            return result;
+        }
+
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start);
+        result.query_ms = elapsed.count();
+
+        if (status.connected == 0) {
+            result.error = L"engine rig snapshot disconnected";
+            return result;
+        }
+
+        const auto mhz = FixedBufferToString(status.freq_mhz, std::size(status.freq_mhz));
+        if (mhz.empty()) {
+            result.error = L"engine snapshot had no frequency";
+            return result;
+        }
+
+        try {
+            result.frequency_hz = ParseMhzToHz(mhz);
+        } catch (...) {
+            result.error = L"invalid engine frequency: " + WidenAscii(mhz);
+        }
+        return result;
+    }
+
+private:
+    using ConnectFn = QsrClient* (*)(const char*);
+    using DisconnectFn = void (*)(QsrClient*);
+    using LastErrorFn = const char* (*)();
+    using GetRigStatusFn = std::int32_t (*)(QsrClient*, QsrRigStatus*);
+
+    HMODULE library_{};
+    ConnectFn connect_{};
+    DisconnectFn disconnect_{};
+    LastErrorFn last_error_{};
+    GetRigStatusFn get_rig_status_{};
+    QsrClient* client_{};
+    bool available_{};
+    std::wstring error_;
+
+    void Load() {
+        const auto dll_path = ExeDirectory() / L"qsoripper_ffi.dll";
+        library_ = LoadLibraryExW(dll_path.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+        if (library_ == nullptr) {
+            error_ = L"qsoripper_ffi.dll not found beside probe executable";
+            return;
+        }
+
+        connect_ = reinterpret_cast<ConnectFn>(GetProcAddress(library_, "qsr_connect"));
+        disconnect_ = reinterpret_cast<DisconnectFn>(GetProcAddress(library_, "qsr_disconnect"));
+        last_error_ = reinterpret_cast<LastErrorFn>(GetProcAddress(library_, "qsr_last_error"));
+        get_rig_status_ = reinterpret_cast<GetRigStatusFn>(GetProcAddress(library_, "qsr_get_rig_status"));
+        if (connect_ == nullptr || disconnect_ == nullptr || last_error_ == nullptr ||
+            get_rig_status_ == nullptr) {
+            error_ = L"qsoripper_ffi.dll is missing required exports";
+            available_ = false;
+            return;
+        }
+
+        available_ = true;
+    }
+
+    void EnsureConnected() {
+        if (client_ != nullptr) {
+            return;
+        }
+
+        client_ = connect_("http://127.0.0.1:50051");
+        if (client_ == nullptr) {
+            error_ = L"engine connect failed";
+            const auto message = last_error_ == nullptr ? nullptr : last_error_();
+            if (message != nullptr && message[0] != '\0') {
+                error_ += L": " + WidenAscii(message);
+            }
+        }
+    }
+
+    static std::filesystem::path ExeDirectory() {
+        std::wstring buffer(MAX_PATH, L'\0');
+        DWORD length = 0;
+        while (true) {
+            length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+            if (length == 0) {
+                return std::filesystem::current_path();
+            }
+            if (length < buffer.size() - 1) {
+                buffer.resize(length);
+                return std::filesystem::path(buffer).parent_path();
+            }
+            buffer.resize(buffer.size() * 2);
+        }
+    }
+};
+
 HFONT MakeFont(int height, int weight = FW_NORMAL) {
     return CreateFontW(-height, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
@@ -343,9 +530,11 @@ void DrawTile(HDC dc, const RECT& rect, const std::wstring& label, const std::ws
     StrokeRoundRect(dc, rect, RGB(111, 71, 0), kPanelDark, 10, 1);
 
     const auto label_font = MakeFont(14, FW_BOLD);
-    const auto value_font = MakeFont(28, FW_BOLD);
     RECT label_rect{rect.left + 18, rect.top + 16, rect.right - 14, rect.top + 40};
     RECT value_rect{rect.left + 18, rect.top + 48, rect.right - 14, rect.bottom - 12};
+    const auto value_font = MakeFont(
+        ChooseFittingFontHeight(dc, value, value_rect, 16, 28, FW_BOLD),
+        FW_BOLD);
     DrawTextInRect(dc, label, label_rect, label_font, kAmberDim, DT_LEFT | DT_TOP | DT_SINGLELINE);
     DrawTextInRect(dc, value, value_rect, value_font, kAmber,
                    DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -406,8 +595,9 @@ void Paint(HWND hwnd, HDC target) {
     const int tile_height = 92;
     const int tile_bottom = card.bottom - 28;
     const int tile_top = tile_bottom - tile_height;
-    const int gap = 14;
-    const int tile_width = (card.right - card.left - 84 - (gap * 3)) / 4;
+    const int tile_count = 5;
+    const int gap = 12;
+    const int tile_width = (card.right - card.left - 84 - (gap * (tile_count - 1))) / tile_count;
 
     const int frequency_top = card.top + 84;
     const int frequency_bottom = std::max(frequency_top + 44, tile_top - 20);
@@ -431,6 +621,9 @@ void Paint(HWND hwnd, HDC target) {
     OffsetRect(&tile, tile_width + gap, 0);
     DrawTile(memory, tile, L"CHANGE GAP",
              snapshot.change_gap_ms ? std::to_wstring(*snapshot.change_gap_ms) + L" ms" : L"-- ms");
+    OffsetRect(&tile, tile_width + gap, 0);
+    DrawTile(memory, tile, L"ENGINE SKEW",
+             snapshot.engine_error.empty() ? FormatSkew(snapshot.frequency_hz, snapshot.engine_frequency_hz) : L"ERR");
 
     RECT log_box{34, height - footer_height - log_height - 16, width - 34, height - footer_height - 12};
     StrokeRoundRect(memory, log_box, RGB(111, 71, 0), kPanelDark, 0, 1);
@@ -452,7 +645,11 @@ void Paint(HWND hwnd, HDC target) {
     FillSolid(memory, footer, RGB(20, 13, 3));
     std::wstring footer_text = snapshot.connected
         ? L"polling direct cathub - frequency=" + frequency + L" MHz - query=" +
-              std::to_wstring(snapshot.query_ms) + L" ms"
+              std::to_wstring(snapshot.query_ms) + L" ms - engine=" +
+              (snapshot.engine_frequency_hz ? FormatFrequency(*snapshot.engine_frequency_hz) + L" MHz/" +
+                   std::to_wstring(snapshot.engine_query_ms.value_or(0)) + L" ms"
+                                            : L"--") +
+              L" - skew=" + FormatSkew(snapshot.frequency_hz, snapshot.engine_frequency_hz)
         : L"link down - " + snapshot.error;
     RECT footer_text_rect{34, height - 34, width - 34, height - 10};
     DrawTextInRect(memory, footer_text, footer_text_rect, footer_font, kAmberDim,
@@ -478,17 +675,22 @@ void PollLoop(HWND hwnd) {
     }
 
     CatHubClient client;
+    EngineClient engine;
     std::optional<std::uint64_t> last_frequency;
     std::optional<std::chrono::steady_clock::time_point> last_change;
     int poll_count = 0;
 
-    AppendLog(L"native probe starting; target=127.0.0.1:4532 poll=100ms commands=f,m,v");
+    AppendLog(L"native probe starting; direct=127.0.0.1:4532 engine=http://127.0.0.1:50051 poll=100ms commands=f,m,v");
 
     while (g_running.load()) {
         const auto loop_start = std::chrono::steady_clock::now();
         Snapshot snapshot;
         try {
             snapshot = client.ReadSnapshot();
+            const auto engine_snapshot = engine.ReadSnapshot();
+            snapshot.engine_frequency_hz = engine_snapshot.frequency_hz;
+            snapshot.engine_query_ms = engine_snapshot.query_ms;
+            snapshot.engine_error = engine_snapshot.error;
             poll_count++;
 
             const bool changed = !last_frequency || *last_frequency != snapshot.frequency_hz;
@@ -502,10 +704,24 @@ void PollLoop(HWND hwnd) {
                 last_change = loop_start;
 
                 std::wstringstream message;
-                message << L"change #" << poll_count << L": " << snapshot.frequency_hz
-                        << L" Hz " << snapshot.frequency << L" MHz vfo=" << snapshot.vfo
-                        << L" mode=" << snapshot.mode << L" query=" << snapshot.query_ms
-                        << L"ms gap=";
+                message << L"change #" << poll_count << L": direct=" << snapshot.frequency_hz
+                        << L" Hz " << snapshot.frequency << L" MHz engine=";
+                if (snapshot.engine_frequency_hz) {
+                    message << *snapshot.engine_frequency_hz << L" Hz "
+                            << FormatFrequency(*snapshot.engine_frequency_hz) << L" MHz";
+                } else {
+                    message << L"--";
+                }
+                message << L" skew=" << FormatSkew(snapshot.frequency_hz, snapshot.engine_frequency_hz)
+                        << L" vfo=" << snapshot.vfo
+                        << L" mode=" << snapshot.mode << L" direct_query=" << snapshot.query_ms
+                        << L"ms engine_query=";
+                if (snapshot.engine_query_ms) {
+                    message << *snapshot.engine_query_ms << L"ms";
+                } else {
+                    message << L"--ms";
+                }
+                message << L" gap=";
                 if (snapshot.change_gap_ms) {
                     message << *snapshot.change_gap_ms << L"ms";
                 } else {
@@ -514,9 +730,25 @@ void PollLoop(HWND hwnd) {
                 AppendLog(message.str());
             } else if (poll_count % 25 == 0) {
                 std::wstringstream message;
-                message << L"poll #" << poll_count << L": unchanged " << snapshot.frequency_hz
-                        << L" Hz query=" << snapshot.query_ms << L"ms";
+                message << L"poll #" << poll_count << L": unchanged direct=" << snapshot.frequency_hz
+                        << L" Hz engine=";
+                if (snapshot.engine_frequency_hz) {
+                    message << *snapshot.engine_frequency_hz << L" Hz "
+                            << FormatFrequency(*snapshot.engine_frequency_hz) << L" MHz";
+                } else {
+                    message << L"--";
+                }
+                message << L" skew=" << FormatSkew(snapshot.frequency_hz, snapshot.engine_frequency_hz)
+                        << L" direct_query=" << snapshot.query_ms << L"ms engine_query=";
+                if (snapshot.engine_query_ms) {
+                    message << *snapshot.engine_query_ms << L"ms";
+                } else {
+                    message << L"--ms";
+                }
                 AppendLog(message.str());
+            }
+            if (!snapshot.engine_error.empty() && poll_count % 10 == 1) {
+                AppendLog(L"engine poll error: " + snapshot.engine_error);
             }
         } catch (const std::exception& ex) {
             snapshot.connected = false;

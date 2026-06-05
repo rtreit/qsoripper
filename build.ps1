@@ -23,7 +23,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('build', 'check', 'rust', 'cw-decoder', 'dotnet', 'win32', 'check-rust', 'check-dotnet', 'proto', 'help')]
+    [ValidateSet('build', 'check', 'rust', 'cw-decoder', 'dotnet', 'win32', 'cathub-probe-native', 'check-rust', 'check-dotnet', 'proto', 'help')]
     [string]$Command = 'build',
 
     [ValidateSet('Release', 'Debug')]
@@ -168,6 +168,8 @@ $CwScopeGuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Pat
 $DotnetEngineProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.Engine.DotNet' 'QsoRipper.Engine.DotNet.csproj'
 $DotnetDebugHostProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.DebugHost' 'QsoRipper.DebugHost.csproj'
 $CwScopeGuiProject = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'gui' 'CwDecoderGui.csproj'
+$CatHubNativeProbeSourceDir = Join-Path $PSScriptRoot 'experiments' 'cathub-frequency-probe-native'
+$CatHubNativeProbeBuildDir = Join-Path $PSScriptRoot 'artifacts' 'build' 'cathub-frequency-probe-native'
 $ServerBinary = if ($IsWindows) { 'qsoripper-server.exe' } else { 'qsoripper-server' }
 $CatHubBinary = if ($IsWindows) { 'qsoripper-cathub.exe' } else { 'qsoripper-cathub' }
 $CwDecoderRustManifest = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'Cargo.toml'
@@ -571,11 +573,80 @@ function Build-CwDecoderRust {
     }
 }
 
+function Build-CatHubNativeProbe {
+    if (-not $IsWindows) {
+        Write-Step 'CatHub native frequency probe'
+        Write-Host 'The native CatHub frequency probe is Win32-only; skipping on this platform.' -ForegroundColor Yellow
+        return
+    }
+
+    $cmake = Get-Command cmake -ErrorAction SilentlyContinue
+    if (-not $cmake) {
+        Write-Step 'CatHub native frequency probe'
+        Write-Host 'CMake not found, skipping native CatHub frequency probe. Install CMake and the Visual Studio C++ workload.' -ForegroundColor Yellow
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath (Join-Path $CatHubNativeProbeSourceDir 'CMakeLists.txt'))) {
+        Write-Step 'CatHub native frequency probe'
+        Write-Host "Source not found at $CatHubNativeProbeSourceDir, skipping." -ForegroundColor Yellow
+        return
+    }
+
+    $catHubNativeProbeOutputDir = Join-Path $CatHubNativeProbeBuildDir $Configuration
+    Clear-LockedPublishArtifacts -DestinationDir $catHubNativeProbeOutputDir
+
+    Measure-BuildStep "Configuring CatHub native frequency probe ($Configuration)" {
+        $configured = $false
+        $generators = @('Visual Studio 18 2026', 'Visual Studio 17 2022')
+        foreach ($generator in $generators) {
+            Write-Host "  Trying CMake generator: $generator"
+            cmake -S $CatHubNativeProbeSourceDir -B $CatHubNativeProbeBuildDir -G $generator -A x64
+            if ($LASTEXITCODE -eq 0) {
+                $configured = $true
+                break
+            }
+
+            Remove-Item (Join-Path $CatHubNativeProbeBuildDir 'CMakeCache.txt') -Force -ErrorAction SilentlyContinue
+            Remove-Item (Join-Path $CatHubNativeProbeBuildDir 'CMakeFiles') -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        if (-not $configured) {
+            Write-Host 'FAILED: no supported Visual Studio CMake generator found for native CatHub frequency probe.' -ForegroundColor Red
+            exit 1
+        }
+    }
+
+    Invoke-Build "Building CatHub native frequency probe ($Configuration)" cmake @(
+        '--build',
+        $CatHubNativeProbeBuildDir,
+        '--config',
+        $Configuration
+    )
+
+    $ffiDll = Join-Path $PSScriptRoot 'src' 'rust' 'target' $RustTargetProfile 'qsoripper_ffi.dll'
+    if (Test-Path -LiteralPath $ffiDll) {
+        Copy-PublishArtifact -Path $ffiDll -DestinationDir $catHubNativeProbeOutputDir
+    }
+    else {
+        Write-Host "  Warning: qsoripper_ffi.dll not found at $ffiDll; native probe will run direct cathub reads but ENGINE SKEW will show ERR." -ForegroundColor Yellow
+    }
+
+    $exe = Join-Path $catHubNativeProbeOutputDir 'CatHubFrequencyProbeNative.exe'
+    if (Test-Path -LiteralPath $exe) {
+        Write-Host "  -> $exe"
+    }
+    else {
+        Write-Host "  Warning: expected CatHubFrequencyProbeNative.exe at $exe but it was not found." -ForegroundColor Yellow
+    }
+}
+
 function Build-All {
     Build-Rust
     Build-CwDecoderRust
     Build-Dotnet
     Build-Win32
+    Build-CatHubNativeProbe
 }
 
 function Check-Proto {
@@ -732,6 +803,8 @@ Commands:
   cw-decoder    Build the experiments/cw-decoder Rust binaries (cw-decoder + eval) only
   dotnet        Publish the CLI and GUI apps only
   win32         Build the Win32 C GUI app only
+  cathub-probe-native
+                Build the native C++ CatHub frequency probe only
   check-rust    Rust quality: fmt, clippy, test + coverage threshold, buf lint, cargo deny
   check-dotnet  .NET quality: format, build, test + coverage threshold, vulnerable package check
   proto         Run buf lint
@@ -754,6 +827,7 @@ try {
         'cw-decoder'   { Build-CwDecoderRust }
         'dotnet'       { Build-Dotnet }
         'win32'        { Build-Win32 }
+        'cathub-probe-native' { Build-CatHubNativeProbe }
         'check-rust'   { Check-Rust }
         'check-dotnet' { Check-Dotnet }
         'proto'        { Check-Proto }

@@ -7,6 +7,9 @@ add_executable(CatHubFrequencyProbeNative WIN32
 )
 
 target_compile_features(CatHubFrequencyProbeNative PRIVATE cxx_std_20)
+target_include_directories(CatHubFrequencyProbeNative PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../src/rust/qsoripper-ffi
+)
 target_compile_definitions(CatHubFrequencyProbeNative PRIVATE
     UNICODE
     _UNICODE
