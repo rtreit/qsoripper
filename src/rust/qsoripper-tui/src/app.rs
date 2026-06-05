@@ -182,6 +182,11 @@ pub(crate) struct App {
     pub(crate) space_weather: Option<SpaceWeatherInfo>,
     /// Current rig control snapshot.
     pub(crate) rig_info: Option<RigInfo>,
+    /// Last frequency value written into the form from rig control.
+    ///
+    /// If the form still contains this value, later rig snapshots may keep it in sync even
+    /// after the operator starts typing a callsign. A manual frequency edit breaks that match.
+    pub(crate) last_auto_rig_frequency_mhz: Option<String>,
     /// Whether rig control polling is enabled (default: `true`).
     pub(crate) rig_control_enabled: bool,
     /// Transient status bar message.
@@ -227,6 +232,7 @@ impl App {
             recent_qsos: Vec::new(),
             space_weather: None,
             rig_info: None,
+            last_auto_rig_frequency_mhz: None,
             rig_control_enabled: true,
             status_message: None,
             qso_list_focused: false,
