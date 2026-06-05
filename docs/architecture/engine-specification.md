@@ -461,7 +461,8 @@ Returns the most recent frequency/mode snapshot from the rig.
 **Behavior:**
 - Return a `RigSnapshot` containing `frequency_hz`, `band`, `mode`, `submode`, `raw_mode`, `status`, and `sampled_at`.
 - If the rig is disconnected or disabled, return a snapshot with appropriate status and no frequency/mode data.
-- If the last snapshot is older than `QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS`, mark it as stale.
+- Treat this RPC as an interactive live-read path. Engines may share a very recent cached snapshot across concurrent UI polls, but must refresh rigctld state when the cached snapshot is older than the interactive freshness budget (currently 50 ms) even if the general rig-control stale threshold is higher.
+- If a live refresh fails after a previous successful read, return the last cached frequency/mode with `status = Error` and an `error_message` so clients can display both the last known value and the degraded connection state.
 
 **Error semantics:**
 - This RPC should always succeed. Rig errors are reported in the snapshot's `status` and `error_message` fields.
@@ -1141,10 +1142,10 @@ All backends must implement the `EngineStorage` trait, which decomposes into:
 | `m\n` | Mode and passband (e.g., `USB\n2400`) | Get current mode |
 
 **Polling model:**
-- The engine polls rigctld at a configurable interval.
-- Each poll reads frequency and mode, constructs a `RigSnapshot`, and caches it.
+- The engine reads rigctld on demand and caches the latest successful `RigSnapshot`.
+- Interactive snapshot reads, including `GetRigSnapshot`, must refresh when the cached value is older than the interactive freshness budget so high-frequency UI displays do not lag behind cathub.
+- Lower-frequency status consumers may use `QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS` before forcing a new rigctld read.
 - If the TCP connection fails, the rig status transitions to `Disconnected` or `Error`.
-- If the snapshot is older than `QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS`, it is marked stale.
 
 **Read timeout:** `QSORIPPER_RIGCTLD_READ_TIMEOUT_MS` controls the per-command TCP read timeout.
 

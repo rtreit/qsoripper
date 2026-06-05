@@ -14,7 +14,7 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use qsoripper_core::adif::{parse_adi_qsos, serialize_adi_qsos};
@@ -68,6 +68,8 @@ use setup::{
     default_config_path, SetupControlSurface, SetupState, StationProfileControlSurface,
     CONFIG_PATH_ENV_VAR,
 };
+
+const INTERACTIVE_RIG_SNAPSHOT_MAX_AGE: Duration = Duration::from_millis(50);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1220,7 +1222,7 @@ impl RigControlService for RigControlControlSurface {
             .runtime_config
             .rig_control_monitor()
             .await
-            .current_snapshot()
+            .current_snapshot_with_max_age(INTERACTIVE_RIG_SNAPSHOT_MAX_AGE)
             .await;
         Ok(Response::new(GetRigSnapshotResponse {
             snapshot: Some(snapshot),

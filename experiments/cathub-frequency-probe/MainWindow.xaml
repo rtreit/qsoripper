@@ -1,0 +1,177 @@
+<Window
+    x:Class="CatHubFrequencyProbe.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="CatHub Frequency Probe">
+
+    <Grid Background="#090601">
+        <Grid.Resources>
+            <Style x:Key="TileBorderStyle" TargetType="Border">
+                <Setter Property="Background" Value="#100a02" />
+                <Setter Property="BorderBrush" Value="#6f4700" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Padding" Value="14" />
+                <Setter Property="CornerRadius" Value="8" />
+            </Style>
+            <Style x:Key="TileLabelStyle" TargetType="TextBlock">
+                <Setter Property="Foreground" Value="#b98519" />
+                <Setter Property="FontFamily" Value="Cascadia Mono,Consolas" />
+                <Setter Property="FontSize" Value="12" />
+                <Setter Property="CharacterSpacing" Value="120" />
+            </Style>
+            <Style x:Key="TileValueStyle" TargetType="TextBlock">
+                <Setter Property="Foreground" Value="#ffbf00" />
+                <Setter Property="FontFamily" Value="Cascadia Mono,Consolas" />
+                <Setter Property="FontSize" Value="28" />
+                <Setter Property="FontWeight" Value="Bold" />
+            </Style>
+        </Grid.Resources>
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="#140d03" BorderBrush="#ff9f1c" BorderThickness="0,0,0,1" Padding="24,18">
+            <Grid>
+                <StackPanel>
+                    <TextBlock Text="CATHUB DIRECT FREQUENCY PROBE"
+                               Foreground="#ffbf00"
+                               FontFamily="Cascadia Mono,Consolas"
+                               FontSize="18"
+                               FontWeight="Bold"
+                               CharacterSpacing="120" />
+                    <TextBlock x:Name="EndpointText"
+                               Foreground="#ffd166"
+                               FontFamily="Cascadia Mono,Consolas"
+                               FontSize="13"
+                               Text="direct 127.0.0.1:4532 · engine http://127.0.0.1:50051 · 100 ms poll" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1" Padding="28">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="170" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0"
+                    CornerRadius="16"
+                    BorderBrush="#ff9f1c"
+                    BorderThickness="2"
+                    Background="#100a02"
+                    Padding="28">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="LIVE RADIO FREQUENCY"
+                               Foreground="#b98519"
+                               FontFamily="Cascadia Mono,Consolas"
+                               FontSize="16"
+                               FontWeight="SemiBold"
+                               CharacterSpacing="160" />
+
+                    <Viewbox Grid.Row="1" Stretch="Uniform">
+                        <StackPanel Orientation="Horizontal" Spacing="18">
+                            <TextBlock x:Name="FrequencyText"
+                                       Text="--.------"
+                                       Foreground="#ffbf00"
+                                       FontFamily="Cascadia Mono,Consolas"
+                                       FontWeight="Black"
+                                       FontSize="132"
+                                       CharacterSpacing="50" />
+                            <TextBlock Text="MHz"
+                                       Foreground="#d88900"
+                                       FontFamily="Cascadia Mono,Consolas"
+                                       FontWeight="Bold"
+                                       FontSize="44"
+                                       VerticalAlignment="Bottom"
+                                       Margin="0,0,0,22" />
+                        </StackPanel>
+                    </Viewbox>
+
+                    <Grid Grid.Row="2" ColumnSpacing="18">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Style="{StaticResource TileBorderStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource TileLabelStyle}" Text="VFO" />
+                                <TextBlock x:Name="VfoText" Style="{StaticResource TileValueStyle}" Text="--" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="1" Style="{StaticResource TileBorderStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource TileLabelStyle}" Text="MODE" />
+                                <TextBlock x:Name="ModeText" Style="{StaticResource TileValueStyle}" Text="--" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="2" Style="{StaticResource TileBorderStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource TileLabelStyle}" Text="QUERY" />
+                                <TextBlock x:Name="QueryText" Style="{StaticResource TileValueStyle}" Text="-- ms" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="3" Style="{StaticResource TileBorderStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource TileLabelStyle}" Text="CHANGE GAP" />
+                                <TextBlock x:Name="ChangeGapText" Style="{StaticResource TileValueStyle}" Text="-- ms" />
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="4" Style="{StaticResource TileBorderStyle}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource TileLabelStyle}" Text="ENGINE SKEW" />
+                                <TextBlock x:Name="EngineSkewText" Style="{StaticResource TileValueStyle}" Text="--" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </Border>
+
+            <Border Grid.Row="1"
+                    Margin="0,22,0,0"
+                    Background="#090601"
+                    BorderBrush="#6f4700"
+                    BorderThickness="1"
+                    Padding="14">
+                <Grid RowSpacing="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <TextBlock x:Name="LogPathText"
+                               Foreground="#b98519"
+                               FontFamily="Cascadia Mono,Consolas"
+                               FontSize="12" />
+                    <ScrollViewer Grid.Row="1"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <TextBlock x:Name="LogText"
+                                   Foreground="#ffd166"
+                                   FontFamily="Cascadia Mono,Consolas"
+                                   FontSize="12"
+                                   TextWrapping="NoWrap" />
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <Border Grid.Row="2" Background="#140d03" Padding="24,10">
+            <TextBlock x:Name="FooterText"
+                       Foreground="#b98519"
+                       FontFamily="Cascadia Mono,Consolas"
+                       FontSize="12"
+                       Text="Direct cathub rigctld reads only. No QsoRipper engine, GUI, TUI, or Win32 UI code path involved." />
+        </Border>
+    </Grid>
+</Window>

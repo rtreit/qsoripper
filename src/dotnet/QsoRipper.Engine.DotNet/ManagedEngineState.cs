@@ -60,6 +60,7 @@ internal sealed class ManagedEngineState
 
     private static readonly JsonFormatter ProtoJsonFormatter = new(JsonFormatter.Settings.Default.WithFormatDefaultValues(true));
     private static readonly JsonParser ProtoJsonParser = new(JsonParser.Settings.Default.WithIgnoreUnknownFields(true));
+    private static readonly TimeSpan InteractiveRigSnapshotMaxAge = TimeSpan.FromMilliseconds(50);
 
     private readonly Lock _gate = new();
     private readonly IEngineStorage _storage;
@@ -994,7 +995,7 @@ internal sealed class ManagedEngineState
 
         if (_rigControlMonitor is not null)
         {
-            return _rigControlMonitor.CurrentSnapshot();
+            return _rigControlMonitor.CurrentSnapshot(InteractiveRigSnapshotMaxAge);
         }
 
         return BuildRigSnapshot(CreateRigStatusResponse());

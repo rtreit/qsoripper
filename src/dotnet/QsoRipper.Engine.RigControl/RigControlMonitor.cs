@@ -40,9 +40,17 @@ public sealed class RigControlMonitor
     /// </summary>
     public RigSnapshot CurrentSnapshot()
     {
+        return CurrentSnapshot(_staleThreshold);
+    }
+
+    /// <summary>
+    /// Return the current snapshot, refreshing when it is older than <paramref name="maxAge"/>.
+    /// </summary>
+    public RigSnapshot CurrentSnapshot(TimeSpan maxAge)
+    {
         lock (_gate)
         {
-            if (_cached is not null && Stopwatch.GetElapsedTime(_lastFetchTimestamp) < _staleThreshold)
+            if (_cached is not null && Stopwatch.GetElapsedTime(_lastFetchTimestamp) < maxAge)
             {
                 return _cached.Clone();
             }

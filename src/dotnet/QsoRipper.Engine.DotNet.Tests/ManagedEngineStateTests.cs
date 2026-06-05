@@ -468,6 +468,30 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
+    public void Build_rig_snapshot_refreshes_interactive_monitor_cache()
+    {
+        var frequencyHz = 14_074_000UL;
+        var monitor = new RigControlMonitor(
+            new FakeRigControlProvider(() => new RigSnapshot
+            {
+                Status = RigConnectionStatus.Connected,
+                FrequencyHz = frequencyHz,
+                Band = Band._20M,
+                Mode = Mode.Cw,
+            }),
+            TimeSpan.FromSeconds(60));
+        var state = CreateStateWithRigMonitor(monitor);
+
+        var first = state.BuildRigSnapshot();
+        frequencyHz = 14_055_000;
+        Thread.Sleep(75);
+        var second = state.BuildRigSnapshot();
+
+        Assert.Equal(14_074_000UL, first.FrequencyHz);
+        Assert.Equal(14_055_000UL, second.FrequencyHz);
+    }
+
+    [Fact]
     public void Log_qso_requires_timestamp_band_and_mode()
     {
         var state = CreateState();
@@ -1616,10 +1640,15 @@ public sealed class ManagedEngineStateTests : IDisposable
 
     private ManagedEngineState CreateStateWithRigSnapshot(RigSnapshot snapshot)
     {
-        var storage = new MemoryStorage();
         var monitor = new RigControlMonitor(
             new FakeRigControlProvider(() => snapshot.Clone()),
             TimeSpan.Zero);
+        return CreateStateWithRigMonitor(monitor);
+    }
+
+    private ManagedEngineState CreateStateWithRigMonitor(RigControlMonitor monitor)
+    {
+        var storage = new MemoryStorage();
         return new ManagedEngineState(
             Path.Combine(_tempDirectory, "config.toml"),
             storage,

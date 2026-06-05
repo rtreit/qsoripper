@@ -81,6 +81,43 @@ public sealed class RigControlMonitorTests
     }
 
     [Fact]
+    public void CurrentSnapshotWithMaxAgeRefreshesBeforeConfiguredThreshold()
+    {
+        var frequencyHz = 14_074_000UL;
+        var provider = new FakeProvider(() => new RigSnapshot { FrequencyHz = frequencyHz });
+        var monitor = new RigControlMonitor(provider, TimeSpan.FromSeconds(60));
+
+        var first = monitor.CurrentSnapshot();
+        frequencyHz = 14_055_000;
+        Thread.Sleep(20);
+        var second = monitor.CurrentSnapshot(TimeSpan.FromMilliseconds(10));
+
+        Assert.Equal(14_074_000UL, first.FrequencyHz);
+        Assert.Equal(14_055_000UL, second.FrequencyHz);
+    }
+
+    [Fact]
+    public void CurrentSnapshotWithMaxAgeReusesCacheWhenFreshEnough()
+    {
+        var callCount = 0;
+        var frequencyHz = 14_074_000UL;
+        var provider = new FakeProvider(() =>
+        {
+            callCount++;
+            return new RigSnapshot { FrequencyHz = frequencyHz };
+        });
+        var monitor = new RigControlMonitor(provider, TimeSpan.FromSeconds(60));
+
+        var first = monitor.CurrentSnapshot();
+        frequencyHz = 14_055_000;
+        var second = monitor.CurrentSnapshot(TimeSpan.FromSeconds(60));
+
+        Assert.Equal(14_074_000UL, first.FrequencyHz);
+        Assert.Equal(14_074_000UL, second.FrequencyHz);
+        Assert.Equal(1, callCount);
+    }
+
+    [Fact]
     public void FailureWithoutCacheReturnsErrorSnapshot()
     {
         var provider = new FailingProvider(

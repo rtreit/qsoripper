@@ -6,7 +6,7 @@ use std::{
 };
 
 use prost_types::Timestamp;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::proto::qsoripper::domain::{RigConnectionStatus, RigSnapshot};
 
@@ -25,6 +25,7 @@ struct CachedSnapshot {
 pub struct RigControlMonitor {
     provider: Arc<dyn RigControlProvider>,
     stale_threshold: Duration,
+    refresh_gate: Mutex<()>,
     state: RwLock<Option<CachedSnapshot>>,
 }
 
@@ -35,23 +36,42 @@ impl RigControlMonitor {
         Self {
             provider,
             stale_threshold,
+            refresh_gate: Mutex::new(()),
             state: RwLock::new(None),
         }
     }
 
     /// Return the current snapshot, refreshing when stale or missing.
     pub async fn current_snapshot(&self) -> RigSnapshot {
+        self.current_snapshot_with_max_age(self.stale_threshold)
+            .await
+    }
+
+    /// Return the current snapshot, refreshing when it is older than `max_age`.
+    pub async fn current_snapshot_with_max_age(&self, max_age: Duration) -> RigSnapshot {
         if let Some(cached) = self.state.read().await.clone() {
-            if cached.fetched_monotonic.elapsed() < self.stale_threshold {
+            if cached.fetched_monotonic.elapsed() < max_age {
                 return cached.snapshot.clone();
             }
         }
 
-        self.refresh_snapshot().await
+        let _guard = self.refresh_gate.lock().await;
+        if let Some(cached) = self.state.read().await.clone() {
+            if cached.fetched_monotonic.elapsed() < max_age {
+                return cached.snapshot.clone();
+            }
+        }
+
+        self.refresh_snapshot_core().await
     }
 
     /// Force a refresh and return the latest available snapshot.
     pub async fn refresh_snapshot(&self) -> RigSnapshot {
+        let _guard = self.refresh_gate.lock().await;
+        self.refresh_snapshot_core().await
+    }
+
+    async fn refresh_snapshot_core(&self) -> RigSnapshot {
         let cached = self.state.read().await.clone();
 
         match self.provider.get_snapshot().await {
@@ -169,6 +189,7 @@ mod tests {
         let monitor = RigControlMonitor {
             provider: bad_provider,
             stale_threshold: Duration::from_secs(0),
+            refresh_gate: Mutex::new(()),
             state: RwLock::new(existing),
         };
 
@@ -247,5 +268,36 @@ mod tests {
             14_055_000, snapshot.frequency_hz,
             "default stale threshold must surface rig changes within {INTERACTIVE_BUDGET_MS} ms",
         );
+    }
+
+    #[tokio::test]
+    async fn max_age_override_refreshes_before_configured_threshold() {
+        let provider = Arc::new(MutableProvider::new(14_074_000));
+        let monitor = RigControlMonitor::new(provider.clone(), Duration::from_secs(60));
+
+        let _ = monitor.refresh_snapshot().await;
+        provider.set_frequency(14_055_000);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let snapshot = monitor
+            .current_snapshot_with_max_age(Duration::from_millis(10))
+            .await;
+
+        assert_eq!(14_055_000, snapshot.frequency_hz);
+    }
+
+    #[tokio::test]
+    async fn max_age_override_reuses_cache_when_fresh_enough() {
+        let provider = Arc::new(MutableProvider::new(14_074_000));
+        let monitor = RigControlMonitor::new(provider.clone(), Duration::from_secs(60));
+
+        let _ = monitor.refresh_snapshot().await;
+        provider.set_frequency(14_055_000);
+
+        let snapshot = monitor
+            .current_snapshot_with_max_age(Duration::from_secs(60))
+            .await;
+
+        assert_eq!(14_074_000, snapshot.frequency_hz);
     }
 }
