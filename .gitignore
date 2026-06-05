@@ -1,6 +1,9 @@
 ## A streamlined .gitignore for a polyglot project
 ## covering .NET, Rust, C/CMake, and common editor/OS artifacts.
 
+# Misc
+*.zip
+
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/
