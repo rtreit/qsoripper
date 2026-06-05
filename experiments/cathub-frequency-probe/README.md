@@ -12,6 +12,18 @@ Run from the repository root:
 dotnet run --project experiments\cathub-frequency-probe\CatHubFrequencyProbe.csproj
 ```
 
+Publish the Native AOT executable from the repository root:
+
+```powershell
+dotnet publish experiments\cathub-frequency-probe\CatHubFrequencyProbe.csproj -c Release -o artifacts\publish\cathub-frequency-probe-aot\Release
+```
+
+Native AOT executable:
+
+```text
+artifacts\publish\cathub-frequency-probe-aot\Release\CatHubFrequencyProbe.exe
+```
+
 Diagnostic log:
 
 ```text
