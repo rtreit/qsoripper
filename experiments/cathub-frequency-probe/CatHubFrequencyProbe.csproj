@@ -42,4 +42,11 @@
           BeforeTargets="MarkupCompilePass1"
           DependsOnTargets="Protobuf_Compile" />
 
+  <Target Name="CopyWinUiPriToPublishDirectory"
+          AfterTargets="Publish"
+          Condition="'$(PublishDir)' != '' and Exists('$(TargetDir)$(TargetName).pri')">
+    <Copy SourceFiles="$(TargetDir)$(TargetName).pri"
+          DestinationFolder="$(PublishDir)" />
+  </Target>
+
 </Project>
