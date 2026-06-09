@@ -218,6 +218,7 @@ fn handle_event_with_channel(
             let band_idx = app.form.band_idx;
             let mode_idx = app.form.mode_idx;
             app.form = LogForm::new();
+            app.last_auto_rig_frequency_mhz = None;
             app.form.band_idx = band_idx;
             app.form.mode_idx = mode_idx;
             app.form.on_band_change();
@@ -233,6 +234,7 @@ fn handle_event_with_channel(
             let band_idx = app.form.band_idx;
             let mode_idx = app.form.mode_idx;
             app.form = LogForm::new();
+            app.last_auto_rig_frequency_mhz = None;
             app.form.band_idx = band_idx;
             app.form.mode_idx = mode_idx;
             app.form.on_band_change();
@@ -505,6 +507,7 @@ fn handle_key_with_channel(
             }
             app::View::LogEntry => {
                 app.form = LogForm::new();
+                app.last_auto_rig_frequency_mhz = None;
                 app.lookup_result = None;
                 app.editing_local_id = None;
                 app.reset_timer();
@@ -978,6 +981,7 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
 
     let advanced_tab = app.form.advanced_tab;
     app.form = LogForm::new();
+    app.last_auto_rig_frequency_mhz = None;
     app.form.advanced_tab = advanced_tab;
 
     app.form.callsign = qso.callsign.clone();
@@ -1331,8 +1335,16 @@ fn apply_rig_snapshot(app: &mut App, rig: Option<app::RigInfo>) {
                 reason = "ham radio frequencies are well within f64 mantissa range"
             )]
             let new_freq = format!("{:.3}", info.frequency_hz as f64 / 1_000_000.0);
-            if app.form.callsign.is_empty() || app.form.frequency_mhz.is_empty() {
-                app.form.frequency_mhz = new_freq;
+            let frequency_still_auto = app
+                .last_auto_rig_frequency_mhz
+                .as_deref()
+                .is_some_and(|last| last == app.form.frequency_mhz);
+            if app.form.callsign.is_empty()
+                || app.form.frequency_mhz.is_empty()
+                || frequency_still_auto
+            {
+                app.form.frequency_mhz.clone_from(&new_freq);
+                app.last_auto_rig_frequency_mhz = Some(new_freq);
             }
         }
 
@@ -3097,6 +3109,7 @@ mod tests {
         apply_rig_snapshot(&mut app, rig);
         assert!(app.rig_info.is_some());
         assert_eq!(app.form.frequency_mhz, "14.225");
+        assert_eq!(app.last_auto_rig_frequency_mhz.as_deref(), Some("14.225"));
         assert_eq!(BANDS[app.form.band_idx], "20M");
         assert_eq!(MODES[app.form.mode_idx], "SSB");
     }
@@ -3126,6 +3139,7 @@ mod tests {
         let mut app = make_app();
         app.form.callsign = "K7ABC".to_string();
         app.form.band_idx = 3; // 40M
+        let original_freq = app.form.frequency_mhz.clone();
         let rig = Some(RigInfo {
             frequency_display: "7.150 MHz".to_string(),
             frequency_hz: 7_150_000,
@@ -3138,6 +3152,80 @@ mod tests {
         apply_rig_snapshot(&mut app, rig);
         // Band and mode should NOT change when callsign is entered
         assert_eq!(app.form.band_idx, 3);
+        assert_eq!(app.form.frequency_mhz, original_freq);
+    }
+
+    #[test]
+    fn apply_rig_snapshot_keeps_auto_frequency_tracking_after_callsign_entry() {
+        use crate::app::{RigInfo, RigStatus};
+        let mut app = make_app();
+
+        apply_rig_snapshot(
+            &mut app,
+            Some(RigInfo {
+                frequency_display: "14.225 MHz".to_string(),
+                frequency_hz: 14_225_000,
+                band: Some("20M".to_string()),
+                mode: Some("SSB".to_string()),
+                submode: None,
+                status: RigStatus::Connected,
+                error_message: None,
+            }),
+        );
+        app.form.callsign = "K7ABC".to_string();
+
+        apply_rig_snapshot(
+            &mut app,
+            Some(RigInfo {
+                frequency_display: "14.230 MHz".to_string(),
+                frequency_hz: 14_230_000,
+                band: Some("20M".to_string()),
+                mode: Some("SSB".to_string()),
+                submode: None,
+                status: RigStatus::Connected,
+                error_message: None,
+            }),
+        );
+
+        assert_eq!(app.form.frequency_mhz, "14.230");
+        assert_eq!(app.last_auto_rig_frequency_mhz.as_deref(), Some("14.230"));
+    }
+
+    #[test]
+    fn apply_rig_snapshot_does_not_overwrite_manually_edited_frequency() {
+        use crate::app::{RigInfo, RigStatus};
+        let mut app = make_app();
+
+        apply_rig_snapshot(
+            &mut app,
+            Some(RigInfo {
+                frequency_display: "14.225 MHz".to_string(),
+                frequency_hz: 14_225_000,
+                band: Some("20M".to_string()),
+                mode: Some("SSB".to_string()),
+                submode: None,
+                status: RigStatus::Connected,
+                error_message: None,
+            }),
+        );
+        app.form.callsign = "K7ABC".to_string();
+        app.form.frequency_mhz = "14.229".to_string();
+
+        apply_rig_snapshot(
+            &mut app,
+            Some(RigInfo {
+                frequency_display: "14.230 MHz".to_string(),
+                frequency_hz: 14_230_000,
+                band: Some("20M".to_string()),
+                mode: Some("SSB".to_string()),
+                submode: None,
+                status: RigStatus::Connected,
+                error_message: None,
+            }),
+        );
+
+        assert_eq!(app.form.frequency_mhz, "14.229");
+        assert_eq!(app.last_auto_rig_frequency_mhz.as_deref(), Some("14.225"));
     }
 
     #[test]
