@@ -235,6 +235,7 @@ internal static class SharedSetupConfigPersistence
         var qrzLogbook = GetTable(root, "qrz_logbook");
         var sync = GetTable(root, "sync");
         var rigControl = GetTable(root, "rig_control");
+        var wsjtxIngest = GetTable(root, "wsjtx_ingest");
         var stationProfile = GetTable(root, "station_profile");
         var stationProfiles = GetTable(root, "station_profiles");
 
@@ -248,6 +249,7 @@ internal static class SharedSetupConfigPersistence
         config.QrzLogbookBaseUrl = GetString(qrzLogbook, "base_url");
         config.SyncConfig = ParseSyncConfig(sync);
         config.RigControl = ParseRigControl(rigControl);
+        config.WsjtxIngest = ParseWsjtxIngest(wsjtxIngest);
         config.ActiveProfileId = NormalizeOptional(GetString(stationProfiles, "active_profile_id"));
 
         var entries = GetTableArray(stationProfiles, "entries");
@@ -318,6 +320,7 @@ internal static class SharedSetupConfigPersistence
         "qrz_logbook",
         "sync",
         "rig_control",
+        "wsjtx_ingest",
     };
 
     // Splice the freshly-serialized engine-owned tables into the existing document (when one
@@ -448,6 +451,9 @@ internal static class SharedSetupConfigPersistence
         var rigControl = BuildRigControlTable(config.RigControl);
         AddTableIfNotEmpty(root, "rig_control", rigControl);
 
+        var wsjtxIngest = BuildWsjtxIngestTable(config.WsjtxIngest);
+        AddTableIfNotEmpty(root, "wsjtx_ingest", wsjtxIngest);
+
         return root;
     }
 
@@ -565,6 +571,51 @@ internal static class SharedSetupConfigPersistence
             table["stale_threshold_ms"] = settings.StaleThresholdMs;
         }
 
+        return table;
+    }
+
+    private static WsjtxIngestSettings? ParseWsjtxIngest(TomlTable? table)
+    {
+        if (table is null)
+        {
+            return null;
+        }
+
+        var settings = new WsjtxIngestSettings();
+        AssignIfPresent(GetBoolean(table, "enabled"), value => settings.Enabled = value);
+        AssignIfPresent(GetBoolean(table, "udp_enabled"), value => settings.UdpEnabled = value);
+        AssignIfPresent(GetString(table, "udp_bind"), value => settings.UdpBind = value);
+        AssignIfPresent(GetBoolean(table, "adif_tail_enabled"), value => settings.AdifTailEnabled = value);
+        AssignIfPresent(GetString(table, "adif_tail_path"), value => settings.AdifTailPath = value);
+        AssignIfPresent(GetUInt32(table, "poll_interval_ms"), value => settings.PollIntervalMs = value);
+        AssignIfPresent(GetBoolean(table, "sync_to_qrz"), value => settings.SyncToQrz = value);
+
+        return WsjtxIngestHasValues(settings) ? settings : null;
+    }
+
+    private static TomlTable BuildWsjtxIngestTable(WsjtxIngestSettings? settings)
+    {
+        var table = new TomlTable();
+        if (settings is null)
+        {
+            return table;
+        }
+
+        table["enabled"] = settings.Enabled;
+        if (settings.HasUdpEnabled)
+        {
+            table["udp_enabled"] = settings.UdpEnabled;
+        }
+
+        AddIfValue(table, "udp_bind", NormalizeOptional(settings.UdpBind));
+        table["adif_tail_enabled"] = settings.AdifTailEnabled;
+        AddIfValue(table, "adif_tail_path", NormalizeOptional(settings.AdifTailPath));
+        if (settings.PollIntervalMs != 0)
+        {
+            table["poll_interval_ms"] = settings.PollIntervalMs;
+        }
+
+        table["sync_to_qrz"] = settings.SyncToQrz;
         return table;
     }
 
@@ -1310,6 +1361,17 @@ internal static class SharedSetupConfigPersistence
             || settings.HasStaleThresholdMs;
     }
 
+    private static bool WsjtxIngestHasValues(WsjtxIngestSettings settings)
+    {
+        return settings.Enabled
+            || settings.HasUdpEnabled
+            || !string.IsNullOrWhiteSpace(settings.UdpBind)
+            || settings.AdifTailEnabled
+            || !string.IsNullOrWhiteSpace(settings.AdifTailPath)
+            || settings.PollIntervalMs != 0
+            || settings.SyncToQrz;
+    }
+
     private static bool LooksLikeJson(string content)
     {
         foreach (var character in content)
@@ -1526,6 +1588,8 @@ internal sealed class SharedPersistedSetupConfig
     public SyncConfig SyncConfig { get; set; } = new();
 
     public RigControlSettings? RigControl { get; set; }
+
+    public WsjtxIngestSettings? WsjtxIngest { get; set; }
 
     // Leniently-parsed projection of the `[cat_hub]` section for STATUS/wizard display only.
     // Never used to re-serialize the section (that would destroy comments/unknown keys).

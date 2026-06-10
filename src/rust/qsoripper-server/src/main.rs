@@ -6,6 +6,7 @@ mod setup;
 mod station_profile_support;
 mod sync;
 mod sync_scheduler;
+mod wsjtx_ingest;
 
 use std::{
     fs,
@@ -92,8 +93,7 @@ where
             &options.runtime_config_cli_storage_overrides(),
         )?,
     );
-    let sync_scheduler = Arc::new(sync_scheduler::SyncScheduler::new());
-    sync_scheduler.start(runtime_config.clone());
+    let background_services = start_background_services(runtime_config.clone());
 
     // One-shot QRZ logid backfill + duplicate collapse. Older builds never
     // mapped APP_QRZLOG_LOGID into qrz_logid, so QRZ pulls produced rows
@@ -115,12 +115,15 @@ where
             }
         }
     }
-    let logbook_service =
-        DeveloperLogbookService::new(runtime_config.clone(), sync_scheduler.clone());
+    let logbook_service = DeveloperLogbookService::new(
+        runtime_config.clone(),
+        background_services.sync_scheduler.clone(),
+    );
     let lookup_service = DeveloperLookupService::new(runtime_config.clone());
     let engine_service = EngineControlSurface;
     let developer_control_service = DeveloperControlSurface::new(runtime_config.clone());
-    let setup_service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+    let setup_service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone())
+        .with_wsjtx_ingest_status(background_services.wsjtx_ingest.status_handle());
     let station_profile_service =
         StationProfileControlSurface::new(setup_state.clone(), runtime_config.clone());
     let contest_calendar_service = ContestCalendarControlSurface::new(runtime_config.clone());
@@ -182,13 +185,38 @@ where
         signal_result = &mut shutdown_signal => {
             signal_result?;
             println!("Shutting down.");
-            sync_scheduler.stop();
+            background_services.stop();
             let _ = shutdown_sender.send(());
             server.await?;
         }
     }
 
+    background_services.stop();
+
     Ok(())
+}
+
+struct BackgroundServices {
+    sync_scheduler: Arc<sync_scheduler::SyncScheduler>,
+    wsjtx_ingest: Arc<wsjtx_ingest::WsjtxIngestSupervisor>,
+}
+
+impl BackgroundServices {
+    fn stop(&self) {
+        self.sync_scheduler.stop();
+        self.wsjtx_ingest.stop();
+    }
+}
+
+fn start_background_services(runtime_config: Arc<RuntimeConfigManager>) -> BackgroundServices {
+    let sync_scheduler = Arc::new(sync_scheduler::SyncScheduler::new());
+    sync_scheduler.start(runtime_config.clone());
+    let wsjtx_ingest = Arc::new(wsjtx_ingest::WsjtxIngestSupervisor::new());
+    wsjtx_ingest.start(runtime_config);
+    BackgroundServices {
+        sync_scheduler,
+        wsjtx_ingest,
+    }
 }
 
 fn setup_completion_label(setup_complete: bool) -> &'static str {

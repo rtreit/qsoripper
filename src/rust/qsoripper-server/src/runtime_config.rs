@@ -67,11 +67,23 @@ pub(crate) const QRZ_LOGBOOK_BASE_URL_ENV_VAR: &str = "QSORIPPER_QRZ_LOGBOOK_BAS
 pub(crate) const SYNC_AUTO_ENABLED_ENV_VAR: &str = "QSORIPPER_SYNC_AUTO_ENABLED";
 pub(crate) const SYNC_INTERVAL_SECONDS_ENV_VAR: &str = "QSORIPPER_SYNC_INTERVAL_SECONDS";
 pub(crate) const SYNC_CONFLICT_POLICY_ENV_VAR: &str = "QSORIPPER_SYNC_CONFLICT_POLICY";
+pub(crate) const WSJTX_INGEST_ENABLED_ENV_VAR: &str = "QSORIPPER_WSJTX_INGEST_ENABLED";
+pub(crate) const WSJTX_INGEST_UDP_ENABLED_ENV_VAR: &str = "QSORIPPER_WSJTX_INGEST_UDP_ENABLED";
+pub(crate) const WSJTX_INGEST_UDP_BIND_ENV_VAR: &str = "QSORIPPER_WSJTX_INGEST_UDP_BIND";
+pub(crate) const WSJTX_INGEST_ADIF_TAIL_ENABLED_ENV_VAR: &str =
+    "QSORIPPER_WSJTX_INGEST_ADIF_TAIL_ENABLED";
+pub(crate) const WSJTX_INGEST_ADIF_TAIL_PATH_ENV_VAR: &str =
+    "QSORIPPER_WSJTX_INGEST_ADIF_TAIL_PATH";
+pub(crate) const WSJTX_INGEST_POLL_INTERVAL_MS_ENV_VAR: &str =
+    "QSORIPPER_WSJTX_INGEST_POLL_INTERVAL_MS";
+pub(crate) const WSJTX_INGEST_SYNC_TO_QRZ_ENV_VAR: &str = "QSORIPPER_WSJTX_INGEST_SYNC_TO_QRZ";
 
 pub(crate) const DEFAULT_QRZ_LOGBOOK_BASE_URL: &str = "https://logbook.qrz.com/api";
 const DEFAULT_SYNC_AUTO_ENABLED: &str = "false";
 const DEFAULT_SYNC_INTERVAL_SECONDS: &str = "300";
 const DEFAULT_SYNC_CONFLICT_POLICY: &str = "last_write_wins";
+pub(crate) const DEFAULT_WSJTX_INGEST_UDP_BIND: &str = "127.0.0.1:2237";
+pub(crate) const DEFAULT_WSJTX_INGEST_POLL_INTERVAL_MS: &str = "1000";
 
 const DEFAULT_STORAGE_BACKEND: &str = "memory";
 const DEFAULT_SQLITE_PATH: &str = "qsoripper.db";
@@ -599,6 +611,69 @@ const SUPPORTED_FIELDS: &[ConfigFieldSpec] = &[
         default_value: Some(DEFAULT_SYNC_CONFLICT_POLICY),
     },
     ConfigFieldSpec {
+        key: WSJTX_INGEST_ENABLED_ENV_VAR,
+        label: "WSJT-X ingest enabled",
+        description: "Enable automatic ingestion of QSOs logged by WSJT-X.",
+        kind: RuntimeConfigValueKind::Boolean,
+        secret: false,
+        allowed_values: BOOLEAN_ALLOWED_VALUES,
+        default_value: Some("false"),
+    },
+    ConfigFieldSpec {
+        key: WSJTX_INGEST_UDP_ENABLED_ENV_VAR,
+        label: "WSJT-X UDP ingest enabled",
+        description: "Listen for WSJT-X real-time Logged ADIF UDP messages.",
+        kind: RuntimeConfigValueKind::Boolean,
+        secret: false,
+        allowed_values: BOOLEAN_ALLOWED_VALUES,
+        default_value: Some("true"),
+    },
+    ConfigFieldSpec {
+        key: WSJTX_INGEST_UDP_BIND_ENV_VAR,
+        label: "WSJT-X UDP bind",
+        description: "Local host:port for the WSJT-X UDP listener.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(DEFAULT_WSJTX_INGEST_UDP_BIND),
+    },
+    ConfigFieldSpec {
+        key: WSJTX_INGEST_ADIF_TAIL_ENABLED_ENV_VAR,
+        label: "WSJT-X ADIF tail enabled",
+        description: "Poll WSJT-X's wsjtx_log.adi file for recovery ingestion.",
+        kind: RuntimeConfigValueKind::Boolean,
+        secret: false,
+        allowed_values: BOOLEAN_ALLOWED_VALUES,
+        default_value: Some("false"),
+    },
+    ConfigFieldSpec {
+        key: WSJTX_INGEST_ADIF_TAIL_PATH_ENV_VAR,
+        label: "WSJT-X ADIF tail path",
+        description: "Path to WSJT-X's wsjtx_log.adi file.",
+        kind: RuntimeConfigValueKind::Path,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: WSJTX_INGEST_POLL_INTERVAL_MS_ENV_VAR,
+        label: "WSJT-X ADIF poll interval",
+        description: "Polling interval for WSJT-X ADIF tail recovery, in milliseconds.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(DEFAULT_WSJTX_INGEST_POLL_INTERVAL_MS),
+    },
+    ConfigFieldSpec {
+        key: WSJTX_INGEST_SYNC_TO_QRZ_ENV_VAR,
+        label: "WSJT-X sync to QRZ",
+        description: "Immediately upload imported WSJT-X QSOs to QRZ Logbook.",
+        kind: RuntimeConfigValueKind::Boolean,
+        secret: false,
+        allowed_values: BOOLEAN_ALLOWED_VALUES,
+        default_value: Some("false"),
+    },
+    ConfigFieldSpec {
         key: CONTEST_CALENDAR_ENABLED_ENV_VAR,
         label: "Contest calendar enabled",
         description: "Enable live contest calendar fetching.",
@@ -816,14 +891,8 @@ fn normalize_value(key: &'static str, raw_value: &str) -> Result<String, String>
         parse_storage_backend(trimmed)
             .map_err(|error| error.to_string())
             .map(|_| trimmed.to_ascii_lowercase())
-    } else if key == QRZ_XML_CAPTURE_ONLY_ENV_VAR {
-        parse_bool(trimmed).map(|value| {
-            if value {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            }
-        })
+    } else if is_boolean_key(key) {
+        normalize_bool_value(trimmed)
     } else if key == QRZ_HTTP_TIMEOUT_SECONDS_ENV_VAR {
         trimmed
             .parse::<u64>()
@@ -844,28 +913,12 @@ fn normalize_value(key: &'static str, raw_value: &str) -> Result<String, String>
             .parse::<u64>()
             .map(|value| value.to_string())
             .map_err(|_| format!("'{key}' expects an integer value."))
-    } else if key == NOAA_SPACE_WEATHER_ENABLED_ENV_VAR {
-        parse_bool(trimmed).map(|value| {
-            if value {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            }
-        })
     } else if is_station_positive_integer_key(key) {
         parse_positive_integer(key, trimmed).map(|value| value.to_string())
     } else if key == STATION_LATITUDE_ENV_VAR {
         parse_bounded_f64(key, trimmed, -90.0, 90.0).map(|value| value.to_string())
     } else if key == STATION_LONGITUDE_ENV_VAR {
         parse_bounded_f64(key, trimmed, -180.0, 180.0).map(|value| value.to_string())
-    } else if key == SYNC_AUTO_ENABLED_ENV_VAR {
-        parse_bool(trimmed).map(|value| {
-            if value {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            }
-        })
     } else if key == SYNC_INTERVAL_SECONDS_ENV_VAR {
         trimmed
             .parse::<u32>()
@@ -881,14 +934,6 @@ fn normalize_value(key: &'static str, raw_value: &str) -> Result<String, String>
                 CONFLICT_POLICY_ALLOWED_VALUES.join(", ")
             ))
         }
-    } else if key == RIGCTLD_ENABLED_ENV_VAR {
-        parse_bool(trimmed).map(|value| {
-            if value {
-                "true".to_string()
-            } else {
-                "false".to_string()
-            }
-        })
     } else if matches!(
         key,
         RIGCTLD_PORT_ENV_VAR | RIGCTLD_READ_TIMEOUT_MS_ENV_VAR | RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR
@@ -897,9 +942,37 @@ fn normalize_value(key: &'static str, raw_value: &str) -> Result<String, String>
             .parse::<u64>()
             .map(|value| value.to_string())
             .map_err(|_| format!("'{key}' expects an integer value."))
+    } else if key == WSJTX_INGEST_UDP_BIND_ENV_VAR {
+        validate_host_port(trimmed, key).map(|()| trimmed.to_string())
+    } else if key == WSJTX_INGEST_POLL_INTERVAL_MS_ENV_VAR {
+        parse_positive_integer(key, trimmed).map(|value| value.to_string())
     } else {
         Ok(trimmed.to_string())
     }
+}
+
+fn is_boolean_key(key: &str) -> bool {
+    matches!(
+        key,
+        QRZ_XML_CAPTURE_ONLY_ENV_VAR
+            | NOAA_SPACE_WEATHER_ENABLED_ENV_VAR
+            | SYNC_AUTO_ENABLED_ENV_VAR
+            | RIGCTLD_ENABLED_ENV_VAR
+            | WSJTX_INGEST_ENABLED_ENV_VAR
+            | WSJTX_INGEST_UDP_ENABLED_ENV_VAR
+            | WSJTX_INGEST_ADIF_TAIL_ENABLED_ENV_VAR
+            | WSJTX_INGEST_SYNC_TO_QRZ_ENV_VAR
+    )
+}
+
+fn normalize_bool_value(raw_value: &str) -> Result<String, String> {
+    parse_bool(raw_value).map(|value| {
+        if value {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        }
+    })
 }
 
 fn parse_bool(raw_value: &str) -> Result<bool, String> {
@@ -933,6 +1006,22 @@ fn parse_bounded_f64(key: &str, raw_value: &str, min: f64, max: f64) -> Result<f
         return Err(format!("'{key}' must be between {min} and {max}."));
     }
     Ok(value)
+}
+
+fn validate_host_port(bind: &str, label: &str) -> Result<(), String> {
+    let (host, port) = bind
+        .rsplit_once(':')
+        .ok_or_else(|| format!("'{label}' must be in host:port form."))?;
+    if host.trim().is_empty() {
+        return Err(format!("'{label}' must include a host."));
+    }
+    let port: u32 = port
+        .parse()
+        .map_err(|_| format!("'{label}' port is not a number."))?;
+    if port == 0 || port > u32::from(u16::MAX) {
+        return Err(format!("'{label}' port must be between 1 and 65535."));
+    }
+    Ok(())
 }
 
 fn is_station_positive_integer_key(key: &str) -> bool {
@@ -977,6 +1066,7 @@ fn station_profile_override_values(profile: Option<&StationProfile>) -> BTreeMap
 }
 
 fn build_runtime_bindings(values: &BTreeMap<String, String>) -> Result<RuntimeBindings, String> {
+    validate_wsjtx_ingest_values(values)?;
     let storage = build_storage(
         &parse_storage_options_from_values(values).map_err(|error| error.to_string())?,
     )
@@ -1004,6 +1094,29 @@ fn build_runtime_bindings(values: &BTreeMap<String, String>) -> Result<RuntimeBi
         lookup_provider_summary,
         active_station_profile,
     })
+}
+
+fn validate_wsjtx_ingest_values(values: &BTreeMap<String, String>) -> Result<(), String> {
+    for key in [
+        WSJTX_INGEST_ENABLED_ENV_VAR,
+        WSJTX_INGEST_UDP_ENABLED_ENV_VAR,
+        WSJTX_INGEST_ADIF_TAIL_ENABLED_ENV_VAR,
+        WSJTX_INGEST_SYNC_TO_QRZ_ENV_VAR,
+    ] {
+        if let Some(value) = values.get(key) {
+            parse_bool(value)?;
+        }
+    }
+
+    if let Some(bind) = values.get(WSJTX_INGEST_UDP_BIND_ENV_VAR) {
+        validate_host_port(bind, WSJTX_INGEST_UDP_BIND_ENV_VAR)?;
+    }
+
+    if let Some(interval) = values.get(WSJTX_INGEST_POLL_INTERVAL_MS_ENV_VAR) {
+        parse_positive_integer(WSJTX_INGEST_POLL_INTERVAL_MS_ENV_VAR, interval)?;
+    }
+
+    Ok(())
 }
 
 fn build_active_station_profile(

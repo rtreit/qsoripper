@@ -1325,6 +1325,42 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal("ts590", response.Status.CatHub.Radio.Backend);
     }
 
+    [Fact]
+    public void Save_setup_writes_wsjtx_ingest_section_and_round_trips()
+    {
+        var state = CreateState();
+
+        var response = state.SaveSetup(new SaveSetupRequest
+        {
+            WsjtxIngest = new WsjtxIngestSettings
+            {
+                Enabled = true,
+                UdpEnabled = true,
+                UdpBind = "127.0.0.1:2237",
+                AdifTailEnabled = true,
+                AdifTailPath = Path.Combine(_tempDirectory, "wsjtx_log.adi"),
+                PollIntervalMs = 250,
+                SyncToQrz = true,
+            },
+        });
+
+        var configPath = Path.Combine(_tempDirectory, "config.toml");
+        var content = File.ReadAllText(configPath);
+        var reloaded = CreateState();
+        var status = reloaded.GetSetupStatus();
+
+        Assert.NotNull(response.Status.WsjtxIngest);
+        Assert.Contains("[wsjtx_ingest]", content, StringComparison.Ordinal);
+        Assert.NotNull(status.WsjtxIngest);
+        Assert.True(status.WsjtxIngest.Enabled);
+        Assert.True(status.WsjtxIngest.UdpEnabled);
+        Assert.Equal("127.0.0.1:2237", status.WsjtxIngest.UdpBind);
+        Assert.True(status.WsjtxIngest.AdifTailEnabled);
+        Assert.Equal(Path.Combine(_tempDirectory, "wsjtx_log.adi"), status.WsjtxIngest.AdifTailPath);
+        Assert.Equal(250u, status.WsjtxIngest.PollIntervalMs);
+        Assert.True(status.WsjtxIngest.SyncToQrz);
+    }
+
     [Theory]
     [MemberData(nameof(InvalidCatHubCases))]
     public void Save_setup_rejects_invalid_cat_hub(CatHubSettings catHub, string expectedMessage)

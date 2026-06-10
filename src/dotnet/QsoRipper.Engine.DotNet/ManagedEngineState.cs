@@ -369,6 +369,11 @@ internal sealed class ManagedEngineState
                 _persistedSetup.RigControl = _rigControl.Clone();
             }
 
+            if (request.WsjtxIngest is not null)
+            {
+                _persistedSetup.WsjtxIngest = request.WsjtxIngest.Clone();
+            }
+
             // CONDITIONAL OWNERSHIP: only an explicit cat_hub in the request triggers a
             // `[cat_hub]` rewrite. The override is consumed (cleared) by PersistNoLock so a
             // later save without cat_hub preserves the section verbatim.
@@ -1368,6 +1373,11 @@ internal sealed class ManagedEngineState
         if (_persistedSetup.RigControl is not null)
         {
             status.RigControl = _persistedSetup.RigControl.Clone();
+        }
+
+        if (_persistedSetup.WsjtxIngest is not null)
+        {
+            status.WsjtxIngest = _persistedSetup.WsjtxIngest.Clone();
         }
 
         if (_persistedSetup.CatHub is not null)

@@ -11,6 +11,8 @@ import "services/rig_control_settings.proto";
 import "services/runtime_config_definition.proto";
 import "services/runtime_config_value.proto";
 import "services/storage_backend.proto";
+import "services/wsjtx_ingest_settings.proto";
+import "services/wsjtx_ingest_status.proto";
 
 message SetupStatus {
   bool config_file_exists = 1;
@@ -54,4 +56,8 @@ message SetupStatus {
   bool persistence_contract_explicit = 25;
   // Current persisted CAT hub (`[cat_hub]`) configuration, if set.
   optional CatHubSettings cat_hub = 26;
+  // Current persisted WSJT-X ingestion configuration, if set.
+  optional WsjtxIngestSettings wsjtx_ingest = 27;
+  // Live WSJT-X ingestion diagnostics.
+  optional WsjtxIngestStatus wsjtx_ingest_status = 28;
 }

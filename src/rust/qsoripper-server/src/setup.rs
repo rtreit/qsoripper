@@ -26,7 +26,7 @@ use qsoripper_core::proto::qsoripper::services::{
     SetupFieldValidation, SetupStatus, SetupWizardStep, SetupWizardStepStatus,
     StationProfileRecord, StorageBackend, TestQrzCredentialsRequest, TestQrzCredentialsResponse,
     TestQrzLogbookCredentialsRequest, TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest,
-    ValidateSetupStepResponse,
+    ValidateSetupStepResponse, WsjtxIngestSettings, WsjtxIngestStatus,
 };
 use qsoripper_core::qrz_logbook::{QrzLogbookClient, QrzLogbookConfig};
 use qsoripper_core::rig_control::{
@@ -34,13 +34,17 @@ use qsoripper_core::rig_control::{
     RIGCTLD_READ_TIMEOUT_MS_ENV_VAR, RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tonic::{Request, Response, Status};
 
 use crate::runtime_config::{
     RuntimeConfigManager, DEFAULT_QRZ_LOGBOOK_BASE_URL, QRZ_LOGBOOK_API_KEY_ENV_VAR,
     QRZ_LOGBOOK_BASE_URL_ENV_VAR, SQLITE_PATH_ENV_VAR, STORAGE_BACKEND_ENV_VAR,
     SYNC_AUTO_ENABLED_ENV_VAR, SYNC_CONFLICT_POLICY_ENV_VAR, SYNC_INTERVAL_SECONDS_ENV_VAR,
+    WSJTX_INGEST_ADIF_TAIL_ENABLED_ENV_VAR, WSJTX_INGEST_ADIF_TAIL_PATH_ENV_VAR,
+    WSJTX_INGEST_ENABLED_ENV_VAR, WSJTX_INGEST_POLL_INTERVAL_MS_ENV_VAR,
+    WSJTX_INGEST_SYNC_TO_QRZ_ENV_VAR, WSJTX_INGEST_UDP_BIND_ENV_VAR,
+    WSJTX_INGEST_UDP_ENABLED_ENV_VAR,
 };
 use crate::station_profile_support::{
     insert_station_profile_runtime_values, normalize_station_profile as normalize_profile_payload,
@@ -59,6 +63,7 @@ const PERSISTENCE_STEP_LABEL: &str = "Log storage";
 pub(crate) struct SetupControlSurface {
     state: Arc<SetupState>,
     runtime_config: Arc<RuntimeConfigManager>,
+    wsjtx_ingest_status: Option<Arc<Mutex<WsjtxIngestStatus>>>,
 }
 
 impl SetupControlSurface {
@@ -66,7 +71,23 @@ impl SetupControlSurface {
         Self {
             state,
             runtime_config,
+            wsjtx_ingest_status: None,
         }
+    }
+
+    pub(crate) fn with_wsjtx_ingest_status(
+        mut self,
+        status: Arc<Mutex<WsjtxIngestStatus>>,
+    ) -> Self {
+        self.wsjtx_ingest_status = Some(status);
+        self
+    }
+
+    async fn attach_wsjtx_status(&self, mut status: SetupStatus) -> SetupStatus {
+        if let Some(wsjtx_status) = &self.wsjtx_ingest_status {
+            status.wsjtx_ingest_status = Some(wsjtx_status.lock().await.clone());
+        }
+        status
     }
 }
 
@@ -91,8 +112,9 @@ impl SetupService for SetupControlSurface {
         &self,
         _request: Request<GetSetupStatusRequest>,
     ) -> Result<Response<GetSetupStatusResponse>, Status> {
+        let status = self.attach_wsjtx_status(self.state.status().await).await;
         Ok(Response::new(GetSetupStatusResponse {
-            status: Some(self.state.status().await),
+            status: Some(status),
         }))
     }
 
@@ -105,6 +127,7 @@ impl SetupService for SetupControlSurface {
             .save_setup(request.into_inner(), &self.runtime_config)
             .await
             .map_err(Status::invalid_argument)?;
+        let status = self.attach_wsjtx_status(status).await;
         Ok(Response::new(SaveSetupResponse {
             status: Some(status),
         }))
@@ -541,6 +564,8 @@ struct PersistedSetupConfig {
     sync: PersistedSyncConfig,
     #[serde(default, skip_serializing_if = "PersistedRigControlConfig::is_empty")]
     rig_control: PersistedRigControlConfig,
+    #[serde(default, skip_serializing_if = "PersistedWsjtxIngestConfig::is_empty")]
+    wsjtx_ingest: PersistedWsjtxIngestConfig,
 }
 
 impl PersistedSetupConfig {
@@ -644,6 +669,9 @@ impl PersistedSetupConfig {
         if let Some(ref rig_control) = request.rig_control {
             config.rig_control = PersistedRigControlConfig::from_proto(rig_control)?;
         }
+        if let Some(ref wsjtx_ingest) = request.wsjtx_ingest {
+            config.wsjtx_ingest = PersistedWsjtxIngestConfig::from_proto(wsjtx_ingest)?;
+        }
 
         config.sync_active_station_profile();
 
@@ -729,6 +757,10 @@ impl PersistedSetupConfig {
                 RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR.to_string(),
                 stale_threshold_ms.to_string(),
             );
+        }
+
+        if !PersistedWsjtxIngestConfig::is_empty(&self.wsjtx_ingest) {
+            self.wsjtx_ingest.insert_runtime_values(&mut values);
         }
 
         values
@@ -1227,6 +1259,122 @@ impl PersistedRigControlConfig {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PersistedWsjtxIngestConfig {
+    enabled: Option<bool>,
+    udp_enabled: Option<bool>,
+    udp_bind: Option<String>,
+    adif_tail_enabled: Option<bool>,
+    adif_tail_path: Option<String>,
+    poll_interval_ms: Option<u32>,
+    sync_to_qrz: Option<bool>,
+}
+
+impl PersistedWsjtxIngestConfig {
+    fn is_empty(config: &Self) -> bool {
+        config.enabled.is_none()
+            && config.udp_enabled.is_none()
+            && normalize_optional_string(config.udp_bind.as_deref()).is_none()
+            && config.adif_tail_enabled.is_none()
+            && normalize_optional_string(config.adif_tail_path.as_deref()).is_none()
+            && config.poll_interval_ms.is_none()
+            && config.sync_to_qrz.is_none()
+    }
+
+    fn from_proto(settings: &WsjtxIngestSettings) -> Result<Self, String> {
+        let udp_bind = normalize_optional_string(Some(&settings.udp_bind))
+            .unwrap_or_else(|| crate::runtime_config::DEFAULT_WSJTX_INGEST_UDP_BIND.to_string());
+        validate_host_port(&udp_bind, "WSJT-X UDP bind")?;
+        let poll_interval_ms = if settings.poll_interval_ms == 0 {
+            crate::runtime_config::DEFAULT_WSJTX_INGEST_POLL_INTERVAL_MS
+                .parse()
+                .unwrap_or(1_000)
+        } else {
+            settings.poll_interval_ms
+        };
+        let adif_tail_path = normalize_optional_string(settings.adif_tail_path.as_deref());
+        if settings.adif_tail_enabled && adif_tail_path.is_none() {
+            return Err(
+                "WSJT-X ADIF tail path is required when ADIF tailing is enabled.".to_string(),
+            );
+        }
+
+        Ok(Self {
+            enabled: Some(settings.enabled),
+            udp_enabled: Some(settings.udp_enabled.unwrap_or(true)),
+            udp_bind: Some(udp_bind),
+            adif_tail_enabled: Some(settings.adif_tail_enabled),
+            adif_tail_path,
+            poll_interval_ms: Some(poll_interval_ms),
+            sync_to_qrz: Some(settings.sync_to_qrz),
+        })
+    }
+
+    fn to_proto(&self) -> Option<WsjtxIngestSettings> {
+        if Self::is_empty(self) {
+            return None;
+        }
+
+        Some(WsjtxIngestSettings {
+            enabled: self.enabled.unwrap_or(false),
+            udp_enabled: Some(self.udp_enabled.unwrap_or(true)),
+            udp_bind: normalize_optional_string(self.udp_bind.as_deref()).unwrap_or_else(|| {
+                crate::runtime_config::DEFAULT_WSJTX_INGEST_UDP_BIND.to_string()
+            }),
+            adif_tail_enabled: self.adif_tail_enabled.unwrap_or(false),
+            adif_tail_path: normalize_optional_string(self.adif_tail_path.as_deref()),
+            poll_interval_ms: self.poll_interval_ms.unwrap_or_else(|| {
+                crate::runtime_config::DEFAULT_WSJTX_INGEST_POLL_INTERVAL_MS
+                    .parse()
+                    .unwrap_or(1_000)
+            }),
+            sync_to_qrz: self.sync_to_qrz.unwrap_or(false),
+        })
+    }
+
+    fn insert_runtime_values(&self, values: &mut BTreeMap<String, String>) {
+        if let Some(enabled) = self.enabled {
+            values.insert(
+                WSJTX_INGEST_ENABLED_ENV_VAR.to_string(),
+                enabled.to_string(),
+            );
+        }
+        if let Some(udp_enabled) = self.udp_enabled {
+            values.insert(
+                WSJTX_INGEST_UDP_ENABLED_ENV_VAR.to_string(),
+                udp_enabled.to_string(),
+            );
+        }
+        if let Some(udp_bind) = normalize_optional_string(self.udp_bind.as_deref()) {
+            values.insert(WSJTX_INGEST_UDP_BIND_ENV_VAR.to_string(), udp_bind);
+        }
+        if let Some(adif_tail_enabled) = self.adif_tail_enabled {
+            values.insert(
+                WSJTX_INGEST_ADIF_TAIL_ENABLED_ENV_VAR.to_string(),
+                adif_tail_enabled.to_string(),
+            );
+        }
+        if let Some(adif_tail_path) = normalize_optional_string(self.adif_tail_path.as_deref()) {
+            values.insert(
+                WSJTX_INGEST_ADIF_TAIL_PATH_ENV_VAR.to_string(),
+                adif_tail_path,
+            );
+        }
+        if let Some(poll_interval_ms) = self.poll_interval_ms {
+            values.insert(
+                WSJTX_INGEST_POLL_INTERVAL_MS_ENV_VAR.to_string(),
+                poll_interval_ms.to_string(),
+            );
+        }
+        if let Some(sync_to_qrz) = self.sync_to_qrz {
+            values.insert(
+                WSJTX_INGEST_SYNC_TO_QRZ_ENV_VAR.to_string(),
+                sync_to_qrz.to_string(),
+            );
+        }
+    }
+}
+
 /// Mirror of the cathub daemon's `[cat_hub.radio]` table. Every field is optional
 /// so the engine only writes what the wizard supplied and the daemon fills in the
 /// rest from its own defaults.
@@ -1665,6 +1813,22 @@ fn validate_cat_hub_bind(bind: &str, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_host_port(bind: &str, label: &str) -> Result<(), String> {
+    let (host, port) = bind
+        .rsplit_once(':')
+        .ok_or_else(|| format!("{label} must be in host:port form."))?;
+    if host.trim().is_empty() {
+        return Err(format!("{label} must include a host."));
+    }
+    let port: u32 = port
+        .parse()
+        .map_err(|_| format!("{label} port is not a number."))?;
+    if port == 0 || port > u32::from(u16::MAX) {
+        return Err(format!("{label} port must be between 1 and 65535."));
+    }
+    Ok(())
+}
+
 fn first_duplicate<'a>(values: &[&'a str]) -> Option<&'a str> {
     let mut seen: Vec<&str> = Vec::with_capacity(values.len());
     for value in values {
@@ -1764,7 +1928,7 @@ fn load_persisted_config(config_path: &Path) -> Result<Option<PersistedSetupConf
 /// caller supplies a complete replacement (see `write_persisted_config`). Every other
 /// unknown top-level table (for example `[launcher]` written by the launcher) is always
 /// preserved untouched so the unified `config.toml` can be shared across all components.
-const ENGINE_OWNED_CONFIG_KEYS: [&str; 8] = [
+const ENGINE_OWNED_CONFIG_KEYS: [&str; 9] = [
     "logbook",
     "storage",
     "station_profile",
@@ -1773,6 +1937,7 @@ const ENGINE_OWNED_CONFIG_KEYS: [&str; 8] = [
     "qrz_logbook",
     "sync",
     "rig_control",
+    "wsjtx_ingest",
 ];
 
 fn write_persisted_config(
@@ -1920,6 +2085,8 @@ fn build_status(
         sync_config: persisted_config.map(|config| config.sync.to_proto()),
         rig_control: persisted_config.and_then(|config| config.rig_control.to_proto()),
         cat_hub: cat_hub.and_then(PersistedCatHubConfig::to_proto),
+        wsjtx_ingest: persisted_config.and_then(|config| config.wsjtx_ingest.to_proto()),
+        wsjtx_ingest_status: None,
         persistence_step_enabled: true,
         persistence_label: PERSISTENCE_STEP_LABEL.to_string(),
         persistence_description: PERSISTENCE_STEP_DESCRIPTION.to_string(),
@@ -2430,7 +2597,7 @@ mod tests {
         ListStationProfilesRequest, RigControlSettings, SaveSetupRequest,
         SaveStationProfileRequest, SetActiveStationProfileRequest,
         SetSessionStationProfileOverrideRequest, SetupWizardStep, StorageBackend,
-        ValidateSetupStepRequest,
+        ValidateSetupStepRequest, WsjtxIngestSettings,
     };
 
     fn unique_config_path() -> std::path::PathBuf {
@@ -3534,6 +3701,130 @@ station_callsign = "K7RND"
             runtime_values
                 .get(RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR)
                 .map(String::as_str)
+        );
+
+        drop(service);
+        drop(runtime_config);
+        drop(setup_state);
+
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    #[tokio::test]
+    async fn save_setup_persists_wsjtx_ingest_and_round_trips() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "wsjtx-ingest.db");
+        let adif_tail_path = absolute_log_file_path(&config_path, "wsjtx_log.adi");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+
+        let response = SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                wsjtx_ingest: Some(WsjtxIngestSettings {
+                    enabled: true,
+                    udp_enabled: Some(true),
+                    udp_bind: "127.0.0.1:2237".to_string(),
+                    adif_tail_enabled: true,
+                    adif_tail_path: Some(adif_tail_path.clone()),
+                    poll_interval_ms: 1500,
+                    sync_to_qrz: true,
+                }),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save setup")
+        .into_inner();
+
+        let status = response.status.expect("status payload");
+        let wsjtx = status.wsjtx_ingest.expect("wsjtx settings");
+        assert!(wsjtx.enabled);
+        assert_eq!(Some(true), wsjtx.udp_enabled);
+        assert_eq!("127.0.0.1:2237", wsjtx.udp_bind);
+        assert!(wsjtx.adif_tail_enabled);
+        assert_eq!(
+            Some(adif_tail_path.as_str()),
+            wsjtx.adif_tail_path.as_deref()
+        );
+        assert_eq!(1500, wsjtx.poll_interval_ms);
+        assert!(wsjtx.sync_to_qrz);
+
+        let saved_toml = fs::read_to_string(&config_path).expect("read config");
+        assert!(
+            saved_toml.contains("[wsjtx_ingest]"),
+            "wsjtx_ingest table: {saved_toml}"
+        );
+        let parsed =
+            toml::from_str::<PersistedSetupConfig>(&saved_toml).expect("parse saved config");
+        assert_eq!(Some(true), parsed.wsjtx_ingest.enabled);
+        assert_eq!(
+            Some("127.0.0.1:2237"),
+            parsed.wsjtx_ingest.udp_bind.as_deref()
+        );
+
+        let runtime_values = setup_state.runtime_config_values().await;
+        assert_eq!(
+            Some("true"),
+            runtime_values
+                .get(crate::runtime_config::WSJTX_INGEST_ENABLED_ENV_VAR)
+                .map(String::as_str)
+        );
+        assert_eq!(
+            Some(adif_tail_path.as_str()),
+            runtime_values
+                .get(crate::runtime_config::WSJTX_INGEST_ADIF_TAIL_PATH_ENV_VAR)
+                .map(String::as_str)
+        );
+
+        drop(service);
+        drop(runtime_config);
+        drop(setup_state);
+
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    #[tokio::test]
+    async fn save_setup_rejects_wsjtx_adif_tail_without_path() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "wsjtx-invalid.db");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+
+        let error = SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                wsjtx_ingest: Some(WsjtxIngestSettings {
+                    enabled: true,
+                    udp_enabled: Some(false),
+                    adif_tail_enabled: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect_err("ADIF tail without path should fail");
+
+        assert!(
+            error
+                .message()
+                .contains("WSJT-X ADIF tail path is required"),
+            "unexpected error: {error}"
         );
 
         drop(service);

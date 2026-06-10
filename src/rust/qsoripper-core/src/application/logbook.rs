@@ -315,6 +315,9 @@ impl LogbookEngine {
                 }
             }
 
+            if let Some(qso) = outcome.affected_qso {
+                summary.affected_qsos.push(qso);
+            }
             summary.warnings.extend(outcome.warnings);
         }
 
@@ -396,7 +399,19 @@ impl LogbookEngine {
 
         if let Some(existing) = self.find_duplicate_import(&qso).await? {
             if refresh {
-                let merged = merge_qso_for_refresh(existing, &qso);
+                let merged = merge_qso_for_refresh(existing.clone(), &qso);
+                let mut comparable_existing = existing;
+                comparable_existing.updated_at = merged.updated_at;
+                if comparable_existing == merged {
+                    warnings.push(format!(
+                        "Record {record_number}: duplicate skipped; matched an existing QSO and import data did not change it."
+                    ));
+                    return Ok(AdifImportOutcome {
+                        kind: AdifImportOutcomeKind::Skipped,
+                        affected_qso: None,
+                        warnings,
+                    });
+                }
                 self.storage.logbook().update_qso(&merged).await?;
                 warnings.push(format!(
                     "Record {record_number}: refreshed existing record '{}'.",
@@ -404,6 +419,7 @@ impl LogbookEngine {
                 ));
                 return Ok(AdifImportOutcome {
                     kind: AdifImportOutcomeKind::Updated,
+                    affected_qso: Some(merged),
                     warnings,
                 });
             }
@@ -413,13 +429,15 @@ impl LogbookEngine {
             ));
             return Ok(AdifImportOutcome {
                 kind: AdifImportOutcomeKind::Skipped,
+                affected_qso: None,
                 warnings,
             });
         }
 
-        let _ = self.log_qso(qso).await?;
+        let stored = self.log_qso(qso).await?;
         Ok(AdifImportOutcome {
             kind: AdifImportOutcomeKind::Imported,
+            affected_qso: Some(stored),
             warnings,
         })
     }
@@ -473,7 +491,7 @@ pub struct LogbookSyncStatus {
 }
 
 /// Summary of an ADIF import run.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct AdifImportSummary {
     /// Number of records inserted into storage.
     pub records_imported: u32,
@@ -483,6 +501,8 @@ pub struct AdifImportSummary {
     pub records_updated: u32,
     /// Human-readable warnings collected during import.
     pub warnings: Vec<String>,
+    /// Records inserted or updated by this import.
+    pub affected_qsos: Vec<QsoRecord>,
 }
 
 impl LogbookSyncStatus {
@@ -521,9 +541,10 @@ enum AdifImportOutcomeKind {
     Skipped,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 struct AdifImportOutcome {
     kind: AdifImportOutcomeKind,
+    affected_qso: Option<QsoRecord>,
     warnings: Vec<String>,
 }
 
@@ -531,6 +552,7 @@ impl AdifImportOutcome {
     fn skipped(warning: String) -> Self {
         Self {
             kind: AdifImportOutcomeKind::Skipped,
+            affected_qso: None,
             warnings: vec![warning],
         }
     }

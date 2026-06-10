@@ -10,6 +10,7 @@ import "services/cat_hub_settings.proto";
 import "services/rig_control_settings.proto";
 import "services/setup_field_value.proto";
 import "services/storage_backend.proto";
+import "services/wsjtx_ingest_settings.proto";
 
 message SaveSetupRequest {
   // Deprecated: legacy storage backend selector. Use log_file_path instead.
@@ -30,4 +31,6 @@ message SaveSetupRequest {
   repeated SetupFieldValue persistence_values = 10;
   // CAT hub (`[cat_hub]`) configuration. Omit to leave unchanged.
   optional CatHubSettings cat_hub = 11;
+  // WSJT-X ingestion (`[wsjtx_ingest]`) configuration. Omit to leave unchanged.
+  optional WsjtxIngestSettings wsjtx_ingest = 12;
 }

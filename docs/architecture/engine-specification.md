@@ -289,6 +289,8 @@ Imports QSO records from a client-streamed ADIF payload.
 
 **Duplicate handling:** The engine should detect duplicates by matching on station callsign + worked callsign + band + mode + compatible submode/frequency + compatible UTC timestamp and skip them rather than creating duplicate entries. Timestamp matching must handle minute-precision ADIF sources (for example N1MM contest exports) by matching an existing second-precision QSO in the same displayed minute when either side is minute-precision. Small frequency drift between ADIF sources and QRZ-enriched rows should not create a duplicate when the contact identity otherwise matches.
 
+WSJT-X ingestion, manual ADIF imports, and any future ADIF-based recovery inputs MUST use this same import path so duplicate behavior, active station-profile fallback, refresh semantics, and storage state remain consistent across sources.
+
 **Error semantics:**
 - `INVALID_ARGUMENT` — ADIF content is malformed or unparseable.
 - `INTERNAL` — storage write failure.
@@ -567,7 +569,7 @@ arrays); a standalone file with top-level `[radio]` … tables is still accepted
 
 Because multiple components write the same file, every engine setup save is **merge-preserving**:
 the engine replaces only its own top-level tables (`logbook`, `storage`, `station_profile`,
-`station_profiles`, `qrz_xml`, `qrz_logbook`, `sync`, `rig_control`) and preserves all other
+`station_profiles`, `qrz_xml`, `qrz_logbook`, `sync`, `rig_control`, `wsjtx_ingest`) and preserves all other
 tables (`[cat_hub]`, `[launcher]`, and any future component sections). A conformant engine in
 any language must implement this merge-preserving behavior rather than rewriting the whole
 file, so it never clobbers another component's configuration.
@@ -643,6 +645,7 @@ Returns whether initial setup has been completed.
 **Behavior:**
 - Check if a valid configuration and station profile exist.
 - Return a `SetupStatus` indicating `complete` or `incomplete` with details about what is missing.
+- Include current `wsjtx_ingest` settings when configured and live `wsjtx_ingest_status` diagnostics when the engine implements the WSJT-X supervisor.
 
 #### SaveSetup
 
@@ -670,8 +673,41 @@ Persists setup configuration and station profile.
   transports distinct; hamlib_net binds distinct and in `host:port` form; a face transport may
   not reuse the radio port. Violations return `INVALID_ARGUMENT`.
 
+**WSJT-X ingest (`wsjtx_ingest`) management:**
+- The optional `wsjtx_ingest` field (`WsjtxIngestSettings`) lets setup clients manage the
+  engine-owned `[wsjtx_ingest]` section.
+- Omit `wsjtx_ingest` to leave existing WSJT-X ingest settings unchanged. When present, the
+  engine persists a replacement `[wsjtx_ingest]` table with `enabled`, `udp_enabled`,
+  `udp_bind`, `adif_tail_enabled`, `adif_tail_path`, `poll_interval_ms`, and `sync_to_qrz`.
+- Defaults are conservative: ingestion disabled; UDP bind `127.0.0.1:2237`; UDP enabled when
+  ingestion is enabled and the field is omitted; ADIF tail disabled unless a path is supplied;
+  poll interval defaults to a modest nonzero value; immediate QRZ sync disabled.
+- Validation requires `udp_bind` to be `host:port` with port 1-65535, `poll_interval_ms` to
+  be nonzero when supplied, and `adif_tail_path` to be present when ADIF tailing is enabled.
+  Violations return `INVALID_ARGUMENT`.
+
+**WSJT-X ingest runtime behavior:**
+- When enabled, the Rust engine starts a background supervisor with independent UDP and ADIF-tail
+  inputs. The supervisor MUST NOT block normal logging or engine startup after configuration has
+  been accepted.
+- UDP input listens for WSJT-X Logged ADIF datagrams and ignores non-logged WSJT-X messages. Raw
+  ADIF and lightweight JSON-wrapped ADIF may be accepted by test/simulation helpers, but runtime
+  framed WSJT-X packets must only import logged-QSO ADIF payloads.
+- ADIF-tail input polls `wsjtx_log.adi`, scans from byte 0 on first run for startup recovery, and
+  then imports only appended complete ADIF records while the engine is running. It must not advance
+  its cursor past an incomplete trailing record or a failed import.
+- Both inputs feed `LogbookEngine::import_adif_qsos`. Duplicate UDP events, repeated ADIF scans,
+  and later manual imports must not create duplicate QSOs.
+- `WsjtxIngestStatus` reports enabled/running state, UDP/tail health, last event time, last
+  imported callsign/local id, imported/updated/skipped/duplicate counters, parse errors, last
+  ingestion error, and last QRZ sync result.
+- When `sync_to_qrz=true`, imported or refreshed WSJT-X QSOs use the same per-operation QRZ upload
+  semantics as `LogQso(sync_to_qrz=true)`: success writes QRZ metadata back locally, while failure
+  leaves the local QSO persisted and retryable and records an actionable diagnostic. QRZ upload
+  work must not block the local UDP/tail ingestion loops.
+
 **Error semantics:**
-- `INVALID_ARGUMENT` — invalid or missing required setup fields, or an invalid `cat_hub` section.
+- `INVALID_ARGUMENT` — invalid or missing required setup fields, an invalid `cat_hub` section, or invalid `wsjtx_ingest` settings.
 - `INTERNAL` — failed to persist configuration.
 
 #### GetSetupWizardState

@@ -24,6 +24,7 @@ tonic = { workspace = true }
 
 [dev-dependencies]
 qsoripper-cathub = { path = "../qsoripper-cathub", version = "0.1.0" }
+tempfile = "3"
 
 [lints]
 workspace = true

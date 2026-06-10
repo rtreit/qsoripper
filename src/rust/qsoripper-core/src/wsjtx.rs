@@ -7,6 +7,10 @@ use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
+const WSJTX_MAGIC: u32 = 0xadbc_cbda;
+const WSJTX_LOGGED_ADIF_MESSAGE_TYPE: u32 = 12;
+const WSJTX_NULL_STRING_LENGTH: u32 = u32::MAX;
+
 /// Import a WSJT-X UDP datagram by extracting any embedded ADIF payload and
 /// feeding it through the normal logbook import path.
 ///
@@ -24,7 +28,12 @@ pub async fn ingest_wsjtx_udp_datagram(
     active_station_profile: Option<&StationProfile>,
     refresh: bool,
 ) -> Result<AdifImportSummary, String> {
-    let adif_payload = extract_adif_payload(datagram)?;
+    let Some(adif_payload) = extract_adif_payload(datagram)? else {
+        return Ok(AdifImportSummary {
+            records_skipped: 1,
+            ..AdifImportSummary::default()
+        });
+    };
     ingest_adif_payload(
         logbook_engine,
         &adif_payload,
@@ -52,26 +61,47 @@ pub async fn ingest_wsjtx_adif_tail(
 ) -> Result<AdifImportSummary, String> {
     let bytes =
         fs::read(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    if *cursor >= bytes.len() {
+    if *cursor > bytes.len() {
+        *cursor = 0;
+    }
+    if *cursor == bytes.len() {
         return Ok(AdifImportSummary::default());
     }
 
-    let Some(appended) = bytes.get(*cursor..) else {
+    let start = *cursor;
+    let Some(appended) = bytes.get(start..) else {
         return Ok(AdifImportSummary::default());
     };
-    let appended = appended.to_vec();
-    *cursor = bytes.len();
-    ingest_adif_payload(logbook_engine, &appended, active_station_profile, refresh).await
+    let Some(complete_len) = complete_adif_prefix_len(appended) else {
+        return Ok(AdifImportSummary::default());
+    };
+    let Some(complete_payload) = appended.get(..complete_len) else {
+        return Ok(AdifImportSummary::default());
+    };
+
+    let summary = ingest_adif_payload(
+        logbook_engine,
+        complete_payload,
+        active_station_profile,
+        refresh,
+    )
+    .await?;
+    *cursor = start.saturating_add(complete_len);
+    Ok(summary)
 }
 
-fn extract_adif_payload(datagram: &[u8]) -> Result<Vec<u8>, String> {
+fn extract_adif_payload(datagram: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    if read_be_u32(datagram, 0)?.is_some_and(|magic| magic == WSJTX_MAGIC) {
+        return extract_wsjtx_logged_adif(datagram);
+    }
+
     if let Ok(value) = serde_json::from_slice::<Value>(datagram) {
         if let Some(adif) = value.get("adif").and_then(Value::as_str).map(str::to_owned) {
-            return Ok(adif.into_bytes());
+            return Ok(Some(adif.into_bytes()));
         }
 
         if let Some(adif) = value.get("qsos").and_then(Value::as_str).map(str::to_owned) {
-            return Ok(adif.into_bytes());
+            return Ok(Some(adif.into_bytes()));
         }
 
         if let Some(adif) = value
@@ -79,7 +109,7 @@ fn extract_adif_payload(datagram: &[u8]) -> Result<Vec<u8>, String> {
             .and_then(Value::as_str)
             .map(str::to_owned)
         {
-            return Ok(adif.into_bytes());
+            return Ok(Some(adif.into_bytes()));
         }
     }
 
@@ -87,10 +117,76 @@ fn extract_adif_payload(datagram: &[u8]) -> Result<Vec<u8>, String> {
         .iter()
         .any(|byte| *byte == b'<' || *byte == b'>' || *byte == b'\n')
     {
-        return Ok(datagram.to_vec());
+        return Ok(Some(datagram.to_vec()));
     }
 
     Err("WSJT-X datagram does not contain a usable ADIF payload".to_string())
+}
+
+fn extract_wsjtx_logged_adif(datagram: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    let Some(magic) = read_be_u32(datagram, 0)? else {
+        return Ok(None);
+    };
+    if magic != WSJTX_MAGIC {
+        return Ok(None);
+    }
+
+    let Some(_schema) = read_be_u32(datagram, 4)? else {
+        return Err("WSJT-X datagram is missing schema field".to_string());
+    };
+    let Some(message_type) = read_be_u32(datagram, 8)? else {
+        return Err("WSJT-X datagram is missing message type field".to_string());
+    };
+    if message_type != WSJTX_LOGGED_ADIF_MESSAGE_TYPE {
+        return Ok(None);
+    }
+
+    let mut cursor = 12;
+    let _id = read_wsjtx_utf8(datagram, &mut cursor)?;
+    let adif = read_wsjtx_utf8(datagram, &mut cursor)?;
+    if adif.trim().is_empty() {
+        return Err("WSJT-X Logged ADIF datagram has an empty ADIF payload".to_string());
+    }
+
+    Ok(Some(adif.into_bytes()))
+}
+
+fn read_be_u32(bytes: &[u8], offset: usize) -> Result<Option<u32>, String> {
+    let Some(end) = offset.checked_add(4) else {
+        return Err("WSJT-X datagram offset overflow".to_string());
+    };
+    let Some(slice) = bytes.get(offset..end) else {
+        return Ok(None);
+    };
+    let value = u32::from_be_bytes(
+        slice
+            .try_into()
+            .map_err(|_| "WSJT-X datagram u32 field had invalid length".to_string())?,
+    );
+    Ok(Some(value))
+}
+
+fn read_wsjtx_utf8(bytes: &[u8], cursor: &mut usize) -> Result<String, String> {
+    let Some(length) = read_be_u32(bytes, *cursor)? else {
+        return Err("WSJT-X datagram is missing string length".to_string());
+    };
+    *cursor = cursor
+        .checked_add(4)
+        .ok_or_else(|| "WSJT-X datagram cursor overflow".to_string())?;
+    if length == WSJTX_NULL_STRING_LENGTH {
+        return Ok(String::new());
+    }
+    let length = usize::try_from(length)
+        .map_err(|_| "WSJT-X datagram string length is not addressable".to_string())?;
+    let end = cursor
+        .checked_add(length)
+        .ok_or_else(|| "WSJT-X datagram string length overflow".to_string())?;
+    let Some(slice) = bytes.get(*cursor..end) else {
+        return Err("WSJT-X datagram string extends past packet end".to_string());
+    };
+    *cursor = end;
+    String::from_utf8(slice.to_vec())
+        .map_err(|error| format!("WSJT-X datagram string is not UTF-8: {error}"))
 }
 
 async fn ingest_adif_payload(
@@ -124,11 +220,29 @@ fn format_wsjtx_error(error: LogbookError) -> String {
     }
 }
 
+fn complete_adif_prefix_len(bytes: &[u8]) -> Option<usize> {
+    let marker = b"<eor>";
+    let mut last_end = None;
+    for (index, window) in bytes.windows(marker.len()).enumerate() {
+        if window
+            .iter()
+            .zip(marker)
+            .all(|(left, right)| left.to_ascii_lowercase() == *right)
+        {
+            last_end = Some(index + marker.len());
+        }
+    }
+    last_end
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::{extract_adif_payload, ingest_wsjtx_adif_tail, ingest_wsjtx_udp_datagram};
-    use crate::application::logbook::LogbookEngine;
+    use super::{
+        complete_adif_prefix_len, extract_adif_payload, ingest_wsjtx_adif_tail,
+        ingest_wsjtx_udp_datagram, WSJTX_LOGGED_ADIF_MESSAGE_TYPE, WSJTX_MAGIC,
+    };
+    use crate::application::logbook::{AdifImportSummary, LogbookEngine};
     use crate::proto::qsoripper::domain::QsoRecord;
     use crate::storage::{
         EngineStorage, LogbookCounts, LogbookStore, LookupSnapshot, LookupSnapshotStore,
@@ -292,13 +406,63 @@ mod tests {
         b"<STATION_CALLSIGN:4>W1AW <CALL:5>K7ABC <QSO_DATE:8>20250101 <TIME_ON:4>1200 <BAND:3>20M <MODE:3>FT8 <RST_SENT:3>-10 <RST_RCVD:3>-12 <EOR>"
     }
 
+    fn sample_adif_with_rst_sent(rst_sent: &str) -> Vec<u8> {
+        format!(
+            "<STATION_CALLSIGN:4>W1AW <CALL:5>K7ABC <QSO_DATE:8>20250101 <TIME_ON:4>1200 <BAND:3>20M <MODE:3>FT8 <RST_SENT:{}>{rst_sent} <RST_RCVD:3>-12 <EOR>",
+            rst_sent.len()
+        )
+        .into_bytes()
+    }
+
+    fn wsjtx_frame(message_type: u32, adif: &str) -> Vec<u8> {
+        let mut frame = Vec::new();
+        append_be_u32(&mut frame, WSJTX_MAGIC);
+        append_be_u32(&mut frame, 2);
+        append_be_u32(&mut frame, message_type);
+        append_wsjtx_utf8(&mut frame, "WSJT-X");
+        append_wsjtx_utf8(&mut frame, adif);
+        frame
+    }
+
+    fn append_be_u32(target: &mut Vec<u8>, value: u32) {
+        target.extend_from_slice(&value.to_be_bytes());
+    }
+
+    fn append_wsjtx_utf8(target: &mut Vec<u8>, value: &str) {
+        let len = u32::try_from(value.len()).expect("test string length");
+        append_be_u32(target, len);
+        target.extend_from_slice(value.as_bytes());
+    }
+
     #[test]
     fn extract_adif_payload_accepts_json_wrapped_adif() {
         let payload = br#"{"type":"logged_qso","adif":"<CALL:5>K7ABC <EOR>"}"#;
 
-        let extracted = extract_adif_payload(payload).expect("payload");
+        let extracted = extract_adif_payload(payload)
+            .expect("payload")
+            .expect("adif");
 
         assert_eq!(String::from_utf8(extracted).unwrap(), "<CALL:5>K7ABC <EOR>");
+    }
+
+    #[test]
+    fn wsjtx_logged_adif_frame_extracts_adif_payload() {
+        let payload = wsjtx_frame(WSJTX_LOGGED_ADIF_MESSAGE_TYPE, "<CALL:5>K7ABC <EOR>");
+
+        let extracted = extract_adif_payload(&payload)
+            .expect("payload")
+            .expect("logged adif");
+
+        assert_eq!(String::from_utf8(extracted).unwrap(), "<CALL:5>K7ABC <EOR>");
+    }
+
+    #[test]
+    fn wsjtx_non_logged_frame_is_ignored() {
+        let payload = wsjtx_frame(0, "<CALL:5>K7ABC <EOR>");
+
+        let extracted = extract_adif_payload(&payload).expect("payload");
+
+        assert_eq!(extracted, None);
     }
 
     #[tokio::test]
@@ -322,6 +486,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ingest_wsjtx_udp_datagram_imports_qso_from_logged_adif_frame() {
+        let engine = LogbookEngine::new(Arc::new(TestStorage::new()));
+        let payload = wsjtx_frame(
+            WSJTX_LOGGED_ADIF_MESSAGE_TYPE,
+            std::str::from_utf8(sample_adif()).expect("sample adif"),
+        );
+
+        let summary = ingest_wsjtx_udp_datagram(&engine, &payload, None, false)
+            .await
+            .expect("import succeeded");
+
+        assert_eq!(summary.records_imported, 1);
+        assert_eq!(summary.records_skipped, 0);
+    }
+
+    #[tokio::test]
+    async fn ingest_wsjtx_udp_datagram_skips_duplicate_logged_adif_frame() {
+        let engine = LogbookEngine::new(Arc::new(TestStorage::new()));
+        let payload = wsjtx_frame(
+            WSJTX_LOGGED_ADIF_MESSAGE_TYPE,
+            std::str::from_utf8(sample_adif()).expect("sample adif"),
+        );
+
+        let first = ingest_wsjtx_udp_datagram(&engine, &payload, None, false)
+            .await
+            .expect("first import");
+        let second = ingest_wsjtx_udp_datagram(&engine, &payload, None, false)
+            .await
+            .expect("second import");
+
+        assert_eq!(first.records_imported, 1);
+        assert_eq!(second.records_imported, 0);
+        assert_eq!(second.records_skipped, 1);
+    }
+
+    #[tokio::test]
+    async fn ingest_wsjtx_udp_datagram_refreshes_changed_duplicate_but_skips_exact_replay() {
+        let engine = LogbookEngine::new(Arc::new(TestStorage::new()));
+        let first_payload = wsjtx_frame(
+            WSJTX_LOGGED_ADIF_MESSAGE_TYPE,
+            std::str::from_utf8(&sample_adif_with_rst_sent("-10")).expect("sample adif"),
+        );
+        let changed_payload = wsjtx_frame(
+            WSJTX_LOGGED_ADIF_MESSAGE_TYPE,
+            std::str::from_utf8(&sample_adif_with_rst_sent("-05")).expect("changed adif"),
+        );
+
+        let first = ingest_wsjtx_udp_datagram(&engine, &first_payload, None, true)
+            .await
+            .expect("first import");
+        let replay = ingest_wsjtx_udp_datagram(&engine, &first_payload, None, true)
+            .await
+            .expect("exact replay");
+        let changed = ingest_wsjtx_udp_datagram(&engine, &changed_payload, None, true)
+            .await
+            .expect("changed import");
+        let qsos = engine
+            .list_qsos(&QsoListQuery::default())
+            .await
+            .expect("qsos");
+
+        assert_eq!(first.records_imported, 1);
+        assert_eq!(replay.records_skipped, 1);
+        assert_eq!(changed.records_updated, 1);
+        assert_eq!(qsos.len(), 1);
+        let qso = qsos.first().expect("single qso");
+        assert_eq!(
+            qso.rst_sent.as_ref().map(|rst| rst.raw.as_str()),
+            Some("-05")
+        );
+    }
+
+    #[tokio::test]
     async fn ingest_wsjtx_adif_tail_imports_appended_records() {
         let engine = LogbookEngine::new(Arc::new(TestStorage::new()));
         let file = NamedTempFile::new().expect("temp file");
@@ -338,5 +575,42 @@ mod tests {
         let metadata_len =
             usize::try_from(fs::metadata(&path).unwrap().len()).expect("metadata len");
         assert_eq!(cursor, metadata_len);
+    }
+
+    #[tokio::test]
+    async fn ingest_wsjtx_adif_tail_waits_for_complete_record_before_advancing_cursor() {
+        let engine = LogbookEngine::new(Arc::new(TestStorage::new()));
+        let file = NamedTempFile::new().expect("temp file");
+        let path = file.path().to_path_buf();
+        let mut partial = sample_adif().to_vec();
+        partial.truncate(partial.len() - "<EOR>".len());
+        fs::write(&path, &partial).expect("write partial record");
+
+        let mut cursor = 0;
+        let partial_summary = ingest_wsjtx_adif_tail(&engine, &path, None, true, &mut cursor)
+            .await
+            .expect("partial tail import");
+
+        assert_eq!(partial_summary, AdifImportSummary::default());
+        assert_eq!(cursor, 0);
+
+        partial.extend_from_slice(b"<EOR>");
+        fs::write(&path, &partial).expect("complete record");
+        let complete_summary = ingest_wsjtx_adif_tail(&engine, &path, None, true, &mut cursor)
+            .await
+            .expect("complete tail import");
+
+        assert_eq!(complete_summary.records_imported, 1);
+        assert_eq!(cursor, partial.len());
+    }
+
+    #[test]
+    fn complete_adif_prefix_len_returns_last_complete_eor_end() {
+        let payload = b"<CALL:3>AAA <EOR><CALL:3>BBB";
+
+        assert_eq!(
+            complete_adif_prefix_len(payload),
+            Some(b"<CALL:3>AAA <EOR>".len())
+        );
     }
 }

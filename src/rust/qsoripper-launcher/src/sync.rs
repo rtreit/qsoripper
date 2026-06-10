@@ -170,6 +170,7 @@ pub(crate) fn save_request_from_status(status: &SetupStatus) -> SaveSetupRequest
         sync_config: status.sync_config,
         rig_control: status.rig_control.clone(),
         cat_hub: None,
+        wsjtx_ingest: status.wsjtx_ingest.clone(),
         persistence_values,
     }
 }
