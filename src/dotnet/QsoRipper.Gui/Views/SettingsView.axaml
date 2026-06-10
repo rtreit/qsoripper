@@ -57,7 +57,7 @@
                      TextWrapping="Wrap"
                      IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
           <TextBlock Classes="settingsSectionHint"
-                     Text="Sections: Ctrl+1 Station  Ctrl+2 Display  Ctrl+3 Storage  Ctrl+4 QRZ  Ctrl+5 Rig  Ctrl+6 CAT Hub  Ctrl+Tab Next"
+                     Text="Sections: Ctrl+1 Station  Ctrl+2 Display  Ctrl+3 Storage  Ctrl+4 QRZ  Ctrl+5 Rig  Ctrl+6 CAT Hub  Ctrl+7 WSJT-X  Ctrl+Tab Next"
                      IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
         </StackPanel>
 
@@ -733,6 +733,102 @@
                 </DataTemplate>
               </ItemsControl.ItemTemplate>
             </ItemsControl>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem AutomationProperties.AutomationId="SettingsWsjtxTab">
+        <TabItem.Header>
+          <StackPanel Spacing="1">
+            <TextBlock Text="WSJT-X" />
+            <TextBlock Classes="settingsTabShortcut" Text="Ctrl+7" />
+          </StackPanel>
+        </TabItem.Header>
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      Padding="16">
+          <StackPanel Spacing="16">
+            <TextBlock Classes="settingsSectionHeader" Text="WSJT-X ingestion" />
+            <TextBlock Classes="settingsSectionHint"
+                       Text="Import QSOs logged in WSJT-X. The UDP listener handles normal Log QSO packets; ADIF tail recovery can catch records missed while QsoRipper was offline." />
+
+            <Border AutomationProperties.AutomationId="SettingsWsjtxRewriteWarning"
+                    IsVisible="{Binding ShowWsjtxIngestRewriteWarning}"
+                    Background="#332E1A"
+                    BorderBrush="#B8862B"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="12,8">
+              <TextBlock TextWrapping="Wrap"
+                         Foreground="#E8C76B"
+                         Text="Saving rewrites the entire [wsjtx_ingest] section. Comments and any keys not shown here will be dropped." />
+            </Border>
+
+            <CheckBox x:Name="SettingsWsjtxIngestEnabledCheckBox"
+                      AutomationProperties.AutomationId="SettingsWsjtxIngestEnabledCheckBox"
+                      Content="Enable WSJT-X QSO ingestion"
+                      IsChecked="{Binding WsjtxIngestEnabled, Mode=TwoWay}" />
+
+            <Grid ColumnDefinitions="150,*,150,*"
+                  RowDefinitions="Auto,Auto,Auto"
+                  ColumnSpacing="12"
+                  RowSpacing="8">
+              <CheckBox x:Name="SettingsWsjtxUdpEnabledCheckBox"
+                        AutomationProperties.AutomationId="SettingsWsjtxUdpEnabledCheckBox"
+                        Grid.Row="0"
+                        Grid.Column="0"
+                        Grid.ColumnSpan="2"
+                        Content="Listen for WSJT-X UDP Logged ADIF packets"
+                        IsChecked="{Binding WsjtxUdpEnabled, Mode=TwoWay}" />
+
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="UDP bind:" VerticalAlignment="Center" />
+              <TextBox x:Name="SettingsWsjtxUdpBindBox"
+                       AutomationProperties.AutomationId="SettingsWsjtxUdpBindBox"
+                       Grid.Row="1"
+                       Grid.Column="1"
+                       Text="{Binding WsjtxUdpBind, Mode=TwoWay}"
+                       PlaceholderText="127.0.0.1:2237" />
+
+              <TextBlock Grid.Row="1" Grid.Column="2" Text="Poll interval (ms):" VerticalAlignment="Center" />
+              <TextBox x:Name="SettingsWsjtxPollIntervalBox"
+                       AutomationProperties.AutomationId="SettingsWsjtxPollIntervalBox"
+                       Grid.Row="1"
+                       Grid.Column="3"
+                       Text="{Binding WsjtxPollIntervalMs, Mode=TwoWay}"
+                       PlaceholderText="1000" />
+
+              <CheckBox x:Name="SettingsWsjtxAdifTailEnabledCheckBox"
+                        AutomationProperties.AutomationId="SettingsWsjtxAdifTailEnabledCheckBox"
+                        Grid.Row="2"
+                        Grid.Column="0"
+                        Grid.ColumnSpan="2"
+                        Content="Tail WSJT-X ADIF log for missed-QSO recovery"
+                        IsChecked="{Binding WsjtxAdifTailEnabled, Mode=TwoWay}" />
+
+              <CheckBox x:Name="SettingsWsjtxSyncToQrzCheckBox"
+                        AutomationProperties.AutomationId="SettingsWsjtxSyncToQrzCheckBox"
+                        Grid.Row="2"
+                        Grid.Column="2"
+                        Grid.ColumnSpan="2"
+                        Content="Upload imported WSJT-X QSOs to QRZ"
+                        IsChecked="{Binding WsjtxSyncToQrz, Mode=TwoWay}" />
+            </Grid>
+
+            <Grid ColumnDefinitions="150,*"
+                  ColumnSpacing="12">
+              <TextBlock Grid.Column="0" Text="ADIF tail path:" VerticalAlignment="Center" />
+              <TextBox x:Name="SettingsWsjtxAdifTailPathBox"
+                       AutomationProperties.AutomationId="SettingsWsjtxAdifTailPathBox"
+                       Grid.Column="1"
+                       Text="{Binding WsjtxAdifTailPath, Mode=TwoWay}"
+                       PlaceholderText="%LOCALAPPDATA%\WSJT-X\wsjtx_log.adi"
+                       TextWrapping="NoWrap"
+                       ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                       ToolTip.Tip="{Binding WsjtxAdifTailPath}" />
+            </Grid>
+
+            <TextBlock Classes="settingsSectionHint"
+                       Text="In WSJT-X, configure Reporting → UDP Server to match the bind address above. The default local-only listener is 127.0.0.1:2237." />
           </StackPanel>
         </ScrollViewer>
       </TabItem>

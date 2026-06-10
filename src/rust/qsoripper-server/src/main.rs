@@ -6,6 +6,7 @@ mod setup;
 mod station_profile_support;
 mod sync;
 mod sync_scheduler;
+mod wsjtx_ingest;
 
 use std::{
     fs,
@@ -25,6 +26,7 @@ use qsoripper_core::storage::{
 };
 use qsoripper_storage_memory::MemoryStorage;
 use qsoripper_storage_sqlite::SqliteStorageBuilder;
+use tokio::sync::Mutex;
 use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
@@ -92,35 +94,19 @@ where
             &options.runtime_config_cli_storage_overrides(),
         )?,
     );
-    let sync_scheduler = Arc::new(sync_scheduler::SyncScheduler::new());
-    sync_scheduler.start(runtime_config.clone());
+    let background_services = start_background_services(runtime_config.clone());
 
-    // One-shot QRZ logid backfill + duplicate collapse. Older builds never
-    // mapped APP_QRZLOG_LOGID into qrz_logid, so QRZ pulls produced rows
-    // that subsequent syncs duplicated whenever fuzzy matching missed.
-    // Repair is idempotent — clean stores are a no-op.
-    {
-        let logbook_engine = runtime_config.logbook_engine().await;
-        match repair::backfill_qrz_logids(logbook_engine.logbook_store()).await {
-            Ok(report) => {
-                if !report.is_no_op() {
-                    eprintln!(
-                        "[repair] QRZ logid backfill: backfilled={}, duplicates_removed={}, merged_groups={}",
-                        report.backfilled, report.duplicates_removed, report.merged_groups,
-                    );
-                }
-            }
-            Err(err) => {
-                eprintln!("[repair] QRZ logid backfill failed (continuing startup): {err}");
-            }
-        }
-    }
-    let logbook_service =
-        DeveloperLogbookService::new(runtime_config.clone(), sync_scheduler.clone());
+    run_startup_repairs(&runtime_config).await;
+    let logbook_service = DeveloperLogbookService::new(
+        runtime_config.clone(),
+        background_services.sync_scheduler.clone(),
+        background_services.qrz_upload_lock.clone(),
+    );
     let lookup_service = DeveloperLookupService::new(runtime_config.clone());
     let engine_service = EngineControlSurface;
     let developer_control_service = DeveloperControlSurface::new(runtime_config.clone());
-    let setup_service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+    let setup_service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone())
+        .with_wsjtx_ingest_status(background_services.wsjtx_ingest.status_handle());
     let station_profile_service =
         StationProfileControlSurface::new(setup_state.clone(), runtime_config.clone());
     let contest_calendar_service = ContestCalendarControlSurface::new(runtime_config.clone());
@@ -182,13 +168,64 @@ where
         signal_result = &mut shutdown_signal => {
             signal_result?;
             println!("Shutting down.");
-            sync_scheduler.stop();
+            background_services.stop();
             let _ = shutdown_sender.send(());
             server.await?;
         }
     }
 
+    background_services.stop();
+
     Ok(())
+}
+
+async fn run_startup_repairs(runtime_config: &Arc<RuntimeConfigManager>) {
+    // One-shot QRZ logid backfill + duplicate collapse. Older builds never
+    // mapped APP_QRZLOG_LOGID into qrz_logid, so QRZ pulls produced rows
+    // that subsequent syncs duplicated whenever fuzzy matching missed.
+    // Repair is idempotent — clean stores are a no-op.
+    let logbook_engine = runtime_config.logbook_engine().await;
+    match repair::backfill_qrz_logids(logbook_engine.logbook_store()).await {
+        Ok(report) => {
+            if !report.is_no_op() {
+                eprintln!(
+                    "[repair] QRZ logid backfill: backfilled={}, duplicates_removed={}, merged_groups={}",
+                    report.backfilled, report.duplicates_removed, report.merged_groups,
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!("[repair] QRZ logid backfill failed (continuing startup): {err}");
+        }
+    }
+}
+
+struct BackgroundServices {
+    sync_scheduler: Arc<sync_scheduler::SyncScheduler>,
+    wsjtx_ingest: Arc<wsjtx_ingest::WsjtxIngestSupervisor>,
+    qrz_upload_lock: Arc<Mutex<()>>,
+}
+
+impl BackgroundServices {
+    fn stop(&self) {
+        self.sync_scheduler.stop();
+        self.wsjtx_ingest.stop();
+    }
+}
+
+fn start_background_services(runtime_config: Arc<RuntimeConfigManager>) -> BackgroundServices {
+    let qrz_upload_lock = Arc::new(Mutex::new(()));
+    let sync_scheduler = Arc::new(sync_scheduler::SyncScheduler::new(qrz_upload_lock.clone()));
+    sync_scheduler.start(runtime_config.clone());
+    let wsjtx_ingest = Arc::new(wsjtx_ingest::WsjtxIngestSupervisor::with_qrz_sync_lock(
+        qrz_upload_lock.clone(),
+    ));
+    wsjtx_ingest.start(runtime_config);
+    BackgroundServices {
+        sync_scheduler,
+        wsjtx_ingest,
+        qrz_upload_lock,
+    }
 }
 
 fn setup_completion_label(setup_complete: bool) -> &'static str {
@@ -313,16 +350,19 @@ fn find_dotenv_path() -> io::Result<Option<PathBuf>> {
 struct DeveloperLogbookService {
     runtime_config: Arc<RuntimeConfigManager>,
     sync_scheduler: Arc<sync_scheduler::SyncScheduler>,
+    qrz_upload_lock: Arc<Mutex<()>>,
 }
 
 impl DeveloperLogbookService {
     fn new(
         runtime_config: Arc<RuntimeConfigManager>,
         sync_scheduler: Arc<sync_scheduler::SyncScheduler>,
+        qrz_upload_lock: Arc<Mutex<()>>,
     ) -> Self {
         Self {
             runtime_config,
             sync_scheduler,
+            qrz_upload_lock,
         }
     }
 
@@ -382,6 +422,7 @@ impl DeveloperLogbookService {
             .unwrap_or_default();
         let book_owner = sync::resolve_book_owner_for_upload(&client, &cached_metadata).await;
 
+        let _upload_guard = self.qrz_upload_lock.lock().await;
         match sync::sync_single_qso(
             &client,
             engine.logbook_store(),
@@ -620,8 +661,10 @@ impl LogbookService for DeveloperLogbookService {
 
         let engine = self.runtime_config.logbook_engine().await;
         let (tx, rx) = tokio::sync::mpsc::channel(16);
+        let qrz_upload_lock = self.qrz_upload_lock.clone();
 
         tokio::spawn(async move {
+            let _upload_guard = qrz_upload_lock.lock().await;
             let store = engine.logbook_store();
             sync::execute_sync(&client, store, request.full_sync, conflict_policy, &tx).await;
         });
@@ -679,10 +722,10 @@ impl LogbookService for DeveloperLogbookService {
         let qsos = parse_adi_qsos(&adif_bytes)
             .await
             .map_err(Status::invalid_argument)?;
-        let summary = engine
-            .import_adif_qsos(qsos, active_station_profile.as_ref(), refresh)
-            .await
-            .map_err(map_logbook_error)?;
+        let summary =
+            Box::pin(engine.import_adif_qsos(qsos, active_station_profile.as_ref(), refresh))
+                .await
+                .map_err(map_logbook_error)?;
 
         Ok(Response::new(ImportAdifResponse {
             records_imported: summary.records_imported,
@@ -1610,11 +1653,17 @@ mod tests {
     }
 
     fn test_sync_scheduler() -> Arc<sync_scheduler::SyncScheduler> {
-        Arc::new(sync_scheduler::SyncScheduler::new())
+        Arc::new(sync_scheduler::SyncScheduler::new(Arc::new(
+            tokio::sync::Mutex::new(()),
+        )))
     }
 
     fn test_logbook_service(config: Arc<RuntimeConfigManager>) -> DeveloperLogbookService {
-        DeveloperLogbookService::new(config, test_sync_scheduler())
+        DeveloperLogbookService::new(
+            config,
+            test_sync_scheduler(),
+            Arc::new(tokio::sync::Mutex::new(())),
+        )
     }
 
     fn test_runtime_config() -> Arc<RuntimeConfigManager> {

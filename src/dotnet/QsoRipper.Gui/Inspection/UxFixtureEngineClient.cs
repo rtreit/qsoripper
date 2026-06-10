@@ -22,6 +22,7 @@ internal sealed class UxFixtureEngineClient : IEngineClient
     private string? _qrzXmlUsername;
     private RigControlSettings? _rigControl;
     private CatHubSettings? _catHub;
+    private WsjtxIngestSettings? _wsjtxIngest;
     private DateTimeOffset? _lastSyncUtc;
     private bool _configFileExists;
     private bool _setupComplete;
@@ -45,6 +46,7 @@ internal sealed class UxFixtureEngineClient : IEngineClient
         _qrzXmlUsername = fixture.QrzXmlUsername;
         _rigControl = fixture.BuildRigControlSettings();
         _catHub = fixture.BuildCatHubSettings();
+        _wsjtxIngest = fixture.BuildWsjtxIngestSettings();
         _lastSyncUtc = fixture.LastSyncUtc;
         _configFileExists = fixture.ConfigFileExists;
         _setupComplete = fixture.SetupComplete;
@@ -216,6 +218,11 @@ internal sealed class UxFixtureEngineClient : IEngineClient
             if (request.CatHub is not null)
             {
                 _catHub = request.CatHub.Clone();
+            }
+
+            if (request.WsjtxIngest is not null)
+            {
+                _wsjtxIngest = request.WsjtxIngest.Clone();
             }
 
             _configFileExists = true;
@@ -617,6 +624,11 @@ internal sealed class UxFixtureEngineClient : IEngineClient
         if (_catHub is not null)
         {
             status.CatHub = _catHub.Clone();
+        }
+
+        if (_wsjtxIngest is not null)
+        {
+            status.WsjtxIngest = _wsjtxIngest.Clone();
         }
 
         if (HasStationProfile())

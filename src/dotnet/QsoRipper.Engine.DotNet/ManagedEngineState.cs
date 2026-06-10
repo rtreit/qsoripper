@@ -141,6 +141,11 @@ internal sealed class ManagedEngineState
         _hasQrzLogbookApiKey = _qrzLogbookApiKey is not null;
         _syncConfig = NormalizeSyncConfig(_persistedSetup.SyncConfig);
         _persistedSetup.SyncConfig = _syncConfig.Clone();
+        if (_persistedSetup.WsjtxIngest is not null)
+        {
+            _persistedSetup.WsjtxIngest = NormalizeWsjtxIngest(_persistedSetup.WsjtxIngest);
+        }
+
         _rigControl = _persistedSetup.RigControl?.Clone();
         _stationProfiles = _persistedSetup.StationProfiles
             .Select(static entry => new ManagedPersistedStationProfile
@@ -319,6 +324,9 @@ internal sealed class ManagedEngineState
             {
                 _ = SharedSetupConfigPersistence.BuildCatHubTableOrThrow(request.CatHub);
             }
+            var normalizedWsjtxIngest = request.WsjtxIngest is null
+                ? null
+                : NormalizeWsjtxIngest(request.WsjtxIngest);
 
             if (request.StationProfile is not null)
             {
@@ -367,6 +375,12 @@ internal sealed class ManagedEngineState
             {
                 _rigControl = request.RigControl.Clone();
                 _persistedSetup.RigControl = _rigControl.Clone();
+            }
+
+            if (request.WsjtxIngest is not null)
+            {
+                _persistedSetup.WsjtxIngest = normalizedWsjtxIngest;
+                _persistedSetup.WsjtxIngestWriteOverride = normalizedWsjtxIngest?.Clone();
             }
 
             // CONDITIONAL OWNERSHIP: only an explicit cat_hub in the request triggers a
@@ -1324,8 +1338,10 @@ internal sealed class ManagedEngineState
         SharedSetupConfigPersistence.Save(_configPath, _persistedSetup);
 
         // The CAT hub override is a one-shot replacement signal (mirrors Rust's per-request
-        // cat_hub_update). Clear it after writing so subsequent saves preserve the section.
+        // cat_hub_update). The WSJT-X override uses the same conditional-ownership model.
+        // Clear both after writing so subsequent saves preserve those sections.
         _persistedSetup.CatHubWriteOverride = null;
+        _persistedSetup.WsjtxIngestWriteOverride = null;
     }
 
     private SetupStatus BuildSetupStatusNoLock()
@@ -1368,6 +1384,11 @@ internal sealed class ManagedEngineState
         if (_persistedSetup.RigControl is not null)
         {
             status.RigControl = _persistedSetup.RigControl.Clone();
+        }
+
+        if (_persistedSetup.WsjtxIngest is not null)
+        {
+            status.WsjtxIngest = _persistedSetup.WsjtxIngest.Clone();
         }
 
         if (_persistedSetup.CatHub is not null)
@@ -1920,6 +1941,46 @@ internal sealed class ManagedEngineState
         }
 
         return normalized;
+    }
+
+    private static WsjtxIngestSettings NormalizeWsjtxIngest(WsjtxIngestSettings settings)
+    {
+        var normalized = settings.Clone();
+        normalized.UdpEnabled = settings.HasUdpEnabled ? settings.UdpEnabled : true;
+        normalized.UdpBind = NormalizeOptional(settings.UdpBind) ?? "127.0.0.1:2237";
+        ValidateHostPort(normalized.UdpBind, "WSJT-X UDP bind");
+
+        normalized.AdifTailPath = NormalizeOptional(settings.AdifTailPath) ?? string.Empty;
+        if (string.IsNullOrEmpty(normalized.AdifTailPath))
+        {
+            normalized.ClearAdifTailPath();
+        }
+        if (normalized.AdifTailEnabled && string.IsNullOrWhiteSpace(normalized.AdifTailPath))
+        {
+            throw new InvalidOperationException("WSJT-X ADIF tail path is required when ADIF tailing is enabled.");
+        }
+
+        if (normalized.PollIntervalMs == 0)
+        {
+            normalized.PollIntervalMs = 1000;
+        }
+
+        return normalized;
+    }
+
+    private static void ValidateHostPort(string bind, string label)
+    {
+        var separator = bind.LastIndexOf(':');
+        if (separator <= 0 || separator == bind.Length - 1)
+        {
+            throw new InvalidOperationException($"{label} must be in host:port form.");
+        }
+
+        var portText = bind[(separator + 1)..];
+        if (!ushort.TryParse(portText, out var port) || port == 0)
+        {
+            throw new InvalidOperationException($"{label} port must be between 1 and 65535.");
+        }
     }
 
     private static bool IsTimestampUnset(Timestamp? value)

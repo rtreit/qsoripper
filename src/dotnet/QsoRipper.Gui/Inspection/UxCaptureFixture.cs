@@ -107,6 +107,20 @@ internal sealed record UxCaptureFixture
 
     public string? CatHubEndpointBind { get; init; }
 
+    public bool? WsjtxIngestEnabled { get; init; }
+
+    public bool? WsjtxUdpEnabled { get; init; }
+
+    public string? WsjtxUdpBind { get; init; }
+
+    public bool? WsjtxAdifTailEnabled { get; init; }
+
+    public string? WsjtxAdifTailPath { get; init; }
+
+    public uint? WsjtxPollIntervalMs { get; init; }
+
+    public bool? WsjtxSyncToQrz { get; init; }
+
     public bool IsSyncing { get; init; }
 
     public IReadOnlyList<UxCaptureQsoFixtureItem> RecentQsos { get; init; } = CreateDefaultRecentQsos();
@@ -275,6 +289,61 @@ internal sealed record UxCaptureFixture
 
         return settings;
     }
+
+    public WsjtxIngestSettings? BuildWsjtxIngestSettings()
+    {
+        var hasValues = WsjtxIngestEnabled.HasValue
+            || WsjtxUdpEnabled.HasValue
+            || !string.IsNullOrWhiteSpace(WsjtxUdpBind)
+            || WsjtxAdifTailEnabled.HasValue
+            || !string.IsNullOrWhiteSpace(WsjtxAdifTailPath)
+            || WsjtxPollIntervalMs.HasValue
+            || WsjtxSyncToQrz.HasValue;
+
+        if (!hasValues)
+        {
+            return null;
+        }
+
+        var settings = new WsjtxIngestSettings();
+        if (WsjtxIngestEnabled.HasValue)
+        {
+            settings.Enabled = WsjtxIngestEnabled.Value;
+        }
+
+        if (WsjtxUdpEnabled.HasValue)
+        {
+            settings.UdpEnabled = WsjtxUdpEnabled.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(WsjtxUdpBind))
+        {
+            settings.UdpBind = WsjtxUdpBind;
+        }
+
+        if (WsjtxAdifTailEnabled.HasValue)
+        {
+            settings.AdifTailEnabled = WsjtxAdifTailEnabled.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(WsjtxAdifTailPath))
+        {
+            settings.AdifTailPath = WsjtxAdifTailPath;
+        }
+
+        if (WsjtxPollIntervalMs.HasValue)
+        {
+            settings.PollIntervalMs = WsjtxPollIntervalMs.Value;
+        }
+
+        if (WsjtxSyncToQrz.HasValue)
+        {
+            settings.SyncToQrz = WsjtxSyncToQrz.Value;
+        }
+
+        return settings;
+    }
+
     public SyncConfig BuildSyncConfig() => new()
     {
         AutoSyncEnabled = AutoSyncEnabled,

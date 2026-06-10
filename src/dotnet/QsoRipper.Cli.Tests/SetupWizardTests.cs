@@ -1,9 +1,11 @@
 using QsoRipper.Cli.Commands;
 using QsoRipper.EngineSelection;
+using QsoRipper.Services;
 
 namespace QsoRipper.Cli.Tests;
 
 #pragma warning disable CA1707 // Remove underscores from member names - xUnit allows underscores in test methods
+[Collection("ConsoleCapture")]
 public class SetupWizardTests
 {
     [Fact]
@@ -119,6 +121,83 @@ public class SetupWizardTests
 
         Assert.False(args.SetupStatus);
         Assert.True(args.SetupFromEnv);
+    }
+
+    [Fact]
+    public void WsjtxIngestFromEnvironmentReadsCanonicalRuntimeVariables()
+    {
+        var snapshot = new Dictionary<string, string?>
+        {
+            ["QSORIPPER_WSJTX_INGEST_ENABLED"] = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_ENABLED"),
+            ["QSORIPPER_WSJTX_INGEST_UDP_ENABLED"] = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_UDP_ENABLED"),
+            ["QSORIPPER_WSJTX_INGEST_UDP_BIND"] = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_UDP_BIND"),
+            ["QSORIPPER_WSJTX_INGEST_ADIF_TAIL_ENABLED"] = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_ADIF_TAIL_ENABLED"),
+            ["QSORIPPER_WSJTX_INGEST_ADIF_TAIL_PATH"] = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_ADIF_TAIL_PATH"),
+            ["QSORIPPER_WSJTX_INGEST_POLL_INTERVAL_MS"] = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_POLL_INTERVAL_MS"),
+            ["QSORIPPER_WSJTX_INGEST_SYNC_TO_QRZ"] = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_SYNC_TO_QRZ"),
+        };
+
+        try
+        {
+            Environment.SetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_ENABLED", "true");
+            Environment.SetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_UDP_ENABLED", "true");
+            Environment.SetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_UDP_BIND", "0.0.0.0:2237");
+            Environment.SetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_ADIF_TAIL_ENABLED", "true");
+            Environment.SetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_ADIF_TAIL_PATH", @"C:\logs\wsjtx_log.adi");
+            Environment.SetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_POLL_INTERVAL_MS", "0");
+            Environment.SetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_SYNC_TO_QRZ", "true");
+
+            var success = SetupCommand.TryBuildWsjtxIngestSettingsFromEnvironment(
+                existing: null,
+                out var settings,
+                out var error);
+
+            Assert.True(success, error);
+            Assert.NotNull(settings);
+            Assert.True(settings.Enabled);
+            Assert.True(settings.UdpEnabled);
+            Assert.Equal("0.0.0.0:2237", settings.UdpBind);
+            Assert.True(settings.AdifTailEnabled);
+            Assert.Equal(@"C:\logs\wsjtx_log.adi", settings.AdifTailPath);
+            Assert.Equal(0u, settings.PollIntervalMs);
+            Assert.True(settings.SyncToQrz);
+        }
+        finally
+        {
+            foreach (var (key, value) in snapshot)
+            {
+                Environment.SetEnvironmentVariable(key, value);
+            }
+        }
+    }
+
+    [Fact]
+    public void WsjtxIngestFromEnvironmentRejectsInvalidUdpBindPort()
+    {
+        var originalEnabled = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_ENABLED");
+        var originalBind = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_UDP_BIND");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_ENABLED", "true");
+            Environment.SetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_UDP_BIND", "127.0.0.1:notaport");
+
+            var success = SetupCommand.TryBuildWsjtxIngestSettingsFromEnvironment(
+                existing: null,
+                out var settings,
+                out var error);
+
+            Assert.False(success);
+            Assert.Null(settings);
+            Assert.Equal(
+                "Error: WSJT-X UDP bind must be host:port with a port between 1 and 65535.",
+                error);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_ENABLED", originalEnabled);
+            Environment.SetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_UDP_BIND", originalBind);
+        }
     }
 }
 #pragma warning restore CA1707
