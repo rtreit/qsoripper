@@ -179,6 +179,37 @@ internal sealed partial class SettingsViewModel : ObservableObject
 
     public ObservableCollection<CatHubEndpointRowViewModel> CatHubEndpoints { get; } = [];
 
+    // WSJT-X ingestion ([wsjtx_ingest]) is conditionally engine-owned like CAT hub.
+    // Untouched settings are omitted on save so existing comments and unknown keys stay intact.
+    [ObservableProperty]
+    private bool _wsjtxIngestEnabled;
+
+    [ObservableProperty]
+    private bool _wsjtxUdpEnabled = true;
+
+    [ObservableProperty]
+    private string _wsjtxUdpBind = "127.0.0.1:2237";
+
+    [ObservableProperty]
+    private bool _wsjtxAdifTailEnabled;
+
+    [ObservableProperty]
+    private string _wsjtxAdifTailPath = string.Empty;
+
+    [ObservableProperty]
+    private string _wsjtxPollIntervalMs = "1000";
+
+    [ObservableProperty]
+    private bool _wsjtxSyncToQrz;
+
+    private bool _hasPersistedWsjtxIngest;
+    private bool _wsjtxIngestLoading;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowWsjtxIngestRewriteWarning))]
+    private bool _isWsjtxIngestDirty;
+
+    public bool ShowWsjtxIngestRewriteWarning => IsWsjtxIngestDirty && _hasPersistedWsjtxIngest;
 
     [ObservableProperty]
     private string _persistenceDescription = "Where should QsoRipper store persisted logbook data?";
@@ -317,12 +348,28 @@ internal sealed partial class SettingsViewModel : ObservableObject
         nameof(CatHubNativePushIndex),
     };
 
+    private static readonly HashSet<string> WsjtxIngestScalarPropertyNames = new(StringComparer.Ordinal)
+    {
+        nameof(WsjtxIngestEnabled),
+        nameof(WsjtxUdpEnabled),
+        nameof(WsjtxUdpBind),
+        nameof(WsjtxAdifTailEnabled),
+        nameof(WsjtxAdifTailPath),
+        nameof(WsjtxPollIntervalMs),
+        nameof(WsjtxSyncToQrz),
+    };
+
     protected override void OnPropertyChanged(PropertyChangedEventArgs e)
     {
         base.OnPropertyChanged(e);
         if (e.PropertyName is not null && CatHubScalarPropertyNames.Contains(e.PropertyName))
         {
             MarkCatHubDirty();
+        }
+
+        if (e.PropertyName is not null && WsjtxIngestScalarPropertyNames.Contains(e.PropertyName))
+        {
+            MarkWsjtxIngestDirty();
         }
     }
 
@@ -334,6 +381,16 @@ internal sealed partial class SettingsViewModel : ObservableObject
         }
 
         IsCatHubDirty = true;
+    }
+
+    private void MarkWsjtxIngestDirty()
+    {
+        if (_wsjtxIngestLoading)
+        {
+            return;
+        }
+
+        IsWsjtxIngestDirty = true;
     }
 
     private void OnCatHubCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -531,6 +588,12 @@ internal sealed partial class SettingsViewModel : ObservableObject
                 return;
             }
 
+            if (IsWsjtxIngestDirty && !TryValidateWsjtxIngestInputs(out var wsjtxError))
+            {
+                ErrorMessage = wsjtxError;
+                return;
+            }
+
             var request = BuildSaveRequest();
             await _engine.SaveSetupAsync(request);
             DidSave = true;
@@ -571,10 +634,13 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private void SelectCatHubSection() => SelectedSectionIndex = 5;
 
     [RelayCommand]
-    private void SelectNextSection() => SelectedSectionIndex = (SelectedSectionIndex + 1) % 6;
+    private void SelectWsjtxSection() => SelectedSectionIndex = 6;
 
     [RelayCommand]
-    private void SelectPreviousSection() => SelectedSectionIndex = (SelectedSectionIndex + 5) % 6;
+    private void SelectNextSection() => SelectedSectionIndex = (SelectedSectionIndex + 1) % 7;
+
+    [RelayCommand]
+    private void SelectPreviousSection() => SelectedSectionIndex = (SelectedSectionIndex + 6) % 7;
 
     [RelayCommand]
     private async Task TestQrzXmlAsync()
@@ -698,6 +764,34 @@ internal sealed partial class SettingsViewModel : ObservableObject
         // Password and API key are never returned by the engine for security;
         // leave them empty so the user can re-enter if they want to change them.
         ApplyCatHub(status.CatHub);
+        ApplyWsjtxIngest(status.WsjtxIngest);
+    }
+
+    private void ApplyWsjtxIngest(WsjtxIngestSettings? settings)
+    {
+        _wsjtxIngestLoading = true;
+        try
+        {
+            _hasPersistedWsjtxIngest = settings is not null;
+            WsjtxIngestEnabled = settings?.Enabled ?? false;
+            WsjtxUdpEnabled = settings?.UdpEnabled ?? true;
+            WsjtxUdpBind = !string.IsNullOrWhiteSpace(settings?.UdpBind)
+                ? settings.UdpBind
+                : "127.0.0.1:2237";
+            WsjtxAdifTailEnabled = settings?.AdifTailEnabled ?? false;
+            WsjtxAdifTailPath = settings is { HasAdifTailPath: true }
+                ? settings.AdifTailPath
+                : string.Empty;
+            WsjtxPollIntervalMs = settings is { PollIntervalMs: > 0 }
+                ? settings.PollIntervalMs.ToString(CultureInfo.InvariantCulture)
+                : "1000";
+            WsjtxSyncToQrz = settings?.SyncToQrz ?? false;
+        }
+        finally
+        {
+            _wsjtxIngestLoading = false;
+            IsWsjtxIngestDirty = false;
+        }
     }
 
     private void ApplyCatHub(CatHubSettings? catHub)
@@ -866,7 +960,28 @@ internal sealed partial class SettingsViewModel : ObservableObject
             request.CatHub = BuildCatHubSettings();
         }
 
+        if (IsWsjtxIngestDirty)
+        {
+            request.WsjtxIngest = BuildWsjtxIngestSettings();
+        }
+
         return request;
+    }
+
+    private WsjtxIngestSettings BuildWsjtxIngestSettings()
+    {
+        var settings = new WsjtxIngestSettings
+        {
+            Enabled = WsjtxIngestEnabled,
+            UdpEnabled = WsjtxUdpEnabled,
+            AdifTailEnabled = WsjtxAdifTailEnabled,
+            SyncToQrz = WsjtxSyncToQrz,
+        };
+
+        SetOptionalString(WsjtxUdpBind, value => settings.UdpBind = value);
+        SetOptionalString(WsjtxAdifTailPath, value => settings.AdifTailPath = value);
+        SetUInt32Field(WsjtxPollIntervalMs, value => settings.PollIntervalMs = value);
+        return settings;
     }
 
     private CatHubSettings BuildCatHubSettings()
@@ -1034,6 +1149,32 @@ internal sealed partial class SettingsViewModel : ObservableObject
             RigControlStaleThresholdMs,
             1,
             "Rig control stale threshold",
+            out validationError);
+    }
+
+    private bool TryValidateWsjtxIngestInputs(out string? validationError)
+    {
+        validationError = null;
+
+        if (WsjtxUdpEnabled
+            && (string.IsNullOrWhiteSpace(WsjtxUdpBind)
+                || !WsjtxUdpBind.Contains(':', StringComparison.Ordinal)))
+        {
+            validationError = "WSJT-X UDP bind must be host:port (for example 127.0.0.1:2237).";
+            return false;
+        }
+
+        if (WsjtxAdifTailEnabled && string.IsNullOrWhiteSpace(WsjtxAdifTailPath))
+        {
+            validationError = "WSJT-X ADIF tail path is required when ADIF tail recovery is enabled.";
+            return false;
+        }
+
+        return TryValidateUInt32Field(
+            WsjtxPollIntervalMs,
+            100,
+            86_400_000,
+            "WSJT-X poll interval",
             out validationError);
     }
 

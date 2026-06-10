@@ -58,6 +58,7 @@ internal static class SetupCommand
         Console.WriteLine($"Station profile:   {status.HasStationProfile}");
         Console.WriteLine($"Rig control:       {FormatRigControlSummary(status.RigControl)}");
         Console.WriteLine($"CAT hub:           {FormatCatHubSummary(status.CatHub)}");
+        Console.WriteLine($"WSJT-X ingest:     {FormatWsjtxIngestSummary(status.WsjtxIngest)}");
 
         return status.SetupComplete ? 0 : 1;
     }
@@ -89,6 +90,13 @@ internal static class SetupCommand
         var rigPortEnv = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_PORT");
         var rigReadTimeoutEnv = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_READ_TIMEOUT_MS");
         var rigStaleThresholdEnv = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS");
+        var wsjtxEnabledEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_ENABLED");
+        var wsjtxUdpEnabledEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_UDP_ENABLED");
+        var wsjtxUdpBindEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_UDP_BIND");
+        var wsjtxAdifTailEnabledEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_ADIF_TAIL_ENABLED");
+        var wsjtxAdifTailPathEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_ADIF_TAIL_PATH");
+        var wsjtxPollIntervalEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_POLL_INTERVAL_MS");
+        var wsjtxSyncToQrzEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_SYNC_TO_QRZ");
 
         if (!TryParseOptionalBooleanEnv(
                 rigEnabledEnv,
@@ -116,6 +124,22 @@ internal static class SetupCommand
                 "QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS",
                 out var rigStaleThresholdMs))
         {
+            return 1;
+        }
+
+        if (!TryBuildWsjtxIngestSettingsFromEnv(
+                currentStatus?.WsjtxIngest,
+                wsjtxEnabledEnv,
+                wsjtxUdpEnabledEnv,
+                wsjtxUdpBindEnv,
+                wsjtxAdifTailEnabledEnv,
+                wsjtxAdifTailPathEnv,
+                wsjtxPollIntervalEnv,
+                wsjtxSyncToQrzEnv,
+                out var wsjtxIngest,
+                out var wsjtxError))
+        {
+            Console.Error.WriteLine(wsjtxError);
             return 1;
         }
 
@@ -227,6 +251,11 @@ internal static class SetupCommand
             saveRequest.RigControl = rigControl;
         }
 
+        if (wsjtxIngest is not null)
+        {
+            saveRequest.WsjtxIngest = wsjtxIngest;
+        }
+
         // Include sync config when a logbook API key is provided.
         if (!string.IsNullOrWhiteSpace(qrzLogbookApiKey))
         {
@@ -288,7 +317,7 @@ internal static class SetupCommand
         var persistenceTitle = string.IsNullOrWhiteSpace(status.PersistenceLabel)
             ? "Storage"
             : status.PersistenceLabel;
-        Console.WriteLine($"Step 1 of 5: {persistenceTitle}");
+        Console.WriteLine($"Step 1 of 6: {persistenceTitle}");
         Console.WriteLine(new string('-', 30));
         if (!string.IsNullOrWhiteSpace(status.PersistenceDescription))
         {
@@ -327,7 +356,7 @@ internal static class SetupCommand
 
         // ── Step 2: Station Profile ────────────────────────────────
         Console.WriteLine();
-        Console.WriteLine("Step 2 of 5: Station Profile");
+        Console.WriteLine("Step 2 of 6: Station Profile");
         Console.WriteLine(new string('-', 30));
 
         var existingProfile = status.StationProfile;
@@ -389,7 +418,7 @@ internal static class SetupCommand
 
         // ── Step 3: QRZ Integration (Optional) ────────────────────
         Console.WriteLine();
-        Console.WriteLine("Step 3 of 5: QRZ Integration (Optional)");
+        Console.WriteLine("Step 3 of 6: QRZ Integration (Optional)");
         Console.WriteLine(new string('-', 30));
 
         string? qrzUsername = null;
@@ -476,7 +505,7 @@ internal static class SetupCommand
 
         // ── Step 4: QRZ Logbook (Optional) ────────────────────────
         Console.WriteLine();
-        Console.WriteLine("Step 4 of 5: QRZ Logbook (Optional)");
+        Console.WriteLine("Step 4 of 6: QRZ Logbook (Optional)");
         Console.WriteLine(new string('-', 30));
         Console.WriteLine("  Enter your QRZ.com Logbook API key for bidirectional sync.");
         Console.WriteLine("  You can find this at qrz.com → Logbook → Settings → API Key.");
@@ -533,9 +562,74 @@ internal static class SetupCommand
             }
         }
 
-        // ── Step 5: Review & Save ──────────────────────────────────
+        // ── Step 5: WSJT-X Ingestion (Optional) ────────────────────
         Console.WriteLine();
-        Console.WriteLine("Step 5 of 5: Review & Save");
+        Console.WriteLine("Step 5 of 6: WSJT-X Ingestion (Optional)");
+        Console.WriteLine(new string('-', 30));
+        Console.WriteLine("  Import QSOs logged in WSJT-X using UDP packets and optional ADIF tail recovery.");
+
+        WsjtxIngestSettings? wsjtxWizardSettings = null;
+        var existingWsjtx = status.WsjtxIngest;
+        if (existingWsjtx is not null)
+        {
+            Console.WriteLine($"  Current WSJT-X ingestion: {FormatWsjtxIngestSummary(existingWsjtx)}");
+        }
+
+        var setupWsjtx = PromptYesNo("Set up WSJT-X ingestion?", defaultYes: existingWsjtx?.Enabled ?? false);
+        if (setupWsjtx)
+        {
+            while (true)
+            {
+                var enabled = PromptYesNo("Enable WSJT-X QSO ingestion?", defaultYes: existingWsjtx?.Enabled ?? true);
+                var udpEnabled = PromptYesNo("Listen for WSJT-X UDP packets?", defaultYes: existingWsjtx?.UdpEnabled ?? true);
+                var udpBind = PromptField(
+                    "WSJT-X UDP bind",
+                    string.IsNullOrWhiteSpace(existingWsjtx?.UdpBind) ? "127.0.0.1:2237" : existingWsjtx.UdpBind);
+                var adifTailEnabled = PromptYesNo("Tail WSJT-X ADIF log for missed-QSO recovery?", defaultYes: existingWsjtx?.AdifTailEnabled ?? false);
+                var adifTailPath = PromptField(
+                    "WSJT-X ADIF tail path",
+                    existingWsjtx is { HasAdifTailPath: true } ? existingWsjtx.AdifTailPath : "");
+                var pollIntervalInput = PromptField(
+                    "WSJT-X poll interval (milliseconds)",
+                    existingWsjtx is { PollIntervalMs: > 0 }
+                        ? existingWsjtx.PollIntervalMs.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                        : "1000");
+                var syncToQrz = PromptYesNo("Upload imported WSJT-X QSOs to QRZ?", defaultYes: existingWsjtx?.SyncToQrz ?? false);
+
+                if (!uint.TryParse(pollIntervalInput, System.Globalization.CultureInfo.InvariantCulture, out var pollIntervalMs)
+                    || pollIntervalMs is < 100 or > 86_400_000)
+                {
+                    Console.WriteLine("  Poll interval must be between 100 and 86400000 milliseconds.");
+                    continue;
+                }
+
+                wsjtxWizardSettings = new WsjtxIngestSettings
+                {
+                    Enabled = enabled,
+                    UdpEnabled = udpEnabled,
+                    UdpBind = udpBind,
+                    AdifTailEnabled = adifTailEnabled,
+                    PollIntervalMs = pollIntervalMs,
+                    SyncToQrz = syncToQrz,
+                };
+
+                if (!string.IsNullOrWhiteSpace(adifTailPath))
+                {
+                    wsjtxWizardSettings.AdifTailPath = adifTailPath;
+                }
+
+                if (TryValidateWsjtxIngestSettings(wsjtxWizardSettings, out var validationError))
+                {
+                    break;
+                }
+
+                Console.WriteLine($"  {validationError}");
+            }
+        }
+
+        // ── Step 6: Review & Save ──────────────────────────────────
+        Console.WriteLine();
+        Console.WriteLine("Step 6 of 6: Review & Save");
         Console.WriteLine(new string('-', 30));
         Console.WriteLine();
         foreach (var field in persistenceFields)
@@ -554,6 +648,7 @@ internal static class SetupCommand
         Console.WriteLine($"  QRZ password:        {(string.IsNullOrWhiteSpace(qrzPassword) ? "(not set)" : "********")}");
         Console.WriteLine($"  QRZ Logbook key:     {(string.IsNullOrWhiteSpace(qrzLogbookApiKey) ? hasExistingLogbookKey ? "(configured)" : "(not set)" : "********")}");
         Console.WriteLine($"  Auto-sync:           {(autoSyncEnabled ? $"enabled (every {syncIntervalSeconds}s)" : "disabled")}");
+        Console.WriteLine($"  WSJT-X ingest:       {FormatWsjtxIngestSummary(wsjtxWizardSettings)}");
         Console.WriteLine();
 
         var save = PromptYesNo("Save and apply?", defaultYes: true);
@@ -606,6 +701,11 @@ internal static class SetupCommand
                 AutoSyncEnabled = autoSyncEnabled,
                 SyncIntervalSeconds = syncIntervalSeconds,
             };
+        }
+
+        if (wsjtxWizardSettings is not null)
+        {
+            saveRequest.WsjtxIngest = wsjtxWizardSettings;
         }
 
         var saveResponse = await client.SaveSetupAsync(saveRequest);
@@ -700,6 +800,169 @@ internal static class SetupCommand
         }
 
         return settings;
+    }
+
+    private static bool TryBuildWsjtxIngestSettingsFromEnv(
+        WsjtxIngestSettings? existing,
+        string? enabledEnv,
+        string? udpEnabledEnv,
+        string? udpBindEnv,
+        string? adifTailEnabledEnv,
+        string? adifTailPathEnv,
+        string? pollIntervalEnv,
+        string? syncToQrzEnv,
+        out WsjtxIngestSettings? settings,
+        out string? error)
+    {
+        settings = null;
+        error = null;
+
+        var hasEnvironmentValues = !string.IsNullOrWhiteSpace(enabledEnv)
+            || !string.IsNullOrWhiteSpace(udpEnabledEnv)
+            || !string.IsNullOrWhiteSpace(udpBindEnv)
+            || !string.IsNullOrWhiteSpace(adifTailEnabledEnv)
+            || !string.IsNullOrWhiteSpace(adifTailPathEnv)
+            || !string.IsNullOrWhiteSpace(pollIntervalEnv)
+            || !string.IsNullOrWhiteSpace(syncToQrzEnv);
+
+        if (!hasEnvironmentValues)
+        {
+            return true;
+        }
+
+        if (!TryParseOptionalBooleanEnv(
+                enabledEnv,
+                "QSORIPPER_WSJTX_INGEST_ENABLED",
+                out var enabled)
+            || !TryParseOptionalBooleanEnv(
+                udpEnabledEnv,
+                "QSORIPPER_WSJTX_UDP_ENABLED",
+                out var udpEnabled)
+            || !TryParseOptionalBooleanEnv(
+                adifTailEnabledEnv,
+                "QSORIPPER_WSJTX_ADIF_TAIL_ENABLED",
+                out var adifTailEnabled)
+            || !TryParseOptionalBooleanEnv(
+                syncToQrzEnv,
+                "QSORIPPER_WSJTX_SYNC_TO_QRZ",
+                out var syncToQrz)
+            || !TryParseOptionalUInt32Env(
+                pollIntervalEnv,
+                "QSORIPPER_WSJTX_POLL_INTERVAL_MS",
+                out var pollIntervalMs))
+        {
+            error = "Error: invalid WSJT-X environment variable value.";
+            return false;
+        }
+
+        if (pollIntervalMs is < 100 or > 86_400_000)
+        {
+            error = "Error: QSORIPPER_WSJTX_POLL_INTERVAL_MS must be between 100 and 86400000.";
+            return false;
+        }
+
+        settings = existing?.Clone() ?? new WsjtxIngestSettings
+        {
+            UdpEnabled = true,
+            UdpBind = "127.0.0.1:2237",
+            PollIntervalMs = 1000,
+        };
+
+        if (enabled.HasValue)
+        {
+            settings.Enabled = enabled.Value;
+        }
+
+        if (udpEnabled.HasValue)
+        {
+            settings.UdpEnabled = udpEnabled.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(udpBindEnv))
+        {
+            settings.UdpBind = udpBindEnv.Trim();
+        }
+        else if (string.IsNullOrWhiteSpace(settings.UdpBind))
+        {
+            settings.UdpBind = "127.0.0.1:2237";
+        }
+
+        if (adifTailEnabled.HasValue)
+        {
+            settings.AdifTailEnabled = adifTailEnabled.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(adifTailPathEnv))
+        {
+            settings.AdifTailPath = adifTailPathEnv.Trim();
+        }
+
+        if (pollIntervalMs.HasValue)
+        {
+            settings.PollIntervalMs = pollIntervalMs.Value;
+        }
+        else if (settings.PollIntervalMs == 0)
+        {
+            settings.PollIntervalMs = 1000;
+        }
+
+        if (syncToQrz.HasValue)
+        {
+            settings.SyncToQrz = syncToQrz.Value;
+        }
+
+        if (!TryValidateWsjtxIngestSettings(settings, out var validationError))
+        {
+            error = $"Error: {validationError}";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryValidateWsjtxIngestSettings(WsjtxIngestSettings settings, out string? error)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        error = null;
+
+        if (settings.UdpEnabled
+            && (string.IsNullOrWhiteSpace(settings.UdpBind)
+                || !settings.UdpBind.Contains(':', StringComparison.Ordinal)))
+        {
+            error = "WSJT-X UDP bind must be host:port (for example 127.0.0.1:2237).";
+            return false;
+        }
+
+        if (settings.AdifTailEnabled && string.IsNullOrWhiteSpace(settings.AdifTailPath))
+        {
+            error = "WSJT-X ADIF tail path is required when ADIF tail recovery is enabled.";
+            return false;
+        }
+
+        if (settings.PollIntervalMs is < 100 or > 86_400_000)
+        {
+            error = "WSJT-X poll interval must be between 100 and 86400000 milliseconds.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string FormatWsjtxIngestSummary(WsjtxIngestSettings? wsjtx)
+    {
+        if (wsjtx is null)
+        {
+            return "(not configured)";
+        }
+
+        var state = wsjtx.Enabled ? "enabled" : "disabled";
+        var udp = wsjtx.UdpEnabled
+            ? string.IsNullOrWhiteSpace(wsjtx.UdpBind) ? "UDP enabled" : $"UDP {wsjtx.UdpBind}"
+            : "UDP disabled";
+        var tail = wsjtx.AdifTailEnabled
+            ? string.IsNullOrWhiteSpace(wsjtx.AdifTailPath) ? "ADIF tail enabled" : $"ADIF tail {wsjtx.AdifTailPath}"
+            : "ADIF tail disabled";
+        return $"{state} ({udp}, {tail})";
     }
 
     private static string FormatCatHubSummary(CatHubSettings? catHub)

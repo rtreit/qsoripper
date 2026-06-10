@@ -687,6 +687,13 @@ Persists setup configuration and station profile.
 - Validation requires `udp_bind` to be `host:port` with port 1-65535, `poll_interval_ms` to
   be nonzero when supplied, and `adif_tail_path` to be present when ADIF tailing is enabled.
   Violations return `INVALID_ARGUMENT`.
+- WSJT-X ingest is a first-class setup surface, not a TOML-only escape hatch. GUI setup wizard,
+  GUI Settings, CLI `setup --status`, CLI `setup --from-env`, and the interactive CLI setup
+  wizard must all project the same `WsjtxIngestSettings` fields. `setup --from-env` recognizes
+  `QSORIPPER_WSJTX_INGEST_ENABLED`, `QSORIPPER_WSJTX_UDP_ENABLED`,
+  `QSORIPPER_WSJTX_UDP_BIND`, `QSORIPPER_WSJTX_ADIF_TAIL_ENABLED`,
+  `QSORIPPER_WSJTX_ADIF_TAIL_PATH`, `QSORIPPER_WSJTX_POLL_INTERVAL_MS`, and
+  `QSORIPPER_WSJTX_SYNC_TO_QRZ`.
 
 **WSJT-X ingest runtime behavior:**
 - When enabled, the Rust engine starts a background supervisor with independent UDP and ADIF-tail

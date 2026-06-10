@@ -4,6 +4,7 @@ using QsoRipper.EngineSelection;
 namespace QsoRipper.Cli.Tests;
 
 #pragma warning disable CA1707 // Remove underscores from member names - xUnit allows underscores in test methods
+[Collection("ConsoleCapture")]
 public class SetupWizardTests
 {
     [Fact]

@@ -261,6 +261,81 @@ public class SettingsViewModelTests
     }
 
     [Fact]
+    public async Task LoadAsyncPopulatesWsjtxIngestSectionFromStatus()
+    {
+        var client = new UxFixtureEngineClient(
+            new UxCaptureFixture
+            {
+                WsjtxIngestEnabled = true,
+                WsjtxUdpEnabled = true,
+                WsjtxUdpBind = "0.0.0.0:2237",
+                WsjtxAdifTailEnabled = true,
+                WsjtxAdifTailPath = @"C:\Users\randy\AppData\Local\WSJT-X\wsjtx_log.adi",
+                WsjtxPollIntervalMs = 1500,
+                WsjtxSyncToQrz = true
+            });
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+
+        Assert.True(viewModel.WsjtxIngestEnabled);
+        Assert.True(viewModel.WsjtxUdpEnabled);
+        Assert.Equal("0.0.0.0:2237", viewModel.WsjtxUdpBind);
+        Assert.True(viewModel.WsjtxAdifTailEnabled);
+        Assert.Equal(@"C:\Users\randy\AppData\Local\WSJT-X\wsjtx_log.adi", viewModel.WsjtxAdifTailPath);
+        Assert.Equal("1500", viewModel.WsjtxPollIntervalMs);
+        Assert.True(viewModel.WsjtxSyncToQrz);
+    }
+
+    [Fact]
+    public async Task SaveEmitsWsjtxIngestSettings()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        viewModel.WsjtxIngestEnabled = true;
+        viewModel.WsjtxUdpEnabled = true;
+        viewModel.WsjtxUdpBind = "127.0.0.1:2237";
+        viewModel.WsjtxAdifTailEnabled = true;
+        viewModel.WsjtxAdifTailPath = @"C:\logs\wsjtx_log.adi";
+        viewModel.WsjtxPollIntervalMs = "500";
+        viewModel.WsjtxSyncToQrz = true;
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.DidSave);
+        var settings = client.LastSaveSetupRequest!.WsjtxIngest;
+        Assert.NotNull(settings);
+        Assert.True(settings.Enabled);
+        Assert.True(settings.UdpEnabled);
+        Assert.Equal("127.0.0.1:2237", settings.UdpBind);
+        Assert.True(settings.AdifTailEnabled);
+        Assert.Equal(@"C:\logs\wsjtx_log.adi", settings.AdifTailPath);
+        Assert.Equal(500u, settings.PollIntervalMs);
+        Assert.True(settings.SyncToQrz);
+    }
+
+    [Fact]
+    public async Task SaveRejectsInvalidWsjtxIngestPollInterval()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        viewModel.WsjtxIngestEnabled = true;
+        viewModel.WsjtxPollIntervalMs = "0";
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.False(viewModel.DidSave);
+        Assert.Equal(
+            "WSJT-X poll interval must be a whole number between 100 and 86400000.",
+            viewModel.ErrorMessage);
+        Assert.Null(client.LastSaveSetupRequest);
+    }
+
+    [Fact]
     public async Task SaveRejectsManagedCatHubWithoutEndpoints()
     {
         var client = new UxFixtureEngineClient(new UxCaptureFixture());
