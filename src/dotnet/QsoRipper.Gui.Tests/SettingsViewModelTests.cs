@@ -288,6 +288,22 @@ public class SettingsViewModelTests
     }
 
     [Fact]
+    public async Task LoadAsyncDefaultsWsjtxUdpToEnabledWhenUnset()
+    {
+        var client = new UxFixtureEngineClient(
+            new UxCaptureFixture
+            {
+                WsjtxIngestEnabled = true,
+                WsjtxUdpBind = "127.0.0.1:2237"
+            });
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+
+        Assert.True(viewModel.WsjtxUdpEnabled);
+    }
+
+    [Fact]
     public async Task SaveEmitsWsjtxIngestSettings()
     {
         var client = new UxFixtureEngineClient(new UxCaptureFixture());
@@ -317,7 +333,7 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public async Task SaveRejectsInvalidWsjtxIngestPollInterval()
+    public async Task SaveAllowsZeroWsjtxPollIntervalForEngineDefault()
     {
         var client = new UxFixtureEngineClient(new UxCaptureFixture());
         var viewModel = new SettingsViewModel(client);
@@ -328,9 +344,41 @@ public class SettingsViewModelTests
 
         await viewModel.SaveCommand.ExecuteAsync(null);
 
+        Assert.True(viewModel.DidSave);
+        Assert.Equal(0u, client.LastSaveSetupRequest!.WsjtxIngest.PollIntervalMs);
+    }
+
+    [Fact]
+    public async Task SaveAllowsSmallPositiveWsjtxPollIntervalAcceptedByEngine()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        viewModel.WsjtxIngestEnabled = true;
+        viewModel.WsjtxPollIntervalMs = "50";
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.DidSave);
+        Assert.Equal(50u, client.LastSaveSetupRequest!.WsjtxIngest.PollIntervalMs);
+    }
+
+    [Fact]
+    public async Task SaveRejectsInvalidWsjtxUdpBindPort()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        viewModel.WsjtxIngestEnabled = true;
+        viewModel.WsjtxUdpBind = "127.0.0.1:notaport";
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
         Assert.False(viewModel.DidSave);
         Assert.Equal(
-            "WSJT-X poll interval must be a whole number between 100 and 86400000.",
+            "WSJT-X UDP bind must be host:port with a port between 1 and 65535.",
             viewModel.ErrorMessage);
         Assert.Null(client.LastSaveSetupRequest);
     }

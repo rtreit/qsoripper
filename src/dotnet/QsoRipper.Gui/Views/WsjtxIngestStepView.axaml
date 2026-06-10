@@ -35,8 +35,7 @@
       <NumericUpDown x:Name="WizardWsjtxPollIntervalInput"
                      AutomationProperties.AutomationId="WizardWsjtxPollIntervalInput"
                      Value="{Binding PollIntervalMs, Mode=TwoWay}"
-                     Minimum="100"
-                     Maximum="86400000"
+                     Minimum="0"
                      Increment="100"
                      FormatString="0" />
     </StackPanel>

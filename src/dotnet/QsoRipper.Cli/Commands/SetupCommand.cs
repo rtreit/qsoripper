@@ -90,13 +90,25 @@ internal static class SetupCommand
         var rigPortEnv = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_PORT");
         var rigReadTimeoutEnv = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_READ_TIMEOUT_MS");
         var rigStaleThresholdEnv = Environment.GetEnvironmentVariable("QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS");
-        var wsjtxEnabledEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_INGEST_ENABLED");
-        var wsjtxUdpEnabledEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_UDP_ENABLED");
-        var wsjtxUdpBindEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_UDP_BIND");
-        var wsjtxAdifTailEnabledEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_ADIF_TAIL_ENABLED");
-        var wsjtxAdifTailPathEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_ADIF_TAIL_PATH");
-        var wsjtxPollIntervalEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_POLL_INTERVAL_MS");
-        var wsjtxSyncToQrzEnv = Environment.GetEnvironmentVariable("QSORIPPER_WSJTX_SYNC_TO_QRZ");
+        var wsjtxEnabledEnv = WsjtxIngestSetup.ReadEnvironmentValue(WsjtxIngestSetup.EnabledEnvironmentVariable);
+        var wsjtxUdpEnabledEnv = WsjtxIngestSetup.ReadEnvironmentValue(
+            WsjtxIngestSetup.UdpEnabledEnvironmentVariable,
+            "QSORIPPER_WSJTX_UDP_ENABLED");
+        var wsjtxUdpBindEnv = WsjtxIngestSetup.ReadEnvironmentValue(
+            WsjtxIngestSetup.UdpBindEnvironmentVariable,
+            "QSORIPPER_WSJTX_UDP_BIND");
+        var wsjtxAdifTailEnabledEnv = WsjtxIngestSetup.ReadEnvironmentValue(
+            WsjtxIngestSetup.AdifTailEnabledEnvironmentVariable,
+            "QSORIPPER_WSJTX_ADIF_TAIL_ENABLED");
+        var wsjtxAdifTailPathEnv = WsjtxIngestSetup.ReadEnvironmentValue(
+            WsjtxIngestSetup.AdifTailPathEnvironmentVariable,
+            "QSORIPPER_WSJTX_ADIF_TAIL_PATH");
+        var wsjtxPollIntervalEnv = WsjtxIngestSetup.ReadEnvironmentValue(
+            WsjtxIngestSetup.PollIntervalMsEnvironmentVariable,
+            "QSORIPPER_WSJTX_POLL_INTERVAL_MS");
+        var wsjtxSyncToQrzEnv = WsjtxIngestSetup.ReadEnvironmentValue(
+            WsjtxIngestSetup.SyncToQrzEnvironmentVariable,
+            "QSORIPPER_WSJTX_SYNC_TO_QRZ");
 
         if (!TryParseOptionalBooleanEnv(
                 rigEnabledEnv,
@@ -597,9 +609,9 @@ internal static class SetupCommand
                 var syncToQrz = PromptYesNo("Upload imported WSJT-X QSOs to QRZ?", defaultYes: existingWsjtx?.SyncToQrz ?? false);
 
                 if (!uint.TryParse(pollIntervalInput, System.Globalization.CultureInfo.InvariantCulture, out var pollIntervalMs)
-                    || pollIntervalMs is < 100 or > 86_400_000)
+                    || !WsjtxIngestSetup.IsValidPollInterval(pollIntervalMs))
                 {
-                    Console.WriteLine("  Poll interval must be between 100 and 86400000 milliseconds.");
+                    Console.WriteLine("  Poll interval must be 0 for the engine default or a positive whole number.");
                     continue;
                 }
 
@@ -802,6 +814,36 @@ internal static class SetupCommand
         return settings;
     }
 
+    internal static bool TryBuildWsjtxIngestSettingsFromEnvironment(
+        WsjtxIngestSettings? existing,
+        out WsjtxIngestSettings? settings,
+        out string? error)
+    {
+        return TryBuildWsjtxIngestSettingsFromEnv(
+            existing,
+            WsjtxIngestSetup.ReadEnvironmentValue(WsjtxIngestSetup.EnabledEnvironmentVariable),
+            WsjtxIngestSetup.ReadEnvironmentValue(
+                WsjtxIngestSetup.UdpEnabledEnvironmentVariable,
+                "QSORIPPER_WSJTX_UDP_ENABLED"),
+            WsjtxIngestSetup.ReadEnvironmentValue(
+                WsjtxIngestSetup.UdpBindEnvironmentVariable,
+                "QSORIPPER_WSJTX_UDP_BIND"),
+            WsjtxIngestSetup.ReadEnvironmentValue(
+                WsjtxIngestSetup.AdifTailEnabledEnvironmentVariable,
+                "QSORIPPER_WSJTX_ADIF_TAIL_ENABLED"),
+            WsjtxIngestSetup.ReadEnvironmentValue(
+                WsjtxIngestSetup.AdifTailPathEnvironmentVariable,
+                "QSORIPPER_WSJTX_ADIF_TAIL_PATH"),
+            WsjtxIngestSetup.ReadEnvironmentValue(
+                WsjtxIngestSetup.PollIntervalMsEnvironmentVariable,
+                "QSORIPPER_WSJTX_POLL_INTERVAL_MS"),
+            WsjtxIngestSetup.ReadEnvironmentValue(
+                WsjtxIngestSetup.SyncToQrzEnvironmentVariable,
+                "QSORIPPER_WSJTX_SYNC_TO_QRZ"),
+            out settings,
+            out error);
+    }
+
     private static bool TryBuildWsjtxIngestSettingsFromEnv(
         WsjtxIngestSettings? existing,
         string? enabledEnv,
@@ -832,40 +874,40 @@ internal static class SetupCommand
 
         if (!TryParseOptionalBooleanEnv(
                 enabledEnv,
-                "QSORIPPER_WSJTX_INGEST_ENABLED",
+                WsjtxIngestSetup.EnabledEnvironmentVariable,
                 out var enabled)
             || !TryParseOptionalBooleanEnv(
                 udpEnabledEnv,
-                "QSORIPPER_WSJTX_UDP_ENABLED",
+                WsjtxIngestSetup.UdpEnabledEnvironmentVariable,
                 out var udpEnabled)
             || !TryParseOptionalBooleanEnv(
                 adifTailEnabledEnv,
-                "QSORIPPER_WSJTX_ADIF_TAIL_ENABLED",
+                WsjtxIngestSetup.AdifTailEnabledEnvironmentVariable,
                 out var adifTailEnabled)
             || !TryParseOptionalBooleanEnv(
                 syncToQrzEnv,
-                "QSORIPPER_WSJTX_SYNC_TO_QRZ",
+                WsjtxIngestSetup.SyncToQrzEnvironmentVariable,
                 out var syncToQrz)
             || !TryParseOptionalUInt32Env(
                 pollIntervalEnv,
-                "QSORIPPER_WSJTX_POLL_INTERVAL_MS",
+                WsjtxIngestSetup.PollIntervalMsEnvironmentVariable,
                 out var pollIntervalMs))
         {
             error = "Error: invalid WSJT-X environment variable value.";
             return false;
         }
 
-        if (pollIntervalMs is < 100 or > 86_400_000)
+        if (pollIntervalMs.HasValue && !WsjtxIngestSetup.IsValidPollInterval(pollIntervalMs.Value))
         {
-            error = "Error: QSORIPPER_WSJTX_POLL_INTERVAL_MS must be between 100 and 86400000.";
+            error = $"Error: {WsjtxIngestSetup.PollIntervalMsEnvironmentVariable} must be 0 for the engine default or a positive whole number.";
             return false;
         }
 
         settings = existing?.Clone() ?? new WsjtxIngestSettings
         {
             UdpEnabled = true,
-            UdpBind = "127.0.0.1:2237",
-            PollIntervalMs = 1000,
+            UdpBind = WsjtxIngestSetup.DefaultUdpBind,
+            PollIntervalMs = WsjtxIngestSetup.DefaultPollIntervalMs,
         };
 
         if (enabled.HasValue)
@@ -884,7 +926,7 @@ internal static class SetupCommand
         }
         else if (string.IsNullOrWhiteSpace(settings.UdpBind))
         {
-            settings.UdpBind = "127.0.0.1:2237";
+            settings.UdpBind = WsjtxIngestSetup.DefaultUdpBind;
         }
 
         if (adifTailEnabled.HasValue)
@@ -903,7 +945,7 @@ internal static class SetupCommand
         }
         else if (settings.PollIntervalMs == 0)
         {
-            settings.PollIntervalMs = 1000;
+            settings.PollIntervalMs = WsjtxIngestSetup.DefaultPollIntervalMs;
         }
 
         if (syncToQrz.HasValue)
@@ -914,6 +956,7 @@ internal static class SetupCommand
         if (!TryValidateWsjtxIngestSettings(settings, out var validationError))
         {
             error = $"Error: {validationError}";
+            settings = null;
             return false;
         }
 
@@ -925,11 +968,12 @@ internal static class SetupCommand
         ArgumentNullException.ThrowIfNull(settings);
         error = null;
 
-        if (settings.UdpEnabled
-            && (string.IsNullOrWhiteSpace(settings.UdpBind)
-                || !settings.UdpBind.Contains(':', StringComparison.Ordinal)))
+        if (!string.IsNullOrWhiteSpace(settings.UdpBind)
+            && !WsjtxIngestSetup.TryValidateHostPort(
+                settings.UdpBind,
+                "WSJT-X UDP bind",
+                out error))
         {
-            error = "WSJT-X UDP bind must be host:port (for example 127.0.0.1:2237).";
             return false;
         }
 
@@ -939,9 +983,9 @@ internal static class SetupCommand
             return false;
         }
 
-        if (settings.PollIntervalMs is < 100 or > 86_400_000)
+        if (!WsjtxIngestSetup.IsValidPollInterval(settings.PollIntervalMs))
         {
-            error = "WSJT-X poll interval must be between 100 and 86400000 milliseconds.";
+            error = "WSJT-X poll interval must be 0 for the engine default or a positive whole number.";
             return false;
         }
 

@@ -83,6 +83,14 @@
       "milliseconds": 200
     },
     {
+      "type": "click",
+      "automationId": "WizardSkipButton"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 200
+    },
+    {
       "type": "screenshot",
       "path": "wizard-review.png"
     },

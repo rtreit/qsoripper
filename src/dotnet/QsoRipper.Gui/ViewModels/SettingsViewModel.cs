@@ -774,17 +774,17 @@ internal sealed partial class SettingsViewModel : ObservableObject
         {
             _hasPersistedWsjtxIngest = settings is not null;
             WsjtxIngestEnabled = settings?.Enabled ?? false;
-            WsjtxUdpEnabled = settings?.UdpEnabled ?? true;
+            WsjtxUdpEnabled = settings is { HasUdpEnabled: true } ? settings.UdpEnabled : true;
             WsjtxUdpBind = !string.IsNullOrWhiteSpace(settings?.UdpBind)
                 ? settings.UdpBind
-                : "127.0.0.1:2237";
+                : WsjtxIngestSetup.DefaultUdpBind;
             WsjtxAdifTailEnabled = settings?.AdifTailEnabled ?? false;
             WsjtxAdifTailPath = settings is { HasAdifTailPath: true }
                 ? settings.AdifTailPath
                 : string.Empty;
             WsjtxPollIntervalMs = settings is { PollIntervalMs: > 0 }
                 ? settings.PollIntervalMs.ToString(CultureInfo.InvariantCulture)
-                : "1000";
+                : WsjtxIngestSetup.DefaultPollIntervalMs.ToString(CultureInfo.InvariantCulture);
             WsjtxSyncToQrz = settings?.SyncToQrz ?? false;
         }
         finally
@@ -1156,11 +1156,12 @@ internal sealed partial class SettingsViewModel : ObservableObject
     {
         validationError = null;
 
-        if (WsjtxUdpEnabled
-            && (string.IsNullOrWhiteSpace(WsjtxUdpBind)
-                || !WsjtxUdpBind.Contains(':', StringComparison.Ordinal)))
+        if (!string.IsNullOrWhiteSpace(WsjtxUdpBind)
+            && !WsjtxIngestSetup.TryValidateHostPort(
+                WsjtxUdpBind,
+                "WSJT-X UDP bind",
+                out validationError))
         {
-            validationError = "WSJT-X UDP bind must be host:port (for example 127.0.0.1:2237).";
             return false;
         }
 
@@ -1170,12 +1171,21 @@ internal sealed partial class SettingsViewModel : ObservableObject
             return false;
         }
 
-        return TryValidateUInt32Field(
-            WsjtxPollIntervalMs,
-            100,
-            86_400_000,
-            "WSJT-X poll interval",
-            out validationError);
+        if (!uint.TryParse(WsjtxPollIntervalMs, CultureInfo.InvariantCulture, out var pollInterval)
+            && !string.IsNullOrWhiteSpace(WsjtxPollIntervalMs))
+        {
+            validationError = "WSJT-X poll interval must be a whole number.";
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(WsjtxPollIntervalMs)
+            && !WsjtxIngestSetup.IsValidPollInterval(pollInterval))
+        {
+            validationError = "WSJT-X poll interval must be 0 for the engine default or a positive whole number.";
+            return false;
+        }
+
+        return true;
     }
 
     private bool TryValidateCatHubInputs(out string? validationError)

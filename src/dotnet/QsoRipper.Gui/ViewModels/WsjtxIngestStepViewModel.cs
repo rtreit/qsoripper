@@ -2,13 +2,16 @@ using System.Collections.Generic;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using QsoRipper.Services;
+using QsoRipper.Shared.Persistence;
 
 namespace QsoRipper.Gui.ViewModels;
 
 internal sealed partial class WsjtxIngestStepViewModel : WizardStepViewModel
 {
-    private const string DefaultUdpBind = "127.0.0.1:2237";
-    private const uint DefaultPollIntervalMs = 1000;
+    private bool _loading;
+
+    [ObservableProperty]
+    private bool _isDirty;
 
     public override string Title => "WSJT-X ingestion (optional)";
 
@@ -24,7 +27,7 @@ internal sealed partial class WsjtxIngestStepViewModel : WizardStepViewModel
     private bool _udpEnabled = true;
 
     [ObservableProperty]
-    private string _udpBind = DefaultUdpBind;
+    private string _udpBind = WsjtxIngestSetup.DefaultUdpBind;
 
     [ObservableProperty]
     private bool _adifTailEnabled;
@@ -33,7 +36,7 @@ internal sealed partial class WsjtxIngestStepViewModel : WizardStepViewModel
     private string? _adifTailPath;
 
     [ObservableProperty]
-    private int _pollIntervalMs = (int)DefaultPollIntervalMs;
+    private int _pollIntervalMs = (int)WsjtxIngestSetup.DefaultPollIntervalMs;
 
     [ObservableProperty]
     private bool _syncToQrz;
@@ -57,27 +60,37 @@ internal sealed partial class WsjtxIngestStepViewModel : WizardStepViewModel
 
     public void ConfigureFromSettings(WsjtxIngestSettings? settings)
     {
-        HasExistingSettings = settings is not null;
-        Enabled = settings?.Enabled ?? false;
-        UdpEnabled = settings?.UdpEnabled ?? true;
-        UdpBind = string.IsNullOrWhiteSpace(settings?.UdpBind) ? DefaultUdpBind : settings.UdpBind;
-        AdifTailEnabled = settings?.AdifTailEnabled ?? false;
-        AdifTailPath = settings is { HasAdifTailPath: true } ? settings.AdifTailPath : string.Empty;
-        PollIntervalMs = settings is { PollIntervalMs: > 0 }
-            ? (int)settings.PollIntervalMs
-            : (int)DefaultPollIntervalMs;
-        SyncToQrz = settings?.SyncToQrz ?? false;
+        _loading = true;
+        try
+        {
+            HasExistingSettings = settings is not null;
+            Enabled = settings?.Enabled ?? false;
+            UdpEnabled = settings is { HasUdpEnabled: true } ? settings.UdpEnabled : true;
+            UdpBind = string.IsNullOrWhiteSpace(settings?.UdpBind) ? WsjtxIngestSetup.DefaultUdpBind : settings.UdpBind;
+            AdifTailEnabled = settings?.AdifTailEnabled ?? false;
+            AdifTailPath = settings is { HasAdifTailPath: true } ? settings.AdifTailPath : string.Empty;
+            PollIntervalMs = settings is { PollIntervalMs: > 0 }
+                ? (int)settings.PollIntervalMs
+                : (int)WsjtxIngestSetup.DefaultPollIntervalMs;
+            SyncToQrz = settings?.SyncToQrz ?? false;
+        }
+        finally
+        {
+            _loading = false;
+            IsDirty = false;
+        }
     }
 
     public bool ShouldSave =>
-        HasExistingSettings
-        || Enabled
-        || !UdpEnabled
-        || !string.Equals(UdpBind, DefaultUdpBind, StringComparison.Ordinal)
-        || AdifTailEnabled
-        || !string.IsNullOrWhiteSpace(AdifTailPath)
-        || PollIntervalMs != DefaultPollIntervalMs
-        || SyncToQrz;
+        IsDirty
+        || (!HasExistingSettings
+            && (Enabled
+                || !UdpEnabled
+                || !string.Equals(UdpBind, WsjtxIngestSetup.DefaultUdpBind, StringComparison.Ordinal)
+                || AdifTailEnabled
+                || !string.IsNullOrWhiteSpace(AdifTailPath)
+                || PollIntervalMs != WsjtxIngestSetup.DefaultPollIntervalMs
+                || SyncToQrz));
 
     public WsjtxIngestSettings BuildSettings()
     {
@@ -85,9 +98,9 @@ internal sealed partial class WsjtxIngestStepViewModel : WizardStepViewModel
         {
             Enabled = Enabled,
             UdpEnabled = UdpEnabled,
-            UdpBind = string.IsNullOrWhiteSpace(UdpBind) ? DefaultUdpBind : UdpBind.Trim(),
+            UdpBind = string.IsNullOrWhiteSpace(UdpBind) ? WsjtxIngestSetup.DefaultUdpBind : UdpBind.Trim(),
             AdifTailEnabled = AdifTailEnabled,
-            PollIntervalMs = PollIntervalMs > 0 ? (uint)PollIntervalMs : DefaultPollIntervalMs,
+            PollIntervalMs = PollIntervalMs > 0 ? (uint)PollIntervalMs : 0,
             SyncToQrz = SyncToQrz,
         };
 
@@ -101,10 +114,10 @@ internal sealed partial class WsjtxIngestStepViewModel : WizardStepViewModel
 
     public bool ValidateLocally()
     {
-        if (UdpEnabled
-            && (string.IsNullOrWhiteSpace(UdpBind) || !UdpBind.Contains(':', StringComparison.Ordinal)))
+        if (!string.IsNullOrWhiteSpace(UdpBind)
+            && !WsjtxIngestSetup.TryValidateHostPort(UdpBind, "UDP bind", out var hostPortError))
         {
-            ValidationSummary = "UDP bind must be host:port (for example 127.0.0.1:2237).";
+            ValidationSummary = hostPortError;
             return false;
         }
 
@@ -114,13 +127,29 @@ internal sealed partial class WsjtxIngestStepViewModel : WizardStepViewModel
             return false;
         }
 
-        if (PollIntervalMs is < 100 or > 86_400_000)
+        if (PollIntervalMs < 0 || !WsjtxIngestSetup.IsValidPollInterval((uint)PollIntervalMs))
         {
-            ValidationSummary = "Poll interval must be between 100 and 86400000 milliseconds.";
+            ValidationSummary = "Poll interval must be 0 for the engine default or a positive whole number.";
             return false;
         }
 
         ClearErrors();
         return true;
+    }
+
+    partial void OnEnabledChanged(bool value) => MarkDirty();
+    partial void OnUdpEnabledChanged(bool value) => MarkDirty();
+    partial void OnUdpBindChanged(string value) => MarkDirty();
+    partial void OnAdifTailEnabledChanged(bool value) => MarkDirty();
+    partial void OnAdifTailPathChanged(string? value) => MarkDirty();
+    partial void OnPollIntervalMsChanged(int value) => MarkDirty();
+    partial void OnSyncToQrzChanged(bool value) => MarkDirty();
+
+    private void MarkDirty()
+    {
+        if (!_loading)
+        {
+            IsDirty = true;
+        }
     }
 }
