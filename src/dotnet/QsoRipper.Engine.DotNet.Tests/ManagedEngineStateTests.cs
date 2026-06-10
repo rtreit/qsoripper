@@ -1335,7 +1335,6 @@ public sealed class ManagedEngineStateTests : IDisposable
             WsjtxIngest = new WsjtxIngestSettings
             {
                 Enabled = true,
-                UdpEnabled = true,
                 UdpBind = "127.0.0.1:2237",
                 AdifTailEnabled = true,
                 AdifTailPath = Path.Combine(_tempDirectory, "wsjtx_log.adi"),
@@ -1359,6 +1358,76 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal(Path.Combine(_tempDirectory, "wsjtx_log.adi"), status.WsjtxIngest.AdifTailPath);
         Assert.Equal(250u, status.WsjtxIngest.PollIntervalMs);
         Assert.True(status.WsjtxIngest.SyncToQrz);
+    }
+
+    [Fact]
+    public void Loaded_wsjtx_ingest_section_applies_runtime_defaults()
+    {
+        var configPath = Path.Combine(_tempDirectory, "config.toml");
+        File.WriteAllText(
+            configPath,
+            """
+            [wsjtx_ingest]
+            enabled = true
+            """);
+
+        var state = CreateState();
+        var status = state.GetSetupStatus();
+
+        Assert.NotNull(status.WsjtxIngest);
+        Assert.True(status.WsjtxIngest.Enabled);
+        Assert.True(status.WsjtxIngest.UdpEnabled);
+        Assert.Equal("127.0.0.1:2237", status.WsjtxIngest.UdpBind);
+        Assert.Equal(1000u, status.WsjtxIngest.PollIntervalMs);
+        Assert.False(status.WsjtxIngest.HasAdifTailPath);
+    }
+
+    [Fact]
+    public void Save_setup_without_wsjtx_ingest_preserves_existing_wsjtx_section()
+    {
+        var configPath = Path.Combine(_tempDirectory, "config.toml");
+        File.WriteAllText(
+            configPath,
+            """
+            [wsjtx_ingest]
+            # keep operator comment
+            enabled = true
+            future_key = "preserve-me"
+            """);
+        var state = CreateState();
+
+        state.SaveSetup(new SaveSetupRequest
+        {
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87"
+            }
+        });
+
+        var content = File.ReadAllText(configPath);
+        Assert.Contains("# keep operator comment", content, StringComparison.Ordinal);
+        Assert.Contains("future_key = \"preserve-me\"", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Save_setup_rejects_invalid_wsjtx_ingest()
+    {
+        var state = CreateState();
+
+        var exception = Assert.Throws<InvalidOperationException>(() => state.SaveSetup(new SaveSetupRequest
+        {
+            WsjtxIngest = new WsjtxIngestSettings
+            {
+                Enabled = true,
+                UdpEnabled = false,
+                AdifTailEnabled = true,
+            },
+        }));
+
+        Assert.Contains("WSJT-X ADIF tail path is required", exception.Message, StringComparison.Ordinal);
     }
 
     [Theory]

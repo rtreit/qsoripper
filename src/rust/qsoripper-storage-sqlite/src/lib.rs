@@ -91,46 +91,48 @@ impl LogbookStore for SqliteStorage {
 
     async fn update_qso(&self, qso: &QsoRecord) -> Result<bool, StorageError> {
         let connection = self.connection()?;
-        let encoded = encode_message(qso);
-        let rows = execute_statement(
+        update_qso_record(&connection, qso)
+    }
+
+    async fn update_qrz_sync_metadata(
+        &self,
+        local_id: &str,
+        expected_updated_at: Option<&prost_types::Timestamp>,
+        qrz_logid: &str,
+    ) -> Result<Option<QsoRecord>, StorageError> {
+        let connection = self.connection()?;
+        let payload = query_optional::<Vec<u8>>(
             &connection,
-            "UPDATE qsos
-             SET qrz_logid = ?,
-                 qrz_bookid = ?,
-                 station_callsign = ?,
-                 worked_callsign = ?,
-                 utc_timestamp_ms = ?,
-                 band = ?,
-                 mode = ?,
-                 contest_id = ?,
-                 created_at_ms = ?,
-                 updated_at_ms = ?,
-                 sync_status = ?,
-                 record = ?,
-                 deleted_at_ms = ?,
-                 pending_remote_delete = ?
-             WHERE local_id = ?",
-            &[
-                Value::from(qso.qrz_logid.as_deref()),
-                Value::from(qso.qrz_bookid.as_deref()),
-                Value::from(qso.station_callsign.as_str()),
-                Value::from(qso.worked_callsign.as_str()),
-                Value::from(timestamp_to_millis(qso.utc_timestamp.as_ref())),
-                Value::Integer(i64::from(qso.band)),
-                Value::Integer(i64::from(qso.mode)),
-                Value::from(qso.contest_id.as_deref()),
-                Value::from(timestamp_to_millis(qso.created_at.as_ref())),
-                Value::from(timestamp_to_millis(qso.updated_at.as_ref())),
-                Value::Integer(i64::from(qso.sync_status)),
-                Value::Binary(encoded),
-                Value::from(timestamp_to_millis(qso.deleted_at.as_ref())),
-                Value::Integer(i64::from(qso.pending_remote_delete)),
-                Value::from(qso.local_id.as_str()),
-            ],
+            "SELECT record FROM qsos WHERE local_id = ?",
+            &[Value::from(local_id)],
+            0,
         )
         .map_err(map_sqlite_error)?;
 
-        Ok(rows > 0)
+        let Some(bytes) = payload else {
+            return Ok(None);
+        };
+        let mut record = decode_qso(&bytes)?;
+        let unchanged_since_upload_started = record.updated_at.as_ref() == expected_updated_at;
+        record.qrz_logid = Some(qrz_logid.to_string());
+        if record.deleted_at.is_some() {
+            record.pending_remote_delete = true;
+            if record.sync_status != SyncStatus::Conflict as i32 {
+                record.sync_status = SyncStatus::Modified as i32;
+            }
+            update_qso_record(&connection, &record)?;
+            return Ok(Some(record));
+        }
+        record.sync_status = if unchanged_since_upload_started {
+            SyncStatus::Synced as i32
+        } else if record.sync_status == SyncStatus::Conflict as i32 {
+            record.sync_status
+        } else {
+            SyncStatus::Modified as i32
+        };
+
+        update_qso_record(&connection, &record)?;
+        Ok(Some(record))
     }
 
     async fn delete_qso(&self, local_id: &str) -> Result<bool, StorageError> {
@@ -517,6 +519,52 @@ impl LookupSnapshotStore for SqliteStorage {
     }
 }
 
+fn update_qso_record(
+    connection: &ConnectionThreadSafe,
+    qso: &QsoRecord,
+) -> Result<bool, StorageError> {
+    let encoded = encode_message(qso);
+    let rows = execute_statement(
+        connection,
+        "UPDATE qsos
+         SET qrz_logid = ?,
+             qrz_bookid = ?,
+             station_callsign = ?,
+             worked_callsign = ?,
+             utc_timestamp_ms = ?,
+             band = ?,
+             mode = ?,
+             contest_id = ?,
+             created_at_ms = ?,
+             updated_at_ms = ?,
+             sync_status = ?,
+             record = ?,
+             deleted_at_ms = ?,
+             pending_remote_delete = ?
+         WHERE local_id = ?",
+        &[
+            Value::from(qso.qrz_logid.as_deref()),
+            Value::from(qso.qrz_bookid.as_deref()),
+            Value::from(qso.station_callsign.as_str()),
+            Value::from(qso.worked_callsign.as_str()),
+            Value::from(timestamp_to_millis(qso.utc_timestamp.as_ref())),
+            Value::Integer(i64::from(qso.band)),
+            Value::Integer(i64::from(qso.mode)),
+            Value::from(qso.contest_id.as_deref()),
+            Value::from(timestamp_to_millis(qso.created_at.as_ref())),
+            Value::from(timestamp_to_millis(qso.updated_at.as_ref())),
+            Value::Integer(i64::from(qso.sync_status)),
+            Value::Binary(encoded),
+            Value::from(timestamp_to_millis(qso.deleted_at.as_ref())),
+            Value::Integer(i64::from(qso.pending_remote_delete)),
+            Value::from(qso.local_id.as_str()),
+        ],
+    )
+    .map_err(map_sqlite_error)?;
+
+    Ok(rows > 0)
+}
+
 fn encode_message<T: Message>(message: &T) -> Vec<u8> {
     message.encode_to_vec()
 }
@@ -609,7 +657,9 @@ mod tests {
     use prost_types::Timestamp;
     use qsoripper_core::application::logbook::LogbookEngine;
     use qsoripper_core::domain::qso::QsoRecordBuilder;
-    use qsoripper_core::proto::qsoripper::domain::{Band, LookupResult, LookupState, Mode};
+    use qsoripper_core::proto::qsoripper::domain::{
+        Band, LookupResult, LookupState, Mode, SyncStatus,
+    };
     use qsoripper_core::storage::{
         EngineStorage, LookupSnapshot, LookupSnapshotStore, QsoListQuery,
     };
@@ -640,6 +690,49 @@ mod tests {
         assert_eq!(loaded.worked_callsign, "K7ABC");
         assert!(loaded.created_at.is_some());
         assert!(loaded.updated_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn sqlite_storage_patches_qrz_metadata_without_replacing_current_row() {
+        let storage = SqliteStorageBuilder::new().in_memory().build().unwrap();
+        let mut qso = QsoRecordBuilder::new("W1AW", "K7PATCH")
+            .band(Band::Band20m)
+            .mode(Mode::Ft8)
+            .timestamp(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            })
+            .build();
+        qso.notes = Some("operator edit".into());
+        qso.sync_status = SyncStatus::Modified as i32;
+        qso.updated_at = Some(Timestamp {
+            seconds: 1_700_000_010,
+            nanos: 0,
+        });
+
+        let logbook = storage.logbook();
+        logbook.insert_qso(&qso).await.unwrap();
+        let patched = logbook
+            .update_qrz_sync_metadata(
+                &qso.local_id,
+                Some(&Timestamp {
+                    seconds: 1_700_000_000,
+                    nanos: 0,
+                }),
+                "QRZ-PATCH",
+            )
+            .await
+            .unwrap()
+            .unwrap_or_else(|| panic!("patched qso"));
+
+        assert_eq!(patched.notes.as_deref(), Some("operator edit"));
+        assert_eq!(patched.qrz_logid.as_deref(), Some("QRZ-PATCH"));
+        assert_eq!(patched.sync_status, SyncStatus::Modified as i32);
+
+        let reloaded = logbook.get_qso(&qso.local_id).await.unwrap().unwrap();
+        assert_eq!(reloaded.notes.as_deref(), Some("operator edit"));
+        assert_eq!(reloaded.qrz_logid.as_deref(), Some("QRZ-PATCH"));
+        assert_eq!(reloaded.sync_status, SyncStatus::Modified as i32);
     }
 
     #[tokio::test]

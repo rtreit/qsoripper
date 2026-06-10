@@ -6,7 +6,9 @@ use crate::domain::station::{
     station_snapshot_has_values,
 };
 use crate::proto::qsoripper::domain::{Band, Mode, QsoRecord, StationProfile, SyncStatus};
-use crate::storage::{EngineStorage, LogbookCounts, QsoListQuery, StorageError, SyncMetadata};
+use crate::storage::{
+    DeletedRecordsFilter, EngineStorage, LogbookCounts, QsoListQuery, StorageError, SyncMetadata,
+};
 use chrono::Utc;
 use prost_types::Timestamp;
 use std::sync::Arc;
@@ -14,6 +16,7 @@ use thiserror::Error;
 
 const ADIF_DUPLICATE_TIME_WINDOW_SECONDS: i64 = 59;
 const ADIF_DUPLICATE_FREQUENCY_TOLERANCE_HZ: u64 = 100;
+const ADIF_IMPORT_FINGERPRINT_FIELD: &str = "APP_QSORIPPER_IMPORT_FINGERPRINT";
 
 /// Coordinates QSO CRUD and sync-status reads through a storage backend.
 #[derive(Clone)]
@@ -390,6 +393,7 @@ impl LogbookEngine {
         }
 
         normalize_qso_for_persistence(&mut qso);
+        stamp_adif_import_fingerprint(&mut qso);
 
         if let Some(reason) = invalid_import_reason(&qso) {
             return Ok(AdifImportOutcome::skipped(format!(
@@ -398,6 +402,17 @@ impl LogbookEngine {
         }
 
         if let Some(existing) = self.find_duplicate_import(&qso).await? {
+            if existing.deleted_at.is_some() {
+                warnings.push(format!(
+                    "Record {record_number}: duplicate skipped; matched a deleted existing QSO and was not resurrected."
+                ));
+                return Ok(AdifImportOutcome {
+                    kind: AdifImportOutcomeKind::Skipped,
+                    affected_qso: None,
+                    warnings,
+                });
+            }
+
             if refresh {
                 let merged = merge_qso_for_refresh(existing.clone(), &qso);
                 let mut comparable_existing = existing;
@@ -412,14 +427,14 @@ impl LogbookEngine {
                         warnings,
                     });
                 }
-                self.storage.logbook().update_qso(&merged).await?;
+                let updated = self.update_qso(merged).await?;
                 warnings.push(format!(
                     "Record {record_number}: refreshed existing record '{}'.",
-                    merged.local_id
+                    updated.local_id
                 ));
                 return Ok(AdifImportOutcome {
                     kind: AdifImportOutcomeKind::Updated,
-                    affected_qso: Some(merged),
+                    affected_qso: Some(updated),
                     warnings,
                 });
             }
@@ -446,6 +461,23 @@ impl LogbookEngine {
         &self,
         candidate: &QsoRecord,
     ) -> Result<Option<QsoRecord>, LogbookError> {
+        if let Some(import_fingerprint) = candidate.extra_fields.get(ADIF_IMPORT_FINGERPRINT_FIELD)
+        {
+            let all_qsos = self
+                .storage
+                .logbook()
+                .list_qsos(&QsoListQuery {
+                    deleted_filter: DeletedRecordsFilter::All,
+                    ..QsoListQuery::default()
+                })
+                .await?;
+            if let Some(existing) = all_qsos.into_iter().find(|existing| {
+                existing.extra_fields.get(ADIF_IMPORT_FINGERPRINT_FIELD) == Some(import_fingerprint)
+            }) {
+                return Ok(Some(existing));
+            }
+        }
+
         let Some(timestamp) = candidate.utc_timestamp else {
             return Ok(None);
         };
@@ -465,6 +497,7 @@ impl LogbookEngine {
                     ADIF_DUPLICATE_TIME_WINDOW_SECONDS,
                 )),
                 callsign_filter,
+                deleted_filter: DeletedRecordsFilter::All,
                 ..QsoListQuery::default()
             })
             .await?;
@@ -670,6 +703,42 @@ fn qsos_match_for_duplicate(existing: &QsoRecord, candidate: &QsoRecord) -> bool
         )
         && optional_strings_compatible(existing.submode.as_deref(), candidate.submode.as_deref())
         && frequencies_compatible(existing, candidate)
+}
+
+fn stamp_adif_import_fingerprint(qso: &mut QsoRecord) {
+    let fingerprint = adif_import_fingerprint(qso);
+    qso.extra_fields
+        .insert(ADIF_IMPORT_FINGERPRINT_FIELD.to_string(), fingerprint);
+}
+
+fn adif_import_fingerprint(qso: &QsoRecord) -> String {
+    let timestamp = qso
+        .utc_timestamp
+        .as_ref()
+        .map_or_else(String::new, |stamp| {
+            format!("{}.{:09}", stamp.seconds, stamp.nanos)
+        });
+    [
+        "v1".to_string(),
+        qso.station_callsign.trim().to_ascii_uppercase(),
+        qso.worked_callsign.trim().to_ascii_uppercase(),
+        timestamp,
+        qso.band.to_string(),
+        qso.mode.to_string(),
+        qso.submode
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_ascii_uppercase(),
+        qso.frequency_hz
+            .map_or_else(String::new, |frequency| frequency.to_string()),
+        {
+            #[allow(deprecated)]
+            let frequency_khz = qso.frequency_khz;
+            frequency_khz.map_or_else(String::new, |frequency| frequency.to_string())
+        },
+    ]
+    .join("\u{1f}")
 }
 
 /// Merge import data onto an existing record for refresh mode.

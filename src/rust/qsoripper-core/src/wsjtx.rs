@@ -3,6 +3,7 @@
 use crate::adif::parse_adi_qsos_without_header_detection;
 use crate::application::logbook::{AdifImportSummary, LogbookEngine, LogbookError};
 use crate::proto::qsoripper::domain::StationProfile;
+#[cfg(test)]
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -11,17 +12,13 @@ const WSJTX_MAGIC: u32 = 0xadbc_cbda;
 const WSJTX_LOGGED_ADIF_MESSAGE_TYPE: u32 = 12;
 const WSJTX_NULL_STRING_LENGTH: u32 = u32::MAX;
 
-/// Import a WSJT-X UDP datagram by extracting any embedded ADIF payload and
-/// feeding it through the normal logbook import path.
-///
-/// The parser accepts both raw ADIF text and lightweight JSON envelopes such as
-/// `{"type":"logged_qso","adif":"<CALL:...>"}` that WSJT-X integrations often
-/// emit when forwarding QSO events to downstream tooling.
+/// Test/simulation helper that accepts permissive WSJT-X-like UDP payloads.
 ///
 /// # Errors
 ///
 /// Returns an error when the datagram has no usable ADIF payload or when the
 /// import pipeline rejects the parsed QSO records.
+#[cfg(test)]
 pub async fn ingest_wsjtx_udp_datagram(
     logbook_engine: &LogbookEngine,
     datagram: &[u8],
@@ -34,12 +31,42 @@ pub async fn ingest_wsjtx_udp_datagram(
             ..AdifImportSummary::default()
         });
     };
-    ingest_adif_payload(
+    Box::pin(ingest_adif_payload(
         logbook_engine,
         &adif_payload,
         active_station_profile,
         refresh,
-    )
+    ))
+    .await
+}
+
+/// Import a real WSJT-X Logged ADIF UDP datagram.
+///
+/// This production entry point accepts only the WSJT-X magic-framed Logged ADIF
+/// message and ignores other WSJT-X message types.
+///
+/// # Errors
+///
+/// Returns an error when a Logged ADIF datagram is malformed or when the import
+/// pipeline rejects the parsed QSO records.
+pub async fn ingest_wsjtx_logged_adif_datagram(
+    logbook_engine: &LogbookEngine,
+    datagram: &[u8],
+    active_station_profile: Option<&StationProfile>,
+    refresh: bool,
+) -> Result<AdifImportSummary, String> {
+    let Some(adif_payload) = extract_wsjtx_logged_adif(datagram)? else {
+        return Ok(AdifImportSummary {
+            records_skipped: 1,
+            ..AdifImportSummary::default()
+        });
+    };
+    Box::pin(ingest_adif_payload(
+        logbook_engine,
+        &adif_payload,
+        active_station_profile,
+        refresh,
+    ))
     .await
 }
 
@@ -79,17 +106,18 @@ pub async fn ingest_wsjtx_adif_tail(
         return Ok(AdifImportSummary::default());
     };
 
-    let summary = ingest_adif_payload(
+    let summary = Box::pin(ingest_adif_payload(
         logbook_engine,
         complete_payload,
         active_station_profile,
         refresh,
-    )
+    ))
     .await?;
     *cursor = start.saturating_add(complete_len);
     Ok(summary)
 }
 
+#[cfg(test)]
 fn extract_adif_payload(datagram: &[u8]) -> Result<Option<Vec<u8>>, String> {
     if read_be_u32(datagram, 0)?.is_some_and(|magic| magic == WSJTX_MAGIC) {
         return extract_wsjtx_logged_adif(datagram);
@@ -203,8 +231,7 @@ async fn ingest_adif_payload(
         return Ok(AdifImportSummary::default());
     }
 
-    logbook_engine
-        .import_adif_qsos(qsos, active_station_profile, refresh)
+    Box::pin(logbook_engine.import_adif_qsos(qsos, active_station_profile, refresh))
         .await
         .map_err(format_wsjtx_error)
 }
@@ -221,18 +248,79 @@ fn format_wsjtx_error(error: LogbookError) -> String {
 }
 
 fn complete_adif_prefix_len(bytes: &[u8]) -> Option<usize> {
-    let marker = b"<eor>";
     let mut last_end = None;
-    for (index, window) in bytes.windows(marker.len()).enumerate() {
-        if window
-            .iter()
-            .zip(marker)
-            .all(|(left, right)| left.to_ascii_lowercase() == *right)
-        {
-            last_end = Some(index + marker.len());
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        let Some(remaining) = bytes.get(cursor..) else {
+            break;
+        };
+        let Some(tag_start_offset) = remaining.iter().position(|byte| *byte == b'<') else {
+            break;
+        };
+        let tag_start = cursor + tag_start_offset;
+        let Some(tag_and_rest) = bytes.get(tag_start..) else {
+            break;
+        };
+        let Some(tag_end_offset) = tag_and_rest.iter().position(|byte| *byte == b'>') else {
+            break;
+        };
+        let tag_end = tag_start + tag_end_offset;
+        let Some(tag_body) = bytes.get(tag_start + 1..tag_end) else {
+            break;
+        };
+        let field_name = adif_tag_name(tag_body);
+        cursor = tag_end + 1;
+
+        if field_name.eq_ignore_ascii_case(b"eor") {
+            last_end = Some(cursor);
+            continue;
+        }
+
+        if let Some(field_len) = adif_field_len(tag_body) {
+            let Some(next_cursor) = cursor_after_utf8_chars(bytes, cursor, field_len) else {
+                break;
+            };
+            cursor = next_cursor;
         }
     }
     last_end
+}
+
+fn cursor_after_utf8_chars(bytes: &[u8], start: usize, char_count: usize) -> Option<usize> {
+    let remaining = std::str::from_utf8(bytes.get(start..)?).ok()?;
+    let mut end_offset = 0;
+    for _ in 0..char_count {
+        let (offset, ch) = remaining.get(end_offset..)?.char_indices().next()?;
+        end_offset = end_offset.checked_add(offset)?.checked_add(ch.len_utf8())?;
+    }
+    start.checked_add(end_offset)
+}
+
+fn adif_tag_name(tag_body: &[u8]) -> &[u8] {
+    let end = tag_body
+        .iter()
+        .position(|byte| *byte == b':' || byte.is_ascii_whitespace())
+        .unwrap_or(tag_body.len());
+    tag_body.get(..end).unwrap_or(tag_body)
+}
+
+fn adif_field_len(tag_body: &[u8]) -> Option<usize> {
+    let colon = tag_body.iter().position(|byte| *byte == b':')?;
+    let mut length = 0_usize;
+    let mut saw_digit = false;
+    for byte in tag_body.get(colon + 1..)? {
+        if *byte == b':' {
+            break;
+        }
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        saw_digit = true;
+        length = length
+            .checked_mul(10)?
+            .checked_add(usize::from(*byte - b'0'))?;
+    }
+    saw_digit.then_some(length)
 }
 
 #[cfg(test)]
@@ -243,7 +331,7 @@ mod tests {
         ingest_wsjtx_udp_datagram, WSJTX_LOGGED_ADIF_MESSAGE_TYPE, WSJTX_MAGIC,
     };
     use crate::application::logbook::{AdifImportSummary, LogbookEngine};
-    use crate::proto::qsoripper::domain::QsoRecord;
+    use crate::proto::qsoripper::domain::{QsoRecord, SyncStatus};
     use crate::storage::{
         EngineStorage, LogbookCounts, LogbookStore, LookupSnapshot, LookupSnapshotStore,
         QsoHistoryPage, QsoListQuery, StorageError, SyncMetadata,
@@ -295,6 +383,30 @@ mod tests {
         async fn update_qso(&self, qso: &QsoRecord) -> Result<bool, StorageError> {
             let mut qsos = self.qsos.write().await;
             Ok(qsos.insert(qso.local_id.clone(), qso.clone()).is_some())
+        }
+
+        async fn update_qrz_sync_metadata(
+            &self,
+            local_id: &str,
+            expected_updated_at: Option<&prost_types::Timestamp>,
+            qrz_logid: &str,
+        ) -> Result<Option<QsoRecord>, StorageError> {
+            let mut qsos = self.qsos.write().await;
+            let Some(record) = qsos.get_mut(local_id) else {
+                return Ok(None);
+            };
+
+            let unchanged_since_upload_started = record.updated_at.as_ref() == expected_updated_at;
+            record.qrz_logid = Some(qrz_logid.to_string());
+            record.sync_status = if unchanged_since_upload_started {
+                SyncStatus::Synced as i32
+            } else if record.sync_status == SyncStatus::Conflict as i32 {
+                record.sync_status
+            } else {
+                SyncStatus::Modified as i32
+            };
+
+            Ok(Some(record.clone()))
         }
 
         async fn delete_qso(&self, local_id: &str) -> Result<bool, StorageError> {
@@ -523,7 +635,8 @@ mod tests {
 
     #[tokio::test]
     async fn ingest_wsjtx_udp_datagram_refreshes_changed_duplicate_but_skips_exact_replay() {
-        let engine = LogbookEngine::new(Arc::new(TestStorage::new()));
+        let storage = Arc::new(TestStorage::new());
+        let engine = LogbookEngine::new(storage.clone());
         let first_payload = wsjtx_frame(
             WSJTX_LOGGED_ADIF_MESSAGE_TYPE,
             std::str::from_utf8(&sample_adif_with_rst_sent("-10")).expect("sample adif"),
@@ -539,6 +652,17 @@ mod tests {
         let replay = ingest_wsjtx_udp_datagram(&engine, &first_payload, None, true)
             .await
             .expect("exact replay");
+        let mut synced_qso = engine
+            .list_qsos(&QsoListQuery::default())
+            .await
+            .expect("qsos")
+            .into_iter()
+            .next()
+            .expect("imported qso");
+        synced_qso.sync_status = SyncStatus::Synced as i32;
+        synced_qso.qrz_logid = Some("remote-1".to_string());
+        storage.update_qso(&synced_qso).await.expect("mark synced");
+
         let changed = ingest_wsjtx_udp_datagram(&engine, &changed_payload, None, true)
             .await
             .expect("changed import");
@@ -556,6 +680,8 @@ mod tests {
             qso.rst_sent.as_ref().map(|rst| rst.raw.as_str()),
             Some("-05")
         );
+        assert_eq!(qso.sync_status, SyncStatus::Modified as i32);
+        assert_eq!(qso.qrz_logid.as_deref(), Some("remote-1"));
     }
 
     #[tokio::test]
@@ -604,6 +730,41 @@ mod tests {
         assert_eq!(cursor, partial.len());
     }
 
+    #[tokio::test]
+    async fn ingest_wsjtx_adif_tail_replay_matches_original_import_after_local_edit_and_delete() {
+        let storage = Arc::new(TestStorage::new());
+        let engine = LogbookEngine::new(storage.clone());
+        let file = NamedTempFile::new().expect("temp file");
+        let path = file.path().to_path_buf();
+        fs::write(&path, sample_adif()).expect("write initial record");
+
+        let mut cursor = 0;
+        let first = ingest_wsjtx_adif_tail(&engine, &path, None, false, &mut cursor)
+            .await
+            .expect("first import");
+        let mut edited = first.affected_qsos.first().expect("affected qso").clone();
+        edited.worked_callsign = "K7EDIT".to_string();
+        edited.deleted_at = Some(millis_to_timestamp(1_700_000_500_000));
+        storage.update_qso(&edited).await.expect("operator edit");
+
+        cursor = 0;
+        let replay = ingest_wsjtx_adif_tail(&engine, &path, None, false, &mut cursor)
+            .await
+            .expect("replay import");
+        let stored = storage.qsos.read().await;
+
+        assert_eq!(first.records_imported, 1);
+        assert_eq!(replay.records_imported, 0);
+        assert_eq!(replay.records_skipped, 1);
+        assert_eq!(stored.len(), 1);
+        assert!(stored
+            .values()
+            .next()
+            .expect("stored qso")
+            .deleted_at
+            .is_some());
+    }
+
     #[test]
     fn complete_adif_prefix_len_returns_last_complete_eor_end() {
         let payload = b"<CALL:3>AAA <EOR><CALL:3>BBB";
@@ -612,5 +773,19 @@ mod tests {
             complete_adif_prefix_len(payload),
             Some(b"<CALL:3>AAA <EOR>".len())
         );
+    }
+
+    #[test]
+    fn complete_adif_prefix_len_ignores_eor_inside_field_value() {
+        let payload = b"<CALL:4>W1AW<COMMENT:11>abc<EOR>def";
+
+        assert_eq!(complete_adif_prefix_len(payload), None);
+    }
+
+    #[test]
+    fn complete_adif_prefix_len_counts_adif_field_lengths_as_utf8_characters() {
+        let payload = "<COMMENT:11>éééééé<EOR>".as_bytes();
+
+        assert_eq!(complete_adif_prefix_len(payload), None);
     }
 }

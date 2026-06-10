@@ -307,9 +307,8 @@ internal static class SharedSetupConfigPersistence
     }
 
     // Top-level TOML keys owned by the engine setup config. On save these are replaced
-    // wholesale; every other top-level table (for example [cat_hub] written by the CAT hub
-    // daemon and [launcher] written by the launcher) is preserved so the unified config.toml
-    // can be safely shared across all QsoRipper components.
+    // wholesale; conditionally-owned tables such as [cat_hub] and [wsjtx_ingest] are
+    // preserved unless a one-shot replacement override is supplied.
     private static readonly string[] EngineOwnedConfigKeys =
     {
         "logbook",
@@ -320,7 +319,6 @@ internal static class SharedSetupConfigPersistence
         "qrz_logbook",
         "sync",
         "rig_control",
-        "wsjtx_ingest",
     };
 
     // Splice the freshly-serialized engine-owned tables into the existing document (when one
@@ -338,6 +336,12 @@ internal static class SharedSetupConfigPersistence
             var catHubTable = BuildCatHubTableOrThrow(config.CatHubWriteOverride);
             result.Remove("cat_hub");
             result["cat_hub"] = catHubTable;
+        }
+        if (config.WsjtxIngestWriteOverride is not null)
+        {
+            var wsjtxIngest = BuildWsjtxIngestTable(config.WsjtxIngestWriteOverride);
+            result.Remove("wsjtx_ingest");
+            AddTableIfNotEmpty(result, "wsjtx_ingest", wsjtxIngest);
         }
 
         return result;
@@ -450,9 +454,6 @@ internal static class SharedSetupConfigPersistence
 
         var rigControl = BuildRigControlTable(config.RigControl);
         AddTableIfNotEmpty(root, "rig_control", rigControl);
-
-        var wsjtxIngest = BuildWsjtxIngestTable(config.WsjtxIngest);
-        AddTableIfNotEmpty(root, "wsjtx_ingest", wsjtxIngest);
 
         return root;
     }
@@ -1590,6 +1591,8 @@ internal sealed class SharedPersistedSetupConfig
     public RigControlSettings? RigControl { get; set; }
 
     public WsjtxIngestSettings? WsjtxIngest { get; set; }
+
+    public WsjtxIngestSettings? WsjtxIngestWriteOverride { get; set; }
 
     // Leniently-parsed projection of the `[cat_hub]` section for STATUS/wizard display only.
     // Never used to re-serialize the section (that would destroy comments/unknown keys).

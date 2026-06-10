@@ -348,7 +348,13 @@ impl SetupState {
             .as_ref()
             .map(PersistedCatHubConfig::from_proto)
             .transpose()?;
-        write_persisted_config(self.config_path.as_path(), &config, cat_hub_update.as_ref())?;
+        let wsjtx_ingest_update = request.wsjtx_ingest.as_ref().map(|_| &config.wsjtx_ingest);
+        write_persisted_config(
+            self.config_path.as_path(),
+            &config,
+            cat_hub_update.as_ref(),
+            wsjtx_ingest_update,
+        )?;
 
         {
             let mut persisted_config = self.persisted_config.write().await;
@@ -534,7 +540,7 @@ impl SetupState {
         runtime_config
             .preview_config_file_values(runtime_values.clone())
             .await?;
-        write_persisted_config(self.config_path.as_path(), &next, None)?;
+        write_persisted_config(self.config_path.as_path(), &next, None, None)?;
         {
             let mut persisted_config = self.persisted_config.write().await;
             *persisted_config = Some(next);
@@ -1923,12 +1929,13 @@ fn load_persisted_config(config_path: &Path) -> Result<Option<PersistedSetupConf
 }
 
 /// Top-level TOML keys owned by the engine setup config. On save these are replaced
-/// wholesale. The `[cat_hub]` section is CONDITIONALLY engine-managed: it is preserved
-/// verbatim when a save does not touch it, and only removed-and-rewritten when the
-/// caller supplies a complete replacement (see `write_persisted_config`). Every other
+/// wholesale. The `[cat_hub]` and `[wsjtx_ingest]` sections are CONDITIONALLY
+/// engine-managed: they are preserved verbatim when a save does not touch them, and
+/// only removed-and-rewritten when the caller supplies a complete replacement (see
+/// `write_persisted_config`). Every other
 /// unknown top-level table (for example `[launcher]` written by the launcher) is always
 /// preserved untouched so the unified `config.toml` can be shared across all components.
-const ENGINE_OWNED_CONFIG_KEYS: [&str; 9] = [
+const ENGINE_OWNED_CONFIG_KEYS: [&str; 8] = [
     "logbook",
     "storage",
     "station_profile",
@@ -1937,13 +1944,13 @@ const ENGINE_OWNED_CONFIG_KEYS: [&str; 9] = [
     "qrz_logbook",
     "sync",
     "rig_control",
-    "wsjtx_ingest",
 ];
 
 fn write_persisted_config(
     config_path: &Path,
     config: &PersistedSetupConfig,
     cat_hub_update: Option<&PersistedCatHubConfig>,
+    wsjtx_ingest_update: Option<&PersistedWsjtxIngestConfig>,
 ) -> Result<(), String> {
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
@@ -1992,6 +1999,9 @@ fn write_persisted_config(
         doc.remove(key);
     }
     for (key, item) in owned_doc.iter() {
+        if key == "wsjtx_ingest" {
+            continue;
+        }
         doc.insert(key, item.clone());
     }
 
@@ -2000,6 +2010,9 @@ fn write_persisted_config(
     if let Some(cat_hub) = cat_hub_update {
         splice_cat_hub_section(&mut doc, cat_hub, config_path)?;
     }
+    if let Some(wsjtx_ingest) = wsjtx_ingest_update {
+        splice_wsjtx_ingest_section(&mut doc, wsjtx_ingest, config_path)?;
+    }
 
     fs::write(config_path, doc.to_string()).map_err(|error| {
         format!(
@@ -2007,6 +2020,34 @@ fn write_persisted_config(
             config_path.display()
         )
     })
+}
+
+fn splice_wsjtx_ingest_section(
+    doc: &mut toml_edit::DocumentMut,
+    wsjtx_ingest: &PersistedWsjtxIngestConfig,
+    config_path: &Path,
+) -> Result<(), String> {
+    let owned_text = toml::to_string_pretty(&PersistedSetupConfig {
+        wsjtx_ingest: wsjtx_ingest.clone(),
+        ..PersistedSetupConfig::default()
+    })
+    .map_err(|error| {
+        format!(
+            "Failed to serialize WSJT-X ingest config '{}': {error}",
+            config_path.display()
+        )
+    })?;
+    let owned_doc: toml_edit::DocumentMut = owned_text.parse().map_err(|error| {
+        format!(
+            "Failed to re-parse WSJT-X ingest config '{}': {error}",
+            config_path.display()
+        )
+    })?;
+    doc.remove("wsjtx_ingest");
+    if let Some(item) = owned_doc.get("wsjtx_ingest") {
+        doc.insert("wsjtx_ingest", item.clone());
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -3793,6 +3834,59 @@ station_callsign = "K7RND"
     }
 
     #[tokio::test]
+    async fn save_setup_without_wsjtx_ingest_preserves_existing_wsjtx_section_verbatim() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "wsjtx-preserve.db");
+        fs::create_dir_all(config_path.parent().expect("config directory"))
+            .expect("create config directory");
+        fs::write(
+            &config_path,
+            format!(
+                r#"
+[wsjtx_ingest]
+# keep operator comment
+enabled = true
+future_key = "preserve-me"
+
+[logbook]
+file_path = "{}"
+"#,
+                log_file_path.replace('\\', "\\\\")
+            ),
+        )
+        .expect("seed config");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+        let replacement_log = absolute_log_file_path(&config_path, "replacement.db");
+
+        let _ = SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(replacement_log),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save setup");
+
+        let saved_toml = fs::read_to_string(&config_path).expect("read config");
+        assert!(saved_toml.contains("# keep operator comment"));
+        assert!(saved_toml.contains("future_key = \"preserve-me\""));
+
+        drop(service);
+        drop(runtime_config);
+        drop(setup_state);
+
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    #[tokio::test]
     async fn save_setup_rejects_wsjtx_adif_tail_without_path() {
         let config_path = unique_config_path();
         let log_file_path = absolute_log_file_path(&config_path, "wsjtx-invalid.db");
@@ -4205,7 +4299,7 @@ engines = [1]
         .expect("seed config");
 
         let config = PersistedSetupConfig::default();
-        write_persisted_config(&config_path, &config, None).expect("write");
+        write_persisted_config(&config_path, &config, None, None).expect("write");
 
         let saved = fs::read_to_string(&config_path).expect("read");
         assert!(saved.contains("[cat_hub.radio]"), "cat_hub.radio: {saved}");
@@ -4246,7 +4340,7 @@ backend = "ts590"
         .expect("seed config");
 
         let config = PersistedSetupConfig::default();
-        write_persisted_config(&config_path, &config, None).expect("write");
+        write_persisted_config(&config_path, &config, None, None).expect("write");
 
         let saved = fs::read_to_string(&config_path).expect("read");
         assert!(
@@ -4467,7 +4561,7 @@ tcp_port = 99999
         let cat_hub =
             PersistedCatHubConfig::from_proto(&valid_cat_hub_settings()).expect("valid settings");
         let engine_config = PersistedSetupConfig::default();
-        write_persisted_config(&config_path, &engine_config, Some(&cat_hub)).expect("write");
+        write_persisted_config(&config_path, &engine_config, Some(&cat_hub), None).expect("write");
 
         let saved = fs::read_to_string(&config_path).expect("read");
         assert!(saved.contains("[cat_hub.radio]"), "radio: {saved}");
@@ -4476,7 +4570,7 @@ tcp_port = 99999
         qsoripper_cathub::validate_cat_hub_toml(&saved).expect("daemon-valid cat_hub");
 
         // Second write WITHOUT a CAT hub update must leave the section untouched.
-        write_persisted_config(&config_path, &engine_config, None).expect("second write");
+        write_persisted_config(&config_path, &engine_config, None, None).expect("second write");
         let preserved = fs::read_to_string(&config_path).expect("read again");
         assert!(
             preserved.contains("[cat_hub.radio]"),

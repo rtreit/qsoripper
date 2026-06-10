@@ -2,7 +2,7 @@
 
 use qsoripper_core::application::logbook::is_pending_sync_status;
 use qsoripper_core::domain::lookup::normalize_callsign;
-use qsoripper_core::proto::qsoripper::domain::QsoRecord;
+use qsoripper_core::proto::qsoripper::domain::{QsoRecord, SyncStatus};
 use qsoripper_core::storage::{
     DeletedRecordsFilter, EngineStorage, LogbookCounts, LogbookStore, LookupSnapshot,
     LookupSnapshotStore, QsoHistoryPage, QsoListQuery, QsoSortOrder, StorageError, SyncMetadata,
@@ -66,6 +66,37 @@ impl LogbookStore for MemoryStorage {
 
         state.qsos.insert(qso.local_id.clone(), qso.clone());
         Ok(true)
+    }
+
+    async fn update_qrz_sync_metadata(
+        &self,
+        local_id: &str,
+        expected_updated_at: Option<&prost_types::Timestamp>,
+        qrz_logid: &str,
+    ) -> Result<Option<QsoRecord>, StorageError> {
+        let mut state = self.state.write().await;
+        let Some(record) = state.qsos.get_mut(local_id) else {
+            return Ok(None);
+        };
+
+        let unchanged_since_upload_started = record.updated_at.as_ref() == expected_updated_at;
+        record.qrz_logid = Some(qrz_logid.to_string());
+        if record.deleted_at.is_some() {
+            record.pending_remote_delete = true;
+            if record.sync_status != SyncStatus::Conflict as i32 {
+                record.sync_status = SyncStatus::Modified as i32;
+            }
+            return Ok(Some(record.clone()));
+        }
+        record.sync_status = if unchanged_since_upload_started {
+            SyncStatus::Synced as i32
+        } else if record.sync_status == SyncStatus::Conflict as i32 {
+            record.sync_status
+        } else {
+            SyncStatus::Modified as i32
+        };
+
+        Ok(Some(record.clone()))
     }
 
     async fn delete_qso(&self, local_id: &str) -> Result<bool, StorageError> {
@@ -632,6 +663,41 @@ mod tests {
         let fetched = storage.get_qso(&local_id).await.unwrap().unwrap();
         assert!(fetched.deleted_at.is_none());
         assert!(!fetched.pending_remote_delete);
+    }
+
+    #[tokio::test]
+    async fn memory_storage_qrz_metadata_patch_on_deleted_row_queues_remote_delete() {
+        let storage = MemoryStorage::new();
+        let mut qso = QsoRecordBuilder::new("W1AW", "K7DEL")
+            .band(Band::Band20m)
+            .mode(Mode::Ft8)
+            .timestamp(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            })
+            .build();
+        qso.sync_status = SyncStatus::Modified as i32;
+        qso.updated_at = Some(Timestamp {
+            seconds: 1_700_000_010,
+            nanos: 0,
+        });
+        let local_id = qso.local_id.clone();
+        storage.insert_qso(&qso).await.unwrap();
+        storage
+            .soft_delete_qso(&local_id, 1_700_000_500_000, false)
+            .await
+            .unwrap();
+
+        let patched = storage
+            .update_qrz_sync_metadata(&local_id, qso.updated_at.as_ref(), "QRZ-DEL")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(patched.deleted_at.is_some());
+        assert!(patched.pending_remote_delete);
+        assert_eq!(patched.qrz_logid.as_deref(), Some("QRZ-DEL"));
+        assert_eq!(patched.sync_status, SyncStatus::Modified as i32);
     }
 
     #[tokio::test]

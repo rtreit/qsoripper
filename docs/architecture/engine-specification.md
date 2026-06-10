@@ -569,10 +569,12 @@ arrays); a standalone file with top-level `[radio]` … tables is still accepted
 
 Because multiple components write the same file, every engine setup save is **merge-preserving**:
 the engine replaces only its own top-level tables (`logbook`, `storage`, `station_profile`,
-`station_profiles`, `qrz_xml`, `qrz_logbook`, `sync`, `rig_control`, `wsjtx_ingest`) and preserves all other
-tables (`[cat_hub]`, `[launcher]`, and any future component sections). A conformant engine in
-any language must implement this merge-preserving behavior rather than rewriting the whole
-file, so it never clobbers another component's configuration.
+`station_profiles`, `qrz_xml`, `qrz_logbook`, `sync`, `rig_control`) and preserves all other
+tables (`[cat_hub]`, `[launcher]`, and any future component sections). The conditional
+`[wsjtx_ingest]` setup table is replaced only when `SaveSetup.wsjtx_ingest` is explicitly
+supplied; omitted WSJT-X ingest settings are preserved verbatim. A conformant engine in any
+language must implement this merge-preserving behavior rather than rewriting the whole file,
+so it never clobbers another component's configuration.
 
 `[cat_hub]` is **conditionally engine-owned**: it is preserved verbatim on every save *unless*
 the `SaveSetup` request explicitly carries a `cat_hub` (`CatHubSettings`) message, in which case
@@ -694,8 +696,12 @@ Persists setup configuration and station profile.
   ADIF and lightweight JSON-wrapped ADIF may be accepted by test/simulation helpers, but runtime
   framed WSJT-X packets must only import logged-QSO ADIF payloads.
 - ADIF-tail input polls `wsjtx_log.adi`, scans from byte 0 on first run for startup recovery, and
-  then imports only appended complete ADIF records while the engine is running. It must not advance
-  its cursor past an incomplete trailing record or a failed import.
+  then imports only appended complete ADIF records while the engine is running. Complete-record
+  detection must honor ADIF field lengths as character counts so literal `<EOR>` text inside a
+  field value cannot move the cursor. It must not advance its cursor past an incomplete trailing
+  record or a failed import. Startup replay is recovery-only: it imports missing QSOs and skips
+  existing duplicates, including soft-deleted or locally edited rows that retain the original import
+  fingerprint, rather than refreshing older ADIF rows over newer local edits.
 - Both inputs feed `LogbookEngine::import_adif_qsos`. Duplicate UDP events, repeated ADIF scans,
   and later manual imports must not create duplicate QSOs.
 - `WsjtxIngestStatus` reports enabled/running state, UDP/tail health, last event time, last
@@ -703,8 +709,10 @@ Persists setup configuration and station profile.
   ingestion error, and last QRZ sync result.
 - When `sync_to_qrz=true`, imported or refreshed WSJT-X QSOs use the same per-operation QRZ upload
   semantics as `LogQso(sync_to_qrz=true)`: success writes QRZ metadata back locally, while failure
-  leaves the local QSO persisted and retryable and records an actionable diagnostic. QRZ upload
-  work must not block the local UDP/tail ingestion loops.
+  leaves the local QSO persisted and retryable and records an actionable diagnostic. The async
+  writeback must patch only QRZ metadata and sync state onto the current local row so a stale upload
+  task cannot overwrite newer operator edits. QRZ upload work must not block the local UDP/tail
+  ingestion loops.
 
 **Error semantics:**
 - `INVALID_ARGUMENT` — invalid or missing required setup fields, an invalid `cat_hub` section, or invalid `wsjtx_ingest` settings.

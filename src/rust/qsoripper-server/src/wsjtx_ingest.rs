@@ -8,7 +8,7 @@ use prost_types::Timestamp;
 use qsoripper_core::application::logbook::AdifImportSummary;
 use qsoripper_core::proto::qsoripper::services::WsjtxIngestStatus;
 use qsoripper_core::qrz_logbook::{QrzLogbookClient, QrzLogbookConfig};
-use qsoripper_core::wsjtx::{ingest_wsjtx_adif_tail, ingest_wsjtx_udp_datagram};
+use qsoripper_core::wsjtx::{ingest_wsjtx_adif_tail, ingest_wsjtx_logged_adif_datagram};
 use tokio::net::UdpSocket;
 use tokio::sync::{watch, Mutex};
 use tokio::time::{timeout, Duration};
@@ -27,15 +27,22 @@ use crate::sync;
 pub(crate) struct WsjtxIngestSupervisor {
     status: Arc<Mutex<WsjtxIngestStatus>>,
     import_lock: Arc<Mutex<()>>,
+    qrz_sync_lock: Arc<Mutex<()>>,
     cancel_tx: watch::Sender<bool>,
 }
 
 impl WsjtxIngestSupervisor {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        Self::with_qrz_sync_lock(Arc::new(Mutex::new(())))
+    }
+
+    pub(crate) fn with_qrz_sync_lock(qrz_sync_lock: Arc<Mutex<()>>) -> Self {
         let (cancel_tx, _) = watch::channel(false);
         Self {
             status: Arc::new(Mutex::new(WsjtxIngestStatus::default())),
             import_lock: Arc::new(Mutex::new(())),
+            qrz_sync_lock,
             cancel_tx,
         }
     }
@@ -47,20 +54,30 @@ impl WsjtxIngestSupervisor {
     pub(crate) fn start(&self, runtime_config: Arc<RuntimeConfigManager>) {
         let udp_status = self.status.clone();
         let udp_import_lock = self.import_lock.clone();
+        let udp_qrz_sync_lock = self.qrz_sync_lock.clone();
         let udp_runtime = runtime_config.clone();
         let mut udp_cancel = self.cancel_tx.subscribe();
         tokio::spawn(async move {
-            udp_loop(udp_runtime, udp_status, udp_import_lock, &mut udp_cancel).await;
+            udp_loop(
+                udp_runtime,
+                udp_status,
+                udp_import_lock,
+                udp_qrz_sync_lock,
+                &mut udp_cancel,
+            )
+            .await;
         });
 
         let tail_status = self.status.clone();
         let tail_import_lock = self.import_lock.clone();
+        let tail_qrz_sync_lock = self.qrz_sync_lock.clone();
         let mut tail_cancel = self.cancel_tx.subscribe();
         tokio::spawn(async move {
             adif_tail_loop(
                 runtime_config,
                 tail_status,
                 tail_import_lock,
+                tail_qrz_sync_lock,
                 &mut tail_cancel,
             )
             .await;
@@ -76,6 +93,7 @@ async fn udp_loop(
     runtime_config: Arc<RuntimeConfigManager>,
     status: Arc<Mutex<WsjtxIngestStatus>>,
     import_lock: Arc<Mutex<()>>,
+    qrz_sync_lock: Arc<Mutex<()>>,
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
     let mut active_bind = String::new();
@@ -146,6 +164,7 @@ async fn udp_loop(
                         &runtime_config,
                         &status,
                         &import_lock,
+                        &qrz_sync_lock,
                         datagram,
                         settings.sync_to_qrz,
                     )
@@ -167,6 +186,7 @@ async fn adif_tail_loop(
     runtime_config: Arc<RuntimeConfigManager>,
     status: Arc<Mutex<WsjtxIngestStatus>>,
     import_lock: Arc<Mutex<()>>,
+    qrz_sync_lock: Arc<Mutex<()>>,
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
     let mut cursor = 0_usize;
@@ -220,7 +240,7 @@ async fn adif_tail_loop(
                 &engine,
                 &path,
                 active_station_profile.as_ref(),
-                true,
+                false,
                 &mut cursor,
             )
             .await
@@ -228,7 +248,13 @@ async fn adif_tail_loop(
         match summary {
             Ok(summary) => {
                 record_import_summary(&status, &summary).await;
-                queue_qrz_sync(&runtime_config, &status, settings.sync_to_qrz, summary);
+                queue_qrz_sync(
+                    &runtime_config,
+                    &status,
+                    &qrz_sync_lock,
+                    settings.sync_to_qrz,
+                    summary,
+                );
             }
             Err(error) => {
                 let mut guard = status.lock().await;
@@ -247,18 +273,20 @@ async fn process_datagram(
     runtime_config: &Arc<RuntimeConfigManager>,
     status: &Arc<Mutex<WsjtxIngestStatus>>,
     import_lock: &Arc<Mutex<()>>,
+    qrz_sync_lock: &Arc<Mutex<()>>,
     datagram: &[u8],
     sync_to_qrz: bool,
 ) {
     let summary = {
         let _guard = import_lock.lock().await;
         let (engine, active_station_profile) = runtime_config.logbook_context().await;
-        ingest_wsjtx_udp_datagram(&engine, datagram, active_station_profile.as_ref(), true).await
+        ingest_wsjtx_logged_adif_datagram(&engine, datagram, active_station_profile.as_ref(), true)
+            .await
     };
     match summary {
         Ok(summary) => {
             record_import_summary(status, &summary).await;
-            queue_qrz_sync(runtime_config, status, sync_to_qrz, summary);
+            queue_qrz_sync(runtime_config, status, qrz_sync_lock, sync_to_qrz, summary);
         }
         Err(error) => {
             let mut guard = status.lock().await;
@@ -271,6 +299,7 @@ async fn process_datagram(
 fn queue_qrz_sync(
     runtime_config: &Arc<RuntimeConfigManager>,
     status: &Arc<Mutex<WsjtxIngestStatus>>,
+    qrz_sync_lock: &Arc<Mutex<()>>,
     sync_to_qrz: bool,
     summary: AdifImportSummary,
 ) {
@@ -280,7 +309,9 @@ fn queue_qrz_sync(
 
     let runtime_config = runtime_config.clone();
     let status = status.clone();
+    let qrz_sync_lock = qrz_sync_lock.clone();
     tokio::spawn(async move {
+        let _guard = qrz_sync_lock.lock().await;
         maybe_sync_to_qrz(&runtime_config, &status, true, &summary).await;
     });
 }
@@ -335,8 +366,13 @@ async fn maybe_sync_to_qrz(
     let book_owner = sync::resolve_book_owner_for_upload(&client, &cached_metadata).await;
 
     for qso in &summary.affected_qsos {
-        match sync::sync_single_qso(&client, engine.logbook_store(), qso, book_owner.as_deref())
-            .await
+        match sync::sync_single_qso_metadata_only(
+            &client,
+            engine.logbook_store(),
+            qso,
+            book_owner.as_deref(),
+        )
+        .await
         {
             Ok(outcome) => {
                 let mut guard = status.lock().await;
@@ -376,7 +412,7 @@ async fn record_import_summary(
         guard.last_imported_callsign = Some(qso.worked_callsign.clone());
         guard.last_imported_local_id = Some(qso.local_id.clone());
     }
-    guard.last_error = summary.warnings.last().cloned();
+    guard.last_error = None;
 }
 
 fn count_duplicate_warnings(summary: &AdifImportSummary) -> u32 {
@@ -491,12 +527,16 @@ fn bool_value(values: &BTreeMap<String, String>, key: &str, default: bool) -> bo
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::{WsjtxIngestSupervisor, WsjtxRuntimeSettings};
+    use super::{
+        process_datagram, record_import_summary, WsjtxIngestSupervisor, WsjtxRuntimeSettings,
+    };
     use crate::runtime_config::{
         RuntimeConfigManager, WSJTX_INGEST_ADIF_TAIL_ENABLED_ENV_VAR,
         WSJTX_INGEST_ADIF_TAIL_PATH_ENV_VAR, WSJTX_INGEST_ENABLED_ENV_VAR,
         WSJTX_INGEST_SYNC_TO_QRZ_ENV_VAR, WSJTX_INGEST_UDP_BIND_ENV_VAR,
     };
+    use qsoripper_core::application::logbook::AdifImportSummary;
+    use qsoripper_core::proto::qsoripper::services::WsjtxIngestStatus;
     use qsoripper_core::storage::QsoListQuery;
     use std::collections::BTreeMap;
     use std::fs;
@@ -573,6 +613,54 @@ mod tests {
 
         supervisor.stop();
         assert!(imported, "WSJT-X UDP datagram was not imported");
+    }
+
+    #[tokio::test]
+    async fn record_import_summary_does_not_treat_warnings_as_errors() {
+        let status = Arc::new(tokio::sync::Mutex::new(WsjtxIngestStatus::default()));
+        let summary = AdifImportSummary {
+            records_skipped: 1,
+            warnings: vec!["Record 1 duplicate skipped".to_string()],
+            ..AdifImportSummary::default()
+        };
+
+        record_import_summary(&status, &summary).await;
+
+        let guard = status.lock().await;
+        assert_eq!(guard.records_skipped, 1);
+        assert_eq!(guard.duplicates_skipped, 1);
+        assert!(guard.last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn process_datagram_rejects_raw_adif_on_production_udp_path() {
+        let mut values = BTreeMap::new();
+        values.insert(WSJTX_INGEST_ENABLED_ENV_VAR.to_string(), "true".to_string());
+        let runtime = Arc::new(RuntimeConfigManager::new(values).expect("runtime"));
+        let status = Arc::new(tokio::sync::Mutex::new(WsjtxIngestStatus::default()));
+        let import_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let qrz_sync_lock = Arc::new(tokio::sync::Mutex::new(()));
+
+        process_datagram(
+            &runtime,
+            &status,
+            &import_lock,
+            &qrz_sync_lock,
+            sample_adif("K7RAW").as_bytes(),
+            false,
+        )
+        .await;
+
+        let qsos = runtime
+            .logbook_engine()
+            .await
+            .list_qsos(&QsoListQuery::default())
+            .await
+            .expect("list qsos");
+        let guard = status.lock().await;
+        assert!(qsos.is_empty());
+        assert_eq!(guard.records_skipped, 1);
+        assert_eq!(guard.parse_errors, 0);
     }
 
     #[tokio::test]
