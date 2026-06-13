@@ -63,10 +63,14 @@ impl ClientDialect for Ts2000Dialect {
                 set_freq(ctx, ctx.snapshot().rx_vfo, &payload).await
             }
             b"FB" => {
+                let snap = ctx.snapshot();
                 if read {
-                    return freq_frame(b"FB", ctx.snapshot().vfo(Vfo::B).freq_hz);
+                    return freq_frame(b"FB", snap.vfo(snap.rx_vfo).freq_hz);
                 }
-                set_freq(ctx, Vfo::B, &payload).await
+                // HDSDR can issue waterfall click-to-tune writes through FB rather than FA
+                // depending on its OmniRig VFO-sync state. Treat both as displayed-frequency
+                // writes so the panadapter cannot tune an inactive physical VFO.
+                set_freq(ctx, snap.rx_vfo, &payload).await
             }
             b"MD" => {
                 if read {
@@ -122,7 +126,6 @@ impl ClientDialect for Ts2000Dialect {
             StateChange::Freq { vfo, hz } if vfo == ctx.snapshot().rx_vfo => {
                 Some(freq_frame(b"FA", hz))
             }
-            StateChange::Freq { vfo: Vfo::B, hz } => Some(freq_frame(b"FB", hz)),
             StateChange::Mode { vfo, mode } if vfo == ctx.snapshot().rx_vfo => {
                 Some(vec![b'M', b'D', mode_to_digit(mode), b';'])
             }
@@ -375,6 +378,30 @@ mod tests {
                 hz: 14_074_000
             }],
             "HDSDR/OmniRig FA set-frequency writes express the displayed active frequency"
+        );
+    }
+
+    #[tokio::test]
+    async fn fb_write_tunes_active_vfo_a() {
+        let (ctx, backend) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        ctx.state.record(
+            StateChange::RxVfo { vfo: Vfo::A },
+            RadioEventSource::NativePush,
+        );
+
+        assert_eq!(
+            Ts2000Dialect::new().handle(b"FB00014052000;", &ctx).await,
+            Vec::<u8>::new()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        assert_eq!(
+            backend.mutations(),
+            vec![StateMutation::SetVfoFreq {
+                vfo: Vfo::A,
+                hz: 14_052_000
+            }],
+            "HDSDR/OmniRig may issue waterfall click-to-tune writes through FB"
         );
     }
 
