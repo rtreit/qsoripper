@@ -16,6 +16,15 @@ namespace QsoRipper.Engine.DotNet;
 
 internal sealed record DeleteQsoOutcome(bool Found, bool RemoteDeleteQueued, bool MissingQrzLogid);
 
+/// <summary>A QSO affected (inserted or refreshed) by a WSJT-X import.</summary>
+internal sealed record WsjtxImportedQsoRef(string LocalId, string WorkedCallsign);
+
+/// <summary>An import result paired with the QSOs it inserted or refreshed.</summary>
+internal sealed record WsjtxImportDetail(ImportAdifResponse Response, IReadOnlyList<WsjtxImportedQsoRef> AffectedQsos);
+
+/// <summary>Per-QSO outcome of a managed QRZ logbook sync triggered by WSJT-X ingestion.</summary>
+internal sealed record WsjtxQrzSyncOutcome(string LocalId, string WorkedCallsign, bool Success, string? Error);
+
 internal sealed record RestoreQsoOutcome(bool Found, QsoRecord? Restored);
 
 internal sealed class QsoSoftDeletedException : InvalidOperationException
@@ -84,6 +93,12 @@ internal sealed class ManagedEngineState
     private readonly bool _ownsSyncEngine;
     private QrzLogbookClient? _ownedSyncClient;
     private QrzSyncEngine? _syncEngine;
+
+    // Latest live WSJT-X ingest diagnostics published by the ingest supervisor. A null value means
+    // the supervisor has not published a snapshot yet; BuildSetupStatusNoLock then leaves
+    // SetupStatus.wsjtx_ingest_status unset. Stored as an already-cloned, immutable-by-convention
+    // snapshot and swapped atomically via Volatile reads/writes.
+    private WsjtxIngestStatus? _wsjtxIngestLiveStatus;
 
     public ManagedEngineState(string configPath)
         : this(configPath, new MemoryStorage(), null, null, null, null)
@@ -837,12 +852,22 @@ internal sealed class ManagedEngineState
 
     public ImportAdifResponse ImportAdif(byte[] adifBytes, bool refresh)
     {
+        return ImportAdifDetailed(adifBytes, refresh).Response;
+    }
+
+    /// <summary>
+    /// Imports ADIF bytes and reports the QSOs that were inserted or refreshed, so callers
+    /// (such as the WSJT-X ingest supervisor) can drive per-import QRZ sync and live status.
+    /// </summary>
+    public WsjtxImportDetail ImportAdifDetailed(byte[] adifBytes, bool refresh)
+    {
         ArgumentNullException.ThrowIfNull(adifBytes);
 
         var qsos = ManagedAdifCodec.ParseAdiQsos(adifBytes);
         lock (_gate)
         {
             var response = new ImportAdifResponse();
+            var affected = new List<WsjtxImportedQsoRef>();
             var activeStationProfile = GetEffectiveActiveProfileNoLock();
             var allExisting = Sync(_storage.Logbook.ListQsosAsync(new QsoListQuery())).ToList();
 
@@ -887,6 +912,7 @@ internal sealed class ManagedEngineState
                         Sync(_storage.Logbook.UpdateQsoAsync(merged));
                         allExisting[existingMatch] = merged;
                         response.RecordsUpdated++;
+                        affected.Add(new WsjtxImportedQsoRef(merged.LocalId, merged.WorkedCallsign));
                         response.Warnings.Add($"Record {recordNumber}: refreshed existing record '{merged.LocalId}'.");
                     }
                     else
@@ -904,11 +930,97 @@ internal sealed class ManagedEngineState
                 qso.SyncStatus = SyncStatus.LocalOnly;
                 Sync(_storage.Logbook.InsertQsoAsync(qso));
                 allExisting.Add(qso);
+                affected.Add(new WsjtxImportedQsoRef(qso.LocalId, qso.WorkedCallsign));
                 response.RecordsImported++;
             }
 
-            return response;
+            return new WsjtxImportDetail(response, affected);
         }
+    }
+
+    /// <summary>
+    /// Publishes the latest live WSJT-X ingest diagnostics so a subsequent GetSetupStatus call
+    /// surfaces them in SetupStatus.wsjtx_ingest_status. The supervisor owns the snapshot lifecycle.
+    /// </summary>
+    public void SetWsjtxIngestLiveStatus(WsjtxIngestStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        Volatile.Write(ref _wsjtxIngestLiveStatus, status.Clone());
+    }
+
+    /// <summary>
+    /// Returns a normalized snapshot of the effective WSJT-X ingest settings, applying the same
+    /// defaults as the Rust runtime (enabled=false, udp_enabled=true, udp_bind=127.0.0.1:2237,
+    /// adif_tail_enabled=false, poll_interval_ms=1000, sync_to_qrz=false). The supervisor polls this
+    /// every loop iteration so configuration changes from SaveSetup take effect live.
+    /// </summary>
+    public WsjtxIngestSettings GetWsjtxIngestSettingsSnapshot()
+    {
+        lock (_gate)
+        {
+            if (_persistedSetup.WsjtxIngest is { } persisted)
+            {
+                return NormalizeWsjtxIngestSnapshot(persisted);
+            }
+
+            var defaults = new WsjtxIngestSettings
+            {
+                Enabled = false,
+                UdpEnabled = true,
+                UdpBind = "127.0.0.1:2237",
+                AdifTailEnabled = false,
+                PollIntervalMs = 1000,
+                SyncToQrz = false,
+            };
+            return defaults;
+        }
+    }
+
+    /// <summary>
+    /// Applies managed QRZ logbook sync flags to the supplied imported QSOs, mirroring
+    /// LogQso(sync_to_qrz=true) semantics: when an API key is configured each QSO is marked
+    /// <see cref="SyncStatus.Synced"/> with a synthetic QRZ logid, otherwise it stays
+    /// <see cref="SyncStatus.LocalOnly"/> with a "QRZ logbook is not configured." error. Returns a
+    /// per-QSO outcome list for the supervisor to fold into live status.
+    /// </summary>
+    public IReadOnlyList<WsjtxQrzSyncOutcome> SyncImportedQsosToQrz(IEnumerable<string> localIds)
+    {
+        ArgumentNullException.ThrowIfNull(localIds);
+
+        var outcomes = new List<WsjtxQrzSyncOutcome>();
+        lock (_gate)
+        {
+            foreach (var rawLocalId in localIds)
+            {
+                var localId = rawLocalId?.Trim();
+                if (string.IsNullOrWhiteSpace(localId))
+                {
+                    continue;
+                }
+
+                var existing = Sync(_storage.Logbook.GetQsoAsync(localId));
+                if (existing is null)
+                {
+                    outcomes.Add(new WsjtxQrzSyncOutcome(localId, string.Empty, Success: false, $"QSO '{localId}' was not found."));
+                    continue;
+                }
+
+                if (!_hasQrzLogbookApiKey)
+                {
+                    existing.SyncStatus = SyncStatus.LocalOnly;
+                    Sync(_storage.Logbook.UpdateQsoAsync(existing));
+                    outcomes.Add(new WsjtxQrzSyncOutcome(localId, existing.WorkedCallsign, Success: false, "QRZ logbook is not configured."));
+                    continue;
+                }
+
+                existing.SyncStatus = SyncStatus.Synced;
+                existing.QrzLogid = $"managed-{Guid.NewGuid():N}";
+                Sync(_storage.Logbook.UpdateQsoAsync(existing));
+                outcomes.Add(new WsjtxQrzSyncOutcome(localId, existing.WorkedCallsign, Success: true, Error: null));
+            }
+        }
+
+        return outcomes;
     }
 
     public byte[] ExportAdif(ExportAdifRequest request)
@@ -1389,6 +1501,11 @@ internal sealed class ManagedEngineState
         if (_persistedSetup.WsjtxIngest is not null)
         {
             status.WsjtxIngest = _persistedSetup.WsjtxIngest.Clone();
+        }
+
+        if (Volatile.Read(ref _wsjtxIngestLiveStatus) is { } wsjtxLiveStatus)
+        {
+            status.WsjtxIngestStatus = wsjtxLiveStatus.Clone();
         }
 
         if (_persistedSetup.CatHub is not null)
@@ -1938,6 +2055,31 @@ internal sealed class ManagedEngineState
         if (normalized.ConflictPolicy == ConflictPolicy.Unspecified)
         {
             normalized.ConflictPolicy = ConflictPolicy.FlagForReview;
+        }
+
+        return normalized;
+    }
+
+    private static WsjtxIngestSettings NormalizeWsjtxIngestSnapshot(WsjtxIngestSettings settings)
+    {
+        // Non-throwing variant used by the ingest supervisor's live polling. The persisted settings
+        // were already validated at SaveSetup time, so here we only re-apply trivial defaults and
+        // never throw (the supervisor must remain resilient to any transient config state).
+        var normalized = settings.Clone();
+        normalized.UdpEnabled = settings.HasUdpEnabled ? settings.UdpEnabled : true;
+        if (string.IsNullOrWhiteSpace(normalized.UdpBind))
+        {
+            normalized.UdpBind = "127.0.0.1:2237";
+        }
+
+        if (string.IsNullOrWhiteSpace(normalized.AdifTailPath))
+        {
+            normalized.ClearAdifTailPath();
+        }
+
+        if (normalized.PollIntervalMs == 0)
+        {
+            normalized.PollIntervalMs = 1000;
         }
 
         return normalized;
