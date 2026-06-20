@@ -14,6 +14,11 @@
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.6" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
     <PackageVersion Include="Roslynator.Analyzers" Version="4.15.0" />
+    <!-- Transitive pin: Microsoft.Data.Sqlite 10.0.x pulls SQLitePCLRaw.lib.e_sqlite3 2.1.11,
+         which has high-severity advisory GHSA-2m69-gcr7-jv3q (NU1903). Pin the native SQLite
+         library to the patched 3.50.3 build. Only Microsoft.Data.Sqlite 11.0-preview moves off
+         2.1.11, so a stable Microsoft.Data.Sqlite bump cannot resolve this. -->
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
     <PackageVersion Include="Roslynator.Formatting.Analyzers" Version="4.15.0" />
     <PackageVersion Include="Tomlyn" Version="0.17.0" />
     <PackageVersion Include="ToListinator" Version="0.0.10" />
