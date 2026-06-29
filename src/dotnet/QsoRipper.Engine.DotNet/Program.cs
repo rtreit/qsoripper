@@ -39,6 +39,9 @@ builder.Services.AddSingleton(provider => new ManagedEngineState(
     resolvedStorage.PersistenceLocation,
     persistedSetup));
 
+builder.Services.AddHostedService(provider =>
+    new QsoRipper.Engine.DotNet.Wsjtx.WsjtxIngestSupervisor(provider.GetRequiredService<ManagedEngineState>()));
+
 var app = builder.Build();
 app.MapGrpcService<ManagedEngineInfoGrpcService>();
 app.MapGrpcService<ManagedSetupGrpcService>();

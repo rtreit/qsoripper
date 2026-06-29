@@ -647,7 +647,7 @@ Returns whether initial setup has been completed.
 **Behavior:**
 - Check if a valid configuration and station profile exist.
 - Return a `SetupStatus` indicating `complete` or `incomplete` with details about what is missing.
-- Include current `wsjtx_ingest` settings when configured and live `wsjtx_ingest_status` diagnostics when the engine implements the WSJT-X supervisor.
+- Include current `wsjtx_ingest` settings when configured and live `wsjtx_ingest_status` diagnostics. A conformant engine that runs the WSJT-X ingest supervisor (required when ingestion is enabled — see "WSJT-X ingest runtime behavior") MUST populate `wsjtx_ingest_status` with its current live state.
 
 #### SaveSetup
 
@@ -697,9 +697,15 @@ Persists setup configuration and station profile.
   for compatibility, but documentation and examples should prefer the canonical runtime names.
 
 **WSJT-X ingest runtime behavior:**
-- When enabled, the Rust engine starts a background supervisor with independent UDP and ADIF-tail
+- This runtime behavior is engine-neutral and REQUIRED: every conformant engine, regardless of
+  implementation language, MUST provide WSJT-X ingestion when `wsjtx_ingest.enabled=true`. Both the
+  Rust engine (`qsoripper-server`) and the .NET engine (`QsoRipper.Engine.DotNet`) implement this
+  contract; a third-party engine must too. An engine MAY surface a documented capability flag if it
+  cannot host long-running background work, but the default expectation is full parity.
+- When enabled, a conformant engine starts a background supervisor with independent UDP and ADIF-tail
   inputs. The supervisor MUST NOT block normal logging or engine startup after configuration has
-  been accepted.
+  been accepted. The supervisor MUST observe `wsjtx_ingest` settings changes applied through
+  `SaveSetup` at runtime (start, stop, rebind, or re-point the tail without a process restart).
 - UDP input listens for WSJT-X Logged ADIF datagrams and ignores non-logged WSJT-X messages. Raw
   ADIF and lightweight JSON-wrapped ADIF may be accepted by test/simulation helpers, but runtime
   framed WSJT-X packets must only import logged-QSO ADIF payloads.
