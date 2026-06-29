@@ -224,6 +224,35 @@ async fn ts2000_face_fa_write_tunes_active_vfo_b() {
     assert!(rig.backend.passthroughs().is_empty());
 }
 
+/// HDSDR can issue waterfall click-to-tune writes through `FB` while the radio is receiving
+/// on VFO A. The TS-2000 translator must treat that as a displayed-frequency write, not as
+/// a request to silently tune inactive physical VFO B.
+#[tokio::test]
+async fn ts2000_face_fb_write_tunes_active_vfo_a() {
+    let rig = rig();
+    let mut omni = rig.face(
+        ts2000(),
+        FacePermissions::from_tokens(&["read", "write"]),
+        1,
+    );
+    rig.state.record(
+        StateChange::RxVfo { vfo: Vfo::A },
+        RadioEventSource::NativePush,
+    );
+
+    omni.write_all(b"FB00014052000;").await.expect("write");
+    tokio::time::sleep(Duration::from_millis(30)).await;
+
+    assert_eq!(
+        rig.backend.mutations(),
+        vec![StateMutation::SetVfoFreq {
+            vfo: Vfo::A,
+            hz: 14_052_000
+        }]
+    );
+    assert!(rig.backend.passthroughs().is_empty());
+}
+
 /// HDSDR/OmniRig polls `IF;`, `FA;`, and `FB;`. On active VFO B, `FA;` must report the
 /// displayed active frequency, not stale inactive VFO A, because HDSDR treats FA as its main
 /// panadapter frequency.
