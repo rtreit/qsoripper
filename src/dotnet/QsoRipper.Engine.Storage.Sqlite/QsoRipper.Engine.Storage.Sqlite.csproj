@@ -10,6 +10,10 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
+    <!-- Pin the native SQLite library above the version transitively pulled by
+         Microsoft.Data.Sqlite to pick up the SQLite 3.50.x fix for CVE-2025-6965
+         (advisory GHSA-2m69-gcr7-jv3q). -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" />
   </ItemGroup>
 
 </Project>
