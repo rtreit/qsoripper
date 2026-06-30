@@ -15,6 +15,7 @@ Primary goals:
 - Avoid Python for hot paths and primary services.
 - Keep startup and interaction latency low.
 - Favor small, composable modules over monoliths.
+- In C#, avoid `string.Create(CultureInfo.InvariantCulture, ...)` for interpolated strings unless the interpolation includes culture-sensitive formatting. Prefer ordinary interpolation for literal separators, string-only values, integer zero-padding, and hex identifiers.
 
 ## Architecture Direction
 
