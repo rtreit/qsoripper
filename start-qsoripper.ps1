@@ -493,7 +493,7 @@ function Get-EngineProfiles {
     $rustDebugTargetPath = Join-Path $PSScriptRoot 'src' | Join-Path -ChildPath 'rust' | Join-Path -ChildPath 'target' | Join-Path -ChildPath 'debug' | Join-Path -ChildPath $binaryName
     # Pick the freshest available binary so -SkipBuild after PR merges doesn't
     # silently re-launch a stale debug build (which then 404s on new RPCs).
-    $rustCandidates = @($rustReleaseArtifactPath, $rustReleaseTargetPath, $rustDebugTargetPath) | Where-Object { Test-Path -LiteralPath $_ }
+    $rustCandidates = @(@($rustReleaseArtifactPath, $rustReleaseTargetPath, $rustDebugTargetPath) | Where-Object { Test-Path -LiteralPath $_ })
     $rustBinaryPath = if ($rustCandidates.Count -gt 0) {
         ($rustCandidates | Sort-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc } -Descending | Select-Object -First 1)
     } else {
@@ -501,7 +501,7 @@ function Get-EngineProfiles {
     }
 
     $dotnetReleasePublishedDllPath = Join-Path $PSScriptRoot 'artifacts' | Join-Path -ChildPath 'publish' | Join-Path -ChildPath 'qsoripper-engine-dotnet' | Join-Path -ChildPath 'Release' | Join-Path -ChildPath 'QsoRipper.Engine.DotNet.dll'
-    $dotnetCandidates = @($dotnetReleasePublishedDllPath, $dotnetReleaseDllPath, $dotnetDebugDllPath) | Where-Object { Test-Path -LiteralPath $_ }
+    $dotnetCandidates = @(@($dotnetReleasePublishedDllPath, $dotnetReleaseDllPath, $dotnetDebugDllPath) | Where-Object { Test-Path -LiteralPath $_ })
     if ($dotnetCandidates.Count -gt 0) {
         $dotnetDllPath = ($dotnetCandidates | Sort-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc } -Descending | Select-Object -First 1)
     }
