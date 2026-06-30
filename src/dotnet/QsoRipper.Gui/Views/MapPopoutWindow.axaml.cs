@@ -42,7 +42,7 @@ internal sealed partial class MapPopoutWindow : Window
         }
         if (scaleText is not null)
         {
-            scaleText.Text = string.Create(CultureInfo.InvariantCulture, $"scale ~{FormatKm(scaleKm)}");
+            scaleText.Text = $"scale ~{FormatKm(scaleKm)}";
         }
     }
 

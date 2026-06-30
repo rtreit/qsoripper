@@ -931,12 +931,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         }
 
         return report.Tone == 0
-            ? string.Create(
-                CultureInfo.InvariantCulture,
-                $"{report.Readability}{report.Strength}")
-            : string.Create(
-                CultureInfo.InvariantCulture,
-                $"{report.Readability}{report.Strength}{report.Tone}");
+            ? $"{report.Readability}{report.Strength}"
+            : $"{report.Readability}{report.Strength}{report.Tone}";
     }
 
     private static (string Sent, string Received) SplitCombinedReport(string value)

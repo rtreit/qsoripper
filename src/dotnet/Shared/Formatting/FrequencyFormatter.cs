@@ -9,9 +9,7 @@ internal static class FrequencyFormatter
         var whole = hz / 1_000_000;
         var khz = hz % 1_000_000 / 1_000;
         var fractionalHz = hz % 1_000;
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"{whole}.{khz:000}.{fractionalHz:000}");
+        return $"{whole}.{khz:000}.{fractionalHz:000}";
     }
 
     public static string FormatMhzWithUnit(ulong hz) => $"{FormatMhz(hz)} MHz";
@@ -20,9 +18,7 @@ internal static class FrequencyFormatter
     {
         var whole = hz / 1_000_000;
         var frac = hz % 1_000_000;
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"{whole}.{frac:000000}");
+        return $"{whole}.{frac:000000}";
     }
 
     public static bool TryParseMhzToHz(string? value, out ulong hz)
