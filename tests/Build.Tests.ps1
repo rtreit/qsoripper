@@ -14,6 +14,12 @@ $rustWorkflowPath = Join-Path $repoRoot '.github' 'workflows' 'rust-quality.yml'
 $rustWorkflowContent = Get-Content $rustWorkflowPath -Raw
 $dotnetWorkflowPath = Join-Path $repoRoot '.github' 'workflows' 'dotnet-quality.yml'
 $dotnetWorkflowContent = Get-Content $dotnetWorkflowPath -Raw
+$win32WorkflowPath = Join-Path $repoRoot '.github' 'workflows' 'win32-quality.yml'
+$win32WorkflowContent = Get-Content $win32WorkflowPath -Raw
+$powershellWorkflowPath = Join-Path $repoRoot '.github' 'workflows' 'powershell-quality.yml'
+$powershellWorkflowContent = Get-Content $powershellWorkflowPath -Raw
+$engineConformanceWorkflowPath = Join-Path $repoRoot '.github' 'workflows' 'engine-conformance.yml'
+$engineConformanceWorkflowContent = Get-Content $engineConformanceWorkflowPath -Raw
 $win32MainPath = Join-Path $repoRoot 'src' 'c' 'qsoripper-win32' 'src' 'main.c'
 $win32MainContent = Get-Content $win32MainPath -Raw
 
@@ -117,6 +123,27 @@ Describe 'Local Visual Studio generator selection' {
 
     It 'does not fall back to the Visual Studio 2022 generator for local builds' {
         $scriptContent | Should Not Match 'Visual Studio 17 2022'
+    }
+
+    It 'does not use the Visual Studio 2022 generator in Win32 CI' {
+        $win32WorkflowContent | Should Not Match 'Visual Studio 17 2022'
+    }
+}
+
+Describe 'PR test workflow coverage' {
+
+    It 'runs Win32 CI through the shared test script' {
+        $win32WorkflowContent | Should Match '\./test\.ps1 win32 -Configuration Release'
+    }
+
+    It 'runs Pester tests on pull requests' {
+        $powershellWorkflowContent | Should Match 'pull_request:'
+        $powershellWorkflowContent | Should Match '\./test\.ps1 pester'
+    }
+
+    It 'runs engine conformance on pull requests' {
+        $engineConformanceWorkflowContent | Should Match 'pull_request:'
+        $engineConformanceWorkflowContent | Should Match '\./tests/Run-EngineConformance\.ps1'
     }
 }
 

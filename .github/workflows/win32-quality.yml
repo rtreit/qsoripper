@@ -21,15 +21,10 @@ permissions:
 
 jobs:
   win32-quality:
-    runs-on: windows-2022
+    runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Configure CMake
-        run: cmake -B build -S src/c/qsoripper-win32 -G "Visual Studio 17 2022"
-
-      - name: Build (Release)
-        run: cmake --build build --config Release
-
-      - name: Run tests
-        run: ctest --test-dir build --output-on-failure -C Release
+      - name: Run Win32 tests
+        shell: pwsh
+        run: ./test.ps1 win32 -Configuration Release

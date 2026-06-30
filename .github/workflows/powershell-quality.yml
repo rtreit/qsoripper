@@ -1,0 +1,41 @@
+name: PowerShell Quality
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/powershell-quality.yml"
+      - "*.ps1"
+      - "tests/**/*.ps1"
+      - "README.md"
+      - "docs/**/*.md"
+      - ".github/workflows/*.yml"
+  pull_request:
+  merge_group:
+
+concurrency:
+  group: powershell-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pester:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Pester
+        shell: pwsh
+        run: Install-Module Pester -Scope CurrentUser -Force -SkipPublisherCheck
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: ./test.ps1 pester

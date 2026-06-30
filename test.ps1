@@ -45,6 +45,24 @@ function Write-Step([string]$Message) {
     Write-Host "`n=== $Message ===" -ForegroundColor Cyan
 }
 
+function New-TestCounts([int]$Passed = 0, [int]$Failed = 0, [int]$Skipped = 0) {
+    [pscustomobject]@{
+        Passed  = $Passed
+        Failed  = $Failed
+        Skipped = $Skipped
+    }
+}
+
+function Add-TestResult([string]$Suite, [pscustomobject]$Counts) {
+    if (-not $script:TestResults) { $script:TestResults = [System.Collections.Generic.List[object]]::new() }
+    $script:TestResults.Add([pscustomobject]@{
+            Suite   = $Suite
+            Passed  = [int]$Counts.Passed
+            Failed  = [int]$Counts.Failed
+            Skipped = [int]$Counts.Skipped
+        }) | Out-Null
+}
+
 function Invoke-TestStep([string]$Step, [string]$Executable, [string[]]$Arguments) {
     Write-Step $Step
     if (-not $script:TestTimings) { $script:TestTimings = [System.Collections.Generic.List[object]]::new() }
@@ -60,6 +78,47 @@ function Invoke-TestStep([string]$Step, [string]$Executable, [string[]]$Argument
         $entry.Seconds = [Math]::Round($sw.Elapsed.TotalSeconds, 2)
         $script:TestTimings.Add($entry) | Out-Null
     }
+
+    if ($code -ne 0) {
+        $entry.Status = 'FAIL'
+        Write-Host "FAILED: $Step" -ForegroundColor Red
+        exit $code
+    }
+
+    $entry.Status = 'OK'
+}
+
+function Invoke-TestStepWithCounts([string]$Step, [string]$Executable, [string[]]$Arguments, [string]$Suite, [scriptblock]$Parser) {
+    Write-Step $Step
+    if (-not $script:TestTimings) { $script:TestTimings = [System.Collections.Generic.List[object]]::new() }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $entry = [pscustomobject]@{ Step = $Step; Status = 'RUN'; Seconds = 0.0 }
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $code = 0
+    try {
+        & $Executable @Arguments 2>&1 | ForEach-Object {
+            $line = $_.ToString()
+            $lines.Add($line) | Out-Null
+            Write-Host $line
+        }
+        $code = $LASTEXITCODE
+    }
+    finally {
+        $sw.Stop()
+        $entry.Seconds = [Math]::Round($sw.Elapsed.TotalSeconds, 2)
+        $script:TestTimings.Add($entry) | Out-Null
+    }
+
+    $counts = & $Parser @($lines)
+    if ($null -eq $counts) {
+        $counts = New-TestCounts
+    }
+
+    if ($code -ne 0 -and [int]$counts.Failed -eq 0) {
+        $counts.Failed = 1
+    }
+
+    Add-TestResult -Suite $Suite -Counts $counts
 
     if ($code -ne 0) {
         $entry.Status = 'FAIL'
@@ -104,6 +163,97 @@ function Format-TestSeconds([double]$Seconds) {
     return ('{0:N2}s' -f $Seconds)
 }
 
+function Get-RustTestCounts([string[]]$Lines) {
+    $passed = 0
+    $failed = 0
+    $skipped = 0
+    foreach ($line in $Lines) {
+        if ($line -match 'test result:\s+\w+\.\s+(?<passed>\d+) passed;\s+(?<failed>\d+) failed;\s+(?<ignored>\d+) ignored;') {
+            $passed += [int]$Matches.passed
+            $failed += [int]$Matches.failed
+            $skipped += [int]$Matches.ignored
+        }
+    }
+    New-TestCounts -Passed $passed -Failed $failed -Skipped $skipped
+}
+
+function Get-DotnetTestCounts([string[]]$Lines) {
+    $passed = 0
+    $failed = 0
+    $skipped = 0
+    foreach ($line in $Lines) {
+        if ($line -match 'Failed:\s+(?<failed>\d+),\s+Passed:\s+(?<passed>\d+),\s+Skipped:\s+(?<skipped>\d+),') {
+            $passed += [int]$Matches.passed
+            $failed += [int]$Matches.failed
+            $skipped += [int]$Matches.skipped
+        }
+    }
+    New-TestCounts -Passed $passed -Failed $failed -Skipped $skipped
+}
+
+function Get-CtestCounts([string[]]$Lines) {
+    foreach ($line in $Lines) {
+        if ($line -match '(?<failed>\d+) tests failed out of (?<total>\d+)') {
+            $failed = [int]$Matches.failed
+            $total = [int]$Matches.total
+            return New-TestCounts -Passed ($total - $failed) -Failed $failed
+        }
+    }
+    New-TestCounts
+}
+
+function Get-ObjectIntProperty($Object, [string[]]$Names) {
+    foreach ($name in $Names) {
+        $property = $Object.PSObject.Properties[$name]
+        if ($null -ne $property -and $null -ne $property.Value) {
+            return [int]$property.Value
+        }
+    }
+    return 0
+}
+
+function Get-PesterCounts($Result) {
+    $passed = Get-ObjectIntProperty -Object $Result -Names @('PassedCount', 'Passed')
+    $failed = Get-ObjectIntProperty -Object $Result -Names @('FailedCount', 'Failed')
+    $skipped = Get-ObjectIntProperty -Object $Result -Names @('SkippedCount', 'Skipped')
+    $skipped += Get-ObjectIntProperty -Object $Result -Names @('PendingCount', 'Pending')
+    $skipped += Get-ObjectIntProperty -Object $Result -Names @('InconclusiveCount', 'Inconclusive')
+    New-TestCounts -Passed $passed -Failed $failed -Skipped $skipped
+}
+
+function Write-TestResultSummary {
+    if (-not $script:TestResults -or $script:TestResults.Count -eq 0) { return }
+    $suiteGroups = @($script:TestResults | Group-Object Suite)
+    $maxLen = ($suiteGroups | ForEach-Object { $_.Name.Length } | Measure-Object -Maximum).Maximum
+    $maxLen = [Math]::Max([int]$maxLen, 5)
+    $bar = '=' * ($maxLen + 45)
+    Write-Host ''
+    Write-Host $bar -ForegroundColor Cyan
+    Write-Host (' TEST RESULT SUMMARY ({0} suites)' -f $suiteGroups.Count) -ForegroundColor Cyan
+    Write-Host $bar -ForegroundColor Cyan
+    $headerFmt = '  {0,-' + $maxLen + '} {1,8} {2,8} {3,8} {4,8}'
+    Write-Host ($headerFmt -f 'SUITE', 'PASSED', 'FAILED', 'SKIPPED', 'TOTAL') -ForegroundColor Gray
+    $totalPassed = 0
+    $totalFailed = 0
+    $totalSkipped = 0
+    foreach ($group in $suiteGroups) {
+        $passed = ($group.Group | Measure-Object -Property Passed -Sum).Sum
+        $failed = ($group.Group | Measure-Object -Property Failed -Sum).Sum
+        $skipped = ($group.Group | Measure-Object -Property Skipped -Sum).Sum
+        $suiteTotal = $passed + $failed + $skipped
+        $totalPassed += $passed
+        $totalFailed += $failed
+        $totalSkipped += $skipped
+        $color = if ($failed -gt 0) { 'Red' } else { 'Green' }
+        Write-Host ($headerFmt -f $group.Name, $passed, $failed, $skipped, $suiteTotal) -ForegroundColor $color
+    }
+
+    $grandTotal = $totalPassed + $totalFailed + $totalSkipped
+    Write-Host $bar -ForegroundColor Cyan
+    Write-Host ($headerFmt -f 'TOTAL', $totalPassed, $totalFailed, $totalSkipped, $grandTotal) -ForegroundColor Cyan
+    Write-Host $bar -ForegroundColor Cyan
+}
+
 function Write-TestSummary {
     if (-not $script:TestTimings -or $script:TestTimings.Count -eq 0) { return }
     $total = ($script:TestTimings | Measure-Object -Property Seconds -Sum).Sum
@@ -127,17 +277,18 @@ function Write-TestSummary {
 }
 
 function Test-Rust {
-    Invoke-TestStep 'Rust tests' cargo @('test', '--manifest-path', $RustManifest)
+    Invoke-TestStepWithCounts 'Rust tests' cargo @('test', '--manifest-path', $RustManifest) 'Rust' ${function:Get-RustTestCounts}
 }
 
 function Test-Dotnet {
-    Invoke-TestStep ".NET tests ($Configuration)" dotnet @('test', $DotnetSolution, '-c', $Configuration)
+    Invoke-TestStepWithCounts ".NET tests ($Configuration)" dotnet @('test', $DotnetSolution, '-c', $Configuration) '.NET' ${function:Get-DotnetTestCounts}
 }
 
 function Test-Win32 {
     if (-not $IsWindows) {
         Write-Step 'Win32 tests'
         Write-Host 'Win32 tests require Windows; skipping on this platform.' -ForegroundColor Yellow
+        Add-TestResult -Suite 'Win32' -Counts (New-TestCounts -Skipped 1)
         return
     }
 
@@ -163,11 +314,11 @@ function Test-Win32 {
         '--parallel'
     )
 
-    Invoke-TestStep "Running Win32 CTest ($Configuration)" ctest @(
+    Invoke-TestStepWithCounts "Running Win32 CTest ($Configuration)" ctest @(
         '--test-dir', $Win32BuildDir,
         '-C', $Configuration,
         '--output-on-failure'
-    )
+    ) 'Win32' ${function:Get-CtestCounts}
 }
 
 function Test-Pester {
@@ -175,12 +326,15 @@ function Test-Pester {
     if (-not $pester) {
         Write-Step 'Pester tests'
         Write-Host 'Pester not installed; skipping PowerShell tests. Install-Module Pester -Scope CurrentUser' -ForegroundColor Yellow
+        Add-TestResult -Suite 'PowerShell' -Counts (New-TestCounts -Skipped 1)
         return
     }
 
     Measure-TestStep 'Pester tests' {
         Import-Module Pester -MinimumVersion $pester.Version -Force
         $result = Invoke-Pester -Path $PesterTestsDir -PassThru
+        $counts = Get-PesterCounts -Result $result
+        Add-TestResult -Suite 'PowerShell' -Counts $counts
         $failedCount = if ($null -ne $result.FailedCount) { $result.FailedCount } elseif ($null -ne $result.Failed) { $result.Failed } else { 0 }
         if ($failedCount -gt 0) {
             exit 1
@@ -229,6 +383,7 @@ try {
     }
 }
 finally {
+    Write-TestResultSummary
     Write-TestSummary
 }
 

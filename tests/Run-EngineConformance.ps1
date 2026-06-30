@@ -393,8 +393,11 @@ function Invoke-ConformanceScenario {
     }
 
     $getAfterDeleteResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'get', $localId, '--json')
-    if ($getAfterDeleteResult.ExitCode -eq 0) {
-        throw "$EngineProfile get unexpectedly succeeded after delete for local id '$localId'."
+    Assert-CommandSucceeded -Result $getAfterDeleteResult -Description "$EngineProfile get after delete --json"
+    $getAfterDeleteJson = $getAfterDeleteResult.StdOut | ConvertFrom-Json
+    $deletedAt = Get-ObjectPropertyValue -Object $getAfterDeleteJson.qso -Name 'deletedAt' -DefaultValue $null
+    if ($null -eq $deletedAt -or [string]::IsNullOrWhiteSpace([string]$deletedAt)) {
+        throw "$EngineProfile get after delete did not return a soft-deleted QSO for local id '$localId'."
     }
 
     return [pscustomobject]@{

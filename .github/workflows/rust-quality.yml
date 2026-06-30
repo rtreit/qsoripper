@@ -70,6 +70,13 @@ jobs:
       - name: Run clippy with warnings denied
         run: cargo clippy --manifest-path src/rust/Cargo.toml --all-targets -- -D warnings
 
+      - name: Run tests for coverage-excluded packages
+        run: |
+          cargo test --manifest-path src/rust/Cargo.toml \
+            -p qsoripper-ffi \
+            -p qsoripper-stress \
+            -p qsoripper-stress-tui
+
       - name: Run Rust tests with coverage
         run: |
           cargo llvm-cov \
