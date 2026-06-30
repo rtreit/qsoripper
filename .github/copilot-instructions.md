@@ -68,6 +68,7 @@ Primary goals:
 - Use PowerShell for Windows shell scripting.
 - Use `rg` for text search operations.
 - Keep build and test loops fast to support tight iteration.
+- For local Win32 CMake validation, use the installed Visual Studio Build Tools 2026 generator (`Visual Studio 18 2026`); do not assume `Visual Studio 17 2022` is available.
 
 ## Pull Requests
 

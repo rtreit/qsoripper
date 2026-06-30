@@ -75,6 +75,7 @@ jobs:
           cargo llvm-cov \
             --manifest-path src/rust/Cargo.toml \
             --workspace \
+            --exclude qsoripper-ffi \
             --exclude qsoripper-stress \
             --exclude qsoripper-stress-tui \
             --lcov \

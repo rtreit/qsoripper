@@ -113,6 +113,13 @@ Describe 'Win32 CLI publish/discovery path contract (WIN32-BUG-2)' {
     }
 }
 
+Describe 'Local Visual Studio generator selection' {
+
+    It 'does not fall back to the Visual Studio 2022 generator for local builds' {
+        $scriptContent | Should Not Match 'Visual Studio 17 2022'
+    }
+}
+
 Describe 'Win32 LogQso shadowing regression (WIN32-BUG-1)' {
 
     It 'declares exactly one cmd buffer in LogQso' {
