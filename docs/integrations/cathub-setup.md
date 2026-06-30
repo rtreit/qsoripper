@@ -230,9 +230,6 @@ With the hub running and all six apps connected:
 Live transmit verification requires the operator and real hardware; do not key the
 transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
 
-For opt-in hardware regression tests against a real TS-590, see
-`docs/integrations/cathub-live-radio-tests.md`.
-
 ## 7. Troubleshooting
 
 - "Access denied" / port busy on COM4: the legacy chain or another app still owns the radio
