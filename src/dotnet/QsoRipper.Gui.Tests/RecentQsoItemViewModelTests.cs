@@ -56,6 +56,21 @@ public sealed class RecentQsoItemViewModelTests
     }
 
     [Fact]
+    public void FrequencyDisplayPreservesSubKilohertzDigits()
+    {
+        var item = RecentQsoItemViewModel.FromQso(new QsoRecord
+        {
+            LocalId = "qso-frequency",
+            WorkedCallsign = "W1AW",
+            StationCallsign = "K7RND",
+            FrequencyHz = 14_074_123,
+        });
+
+        Assert.Equal("14.074123", item.Frequency);
+        Assert.Equal((ulong)14_074_123, item.FrequencySortKey);
+    }
+
+    [Fact]
     public void RxWpmDisplayShowsValueWhenPresent()
     {
         var item = RecentQsoItemViewModel.FromQso(new QsoRecord

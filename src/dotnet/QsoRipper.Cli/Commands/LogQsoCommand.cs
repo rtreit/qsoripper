@@ -1,6 +1,7 @@
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Net.Client;
 using QsoRipper.Domain;
+using QsoRipper.Shared.Formatting;
 using QsoRipper.Services;
 
 namespace QsoRipper.Cli.Commands;
@@ -466,7 +467,7 @@ internal static class LogQsoCommand
                 qso.Submode = snapshot.Submode;
             }
 
-            var freq = snapshot.FrequencyHz > 0 ? $"{snapshot.FrequencyHz / 1_000_000.0:F3} MHz" : "unknown";
+            var freq = snapshot.FrequencyHz > 0 ? FrequencyFormatter.FormatMhzWithUnit(snapshot.FrequencyHz) : "unknown";
             var rawMode = snapshot.HasRawMode ? snapshot.RawMode : "unknown";
             Console.WriteLine($"  Rig: {freq} {rawMode}");
 

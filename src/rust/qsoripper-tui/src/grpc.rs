@@ -305,13 +305,8 @@ pub(crate) async fn get_rig_snapshot(channel: Channel) -> anyhow::Result<Option<
         .and_then(mode_to_adif)
         .map(str::to_string);
 
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "ham radio frequencies are well within f64 mantissa range"
-    )]
-    let freq_mhz = snapshot.frequency_hz as f64 / 1_000_000.0;
     let frequency_display = if snapshot.frequency_hz > 0 {
-        format!("{freq_mhz:.3} MHz")
+        format!("{} MHz", format_frequency_mhz(snapshot.frequency_hz))
     } else {
         String::new()
     };
@@ -461,6 +456,17 @@ fn mhz_to_hz(mhz: f64) -> u64 {
     {
         hz.round() as u64
     }
+}
+
+pub(crate) fn format_frequency_mhz(hz: u64) -> String {
+    let whole = hz / 1_000_000;
+    let frac = hz % 1_000_000;
+    let mut full = format!("{whole}.{frac:06}");
+    let min_len = full.find('.').map_or(full.len(), |dot| dot + 4);
+    while full.len() > min_len && full.ends_with('0') {
+        full.pop();
+    }
+    full
 }
 
 /// Return `Some(s.to_string())` if non-empty, `None` otherwise.
@@ -704,6 +710,14 @@ mod tests {
         assert_eq!(parse_optional_bool("Y").unwrap(), Some(true));
         assert_eq!(parse_optional_bool("no").unwrap(), Some(false));
         assert!(parse_optional_bool("sometimes").is_err());
+    }
+
+    #[test]
+    fn frequency_formatter_preserves_hz_fractional_digits() {
+        assert_eq!(format_frequency_mhz(14_000_000), "14.000");
+        assert_eq!(format_frequency_mhz(14_074_000), "14.074");
+        assert_eq!(format_frequency_mhz(14_074_123), "14.074123");
+        assert_eq!(format_frequency_mhz(14_074_120), "14.07412");
     }
 
     #[test]

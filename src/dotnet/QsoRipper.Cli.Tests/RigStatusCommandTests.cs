@@ -24,5 +24,21 @@ public sealed class RigStatusCommandTests
 
         Assert.Equal("FT8 \"DX\" \\ narrow", document.RootElement.GetProperty("rawMode").GetString());
     }
+
+    [Fact]
+    public void BuildConnectedJsonPayload_preserves_sub_kilohertz_frequency_digits()
+    {
+        var snapshot = new RigSnapshot
+        {
+            Status = RigConnectionStatus.Connected,
+            FrequencyHz = 14_074_123,
+        };
+
+        var json = RigStatusCommand.BuildConnectedJsonPayload(snapshot, "14.074123");
+        using var document = JsonDocument.Parse(json);
+
+        Assert.Equal("14.074123", document.RootElement.GetProperty("frequencyMhz").GetString());
+        Assert.Equal("14.074123 MHz", document.RootElement.GetProperty("frequencyDisplay").GetString());
+    }
 }
 #pragma warning restore CA1707

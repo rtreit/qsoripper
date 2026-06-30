@@ -74,6 +74,22 @@ public sealed class FullQsoCardViewModelTests
     }
 
     [Fact]
+    public void ForEditPreservesSubKilohertzFrequencyDigits()
+    {
+        var engine = new RecordingEngineClient();
+        var card = FullQsoCardViewModel.ForEdit(
+            engine,
+            new QsoRecord
+            {
+                WorkedCallsign = "W1AW",
+                StationCallsign = "K7RND",
+                FrequencyHz = 28_075_730,
+            });
+
+        Assert.Equal("28.07573", card.FrequencyMhz);
+    }
+
+    [Fact]
     public void ForNewMapsLoggerBandAndModeToCardOptions()
     {
         var engine = new RecordingEngineClient();

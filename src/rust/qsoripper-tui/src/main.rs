@@ -1018,41 +1018,14 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
     app.form.comment = src.comment.clone().unwrap_or_default();
     app.form.notes = src.notes.clone().unwrap_or_default();
     if let Some(hz) = src.frequency_hz {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "ham radio frequencies are well within f64 mantissa range"
-        )]
-        {
-            app.form.frequency_mhz = format!("{:.6}", hz as f64 / 1_000_000.0)
-                .trim_end_matches('0')
-                .trim_end_matches('.')
-                .to_string();
-            // Ensure at least 3 decimal places
-            let dot = app
-                .form
-                .frequency_mhz
-                .find('.')
-                .unwrap_or(app.form.frequency_mhz.len());
-            let decimals = app.form.frequency_mhz.len() - dot - 1;
-            if decimals < 3 {
-                for _ in 0..(3 - decimals) {
-                    app.form.frequency_mhz.push('0');
-                }
-            }
-        }
+        app.form.frequency_mhz = grpc::format_frequency_mhz(hz);
     } else if let Some(khz) = {
         #[allow(deprecated)]
         {
             src.frequency_khz
         }
     } {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "ham radio frequencies are well within f64 mantissa range"
-        )]
-        {
-            app.form.frequency_mhz = format!("{:.3}", khz as f64 / 1_000.0);
-        }
+        app.form.frequency_mhz = grpc::format_frequency_mhz(khz * 1_000);
     }
     if let Some(ref ts) = src.utc_timestamp {
         if let Some(dt) = chrono::DateTime::from_timestamp(ts.seconds, 0) {
@@ -1330,11 +1303,7 @@ fn apply_rig_snapshot(app: &mut App, rig: Option<app::RigInfo>) {
         // Always track frequency from the VFO when callsign is empty, or when the
         // current frequency field still matches what we last set from the rig.
         if info.frequency_hz > 0 {
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "ham radio frequencies are well within f64 mantissa range"
-            )]
-            let new_freq = format!("{:.3}", info.frequency_hz as f64 / 1_000_000.0);
+            let new_freq = grpc::format_frequency_mhz(info.frequency_hz);
             let frequency_still_auto = app
                 .last_auto_rig_frequency_mhz
                 .as_deref()

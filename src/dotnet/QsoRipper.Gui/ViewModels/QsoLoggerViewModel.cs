@@ -10,6 +10,7 @@ using CommunityToolkit.Mvvm.Input;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Gui.Services;
+using QsoRipper.Shared.Formatting;
 
 namespace QsoRipper.Gui.ViewModels;
 
@@ -660,8 +661,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
         if (!_frequencyManuallySet && snapshot.FrequencyHz > 0)
         {
-            var mhz = snapshot.FrequencyHz / 1_000_000.0;
-            FrequencyMhz = mhz.ToString("F3", CultureInfo.InvariantCulture);
+            FrequencyMhz = FrequencyFormatter.FormatMhz(snapshot.FrequencyHz);
         }
     }
 

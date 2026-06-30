@@ -591,18 +591,18 @@ static int qso_duration_seconds(const char *time_on, const char *time_off)
     return diff;
 }
 
-/* Convert raw MHz decimal string to radio-style: "14.22500" -> "14.225.00" */
+/* Convert raw MHz decimal string to radio-style: "14.225000" -> "14.225.000" */
 static void freq_to_radio_style(const char *mhz_str, char *out, size_t outsz)
 {
     double mhz = atof(mhz_str);
     unsigned long long hz = (unsigned long long)(mhz * 1000000.0 + 0.5);
     unsigned long long whole_mhz = hz / 1000000;
     unsigned long long khz = (hz % 1000000) / 1000;
-    unsigned long long tens = (hz % 1000) / 10;
-    snprintf(out, outsz, "%llu.%03llu.%02llu", whole_mhz, khz, tens);
+    unsigned long long fractional_hz = hz % 1000;
+    snprintf(out, outsz, "%llu.%03llu.%03llu", whole_mhz, khz, fractional_hz);
 }
 
-/* Parse radio-style freq "14.225.00" to raw MHz double (14.22500).
+/* Parse radio-style freq "14.225.000" to raw MHz double (14.225000).
    Also accepts plain decimal "14.22500". */
 static double freq_parse_mhz(const char *s)
 {
@@ -612,10 +612,18 @@ static double freq_parse_mhz(const char *s)
         if (*p == '.') dots++;
 
     if (dots == 2) {
-        /* Radio-style: MHz.kHz.tens_hz */
-        unsigned long long whole_mhz = 0, khz = 0, tens = 0;
-        if (sscanf(s, "%llu.%llu.%llu", &whole_mhz, &khz, &tens) >= 1)
-            return (double)whole_mhz + (double)khz / 1000.0 + (double)tens / 100000.0;
+        /* Radio-style: MHz.kHz.Hz. Two-digit legacy tails are tens of Hz. */
+        unsigned long long whole_mhz = 0, khz = 0, fractional_hz = 0;
+        char tail[16] = {0};
+        if (sscanf(s, "%llu.%llu.%15[0-9]", &whole_mhz, &khz, tail) >= 2) {
+            size_t tail_len = strlen(tail);
+            if (tail_len > 0) {
+                fractional_hz = strtoull(tail, NULL, 10);
+                if (tail_len <= 2)
+                    fractional_hz *= 10;
+            }
+            return (double)whole_mhz + (double)khz / 1000.0 + (double)fractional_hz / 1000000.0;
+        }
         return 0.0;
     }
     return atof(s);
@@ -1321,7 +1329,7 @@ static void InitState(void)
     safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), "59");
     safe_strcpy(g_state.rst_rcvd, sizeof(g_state.rst_rcvd), "59");
 
-    { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[DEFAULT_BAND_IDX]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
+    { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.6f", BAND_DEFAULT_FREQS[DEFAULT_BAND_IDX]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
 
     SetCurrentDateTime();
 }
@@ -1331,7 +1339,7 @@ static void ClearForm(void)
     g_state.callsign[0] = 0;
     g_state.comment[0] = 0;
     g_state.notes[0] = 0;
-    { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
+    { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.6f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
     SetCurrentDateTime();
 
     g_state.has_lookup = 0;
@@ -2152,7 +2160,7 @@ static void ApplyLoadedQsoDetail(const char *local_id, const QsrQsoDetail *detai
     if (detail->freq_mhz[0])
         freq_to_radio_style((const char *)detail->freq_mhz, g_state.freq_mhz, sizeof(g_state.freq_mhz));
     else
-        { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
+        { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.6f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
 
     if (detail->rst_sent[0])
         safe_strcpy(g_state.rst_sent, sizeof(g_state.rst_sent), (const char *)detail->rst_sent);
@@ -3531,7 +3539,7 @@ static void TypeSelectBand(char c)
         int idx = (g_state.band_idx + 1 + attempt) % NUM_BANDS;
         if (toupper((unsigned char)BANDS[idx][0]) == c) {
             g_state.band_idx = idx;
-            { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
+            { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.6f", BAND_DEFAULT_FREQS[idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
             return;
         }
@@ -3886,7 +3894,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
     if (vk == VK_LEFT) {
         if (g_state.focused_field == FIELD_BAND) {
             g_state.band_idx = (g_state.band_idx + NUM_BANDS - 1) % NUM_BANDS;
-            { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
+            { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.6f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
             g_state.mode_idx = (g_state.mode_idx + NUM_MODES - 1) % NUM_MODES;
@@ -3906,7 +3914,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
     if (vk == VK_RIGHT) {
         if (g_state.focused_field == FIELD_BAND) {
             g_state.band_idx = (g_state.band_idx + 1) % NUM_BANDS;
-            { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.5f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
+            { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.6f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
             g_state.cursor_pos[FIELD_FREQ] = (int)strlen(g_state.freq_mhz);
         } else if (g_state.focused_field == FIELD_MODE) {
             g_state.mode_idx = (g_state.mode_idx + 1) % NUM_MODES;

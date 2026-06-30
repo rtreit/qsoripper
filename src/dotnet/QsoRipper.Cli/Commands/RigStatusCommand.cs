@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Grpc.Net.Client;
 using QsoRipper.Domain;
+using QsoRipper.Shared.Formatting;
 using QsoRipper.Services;
 
 namespace QsoRipper.Cli.Commands;
@@ -40,7 +41,7 @@ internal static class RigStatusCommand
         var snapshotResponse = await client.GetRigSnapshotAsync(new GetRigSnapshotRequest());
         if (snapshotResponse.Snapshot is { } snapshot)
         {
-            var freq = snapshot.FrequencyHz > 0 ? $"{snapshot.FrequencyHz / 1_000_000.0:F3} MHz" : "unknown";
+            var freq = snapshot.FrequencyHz > 0 ? FrequencyFormatter.FormatMhzWithUnit(snapshot.FrequencyHz) : "unknown";
             var band = snapshot.Band != Band.Unspecified ? EnumHelpers.FormatBand(snapshot.Band) : "unknown";
             var mode = snapshot.HasRawMode ? snapshot.RawMode : "unknown";
 
@@ -81,7 +82,7 @@ internal static class RigStatusCommand
         }
 
         var freqMhz = snapshot.FrequencyHz > 0
-            ? FormattableString.Invariant($"{snapshot.FrequencyHz / 1_000_000.0:F3}")
+            ? FrequencyFormatter.FormatMhz(snapshot.FrequencyHz)
             : "";
         Console.WriteLine(BuildConnectedJsonPayload(snapshot, freqMhz));
         return 0;

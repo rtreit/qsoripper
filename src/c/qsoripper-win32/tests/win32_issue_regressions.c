@@ -190,11 +190,11 @@ static int test_issue_199_rig_tuning_updates_freq_field(void)
     qsr_test_set_form_basics("K1ABC", "2026-01-02", "03:04");
     qsr_test_set_band_mode_indices(0, 0);
     qsr_test_set_focused_field(FIELD_CALLSIGN);
-    qsr_test_set_freq_field("14.000.00");
+    qsr_test_set_freq_field("14.000.000");
 
-    qsr_test_apply_rig_result(1, "14.225.00", "14.22500", "20M", "SSB");
+    qsr_test_apply_rig_result(1, "14.225.123", "14.225123", "20M", "SSB");
 
-    if (strcmp(qsr_test_get_freq_field(), "14.225.00") != 0) {
+    if (strcmp(qsr_test_get_freq_field(), "14.225.123") != 0) {
         return fail("Rig tuning did not refresh frequency field while callsign was populated");
     }
     return 0;

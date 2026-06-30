@@ -7,6 +7,7 @@ using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.EngineSelection;
 using QsoRipper.Gui.Utilities;
+using QsoRipper.Shared.Formatting;
 
 namespace QsoRipper.Gui.ViewModels;
 
@@ -1029,14 +1030,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
 
     private static string FormatFrequencyMhz(ulong hz)
     {
-        ulong whole = hz / 1_000_000;
-        ulong frac = hz % 1_000_000;
-        string full = $"{whole}.{frac:000000}";
-        int dotPos = full.IndexOf('.', StringComparison.Ordinal);
-        int minLen = dotPos + 4; // dot + 3 digits minimum
-        var trimmed = full.AsSpan().TrimEnd('0');
-        int end = Math.Max(trimmed.Length, minLen);
-        return full[..end];
+        return FrequencyFormatter.FormatMhz(hz);
     }
 
     private static bool TryParseOptionalUInt(string? value, out uint parsed)
