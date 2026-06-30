@@ -694,7 +694,7 @@ impl LogForm {
             .get(self.band_idx)
             .copied()
             .unwrap_or(14.225);
-        self.frequency_mhz = format!("{freq:.3}.000");
+        self.frequency_mhz = format_default_frequency_mhz(freq);
         self.on_mode_change();
     }
 
@@ -1039,6 +1039,11 @@ fn byte_index_for_char(text: &str, char_idx: usize) -> usize {
         .map_or_else(|| text.len(), |(idx, _)| idx)
 }
 
+/// Format a band default frequency using the same Hz-preserving display path as rig updates.
+fn format_default_frequency_mhz(freq: f64) -> String {
+    crate::grpc::format_frequency_mhz(crate::grpc::mhz_to_hz(freq))
+}
+
 /// Return the default RST string for the given mode index.
 fn default_rst_for_mode(mode_idx: usize) -> &'static str {
     match MODES.get(mode_idx).copied().unwrap_or("SSB") {
@@ -1185,6 +1190,11 @@ mod tests {
         form.band_idx = 999;
         form.on_band_change();
         assert_eq!(form.frequency_mhz, "14.225.000");
+    }
+
+    #[test]
+    fn format_default_frequency_preserves_sub_kilohertz_fraction() {
+        assert_eq!(format_default_frequency_mhz(14.225_678), "14.225.678");
     }
 
     #[test]

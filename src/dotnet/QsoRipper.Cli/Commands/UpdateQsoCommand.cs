@@ -97,7 +97,7 @@ internal static class UpdateQsoCommand
                     var freqValue = args[++i];
                     if (!FrequencyFormatter.TryParseMhzToHz(freqValue, out var hz))
                     {
-                        error = $"Invalid value for --freq: {freqValue}. Use MHz such as 14.074.";
+                        error = $"Invalid value for --freq: {freqValue}. Use MHz such as 14.074 or 14.074.123.";
                         return false;
                     }
 

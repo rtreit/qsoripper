@@ -36,6 +36,7 @@
 #define SPACE_WEATHER_REFRESH_MS (60 * 60 * 1000ULL)
 /* Tuning / behaviour constants */
 #define MAX_FIELD_LEN   256
+#define FREQ_FIELD_WIDTH_CHARS 12
 
 /* ── Menu item IDs ─────────────────────────────────────────────────────── */
 
@@ -900,6 +901,16 @@ void qsr_test_apply_rig_result(int connected, const char *freq_display,
 const char *qsr_test_get_freq_field(void)
 {
     return g_state.freq_mhz;
+}
+
+int qsr_test_freq_field_width_chars(void)
+{
+    return FREQ_FIELD_WIDTH_CHARS;
+}
+
+unsigned long long qsr_test_parse_freq_hz(const char *freq)
+{
+    return (unsigned long long)(freq_parse_mhz(freq) * 1000000.0 + 0.5);
 }
 
 void qsr_test_invoke_log_qso(void)
@@ -2625,11 +2636,11 @@ static int PaintLogForm(HDC hdc, int y_start, int w)
     /* Row 5: Freq, Date, Time */
     {
         DrawLabelWithHotkey(hdc, pad, y + 3, CLR_LABEL, "Freq MHz", FieldHotkey(FIELD_FREQ), cw, ch);
-        DrawField(hdc, pad + label_w, y, 10,
+        DrawField(hdc, pad + label_w, y, FREQ_FIELD_WIDTH_CHARS,
                   g_state.freq_mhz, g_state.cursor_pos[FIELD_FREQ],
                   focused_form && g_state.focused_field == FIELD_FREQ, cw, ch);
 
-        int dx = pad + label_w + 10 * cw + 16;
+        int dx = pad + label_w + FREQ_FIELD_WIDTH_CHARS * cw + 16;
         DrawLabelWithHotkey(hdc, dx, y + 3, CLR_LABEL, "Date", FieldHotkey(FIELD_DATE), cw, ch);
         DrawField(hdc, dx + 5 * cw, y, 12,
                   g_state.date, g_state.cursor_pos[FIELD_DATE],
@@ -4474,9 +4485,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             } else if (row == 4) {
                 /* Freq / Date / Time */
                 int cx = pad + label_w;
-                int dx = cx + 10 * cw + 16 + 5 * cw;
+                int dx = cx + FREQ_FIELD_WIDTH_CHARS * cw + 16 + 5 * cw;
                 int tx = dx + 12 * cw + 16 + 5 * cw;
-                if (mx >= cx && mx < cx + 10 * cw + 6) clicked = FIELD_FREQ;
+                if (mx >= cx && mx < cx + FREQ_FIELD_WIDTH_CHARS * cw + 6) clicked = FIELD_FREQ;
                 else if (mx >= dx && mx < dx + 12 * cw + 6) clicked = FIELD_DATE;
                 else if (mx >= tx && mx < tx + 6 * cw + 6) clicked = FIELD_TIME;
             }

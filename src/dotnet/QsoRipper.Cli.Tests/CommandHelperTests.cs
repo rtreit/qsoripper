@@ -52,7 +52,7 @@ public sealed class CommandHelperTests
     }
 
     [Theory]
-    [InlineData("--freq", "nope", "Invalid value for --freq: nope. Use MHz such as 14.074.")]
+    [InlineData("--freq", "nope", "Invalid value for --freq: nope. Use MHz such as 14.074 or 14.074.123.")]
     [InlineData("--rst-sent", "ab", "Invalid value for --rst-sent: ab. Expected 2 or 3 digits.")]
     [InlineData("--rst-rcvd", "1", "Invalid value for --rst-rcvd: 1. Expected 2 or 3 digits.")]
     public void TryBuildQso_rejects_invalid_optional_values(string option, string value, string expectedError)
@@ -424,6 +424,18 @@ public sealed class CommandHelperTests
 
         Assert.False(success);
         Assert.Contains("Invalid --at value", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TryApplyUpdates_rejects_invalid_frequency_with_radio_style_hint()
+    {
+        var qso = new QsoRecord { WorkedCallsign = "W1AW" };
+        var enrich = false;
+
+        var success = UpdateQsoCommand.TryApplyUpdates(["--freq", "nope"], qso, ref enrich, out var error);
+
+        Assert.False(success);
+        Assert.Equal("Invalid value for --freq: nope. Use MHz such as 14.074 or 14.074.123.", error);
     }
 
     [Theory]

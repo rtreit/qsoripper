@@ -446,7 +446,7 @@ pub(crate) async fn purge_deleted_qsos(channel: Channel) -> anyhow::Result<u32> 
 }
 
 /// Convert a frequency in MHz to Hz as a `u64`.
-fn mhz_to_hz(mhz: f64) -> u64 {
+pub(crate) fn mhz_to_hz(mhz: f64) -> u64 {
     let hz = mhz * 1_000_000.0_f64;
     #[expect(
         clippy::cast_possible_truncation,

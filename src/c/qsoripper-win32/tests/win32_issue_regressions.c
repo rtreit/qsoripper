@@ -59,6 +59,8 @@ void qsr_test_set_focused_field(enum Field field);
 void qsr_test_set_rig_enabled(int enabled);
 void qsr_test_apply_rig_result(int connected, const char *freq_display, const char *freq_mhz, const char *band, const char *mode);
 const char *qsr_test_get_freq_field(void);
+int qsr_test_freq_field_width_chars(void);
+unsigned long long qsr_test_parse_freq_hz(const char *freq);
 void qsr_test_invoke_log_qso(void);
 void qsr_test_invoke_load_selected_qso(void);
 void qsr_test_invoke_delete_selected_qso(void);
@@ -196,6 +198,22 @@ static int test_issue_199_rig_tuning_updates_freq_field(void)
 
     if (strcmp(qsr_test_get_freq_field(), "14.225.123") != 0) {
         return fail("Rig tuning did not refresh frequency field while callsign was populated");
+    }
+    return 0;
+}
+
+static int test_freq_field_fits_vhf_radio_style_frequency(void)
+{
+    if (qsr_test_freq_field_width_chars() < 12) {
+        return fail("Frequency field is too narrow for 146.520.000 style values");
+    }
+    return 0;
+}
+
+static int test_legacy_two_digit_radio_frequency_tail_still_parses(void)
+{
+    if (qsr_test_parse_freq_hz("14.225.12") != 14225120ULL) {
+        return fail("Legacy two-digit radio frequency tail did not parse as tens of Hz");
     }
     return 0;
 }
@@ -580,6 +598,8 @@ int main(void)
     int failures = 0;
     if (test_issue_262_utf8_conversion() != 0) failures++;
     if (test_issue_199_rig_tuning_updates_freq_field() != 0) failures++;
+    if (test_freq_field_fits_vhf_radio_style_frequency() != 0) failures++;
+    if (test_legacy_two_digit_radio_frequency_tail_still_parses() != 0) failures++;
     if (test_issue_263_log_is_non_blocking() != 0) failures++;
     if (test_issue_263_load_selected_qso_is_non_blocking() != 0) failures++;
     if (test_issue_263_delete_selected_qso_is_non_blocking() != 0) failures++;
