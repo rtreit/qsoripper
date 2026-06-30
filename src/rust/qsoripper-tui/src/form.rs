@@ -694,7 +694,7 @@ impl LogForm {
             .get(self.band_idx)
             .copied()
             .unwrap_or(14.225);
-        self.frequency_mhz = format!("{freq:.3}");
+        self.frequency_mhz = format!("{freq:.3}.000");
         self.on_mode_change();
     }
 
@@ -1069,7 +1069,7 @@ mod tests {
     #[test]
     fn new_form_sets_default_frequency() {
         let form = LogForm::new();
-        assert_eq!(form.frequency_mhz, "14.225");
+        assert_eq!(form.frequency_mhz, "14.225.000");
     }
 
     #[test]
@@ -1168,7 +1168,7 @@ mod tests {
         let mut form = LogForm::new();
         form.band_idx = BANDS.iter().position(|&b| b == "40M").unwrap();
         form.on_band_change();
-        assert_eq!(form.frequency_mhz, "7.150");
+        assert_eq!(form.frequency_mhz, "7.150.000");
     }
 
     #[test]
@@ -1176,7 +1176,7 @@ mod tests {
         let mut form = LogForm::new();
         form.band_idx = 0;
         form.on_band_change();
-        assert_eq!(form.frequency_mhz, "1.900");
+        assert_eq!(form.frequency_mhz, "1.900.000");
     }
 
     #[test]
@@ -1184,7 +1184,7 @@ mod tests {
         let mut form = LogForm::new();
         form.band_idx = 999;
         form.on_band_change();
-        assert_eq!(form.frequency_mhz, "14.225");
+        assert_eq!(form.frequency_mhz, "14.225.000");
     }
 
     #[test]

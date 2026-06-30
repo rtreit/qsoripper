@@ -35,6 +35,22 @@ public sealed class CommandHelperTests
         Assert.Equal("Worked on dipole", qso.Notes);
     }
 
+    [Fact]
+    public void TryBuildQso_accepts_radio_style_frequency()
+    {
+        var success = LogQsoCommand.TryBuildQso(
+            "W1AW",
+            ["20m", "FT8", "--freq", "14.074.123"],
+            out var qso,
+            out _,
+            out var error);
+
+        Assert.True(success);
+        Assert.Null(error);
+        Assert.NotNull(qso);
+        Assert.Equal((ulong)14_074_123, qso!.FrequencyHz);
+    }
+
     [Theory]
     [InlineData("--freq", "nope", "Invalid value for --freq: nope. Use MHz such as 14.074.")]
     [InlineData("--rst-sent", "ab", "Invalid value for --rst-sent: ab. Expected 2 or 3 digits.")]

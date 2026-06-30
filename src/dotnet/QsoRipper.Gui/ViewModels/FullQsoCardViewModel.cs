@@ -1148,9 +1148,9 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
             return true;
         }
 
-        if (double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out var mhz) && mhz > 0)
+        if (FrequencyFormatter.TryParseMhzToHz(normalized, out var hz))
         {
-            setter((ulong)Math.Round(mhz * 1_000_000.0, MidpointRounding.AwayFromZero));
+            setter(hz);
             return true;
         }
 

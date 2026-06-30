@@ -82,7 +82,7 @@ internal static class RigStatusCommand
         }
 
         var freqMhz = snapshot.FrequencyHz > 0
-            ? FrequencyFormatter.FormatMhz(snapshot.FrequencyHz)
+            ? FrequencyFormatter.FormatDecimalMhz(snapshot.FrequencyHz)
             : "";
         Console.WriteLine(BuildConnectedJsonPayload(snapshot, freqMhz));
         return 0;
@@ -98,7 +98,7 @@ internal static class RigStatusCommand
         if (frequencyMhz.Length > 0)
         {
             writer.WriteNumber("frequencyHz", snapshot.FrequencyHz);
-            writer.WriteString("frequencyDisplay", $"{frequencyMhz} MHz");
+            writer.WriteString("frequencyDisplay", FrequencyFormatter.FormatMhzWithUnit(snapshot.FrequencyHz));
             writer.WriteString("frequencyMhz", frequencyMhz);
         }
 

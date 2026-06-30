@@ -38,7 +38,7 @@ public sealed class RigStatusCommandTests
         using var document = JsonDocument.Parse(json);
 
         Assert.Equal("14.074123", document.RootElement.GetProperty("frequencyMhz").GetString());
-        Assert.Equal("14.074123 MHz", document.RootElement.GetProperty("frequencyDisplay").GetString());
+        Assert.Equal("14.074.123 MHz", document.RootElement.GetProperty("frequencyDisplay").GetString());
     }
 }
 #pragma warning restore CA1707

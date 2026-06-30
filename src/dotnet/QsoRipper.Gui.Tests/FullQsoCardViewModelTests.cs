@@ -16,7 +16,7 @@ public sealed class FullQsoCardViewModelTests
         var logger = new QsoLoggerViewModel(engine)
         {
             Callsign = "kd9su",
-            FrequencyMhz = "14.074",
+            FrequencyMhz = "14.074.123",
             Notes = "Portable op",
             Comment = "Loud signal",
             ContestId = "ARRL-FD",
@@ -49,6 +49,7 @@ public sealed class FullQsoCardViewModelTests
         Assert.Equal("K7RND", qso.StationCallsign);
         Assert.Equal(Band._20M, qso.Band);
         Assert.Equal(Mode.Cw, qso.Mode);
+        Assert.Equal(14_074_123UL, qso.FrequencyHz);
         Assert.Equal("Richard Smith", qso.WorkedOperatorName);
         Assert.Equal("EN52", qso.WorkedGrid);
         Assert.Equal("United States", qso.WorkedCountry);
@@ -86,7 +87,7 @@ public sealed class FullQsoCardViewModelTests
                 FrequencyHz = 28_075_730,
             });
 
-        Assert.Equal("28.07573", card.FrequencyMhz);
+        Assert.Equal("28.075.730", card.FrequencyMhz);
     }
 
     [Fact]

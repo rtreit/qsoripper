@@ -3067,7 +3067,7 @@ mod tests {
         use crate::app::{RigInfo, RigStatus};
         let mut app = make_app();
         let rig = Some(RigInfo {
-            frequency_display: "14.225 MHz".to_string(),
+            frequency_display: "14.225.000 MHz".to_string(),
             frequency_hz: 14_225_000,
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),
@@ -3077,8 +3077,11 @@ mod tests {
         });
         apply_rig_snapshot(&mut app, rig);
         assert!(app.rig_info.is_some());
-        assert_eq!(app.form.frequency_mhz, "14.225");
-        assert_eq!(app.last_auto_rig_frequency_mhz.as_deref(), Some("14.225"));
+        assert_eq!(app.form.frequency_mhz, "14.225.000");
+        assert_eq!(
+            app.last_auto_rig_frequency_mhz.as_deref(),
+            Some("14.225.000")
+        );
         assert_eq!(BANDS[app.form.band_idx], "20M");
         assert_eq!(MODES[app.form.mode_idx], "SSB");
     }
@@ -3090,7 +3093,7 @@ mod tests {
         app.editing_local_id = Some("qso-123".to_string());
         app.form.band_idx = 3; // 40M
         let rig = Some(RigInfo {
-            frequency_display: "14.225 MHz".to_string(),
+            frequency_display: "14.225.000 MHz".to_string(),
             frequency_hz: 14_225_000,
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),
@@ -3110,7 +3113,7 @@ mod tests {
         app.form.band_idx = 3; // 40M
         let original_freq = app.form.frequency_mhz.clone();
         let rig = Some(RigInfo {
-            frequency_display: "7.150 MHz".to_string(),
+            frequency_display: "7.150.000 MHz".to_string(),
             frequency_hz: 7_150_000,
             band: Some("40M".to_string()),
             mode: Some("CW".to_string()),
@@ -3132,7 +3135,7 @@ mod tests {
         apply_rig_snapshot(
             &mut app,
             Some(RigInfo {
-                frequency_display: "14.225 MHz".to_string(),
+                frequency_display: "14.225.000 MHz".to_string(),
                 frequency_hz: 14_225_000,
                 band: Some("20M".to_string()),
                 mode: Some("SSB".to_string()),
@@ -3146,7 +3149,7 @@ mod tests {
         apply_rig_snapshot(
             &mut app,
             Some(RigInfo {
-                frequency_display: "14.230 MHz".to_string(),
+                frequency_display: "14.230.000 MHz".to_string(),
                 frequency_hz: 14_230_000,
                 band: Some("20M".to_string()),
                 mode: Some("SSB".to_string()),
@@ -3156,8 +3159,11 @@ mod tests {
             }),
         );
 
-        assert_eq!(app.form.frequency_mhz, "14.230");
-        assert_eq!(app.last_auto_rig_frequency_mhz.as_deref(), Some("14.230"));
+        assert_eq!(app.form.frequency_mhz, "14.230.000");
+        assert_eq!(
+            app.last_auto_rig_frequency_mhz.as_deref(),
+            Some("14.230.000")
+        );
     }
 
     #[test]
@@ -3168,7 +3174,7 @@ mod tests {
         apply_rig_snapshot(
             &mut app,
             Some(RigInfo {
-                frequency_display: "14.225 MHz".to_string(),
+                frequency_display: "14.225.000 MHz".to_string(),
                 frequency_hz: 14_225_000,
                 band: Some("20M".to_string()),
                 mode: Some("SSB".to_string()),
@@ -3178,12 +3184,12 @@ mod tests {
             }),
         );
         app.form.callsign = "K7ABC".to_string();
-        app.form.frequency_mhz = "14.229".to_string();
+        app.form.frequency_mhz = "14.229.000".to_string();
 
         apply_rig_snapshot(
             &mut app,
             Some(RigInfo {
-                frequency_display: "14.230 MHz".to_string(),
+                frequency_display: "14.230.000 MHz".to_string(),
                 frequency_hz: 14_230_000,
                 band: Some("20M".to_string()),
                 mode: Some("SSB".to_string()),
@@ -3193,8 +3199,11 @@ mod tests {
             }),
         );
 
-        assert_eq!(app.form.frequency_mhz, "14.229");
-        assert_eq!(app.last_auto_rig_frequency_mhz.as_deref(), Some("14.225"));
+        assert_eq!(app.form.frequency_mhz, "14.229.000");
+        assert_eq!(
+            app.last_auto_rig_frequency_mhz.as_deref(),
+            Some("14.225.000")
+        );
     }
 
     #[test]
@@ -3203,7 +3212,7 @@ mod tests {
         let mut app = make_app();
         let original_band = app.form.band_idx;
         let rig = Some(RigInfo {
-            frequency_display: "14.225 MHz".to_string(),
+            frequency_display: "14.225.000 MHz".to_string(),
             frequency_hz: 14_225_000,
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),
@@ -3223,7 +3232,7 @@ mod tests {
         app.rig_control_enabled = false;
         let original_freq = app.form.frequency_mhz.clone();
         let rig = Some(RigInfo {
-            frequency_display: "14.225 MHz".to_string(),
+            frequency_display: "14.225.000 MHz".to_string(),
             frequency_hz: 14_225_000,
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),

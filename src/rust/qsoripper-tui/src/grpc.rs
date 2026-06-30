@@ -57,7 +57,7 @@ pub(crate) async fn log_qso(
         parse_timestamp(&form.date, &form.time_off).ok()
     };
 
-    let frequency_hz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_hz);
+    let frequency_hz = parse_frequency_mhz(&form.frequency_mhz);
 
     let (lookup_grid, lookup_country, lookup_cq_zone, lookup_dxcc) =
         lookup.unwrap_or((None, None, None, None));
@@ -350,7 +350,7 @@ pub(crate) async fn update_qso(
     } else {
         parse_timestamp(&form.date, &form.time_off).ok()
     };
-    let frequency_hz = form.frequency_mhz.parse::<f64>().ok().map(mhz_to_hz);
+    let frequency_hz = parse_frequency_mhz(&form.frequency_mhz);
 
     let (lookup_grid, lookup_country, lookup_cq_zone, lookup_dxcc) =
         lookup.unwrap_or((None, None, None, None));
@@ -460,13 +460,45 @@ fn mhz_to_hz(mhz: f64) -> u64 {
 
 pub(crate) fn format_frequency_mhz(hz: u64) -> String {
     let whole = hz / 1_000_000;
-    let frac = hz % 1_000_000;
-    let mut full = format!("{whole}.{frac:06}");
-    let min_len = full.find('.').map_or(full.len(), |dot| dot + 4);
-    while full.len() > min_len && full.ends_with('0') {
-        full.pop();
+    let khz = (hz % 1_000_000) / 1_000;
+    let fractional_hz = hz % 1_000;
+    format!("{whole}.{khz:03}.{fractional_hz:03}")
+}
+
+fn parse_frequency_mhz(value: &str) -> Option<u64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
     }
-    full
+
+    if let Some(hz) = parse_radio_style_frequency(trimmed) {
+        return Some(hz);
+    }
+
+    trimmed.parse::<f64>().ok().map(mhz_to_hz)
+}
+
+fn parse_radio_style_frequency(value: &str) -> Option<u64> {
+    let mut parts = value.split('.');
+    let mhz = parts.next()?.parse::<u64>().ok()?;
+    let khz = parts.next()?.parse::<u64>().ok()?;
+    let tail = parts.next()?;
+    if parts.next().is_some() || khz > 999 || tail.is_empty() || tail.len() > 3 {
+        return None;
+    }
+
+    let mut fractional_hz = tail.parse::<u64>().ok()?;
+    if fractional_hz > 999 {
+        return None;
+    }
+
+    if tail.len() <= 2 {
+        fractional_hz *= 10;
+    }
+
+    mhz.checked_mul(1_000_000)?
+        .checked_add(khz.checked_mul(1_000)?)?
+        .checked_add(fractional_hz)
 }
 
 /// Return `Some(s.to_string())` if non-empty, `None` otherwise.
@@ -714,10 +746,18 @@ mod tests {
 
     #[test]
     fn frequency_formatter_preserves_hz_fractional_digits() {
-        assert_eq!(format_frequency_mhz(14_000_000), "14.000");
-        assert_eq!(format_frequency_mhz(14_074_000), "14.074");
-        assert_eq!(format_frequency_mhz(14_074_123), "14.074123");
-        assert_eq!(format_frequency_mhz(14_074_120), "14.07412");
+        assert_eq!(format_frequency_mhz(14_000_000), "14.000.000");
+        assert_eq!(format_frequency_mhz(14_074_000), "14.074.000");
+        assert_eq!(format_frequency_mhz(14_074_123), "14.074.123");
+        assert_eq!(format_frequency_mhz(14_074_120), "14.074.120");
+    }
+
+    #[test]
+    fn frequency_parser_accepts_decimal_and_radio_style_mhz() {
+        assert_eq!(parse_frequency_mhz("14.074123"), Some(14_074_123));
+        assert_eq!(parse_frequency_mhz("14.074.123"), Some(14_074_123));
+        assert_eq!(parse_frequency_mhz("14.074.12"), Some(14_074_120));
+        assert_eq!(parse_frequency_mhz("nope"), None);
     }
 
     #[test]

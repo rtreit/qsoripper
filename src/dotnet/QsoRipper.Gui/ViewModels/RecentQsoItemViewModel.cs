@@ -1009,9 +1009,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
             return false;
         }
 
-        if (double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out var mhz) && mhz > 0)
+        if (FrequencyFormatter.TryParseMhzToHz(normalized, out hz))
         {
-            hz = (ulong)Math.Round(mhz * 1_000_000.0, MidpointRounding.AwayFromZero);
             return true;
         }
 
