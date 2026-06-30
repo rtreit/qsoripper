@@ -24,7 +24,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('all', 'rust', 'dotnet', 'win32', 'pester', 'help')]
+    [ValidateSet('all', 'rust', 'dotnet', 'win32', 'pester', 'conformance', 'help')]
     [string]$Command = 'all',
 
     [ValidateSet('Release', 'Debug')]
@@ -40,6 +40,7 @@ $DotnetSolution = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.slnx'
 $Win32SourceDir = Join-Path $PSScriptRoot 'src' 'c' 'qsoripper-win32'
 $Win32BuildDir = Join-Path $PSScriptRoot 'build' 'win32-tests'
 $PesterTestsDir = Join-Path $PSScriptRoot 'tests'
+$EngineConformanceScript = Join-Path $PSScriptRoot 'tests' 'Run-EngineConformance.ps1'
 
 function Write-Step([string]$Message) {
     Write-Host "`n=== $Message ===" -ForegroundColor Cyan
@@ -136,6 +137,7 @@ function Measure-TestStep([string]$Step, [scriptblock]$Body) {
     $entry = [pscustomobject]@{ Step = $Step; Status = 'RUN'; Seconds = 0.0 }
     $code = 0
     try {
+        $global:LASTEXITCODE = 0
         & $Body
         $code = $LASTEXITCODE
     }
@@ -342,11 +344,50 @@ function Test-Pester {
     }
 }
 
+function Test-Conformance {
+    if (-not (Test-Path -LiteralPath $EngineConformanceScript)) {
+        Write-Step 'Engine conformance'
+        Write-Host "Engine conformance script not found at $EngineConformanceScript." -ForegroundColor Red
+        Add-TestResult -Suite 'Conformance' -Counts (New-TestCounts -Failed 1)
+        exit 1
+    }
+
+    Write-Step 'Engine conformance'
+    if (-not $script:TestTimings) { $script:TestTimings = [System.Collections.Generic.List[object]]::new() }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $entry = [pscustomobject]@{ Step = 'Engine conformance'; Status = 'RUN'; Seconds = 0.0 }
+    $code = 0
+    try {
+        & $EngineConformanceScript
+        $code = $LASTEXITCODE
+    }
+    catch {
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        $code = 1
+    }
+    finally {
+        $sw.Stop()
+        $entry.Seconds = [Math]::Round($sw.Elapsed.TotalSeconds, 2)
+        $script:TestTimings.Add($entry) | Out-Null
+    }
+
+    if ($code -ne 0) {
+        $entry.Status = 'FAIL'
+        Add-TestResult -Suite 'Conformance' -Counts (New-TestCounts -Failed 1)
+        Write-Host 'FAILED: Engine conformance' -ForegroundColor Red
+        exit $code
+    }
+
+    $entry.Status = 'OK'
+    Add-TestResult -Suite 'Conformance' -Counts (New-TestCounts -Passed 1)
+}
+
 function Test-All {
     Test-Rust
     Test-Dotnet
     Test-Win32
     Test-Pester
+    Test-Conformance
 }
 
 function Show-Help {
@@ -357,11 +398,12 @@ QsoRipper Test Script
 Usage: ./test.ps1 [command] [-Configuration Release|Debug] [-Win32Generator <generator>]
 
 Commands:
-  all       Run Rust, .NET, Win32, and Pester tests (default)
+  all       Run Rust, .NET, Win32, Pester, and engine conformance tests (default)
   rust      Run Rust workspace tests
   dotnet    Run .NET solution tests
   win32     Configure, build, and run Win32 CTest tests
   pester    Run PowerShell/Pester tests under tests/
+  conformance Run engine conformance scenario
   help      Show this help
 
 Examples:
@@ -379,6 +421,7 @@ try {
         'dotnet' { Test-Dotnet }
         'win32'  { Test-Win32 }
         'pester' { Test-Pester }
+        'conformance' { Test-Conformance }
         'help'   { Show-Help }
     }
 }

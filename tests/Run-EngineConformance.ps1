@@ -141,6 +141,14 @@ function Get-ObjectPropertyValue {
     return $property.Value
 }
 
+function ConvertFrom-JsonArray([string]$Json) {
+    if ([string]::IsNullOrWhiteSpace($Json)) {
+        return @()
+    }
+
+    return @($Json | ConvertFrom-Json)
+}
+
 function Get-RstDisplay($Rst) {
     if ($null -eq $Rst) {
         return $null
@@ -358,7 +366,7 @@ function Invoke-ConformanceScenario {
 
     $listResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'list', '--json', '--limit', '5')
     Assert-CommandSucceeded -Result $listResult -Description "$EngineProfile list --json"
-    $listJson = @($listResult.StdOut | ConvertFrom-Json)
+    $listJson = @(ConvertFrom-JsonArray $listResult.StdOut)
 
     if ($listJson.Count -ne 1) {
         throw "$EngineProfile expected exactly one QSO in list output but saw $($listJson.Count)."
@@ -387,7 +395,7 @@ function Invoke-ConformanceScenario {
 
     $listAfterDeleteResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'list', '--json', '--limit', '5')
     Assert-CommandSucceeded -Result $listAfterDeleteResult -Description "$EngineProfile list after delete --json"
-    $listAfterDeleteJson = @($listAfterDeleteResult.StdOut | ConvertFrom-Json)
+    $listAfterDeleteJson = @(ConvertFrom-JsonArray $listAfterDeleteResult.StdOut)
     if ($listAfterDeleteJson.Count -ne 0) {
         throw "$EngineProfile expected zero QSOs after delete but saw $($listAfterDeleteJson.Count)."
     }

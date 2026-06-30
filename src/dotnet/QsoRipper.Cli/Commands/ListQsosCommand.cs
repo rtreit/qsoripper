@@ -3,8 +3,8 @@ using Grpc.Net.Client;
 using QsoRipper.Cli;
 using QsoRipper.Domain;
 using QsoRipper.EngineSelection;
-using QsoRipper.Shared.Formatting;
 using QsoRipper.Services;
+using QsoRipper.Shared.Formatting;
 using static QsoRipper.Cli.EnumHelpers;
 
 namespace QsoRipper.Cli.Commands;

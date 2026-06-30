@@ -1,8 +1,8 @@
 using Grpc.Net.Client;
 using QsoRipper.Cli;
 using QsoRipper.Domain;
-using QsoRipper.Shared.Formatting;
 using QsoRipper.Services;
+using QsoRipper.Shared.Formatting;
 
 namespace QsoRipper.Cli.Commands;
 

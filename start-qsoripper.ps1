@@ -371,7 +371,7 @@ function Get-UntrackedEngineProcesses {
         }
     }
 
-    $uniqueFragments = @($fragments | Select-Object -Unique)
+    $uniqueFragments = @($fragments.ToArray() | Select-Object -Unique)
     if ($uniqueFragments.Count -eq 0) {
         return @()
     }

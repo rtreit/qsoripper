@@ -5,7 +5,9 @@
 
 .DESCRIPTION
     Convenience wrapper around build.ps1 and test.ps1 for local pre-push
-    validation when you want the normal build artifacts plus the full test run.
+    validation. By default this runs CI-style quality checks before the full
+    test run so formatting, coverage, vulnerability, Pester, Win32, and Rust
+    gates fail locally before a pull request is opened.
 
 .PARAMETER Configuration
     Build/test configuration. Default: Release.
@@ -28,6 +30,11 @@ param(
 $ErrorActionPreference = 'Stop'
 
 & (Join-Path $PSScriptRoot 'build.ps1') build -Configuration $Configuration
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+& (Join-Path $PSScriptRoot 'build.ps1') check -Configuration $Configuration
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
