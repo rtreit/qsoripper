@@ -47,6 +47,8 @@
   <ItemGroup>
     <Compile Include="..\Shared\Persistence\*.cs"
              Link="Shared\Persistence\%(Filename)%(Extension)" />
+    <Compile Include="..\Shared\Formatting\*.cs"
+             Link="Shared\Formatting\%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

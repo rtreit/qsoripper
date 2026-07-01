@@ -250,7 +250,9 @@
     private static RigSnapshotSummary BuildSnapshotSummary(RigSnapshot snapshot)
     {
         var freqHz = snapshot.FrequencyHz;
-        var freqDisplay = freqHz > 0 ? $"{freqHz / 1_000_000.0:F6} MHz ({freqHz:N0} Hz)" : "Unknown";
+        var freqDisplay = freqHz > 0
+            ? $"{QsoRipper.Shared.Formatting.FrequencyFormatter.FormatMhzWithUnit(freqHz)} ({freqHz:N0} Hz)"
+            : "Unknown";
 
         return new RigSnapshotSummary(
             freqDisplay,

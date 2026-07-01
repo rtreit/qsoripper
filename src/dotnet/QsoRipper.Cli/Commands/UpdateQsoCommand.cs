@@ -2,6 +2,7 @@ using Grpc.Net.Client;
 using QsoRipper.Cli;
 using QsoRipper.Domain;
 using QsoRipper.Services;
+using QsoRipper.Shared.Formatting;
 
 namespace QsoRipper.Cli.Commands;
 
@@ -94,14 +95,13 @@ internal static class UpdateQsoCommand
                     return false;
                 case "--freq" when i < args.Length - 1:
                     var freqValue = args[++i];
-                    if (!double.TryParse(freqValue, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var freqMhz) || freqMhz <= 0)
+                    if (!FrequencyFormatter.TryParseMhzToHz(freqValue, out var hz))
                     {
-                        error = $"Invalid value for --freq: {freqValue}. Use MHz such as 14.074.";
+                        error = $"Invalid value for --freq: {freqValue}. Use MHz such as 14.074 or 14.074.123.";
                         return false;
                     }
 
                     {
-                        var hz = (ulong)Math.Round(freqMhz * 1_000_000.0, MidpointRounding.AwayFromZero);
                         qso.FrequencyHz = hz;
 #pragma warning disable CS0612
                         qso.FrequencyKhz = (hz + 500) / 1000;

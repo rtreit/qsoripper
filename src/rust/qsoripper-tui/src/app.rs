@@ -31,7 +31,7 @@ pub(crate) enum EngineStatus {
 
 /// Display-ready rig control snapshot for the TUI.
 pub(crate) struct RigInfo {
-    /// Formatted frequency string (e.g., `"14.225 MHz"`).
+    /// Formatted frequency string (e.g., `"14.225.000 MHz"`).
     pub(crate) frequency_display: String,
     /// Frequency in Hz (for form auto-population).
     pub(crate) frequency_hz: u64,
@@ -586,7 +586,7 @@ mod tests {
     fn toggle_rig_control_disables_and_clears() {
         let mut app = App::new("http://localhost:50051".to_string());
         app.rig_info = Some(RigInfo {
-            frequency_display: "14.225 MHz".to_string(),
+            frequency_display: "14.225.000 MHz".to_string(),
             frequency_hz: 14_225_000,
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),

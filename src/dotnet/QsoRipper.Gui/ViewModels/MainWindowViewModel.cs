@@ -15,6 +15,7 @@ using QsoRipper.Domain;
 using QsoRipper.EngineSelection;
 using QsoRipper.Gui.Services;
 using QsoRipper.Gui.Utilities;
+using QsoRipper.Shared.Formatting;
 using QsoRipper.Shared.Persistence;
 
 namespace QsoRipper.Gui.ViewModels;
@@ -1481,9 +1482,8 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             {
                 if (snapshot.Status == QsoRipper.Domain.RigConnectionStatus.Connected)
                 {
-                    var freqMhz = snapshot.FrequencyHz / 1_000_000.0;
                     var modeDisplay = ProtoEnumDisplay.ForMode(snapshot.Mode);
-                    RigStatusText = $"Rig: {freqMhz.ToString("F3", CultureInfo.InvariantCulture)} {modeDisplay}";
+                    RigStatusText = $"Rig: {FrequencyFormatter.FormatMhz(snapshot.FrequencyHz)} {modeDisplay}";
                     Logger.ApplyRigSnapshot(snapshot);
                 }
                 else

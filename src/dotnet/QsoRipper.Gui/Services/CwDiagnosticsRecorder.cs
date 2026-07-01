@@ -252,7 +252,7 @@ internal sealed class CwDiagnosticsRecorder : IDisposable
         _episodeCounter++;
         var episodeDir = Path.Combine(
             _episodesDir,
-            string.Create(CultureInfo.InvariantCulture, $"episode-{_episodeCounter:000}"));
+            $"episode-{_episodeCounter:000}");
         Directory.CreateDirectory(episodeDir);
         _activeEpisode = new EpisodeRecorder(
             _episodeCounter,
