@@ -11,6 +11,7 @@ members = [
     "qsoripper-stress-tui",
     "qsoripper-tui",
     "qsoripper-launcher",
+    "qsoripper-winkeyer-editor",
 ]
 
 [workspace.package]
