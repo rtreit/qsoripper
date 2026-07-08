@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"$(git rev-parse --show-toplevel)/.github/hooks/scripts/pre-tool-policy.ps1\"",
+            "commandWindows": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"$(git rev-parse --show-toplevel)/.github/hooks/scripts/pre-tool-policy.ps1\"",
+            "timeout": 15,
+            "statusMessage": "Checking QsoRipper policy"
+          }
+        ]
+      }
+    ]
+  }
+}

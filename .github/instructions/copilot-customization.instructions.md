@@ -7,11 +7,13 @@ This document explains how to create and maintain GitHub Copilot customization f
 | Type | Location | File Pattern | Purpose |
 |---|---|---|---|
 | Instructions | `.github/instructions/` | `*.instructions.md` | Always-on project rules and conventions |
-| Skills | `.github/skills/<name>/` | `SKILL.md` | On-demand domain knowledge loaded when relevant |
+| Skills | `.agents/skills/<name>/` plus `.github/skills/<name>/` adapter copies | `SKILL.md` | On-demand domain knowledge loaded when relevant |
 | Agents | `.github/agents/` | `*.agent.md` | Named AI personas with specialized responsibilities |
 | Prompts | `.github/prompts/` | `*.prompt.md` | Reusable task templates invoked as slash commands |
 
-Global project-level instructions live in `.github/copilot-instructions.md`.
+Global project-level instructions live in root `AGENTS.md`. The
+`.github/copilot-instructions.md` file is a Copilot-specific adapter that points
+to the shared instructions and should not duplicate durable repository rules.
 
 ## YAML Frontmatter
 
@@ -33,9 +35,15 @@ Rules:
 - For skills, `name` must match the containing folder name.
 - `description` should be 10–1024 characters, keyword-rich, and explain both what the component does and when it should be used.
 
-## Skills (`.github/skills/<name>/SKILL.md`)
+## Skills (`.agents/skills/<name>/SKILL.md` and `.github/skills/<name>/SKILL.md`)
 
-Skills provide domain-specific knowledge that Copilot loads on demand when a task matches the skill description. They are ideal for encoding reference material, parsing rules, API conventions, or workflow recipes.
+Skills provide domain-specific knowledge loaded on demand when a task matches
+the skill description. They are ideal for encoding reference material, parsing
+rules, API conventions, or workflow recipes.
+
+The shared source for reusable project skills is `.agents/skills/`. Keep native
+Copilot CLI compatibility by mirroring those skills under `.github/skills/` when
+Copilot needs to discover them from its native path.
 
 ### Folder structure
 
@@ -43,6 +51,12 @@ Skills provide domain-specific knowledge that Copilot loads on demand when a tas
 .github/skills/
   my-skill/
     SKILL.md          # Required — frontmatter + instructions
+    scripts/           # Optional — helper scripts
+    references/        # Optional — reference docs
+
+.agents/skills/
+  my-skill/
+    SKILL.md          # Shared copy for agent surfaces
     scripts/           # Optional — helper scripts
     references/        # Optional — reference docs
 ```
