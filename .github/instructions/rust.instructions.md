@@ -44,7 +44,7 @@ These instructions govern Rust work in QsoRipper, especially under `src/rust/`, 
   - `cargo run --manifest-path src/rust/Cargo.toml -p qsoripper-server`
   - `dotnet run --project src/dotnet/QsoRipper.Cli -- status`
 - When changing Rust dependencies or supply-chain-sensitive infrastructure, also run:
-  - `Push-Location src\rust; cargo deny check --config deny.toml; Pop-Location`
+  - `Push-Location src\rust; cargo deny check; Pop-Location`
 - Treat `cargo audit` as a manual/occasional vulnerability review rather than a per-PR CI requirement unless the team explicitly changes that policy.
 
 ## Authoritative Sources

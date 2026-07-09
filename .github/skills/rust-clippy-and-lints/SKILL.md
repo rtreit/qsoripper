@@ -33,7 +33,7 @@ description: >-
 cargo fmt --manifest-path src\rust\Cargo.toml --all -- --check
 cargo clippy --manifest-path src\rust\Cargo.toml --all-targets -- -D warnings
 Push-Location src\rust
-cargo deny check --config deny.toml
+cargo deny check
 # Optional manual review
 cargo audit
 Pop-Location

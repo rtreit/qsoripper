@@ -718,7 +718,7 @@ function Check-Rust {
         Write-Step 'cargo deny'
         Push-Location $RustDir
         try {
-            cargo deny check --config deny.toml
+            cargo deny check
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "FAILED: cargo deny" -ForegroundColor Red
                 exit $LASTEXITCODE
