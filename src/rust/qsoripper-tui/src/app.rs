@@ -83,6 +83,8 @@ pub(crate) struct CallsignInfo {
 pub(crate) struct RecentQso {
     /// QsoRipper-assigned local UUID.
     pub(crate) local_id: String,
+    /// UTC date formatted as `YYYY-MM-DD`.
+    pub(crate) date: String,
     /// UTC time formatted as `HH:MM`.
     pub(crate) utc: String,
     /// Worked callsign.
@@ -138,6 +140,7 @@ impl RecentQso {
                 .unwrap_or("")
                 .to_lowercase()
                 .contains(lower)
+            || self.date.contains(lower)
             || self.utc.contains(lower)
     }
 }
@@ -352,6 +355,7 @@ mod tests {
     fn make_qso(id: &str, callsign: &str) -> RecentQso {
         RecentQso {
             local_id: id.to_string(),
+            date: "2026-07-08".to_string(),
             utc: "12:00".to_string(),
             callsign: callsign.to_string(),
             band: "20M".to_string(),
@@ -535,6 +539,7 @@ mod tests {
     fn matches_search_finds_band() {
         let qso = RecentQso {
             local_id: "1".to_string(),
+            date: "2026-07-08".to_string(),
             utc: "12:00".to_string(),
             callsign: "K7ABC".to_string(),
             band: "40M".to_string(),
@@ -555,6 +560,7 @@ mod tests {
         assert!(qso.matches_search("cn87"));
         assert!(qso.matches_search("john"));
         assert!(qso.matches_search("portable"));
+        assert!(qso.matches_search("2026-07-08"));
         assert!(qso.matches_search("12:00"));
     }
 
@@ -568,6 +574,7 @@ mod tests {
     fn matches_search_optional_fields_none() {
         let qso = RecentQso {
             local_id: "1".to_string(),
+            date: "2026-07-08".to_string(),
             utc: "10:00".to_string(),
             callsign: "W1ABC".to_string(),
             band: "20M".to_string(),

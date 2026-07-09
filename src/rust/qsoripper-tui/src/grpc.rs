@@ -147,11 +147,16 @@ pub(crate) async fn list_recent_qsos(
     while let Some(response) = stream.message().await? {
         let Some(qso) = response.qso else { continue };
 
-        let utc = qso
+        let (date, utc) = qso
             .utc_timestamp
             .as_ref()
             .and_then(|ts| chrono::DateTime::from_timestamp(ts.seconds, 0))
-            .map(|dt| dt.format("%H:%M").to_string())
+            .map(|dt| {
+                (
+                    dt.format("%Y-%m-%d").to_string(),
+                    dt.format("%H:%M").to_string(),
+                )
+            })
             .unwrap_or_default();
 
         let band = Band::try_from(qso.band)
@@ -179,6 +184,7 @@ pub(crate) async fn list_recent_qsos(
 
         result.push(RecentQso {
             local_id: qso.local_id.clone(),
+            date,
             utc,
             callsign: qso.worked_callsign.clone(),
             band,
