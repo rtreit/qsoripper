@@ -58,6 +58,11 @@ internal static class LookupCommand
             Console.WriteLine($"Country:          {record.Country}");
         }
 
+        if (record.HasAddr2)
+        {
+            Console.WriteLine($"City:             {record.Addr2}");
+        }
+
         if (record.HasState)
         {
             Console.WriteLine($"State:            {record.State}");

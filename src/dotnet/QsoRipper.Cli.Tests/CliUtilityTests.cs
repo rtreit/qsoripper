@@ -1,8 +1,10 @@
 using System.Text;
 using Google.Protobuf.WellKnownTypes;
+using QsoRipper.Cli.Commands;
 using QsoRipper.Domain;
 using QsoRipper.EngineSelection;
 using QsoRipper.Services;
+
 namespace QsoRipper.Cli.Tests;
 
 #pragma warning disable CA1707 // Remove underscores from member names - xUnit allows underscores in test methods
@@ -195,6 +197,37 @@ public sealed class CliUtilityTests
         Assert.Contains("\"localQsoCount\": 1", output, StringComparison.Ordinal);
         Assert.Contains("\"localQsoCount\": 2", output, StringComparison.Ordinal);
         Assert.EndsWith(Environment.NewLine + "]" + Environment.NewLine, output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LookupCommand_PrintRecord_includes_city_when_available()
+    {
+        var record = new CallsignRecord
+        {
+            Callsign = "K7ABC",
+            Addr2 = "Seattle",
+            State = "WA",
+            Country = "United States",
+        };
+
+        var output = ConsoleCapture.Out(() => LookupCommand.PrintRecord(record));
+
+        Assert.Contains("City:             Seattle", output, StringComparison.Ordinal);
+        Assert.Contains("State:            WA", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LookupCommand_PrintRecord_omits_city_when_missing()
+    {
+        var record = new CallsignRecord
+        {
+            Callsign = "K7ABC",
+            State = "WA",
+        };
+
+        var output = ConsoleCapture.Out(() => LookupCommand.PrintRecord(record));
+
+        Assert.DoesNotContain("City:", output, StringComparison.Ordinal);
     }
 
     [Fact]

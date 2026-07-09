@@ -114,6 +114,7 @@ mod tests {
         use qsoripper_core::proto::qsoripper::domain::QsoRecord;
         RecentQso {
             local_id: id.to_string(),
+            date: "2026-07-08".to_string(),
             utc: "14:32".to_string(),
             callsign: callsign.to_string(),
             band: "20M".to_string(),
