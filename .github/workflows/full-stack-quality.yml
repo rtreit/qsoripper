@@ -20,3 +20,11 @@ jobs:
   win32:
     name: Win32 Quality
     uses: ./.github/workflows/win32-quality.yml
+
+  powershell:
+    name: PowerShell Quality
+    uses: ./.github/workflows/powershell-quality.yml
+
+  conformance:
+    name: Engine Conformance
+    uses: ./.github/workflows/engine-conformance.yml

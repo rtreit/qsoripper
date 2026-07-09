@@ -383,7 +383,7 @@
               <StackPanel Grid.Column="3" Spacing="1">
                 <TextBlock Text="Freq" FontSize="10" Opacity="0.72" />
                 <TextBox Text="{Binding Logger.FrequencyMhz, Mode=TwoWay}"
-                         Width="72" Height="28"
+                         Width="92" Height="28"
                          FontFamily="Cascadia Mono, Consolas, monospace"
                          FontSize="12" />
               </StackPanel>
@@ -559,8 +559,8 @@
                     </DataGridTemplateColumn.CellEditingTemplate>
                   </DataGridTemplateColumn>
                   <DataGridTemplateColumn Header="Freq"
-                                          Width="76"
-                                          MinWidth="68"
+                                          Width="112"
+                                          MinWidth="104"
                                           SortMemberPath="FrequencySortKey">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">

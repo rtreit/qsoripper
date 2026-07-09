@@ -1792,7 +1792,7 @@ A conformant engine must pass all of the following scenarios:
 5. `GetQso` returns the logged QSO with all fields intact.
 6. `ListQsos` returns exactly the expected QSOs with correct ordering.
 7. `UpdateQso` modifies the specified fields and updates `updated_at`.
-8. `DeleteQso` removes the QSO; subsequent `GetQso` returns `NOT_FOUND`.
+8. `DeleteQso` soft-deletes the QSO; default `ListQsos` hides it, and `GetQso` returns it with `deleted_at` set.
 9. Unary success and failure responses with optional scalar fields serialize cleanly at the service boundary without handler exceptions.
 
 #### ADIF Round-Trip

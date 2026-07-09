@@ -347,7 +347,7 @@ mod tests {
         let mut terminal = make_terminal();
         let mut app = make_app();
         app.rig_info = Some(RigInfo {
-            frequency_display: "14.225 MHz".to_string(),
+            frequency_display: "14.225.000 MHz".to_string(),
             frequency_hz: 14_225_000,
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),

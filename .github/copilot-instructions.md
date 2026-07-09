@@ -15,6 +15,7 @@ Primary goals:
 - Avoid Python for hot paths and primary services.
 - Keep startup and interaction latency low.
 - Favor small, composable modules over monoliths.
+- In C#, avoid `string.Create(CultureInfo.InvariantCulture, ...)` for interpolated strings unless the interpolation includes culture-sensitive formatting. Prefer ordinary interpolation for literal separators, string-only values, integer zero-padding, and hex identifiers.
 
 ## Architecture Direction
 
@@ -67,6 +68,7 @@ Primary goals:
 - Use PowerShell for Windows shell scripting.
 - Use `rg` for text search operations.
 - Keep build and test loops fast to support tight iteration.
+- For local Win32 CMake validation, use the installed Visual Studio Build Tools 2026 generator (`Visual Studio 18 2026`); do not assume `Visual Studio 17 2022` is available.
 
 ## Pull Requests
 

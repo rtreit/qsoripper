@@ -82,13 +82,19 @@ pub(crate) fn buf_to_str(buf: &[u8]) -> &str {
     std::str::from_utf8(&buf[..end]).unwrap_or("")
 }
 
-/// Format a frequency in Hz to radio-style display: "14.225.00" or "3.536.50".
-/// Pattern: `<MHz>.<kHz>.<fractional kHz in 10s of Hz>`
+/// Format a frequency in Hz to radio-style display: "14.225.000" or "3.536.500".
+/// Pattern: `<MHz>.<kHz>.<fractional kHz in Hz>`
 fn format_freq_radio_style(freq_hz: u64) -> String {
     let mhz = freq_hz / 1_000_000;
     let khz = (freq_hz % 1_000_000) / 1_000;
-    let tens_hz = (freq_hz % 1_000) / 10;
-    format!("{mhz}.{khz:03}.{tens_hz:02}")
+    let hz = freq_hz % 1_000;
+    format!("{mhz}.{khz:03}.{hz:03}")
+}
+
+fn format_freq_mhz(freq_hz: u64) -> String {
+    let mhz = freq_hz / 1_000_000;
+    let frac = freq_hz % 1_000_000;
+    format!("{mhz}.{frac:06}")
 }
 
 /// Opaque client handle holding the runtime and gRPC channels.
@@ -1116,8 +1122,7 @@ fn populate_qso_detail(qso: &QsoRecord, out: &mut QsrQsoDetail) {
     let freq_hz = qso.frequency_hz.or(qso.frequency_khz.map(|k| k * 1000));
     if let Some(hz) = freq_hz {
         if hz > 0 {
-            let mhz = hz as f64 / 1_000_000.0;
-            let freq_str = format!("{mhz:.6}");
+            let freq_str = format_freq_mhz(hz);
             str_to_buf(&freq_str, &mut out.freq_mhz);
         }
     }
@@ -1231,9 +1236,8 @@ fn populate_rig_status(
     out.connected = 1;
 
     if snapshot.frequency_hz > 0 {
-        let mhz = snapshot.frequency_hz as f64 / 1_000_000.0;
         let display = format_freq_radio_style(snapshot.frequency_hz);
-        let mhz_str = format!("{mhz:.5}");
+        let mhz_str = format_freq_mhz(snapshot.frequency_hz);
         str_to_buf(&display, &mut out.freq_display);
         str_to_buf(&mhz_str, &mut out.freq_mhz);
     }
@@ -1252,7 +1256,10 @@ fn populate_rig_status(
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::{buf_to_str, build_qso_record, parse_datetime, qso_to_summary};
+    use super::{
+        buf_to_str, build_qso_record, format_freq_mhz, format_freq_radio_style, parse_datetime,
+        qso_to_summary,
+    };
     use crate::types::{str_to_buf, QsrLogQsoRequest, QsrRstReport};
     use qsoripper_core::proto::qsoripper::domain::{QslStatus, QsoRecord, StationSnapshot};
 
@@ -1286,6 +1293,13 @@ mod tests {
             !qso.station_callsign.trim().is_empty(),
             "station_callsign must be populated so the server's persistence validator accepts the QSO"
         );
+    }
+
+    #[test]
+    fn frequency_formatters_preserve_hz_fractional_digits() {
+        assert_eq!(format_freq_radio_style(14_074_123), "14.074.123");
+        assert_eq!(format_freq_radio_style(14_074_000), "14.074.000");
+        assert_eq!(format_freq_mhz(14_074_123), "14.074123");
     }
 
     #[test]

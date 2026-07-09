@@ -140,11 +140,9 @@ public sealed partial class MainWindow : Window
     {
         var mhz = frequencyHz / 1_000_000;
         var khz = frequencyHz % 1_000_000 / 1_000;
-        var tenHz = frequencyHz % 1_000 / 10;
+        var hz = frequencyHz % 1_000;
 
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"{mhz}.{khz:000}.{tenHz:00}");
+        return $"{mhz}.{khz:000}.{hz:000}";
     }
 
     private static string FormatEngineSkew(FrequencySnapshot direct, EngineFrequencySnapshot? engine)

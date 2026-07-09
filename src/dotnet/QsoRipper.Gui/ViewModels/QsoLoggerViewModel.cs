@@ -10,6 +10,7 @@ using CommunityToolkit.Mvvm.Input;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Gui.Services;
+using QsoRipper.Shared.Formatting;
 
 namespace QsoRipper.Gui.ViewModels;
 
@@ -55,7 +56,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     private string _rstRcvd = "59";
 
     [ObservableProperty]
-    private string _frequencyMhz = "14.225";
+    private string _frequencyMhz = "14.225.000";
 
     [ObservableProperty]
     private string _comment = string.Empty;
@@ -238,8 +239,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
         if (!_frequencyManuallySet)
         {
-            FrequencyMhz = OperatorOptions.Bands[value].DefaultFrequencyMhz
-                .ToString("F3", CultureInfo.InvariantCulture);
+            FrequencyMhz = FormatDefaultFrequency(OperatorOptions.Bands[value].DefaultFrequencyMhz);
         }
     }
 
@@ -341,10 +341,8 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
             qso.Submode = mode.Submode;
         }
 
-        if (double.TryParse(FrequencyMhz, NumberStyles.Float, CultureInfo.InvariantCulture, out var freqMhz)
-            && freqMhz > 0)
+        if (FrequencyFormatter.TryParseMhzToHz(FrequencyMhz, out var hz))
         {
-            var hz = (ulong)Math.Round(freqMhz * 1_000_000.0, MidpointRounding.AwayFromZero);
             qso.FrequencyHz = hz;
 #pragma warning disable CS0612
             qso.FrequencyKhz = (hz + 500) / 1000;
@@ -660,8 +658,7 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 
         if (!_frequencyManuallySet && snapshot.FrequencyHz > 0)
         {
-            var mhz = snapshot.FrequencyHz / 1_000_000.0;
-            FrequencyMhz = mhz.ToString("F3", CultureInfo.InvariantCulture);
+            FrequencyMhz = FrequencyFormatter.FormatMhz(snapshot.FrequencyHz);
         }
     }
 
@@ -813,6 +810,12 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     private void UpdateLogEnabled()
     {
         IsLogEnabled = !string.IsNullOrWhiteSpace(Callsign);
+    }
+
+    private static string FormatDefaultFrequency(double mhz)
+    {
+        return FrequencyFormatter.FormatMhz(
+            (ulong)Math.Round(mhz * 1_000_000.0, MidpointRounding.AwayFromZero));
     }
 
     /// <summary>

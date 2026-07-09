@@ -141,6 +141,14 @@ function Get-ObjectPropertyValue {
     return $property.Value
 }
 
+function ConvertFrom-JsonArray([string]$Json) {
+    if ([string]::IsNullOrWhiteSpace($Json)) {
+        return @()
+    }
+
+    return @($Json | ConvertFrom-Json)
+}
+
 function Get-RstDisplay($Rst) {
     if ($null -eq $Rst) {
         return $null
@@ -358,7 +366,7 @@ function Invoke-ConformanceScenario {
 
     $listResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'list', '--json', '--limit', '5')
     Assert-CommandSucceeded -Result $listResult -Description "$EngineProfile list --json"
-    $listJson = @($listResult.StdOut | ConvertFrom-Json)
+    $listJson = @(ConvertFrom-JsonArray $listResult.StdOut)
 
     if ($listJson.Count -ne 1) {
         throw "$EngineProfile expected exactly one QSO in list output but saw $($listJson.Count)."
@@ -387,14 +395,17 @@ function Invoke-ConformanceScenario {
 
     $listAfterDeleteResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'list', '--json', '--limit', '5')
     Assert-CommandSucceeded -Result $listAfterDeleteResult -Description "$EngineProfile list after delete --json"
-    $listAfterDeleteJson = @($listAfterDeleteResult.StdOut | ConvertFrom-Json)
+    $listAfterDeleteJson = @(ConvertFrom-JsonArray $listAfterDeleteResult.StdOut)
     if ($listAfterDeleteJson.Count -ne 0) {
         throw "$EngineProfile expected zero QSOs after delete but saw $($listAfterDeleteJson.Count)."
     }
 
     $getAfterDeleteResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'get', $localId, '--json')
-    if ($getAfterDeleteResult.ExitCode -eq 0) {
-        throw "$EngineProfile get unexpectedly succeeded after delete for local id '$localId'."
+    Assert-CommandSucceeded -Result $getAfterDeleteResult -Description "$EngineProfile get after delete --json"
+    $getAfterDeleteJson = $getAfterDeleteResult.StdOut | ConvertFrom-Json
+    $deletedAt = Get-ObjectPropertyValue -Object $getAfterDeleteJson.qso -Name 'deletedAt' -DefaultValue $null
+    if ($null -eq $deletedAt -or [string]::IsNullOrWhiteSpace([string]$deletedAt)) {
+        throw "$EngineProfile get after delete did not return a soft-deleted QSO for local id '$localId'."
     }
 
     return [pscustomobject]@{

@@ -31,7 +31,7 @@ public class CliRegressionTests
         var result = await CliProcessRunner.RunAsync("log", "W1AW", "20m", "FT8", "--freq", "nope");
 
         Assert.Equal(1, result.ExitCode);
-        Assert.Contains("Invalid value for --freq: nope", result.StandardError, StringComparison.Ordinal);
+        Assert.Contains("Invalid value for --freq: nope. Use MHz such as 14.074 or 14.074.123.", result.StandardError, StringComparison.Ordinal);
         Assert.DoesNotContain("Could not connect to QsoRipper engine", result.StandardError, StringComparison.Ordinal);
     }
 

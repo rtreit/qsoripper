@@ -364,22 +364,10 @@ function Build-Dotnet {
     $needsVcEnv = $false
     $extraPublishArgs = @()
 
-    if ($vcvarsAll) {
-        # Test if ILCompiler's own detection works
-        $ilcFindScript = Join-Path $env:USERPROFILE '.nuget' 'packages' 'microsoft.dotnet.ilcompiler' '*' 'build' 'findvcvarsall.bat' |
-            Resolve-Path -ErrorAction SilentlyContinue |
-            Sort-Object -Descending |
-            Select-Object -First 1
-
-        if ($ilcFindScript) {
-            $testResult = cmd /c "`"$($ilcFindScript.Path)`" x64 >nul 2>&1 && echo OK" 2>$null
-            if ($testResult -ne 'OK') {
-                Write-Host "  ILCompiler cannot find the platform linker via vswhere." -ForegroundColor Yellow
-                Write-Host "  Using vcvarsall.bat workaround: $vcvarsAll" -ForegroundColor Yellow
-                $needsVcEnv = $true
-                $extraPublishArgs = @('-p:IlcUseEnvironmentalTools=true')
-            }
-        }
+    if ($IsWindows -and $vcvarsAll) {
+        Write-Host "  Using vcvarsall.bat for Native AOT toolchain: $vcvarsAll" -ForegroundColor Yellow
+        $needsVcEnv = $true
+        $extraPublishArgs = @('-p:IlcUseEnvironmentalTools=true')
     }
 
     $publishArgs = @(
@@ -598,7 +586,7 @@ function Build-CatHubNativeProbe {
 
     Measure-BuildStep "Configuring CatHub native frequency probe ($Configuration)" {
         $configured = $false
-        $generators = @('Visual Studio 18 2026', 'Visual Studio 17 2022')
+        $generators = @('Visual Studio 18 2026')
         foreach ($generator in $generators) {
             Write-Host "  Trying CMake generator: $generator"
             cmake -S $CatHubNativeProbeSourceDir -B $CatHubNativeProbeBuildDir -G $generator -A x64

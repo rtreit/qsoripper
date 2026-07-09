@@ -4,6 +4,7 @@ using QsoRipper.Cli;
 using QsoRipper.Domain;
 using QsoRipper.EngineSelection;
 using QsoRipper.Services;
+using QsoRipper.Shared.Formatting;
 using static QsoRipper.Cli.EnumHelpers;
 
 namespace QsoRipper.Cli.Commands;
@@ -318,14 +319,7 @@ internal static class ListQsosCommand
 
     private static string FormatFrequencyMhz(ulong hz)
     {
-        ulong whole = hz / 1_000_000;
-        ulong frac = hz % 1_000_000;
-        string full = $"{whole}.{frac:000000}";
-        int dotPos = full.IndexOf('.', StringComparison.Ordinal);
-        int minLen = dotPos + 4;
-        var trimmed = full.AsSpan().TrimEnd('0');
-        int end = Math.Max(trimmed.Length, minLen);
-        return full[..end];
+        return FrequencyFormatter.FormatMhz(hz);
     }
 }
 

@@ -45,14 +45,29 @@ public sealed class RecentQsoItemViewModelTests
         });
 
         item.UtcDisplay = "2026-04-14T01:02:03Z";
-        item.Frequency = "14.250";
+        item.Frequency = "14.250.570";
         item.Dxcc = "110";
         item.UtcEndDisplay = "2026-04-14T01:12:03Z";
 
         Assert.Equal(new DateTimeOffset(2026, 4, 14, 1, 2, 3, TimeSpan.Zero), item.UtcSortKey);
-        Assert.Equal((ulong)14_250_000, item.FrequencySortKey);
+        Assert.Equal((ulong)14_250_570, item.FrequencySortKey);
         Assert.Equal((uint)110, item.DxccSortKey);
         Assert.Equal(new DateTimeOffset(2026, 4, 14, 1, 12, 3, TimeSpan.Zero), item.UtcEndSortKey);
+    }
+
+    [Fact]
+    public void FrequencyDisplayPreservesSubKilohertzDigits()
+    {
+        var item = RecentQsoItemViewModel.FromQso(new QsoRecord
+        {
+            LocalId = "qso-frequency",
+            WorkedCallsign = "W1AW",
+            StationCallsign = "K7RND",
+            FrequencyHz = 14_074_123,
+        });
+
+        Assert.Equal("14.074.123", item.Frequency);
+        Assert.Equal((ulong)14_074_123, item.FrequencySortKey);
     }
 
     [Fact]
