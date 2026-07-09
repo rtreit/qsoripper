@@ -95,6 +95,7 @@ fn render_search_row(app: &App, frame: &mut Frame, area: Rect) {
 
 fn render_table(app: &App, filtered: &[&crate::app::RecentQso], frame: &mut Frame, area: Rect) {
     let header_cells = [
+        "Date",
         "UTC",
         "Callsign",
         "Band",
@@ -123,6 +124,7 @@ fn render_table(app: &App, filtered: &[&crate::app::RecentQso], frame: &mut Fram
             Style::default().fg(Color::Gray)
         };
         Row::new(vec![
+            Cell::from(qso.date.as_str()),
             Cell::from(qso.utc.as_str()),
             Cell::from(qso.callsign.as_str()).style(
                 Style::default()
@@ -142,6 +144,7 @@ fn render_table(app: &App, filtered: &[&crate::app::RecentQso], frame: &mut Fram
     });
 
     let widths = [
+        Constraint::Length(10),
         Constraint::Length(5),
         Constraint::Length(10),
         Constraint::Length(5),
@@ -174,4 +177,61 @@ fn render_table(app: &App, filtered: &[&crate::app::RecentQso], frame: &mut Fram
     });
 
     frame.render_stateful_widget(table, area, &mut state);
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use ratatui::{backend::TestBackend, Terminal};
+
+    use qsoripper_core::proto::qsoripper::domain::QsoRecord;
+
+    use super::render;
+    use crate::app::{App, RecentQso};
+
+    fn screen_text(terminal: &Terminal<TestBackend>) -> String {
+        let buffer = terminal.backend().buffer();
+        let mut out = String::new();
+
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                out.push_str(buffer[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+
+        out
+    }
+
+    #[test]
+    fn render_table_includes_qso_date_column() {
+        let backend = TestBackend::new(120, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new("http://localhost:50051".to_string());
+        app.recent_qsos.push(RecentQso {
+            local_id: "q1".to_string(),
+            date: "2026-07-08".to_string(),
+            utc: "14:32".to_string(),
+            callsign: "K7ABC".to_string(),
+            band: "20M".to_string(),
+            mode: "SSB".to_string(),
+            rst_sent: "59".to_string(),
+            rst_rcvd: "59".to_string(),
+            country: Some("United States".to_string()),
+            grid: Some("CN87".to_string()),
+            name: Some("John Smith".to_string()),
+            source_record: QsoRecord::default(),
+        });
+
+        terminal
+            .draw(|frame| render(&app, frame, frame.area()))
+            .unwrap();
+        let text = screen_text(&terminal);
+
+        assert!(text.contains("Date"), "expected date header, got:\n{text}");
+        assert!(
+            text.contains("2026-07-08"),
+            "expected QSO date, got:\n{text}"
+        );
+    }
 }
