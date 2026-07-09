@@ -16,7 +16,7 @@ const CALLSIGN_WIDTH: usize = 12;
 /// Fixed display width for RST fields.
 const RST_WIDTH: usize = 5;
 /// Fixed display width for the frequency field.
-const FREQ_WIDTH: usize = 9;
+const FREQ_WIDTH: usize = 12;
 /// Fixed display width for the date field.
 const DATE_WIDTH: usize = 10;
 /// Fixed display width for the time field.
@@ -366,5 +366,16 @@ fn styled_cycle(text: String, focused: bool) -> Span<'static> {
         )
     } else {
         Span::styled(text, Style::default().fg(Color::Gray))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{field_value, FREQ_WIDTH};
+
+    #[test]
+    fn frequency_field_width_preserves_precise_mhz_value() {
+        let value = field_value("1296.123456", false, false, 0, FREQ_WIDTH);
+        assert_eq!(value.trim_end(), "1296.123456");
     }
 }

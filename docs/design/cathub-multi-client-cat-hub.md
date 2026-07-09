@@ -505,7 +505,7 @@ When the implementation PRs land, each must pass:
 - `cargo clippy --manifest-path src\rust\Cargo.toml --all-targets -- -D warnings`
 - `cargo test --manifest-path src\rust\Cargo.toml`
 - `cargo llvm-cov --manifest-path src\rust\Cargo.toml --workspace --exclude qsoripper-stress --exclude qsoripper-stress-tui --lcov --output-path rust-coverage.lcov`, with the workspace line coverage staying at or above the project's 80 percent threshold.
-- `Push-Location src\rust; cargo deny check --config deny.toml; Pop-Location` for the PRs that touch dependencies.
+- `Push-Location src\rust; cargo deny check; Pop-Location` for the PRs that touch dependencies.
 - `dotnet build src\dotnet\QsoRipper.slnx` to confirm no engine regressions when the engine spec or rigctld provider are touched.
 
 ## 15. Open questions
