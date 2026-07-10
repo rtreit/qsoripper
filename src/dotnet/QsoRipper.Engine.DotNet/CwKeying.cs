@@ -36,14 +36,22 @@ internal sealed record ManagedCwKeyerConfig(
 
     public static ManagedCwKeyerConfig FromEnvironment()
     {
-        var backend = Environment.GetEnvironmentVariable(BackendEnvironmentVariable);
-        var port = Environment.GetEnvironmentVariable(WinkeyerPortEnvironmentVariable);
-        var baud = Environment.GetEnvironmentVariable(WinkeyerBaudEnvironmentVariable);
-        var speed = Environment.GetEnvironmentVariable(SpeedWpmEnvironmentVariable);
-        var transmitEnabled = Environment.GetEnvironmentVariable(TransmitEnabledEnvironmentVariable);
-        var maxTxMs = Environment.GetEnvironmentVariable(MaxTxMsEnvironmentVariable);
+        return FromSources(null, Environment.GetEnvironmentVariable);
+    }
 
-        return FromValues(backend, port, baud, speed, transmitEnabled, maxTxMs);
+    internal static ManagedCwKeyerConfig FromSources(
+        ManagedCwPersistedSettings? persisted,
+        Func<string, string?> environment)
+    {
+        string? Effective(string name, string? persistedValue) => environment(name) ?? persistedValue;
+
+        return FromValues(
+            Effective(BackendEnvironmentVariable, persisted?.Backend),
+            Effective(WinkeyerPortEnvironmentVariable, persisted?.WinkeyerPort),
+            Effective(WinkeyerBaudEnvironmentVariable, persisted?.WinkeyerBaud?.ToString(CultureInfo.InvariantCulture)),
+            Effective(SpeedWpmEnvironmentVariable, persisted?.SpeedWpm?.ToString(CultureInfo.InvariantCulture)),
+            Effective(TransmitEnabledEnvironmentVariable, persisted?.TransmitEnabled?.ToString(CultureInfo.InvariantCulture)),
+            Effective(MaxTxMsEnvironmentVariable, persisted?.MaxTxMs?.ToString(CultureInfo.InvariantCulture)));
     }
 
     internal static ManagedCwKeyerConfig FromValues(

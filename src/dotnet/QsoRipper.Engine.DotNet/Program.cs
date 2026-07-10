@@ -17,8 +17,10 @@ var persistedSetup = SharedSetupConfigPersistence.Load(options.ConfigPath);
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(kestrel => ConfigureListenEndpoint(kestrel, options.ListenAddress));
 builder.Services.AddGrpc();
-builder.Services.AddSingleton(static _ =>
-    new ManagedCwController(ManagedCwKeyerConfig.FromEnvironment()));
+builder.Services.AddSingleton(_ =>
+    new ManagedCwController(ManagedCwKeyerConfig.FromSources(
+        persistedSetup.Config.CwKeying,
+        Environment.GetEnvironmentVariable)));
 
 var resolvedStorage = CreateStorage(persistedSetup.Config);
 builder.Services.AddSingleton(resolvedStorage.Storage);

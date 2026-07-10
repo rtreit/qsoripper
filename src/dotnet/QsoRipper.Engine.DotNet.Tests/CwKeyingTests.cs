@@ -7,6 +7,57 @@ namespace QsoRipper.Engine.DotNet.Tests;
 public sealed class CwKeyingTests
 {
     [Fact]
+    public void TomlSettingsSupplyCwConfigurationDefaults()
+    {
+        var persisted = new ManagedCwPersistedSettings
+        {
+            Backend = "winkeyer",
+            WinkeyerPort = "COM9",
+            WinkeyerBaud = 2_400,
+            SpeedWpm = 31,
+            TransmitEnabled = true,
+            MaxTxMs = 45_000,
+        };
+
+        var config = ManagedCwKeyerConfig.FromSources(persisted, static _ => null);
+
+        Assert.Equal(ManagedCwBackendKind.Winkeyer, config.Backend);
+        Assert.Equal("COM9", config.WinkeyerPort);
+        Assert.Equal(2_400, config.WinkeyerBaud);
+        Assert.Equal(31u, config.DefaultSpeedWpm);
+        Assert.True(config.TransmitEnabled);
+        Assert.Equal(45_000u, config.MaxTxMs);
+    }
+
+    [Fact]
+    public void EnvironmentOverridesIndividualTomlSettings()
+    {
+        var persisted = new ManagedCwPersistedSettings
+        {
+            Backend = "winkeyer",
+            WinkeyerPort = "COM9",
+            WinkeyerBaud = 1_200,
+            SpeedWpm = 20,
+            TransmitEnabled = false,
+            MaxTxMs = 30_000,
+        };
+        var environment = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [ManagedCwKeyerConfig.SpeedWpmEnvironmentVariable] = "35",
+            [ManagedCwKeyerConfig.TransmitEnabledEnvironmentVariable] = "true",
+        };
+
+        var config = ManagedCwKeyerConfig.FromSources(
+            persisted,
+            name => environment.GetValueOrDefault(name));
+
+        Assert.Equal("COM9", config.WinkeyerPort);
+        Assert.Equal(35u, config.DefaultSpeedWpm);
+        Assert.True(config.TransmitEnabled);
+        Assert.Equal(30_000u, config.MaxTxMs);
+    }
+
+    [Fact]
     public void ConfigDefaultsToSafeNullBackend()
     {
         var config = ManagedCwKeyerConfig.FromValues(null, null, null, null, null, null);

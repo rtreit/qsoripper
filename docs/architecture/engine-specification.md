@@ -964,6 +964,8 @@ The WinKeyer backend is an engine-lifetime, serialized hardware session. The eng
 
 Hardware transmission is opt-in. `SendCwMacro` and `SendCwText` reject with `FAILED_PRECONDITION` unless `QSORIPPER_CW_TRANSMIT_ENABLED=true`; status and speed operations remain available for setup diagnostics. Each accepted hardware send arms the configured safety ceiling. At expiry the engine requests WinKeyer status (`15`) and clears the input buffer (`0A`) only when the BUSY bit remains set. `AbortCw` cancels the active watchdog and clears the buffer immediately. A subsequent send replaces the previous watchdog deadline.
 
+CW configuration is read from the shared `[cw_keying]` table in `config.toml`. Each corresponding `QSORIPPER_CW_*` environment variable overrides only that TOML key. Both engines apply the same precedence and validation at startup. Setup saves preserve the entire `[cw_keying]` table verbatim because the CW service does not yet expose a configuration mutation RPC.
+
 `CwKeyerStatus` reports the configured backend, probed availability, retained speed, optional port, optional last error, hardware transmit gate, maximum transmit duration, and optional firmware revision. For WinKeyer, status performs a real connection probe instead of inferring availability from configuration alone.
 
 #### Error semantics
@@ -1381,6 +1383,8 @@ All configuration is driven by environment variables prefixed with `QSORIPPER_`.
 | `QSORIPPER_CONTEST_CALENDAR_DETAILS_PATH` | Path | `data\contest-calendar\contest-details.json` | Optional reviewed local JSON catalog for bands, modes, exchange, and rules URL |
 
 #### CW Keying
+
+The same keys may be persisted under `[cw_keying]` in the shared `config.toml`: `backend`, `winkeyer_port`, `winkeyer_baud`, `speed_wpm`, `transmit_enabled`, and `max_tx_ms`. Environment variables in the table below override their corresponding persisted values.
 
 | Variable | Type | Default | Description |
 |---|---|---|---|

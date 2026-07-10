@@ -96,6 +96,7 @@ where
     let address = options.listen_address;
     let setup_state = Arc::new(SetupState::load(options.config_path.clone())?);
     let config_file_values = setup_state.runtime_config_values().await;
+    let cw_config = CwKeyerConfig::from_config_values(&config_file_values)?;
     let runtime_config = Arc::new(
         RuntimeConfigManager::new_with_config_file_values_and_cli_storage_overrides(
             config_file_values,
@@ -121,10 +122,7 @@ where
     let space_weather_service = SpaceWeatherControlSurface::new(runtime_config.clone());
     let rig_control_service = RigControlControlSurface::new(runtime_config.clone());
     let great_circle_service = GreatCircleControlSurface::new();
-    let cw_service = CwControlSurface::new(
-        runtime_config.clone(),
-        CwController::new(CwKeyerConfig::from_env()?),
-    );
+    let cw_service = CwControlSurface::new(runtime_config.clone(), CwController::new(cw_config));
     let active_storage_backend = runtime_config.active_storage_backend().await;
     let setup_status = setup_state.status().await;
     let setup_completion = setup_completion_label(setup_status.setup_complete);

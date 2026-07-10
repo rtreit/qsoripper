@@ -347,8 +347,8 @@ function Invoke-ConformanceScenario {
     if ($cwStatus.backend -ne 'null' -or -not $cwStatus.available -or $cwStatus.transmitEnabled) {
         throw "$EngineProfile did not report the safe default CW status.`n$($cwStatusResult.StdOut)"
     }
-    if ($cwStatus.speedWpm -ne 25 -or $cwStatus.maxTxMs -ne 120000) {
-        throw "$EngineProfile CW defaults do not match the shared contract.`n$($cwStatusResult.StdOut)"
+    if ($cwStatus.speedWpm -ne 29 -or $cwStatus.maxTxMs -ne 45000) {
+        throw "$EngineProfile did not load the shared CW TOML settings.`n$($cwStatusResult.StdOut)"
     }
 
     $cwListResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'cw', 'list', '--json')
@@ -574,6 +574,14 @@ try {
 
     $sharedConfigPath = Join-Path $runDirectory 'config.toml'
     $persistencePath = Join-Path $runDirectory 'conformance-log.db'
+    @'
+[cw_keying]
+backend = "null"
+speed_wpm = 29
+transmit_enabled = false
+max_tx_ms = 45000
+future_key = "preserve-me"
+'@ | Set-Content -LiteralPath $sharedConfigPath
 
     $rustScenarioOutput = @(Invoke-ConformanceScenario -EngineProfile 'rust' -ConfigPath $sharedConfigPath -PersistencePath $persistencePath -Storage 'sqlite')
     $rustResult = Select-ScenarioResult -Results $rustScenarioOutput -EngineProfile 'rust'
@@ -582,6 +590,11 @@ try {
     $dotnetScenarioOutput = @(Invoke-ConformanceScenario -EngineProfile 'dotnet' -ConfigPath $sharedConfigPath -PersistencePath $persistencePath -Storage 'sqlite')
     $dotnetResult = Select-ScenarioResult -Results $dotnetScenarioOutput -EngineProfile 'dotnet'
     Stop-TestEngine
+
+    $sharedConfigContent = Get-Content -LiteralPath $sharedConfigPath -Raw
+    if ($sharedConfigContent -notmatch 'future_key\s*=\s*"preserve-me"') {
+        throw 'An engine setup save did not preserve the shared [cw_keying] table verbatim.'
+    }
 
     Assert-SharedSetupRoundTrip -FirstEngineProfile 'rust' -SecondEngineProfile 'dotnet' -ScenarioId 'rust-to-dotnet'
     Assert-SharedSetupRoundTrip -FirstEngineProfile 'dotnet' -SecondEngineProfile 'rust' -ScenarioId 'dotnet-to-rust'

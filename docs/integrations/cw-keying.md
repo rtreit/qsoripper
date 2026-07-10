@@ -34,7 +34,19 @@ qsoripper cw speed 28
 
 ## WinKeyer configuration
 
-Connect the WinKeyer, close other applications that own its serial port, and start with transmission disabled:
+Connect the WinKeyer, close other applications that own its serial port, and add a safety-first configuration to the shared `config.toml`:
+
+```toml
+[cw_keying]
+backend = "winkeyer"
+winkeyer_port = "COM3"
+winkeyer_baud = 1200
+speed_wpm = 25
+transmit_enabled = false
+max_tx_ms = 120000
+```
+
+The equivalent environment variables are useful for temporary overrides:
 
 ```powershell
 $env:QSORIPPER_CW_KEYER_BACKEND = "winkeyer"
@@ -70,6 +82,8 @@ qsoripper cw abort
 ```
 
 Environment configuration is read when the engine starts. Restart the engine after changing CW settings.
+
+Persisted TOML is also read at engine startup. A `QSORIPPER_CW_*` environment variable overrides only its corresponding `[cw_keying]` value, so temporary changes do not require editing the shared file. Remove the environment variable to return to the persisted value on the next restart.
 
 ## Troubleshooting
 

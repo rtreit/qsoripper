@@ -1,5 +1,6 @@
 //! CW keying support for contest macro expansion and keyer backends.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::sync::Arc;
@@ -156,13 +157,36 @@ impl CwKeyerConfig {
     ///
     /// Returns an error when configured values fail validation.
     pub fn from_env() -> Result<Self, CwError> {
+        Self::from_config_values(&BTreeMap::new())
+    }
+
+    /// Builds configuration from persisted values with process environment overrides.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when an effective value fails validation.
+    pub fn from_config_values(config_values: &BTreeMap<String, String>) -> Result<Self, CwError> {
+        Self::from_config_values_with_environment(config_values, |name| std::env::var(name).ok())
+    }
+
+    fn from_config_values_with_environment(
+        config_values: &BTreeMap<String, String>,
+        environment: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, CwError> {
+        let effective = |name: &str| environment(name).or_else(|| config_values.get(name).cloned());
+        let backend = effective(CW_KEYER_BACKEND_ENV_VAR);
+        let port = effective(CW_WINKEYER_PORT_ENV_VAR);
+        let baud = effective(CW_WINKEYER_BAUD_ENV_VAR);
+        let speed = effective(CW_SPEED_WPM_ENV_VAR);
+        let transmit_enabled = effective(CW_TRANSMIT_ENABLED_ENV_VAR);
+        let max_tx_ms = effective(CW_MAX_TX_MS_ENV_VAR);
         Self::from_values(
-            std::env::var(CW_KEYER_BACKEND_ENV_VAR).ok().as_deref(),
-            std::env::var(CW_WINKEYER_PORT_ENV_VAR).ok(),
-            std::env::var(CW_WINKEYER_BAUD_ENV_VAR).ok().as_deref(),
-            std::env::var(CW_SPEED_WPM_ENV_VAR).ok().as_deref(),
-            std::env::var(CW_TRANSMIT_ENABLED_ENV_VAR).ok().as_deref(),
-            std::env::var(CW_MAX_TX_MS_ENV_VAR).ok().as_deref(),
+            backend.as_deref(),
+            port,
+            baud.as_deref(),
+            speed.as_deref(),
+            transmit_enabled.as_deref(),
+            max_tx_ms.as_deref(),
         )
     }
 }
@@ -887,7 +911,37 @@ fn format_bytes_error(bytes: &[u8], err: &std::io::Error) -> String {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::sync::Mutex;
+
+    #[test]
+    fn config_values_supply_defaults_and_environment_overrides_individual_keys(
+    ) -> Result<(), CwError> {
+        let config_values = BTreeMap::from([
+            (CW_KEYER_BACKEND_ENV_VAR.to_string(), "winkeyer".to_string()),
+            (CW_WINKEYER_PORT_ENV_VAR.to_string(), "COM9".to_string()),
+            (CW_WINKEYER_BAUD_ENV_VAR.to_string(), "1200".to_string()),
+            (CW_SPEED_WPM_ENV_VAR.to_string(), "20".to_string()),
+            (CW_TRANSMIT_ENABLED_ENV_VAR.to_string(), "false".to_string()),
+            (CW_MAX_TX_MS_ENV_VAR.to_string(), "30000".to_string()),
+        ]);
+        let environment = BTreeMap::from([
+            (CW_SPEED_WPM_ENV_VAR.to_string(), "35".to_string()),
+            (CW_TRANSMIT_ENABLED_ENV_VAR.to_string(), "true".to_string()),
+        ]);
+
+        let config = CwKeyerConfig::from_config_values_with_environment(&config_values, |name| {
+            environment.get(name).cloned()
+        })?;
+
+        assert_eq!(config.backend, CwBackendKind::Winkeyer);
+        assert_eq!(config.winkeyer_port.as_deref(), Some("COM9"));
+        assert_eq!(config.winkeyer_baud, 1200);
+        assert_eq!(config.default_speed_wpm, 35);
+        assert!(config.transmit_enabled);
+        assert_eq!(config.max_tx_ms, 30_000);
+        Ok(())
+    }
 
     #[derive(Default)]
     struct FakeState {

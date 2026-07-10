@@ -144,6 +144,44 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
+    public void Cw_keying_toml_loads_and_survives_setup_save_verbatim()
+    {
+        var configPath = Path.Combine(_tempDirectory, "config.toml");
+        File.WriteAllText(
+            configPath,
+            """
+            [cw_keying]
+            backend = "winkeyer"
+            winkeyer_port = "COM3"
+            winkeyer_baud = 1200
+            speed_wpm = 20
+            transmit_enabled = true
+            max_tx_ms = 30000
+            future_key = "preserve-me"
+            """);
+
+        var loaded = SharedSetupConfigPersistence.Load(configPath);
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+            }
+        });
+        var saved = File.ReadAllText(configPath);
+
+        Assert.Equal("winkeyer", loaded.Config.CwKeying.Backend);
+        Assert.Equal("COM3", loaded.Config.CwKeying.WinkeyerPort);
+        Assert.Equal(1_200, loaded.Config.CwKeying.WinkeyerBaud);
+        Assert.Equal(20u, loaded.Config.CwKeying.SpeedWpm);
+        Assert.True(loaded.Config.CwKeying.TransmitEnabled);
+        Assert.Equal(30_000u, loaded.Config.CwKeying.MaxTxMs);
+        Assert.Contains("future_key = \"preserve-me\"", saved, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Log_qso_uses_active_station_context_and_sync_updates_status()
     {
         var state = CreateStateWithSync();

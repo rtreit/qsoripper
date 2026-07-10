@@ -3,6 +3,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use qsoripper_core::cw::{
+    CW_KEYER_BACKEND_ENV_VAR, CW_MAX_TX_MS_ENV_VAR, CW_SPEED_WPM_ENV_VAR,
+    CW_TRANSMIT_ENABLED_ENV_VAR, CW_WINKEYER_BAUD_ENV_VAR, CW_WINKEYER_PORT_ENV_VAR,
+};
 use qsoripper_core::domain::lookup::normalize_callsign;
 use qsoripper_core::domain::station::station_profile_has_values;
 use qsoripper_core::lookup::{
@@ -572,6 +576,8 @@ struct PersistedSetupConfig {
     rig_control: PersistedRigControlConfig,
     #[serde(default, skip_serializing_if = "PersistedWsjtxIngestConfig::is_empty")]
     wsjtx_ingest: PersistedWsjtxIngestConfig,
+    #[serde(default, skip_serializing_if = "PersistedCwKeyingConfig::is_empty")]
+    cw_keying: PersistedCwKeyingConfig,
 }
 
 impl PersistedSetupConfig {
@@ -768,6 +774,7 @@ impl PersistedSetupConfig {
         if !PersistedWsjtxIngestConfig::is_empty(&self.wsjtx_ingest) {
             self.wsjtx_ingest.insert_runtime_values(&mut values);
         }
+        self.cw_keying.insert_runtime_values(&mut values);
 
         values
     }
@@ -861,6 +868,48 @@ impl PersistedSetupConfig {
             || self.station_profile.clone(),
             |entry| PersistedStationProfile::from_proto(&entry.to_proto()),
         );
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PersistedCwKeyingConfig {
+    backend: Option<String>,
+    winkeyer_port: Option<String>,
+    winkeyer_baud: Option<u32>,
+    speed_wpm: Option<u32>,
+    transmit_enabled: Option<bool>,
+    max_tx_ms: Option<u64>,
+}
+
+impl PersistedCwKeyingConfig {
+    fn is_empty(&self) -> bool {
+        self.backend.is_none()
+            && self.winkeyer_port.is_none()
+            && self.winkeyer_baud.is_none()
+            && self.speed_wpm.is_none()
+            && self.transmit_enabled.is_none()
+            && self.max_tx_ms.is_none()
+    }
+
+    fn insert_runtime_values(&self, values: &mut BTreeMap<String, String>) {
+        if let Some(value) = self.backend.as_deref() {
+            values.insert(CW_KEYER_BACKEND_ENV_VAR.to_string(), value.to_string());
+        }
+        if let Some(value) = self.winkeyer_port.as_deref() {
+            values.insert(CW_WINKEYER_PORT_ENV_VAR.to_string(), value.to_string());
+        }
+        if let Some(value) = self.winkeyer_baud {
+            values.insert(CW_WINKEYER_BAUD_ENV_VAR.to_string(), value.to_string());
+        }
+        if let Some(value) = self.speed_wpm {
+            values.insert(CW_SPEED_WPM_ENV_VAR.to_string(), value.to_string());
+        }
+        if let Some(value) = self.transmit_enabled {
+            values.insert(CW_TRANSMIT_ENABLED_ENV_VAR.to_string(), value.to_string());
+        }
+        if let Some(value) = self.max_tx_ms {
+            values.insert(CW_MAX_TX_MS_ENV_VAR.to_string(), value.to_string());
+        }
     }
 }
 
@@ -1999,7 +2048,7 @@ fn write_persisted_config(
         doc.remove(key);
     }
     for (key, item) in owned_doc.iter() {
-        if key == "wsjtx_ingest" {
+        if key == "wsjtx_ingest" || key == "cw_keying" {
             continue;
         }
         doc.insert(key, item.clone());
@@ -2625,6 +2674,8 @@ mod tests {
         load_persisted_config, suggested_log_file_path, validate_log_file_step, validate_qrz_step,
         validate_station_profiles_step, write_persisted_config, PersistedCatHubConfig,
         PersistedSetupConfig, SetupControlSurface, SetupState, StationProfileControlSurface,
+        CW_KEYER_BACKEND_ENV_VAR, CW_MAX_TX_MS_ENV_VAR, CW_SPEED_WPM_ENV_VAR,
+        CW_TRANSMIT_ENABLED_ENV_VAR, CW_WINKEYER_BAUD_ENV_VAR, CW_WINKEYER_PORT_ENV_VAR,
         DEFAULT_CONFIG_FILE_NAME, RIGCTLD_ENABLED_ENV_VAR, RIGCTLD_HOST_ENV_VAR,
         RIGCTLD_PORT_ENV_VAR, RIGCTLD_READ_TIMEOUT_MS_ENV_VAR, RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR,
     };
@@ -4529,6 +4580,62 @@ bind = "127.0.0.1:4532"
         assert_eq!(projected.hamlib_net.len(), 1);
 
         fs::remove_dir_all(config_directory).expect("remove temp config directory");
+    }
+
+    #[tokio::test]
+    async fn cw_keying_toml_loads_and_survives_setup_write_verbatim() {
+        let config_path = unique_config_path();
+        fs::create_dir_all(config_path.parent().expect("config directory"))
+            .expect("create config directory");
+        fs::write(
+            &config_path,
+            r#"
+[cw_keying]
+backend = "winkeyer"
+winkeyer_port = "COM3"
+winkeyer_baud = 1200
+speed_wpm = 20
+transmit_enabled = true
+max_tx_ms = 30000
+future_key = "preserve-me"
+"#,
+        )
+        .expect("write config");
+
+        let config = load_persisted_config(&config_path)
+            .expect("load config")
+            .expect("config present");
+        let values = config.to_runtime_values();
+        write_persisted_config(&config_path, &config, None, None).expect("rewrite config");
+        let saved = fs::read_to_string(&config_path).expect("read config");
+
+        assert_eq!(
+            Some("winkeyer"),
+            values.get(CW_KEYER_BACKEND_ENV_VAR).map(String::as_str)
+        );
+        assert_eq!(
+            Some("COM3"),
+            values.get(CW_WINKEYER_PORT_ENV_VAR).map(String::as_str)
+        );
+        assert_eq!(
+            Some("1200"),
+            values.get(CW_WINKEYER_BAUD_ENV_VAR).map(String::as_str)
+        );
+        assert_eq!(
+            Some("20"),
+            values.get(CW_SPEED_WPM_ENV_VAR).map(String::as_str)
+        );
+        assert_eq!(
+            Some("true"),
+            values.get(CW_TRANSMIT_ENABLED_ENV_VAR).map(String::as_str)
+        );
+        assert_eq!(
+            Some("30000"),
+            values.get(CW_MAX_TX_MS_ENV_VAR).map(String::as_str)
+        );
+        assert!(saved.contains("future_key = \"preserve-me\""));
+
+        let _ = fs::remove_dir_all(config_path.parent().expect("config directory"));
     }
 
     #[test]
