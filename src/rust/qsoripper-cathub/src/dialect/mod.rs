@@ -109,7 +109,7 @@ impl FaceContext {
         // Idempotent suppression: never re-send a value the radio already holds. This keeps
         // the hub as quiet on the wire as a native Hamlib driver and avoids the TS-590
         // PC-control beep that fires on every redundant set. PTT is never redundant.
-        if self.state.snapshot().is_redundant(&mutation) {
+        if self.state.is_redundant(&mutation) {
             return ApplyOutcome::Ok;
         }
         match (class, mutation) {

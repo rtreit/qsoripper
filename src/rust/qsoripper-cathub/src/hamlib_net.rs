@@ -844,6 +844,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_freq_then_same_pktusb_reasserts_mode_after_band_memory_recall() {
+        // The TS-590 recalls MD and DA from per-band memory as soon as FA/FB crosses a band
+        // boundary. Before its AI/poll updates arrive, the cache still contains the old
+        // PKTUSB value. WSJT-X then sends M PKTUSB; that re-assertion must reach the radio
+        // instead of being incorrectly deduped against the stale pre-tune cache.
+        let (ctx, backend, state) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        state.record(
+            StateChange::DataMode {
+                vfo: Vfo::A,
+                on: true,
+            },
+            RadioEventSource::PollDiff,
+        );
+
+        assert_eq!(reply_of("F 28074000", &ctx).await, RPRT_OK.to_vec());
+        assert_eq!(reply_of("M PKTUSB 0", &ctx).await, RPRT_OK.to_vec());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        assert_eq!(
+            backend.mutations(),
+            vec![
+                StateMutation::SetVfoFreq {
+                    vfo: Vfo::A,
+                    hz: 28_074_000,
+                },
+                StateMutation::SetMode {
+                    vfo: Vfo::A,
+                    mode: Mode::Usb,
+                },
+                StateMutation::SetDataMode {
+                    vfo: Vfo::A,
+                    on: true,
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn set_mode_plain_clears_data_flag() {
         // Switching from a data mode to a plain mode must emit DA0. Prime DATA on, then send
         // plain USB: the base mode is unchanged (deduped) but the DATA-off write lands.
