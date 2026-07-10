@@ -12,4 +12,7 @@ message CwKeyerStatus {
   uint32 speed_wpm = 3;
   optional string port_name = 4;
   optional string error_message = 5;
+  bool transmit_enabled = 6;
+  uint64 max_tx_ms = 7;
+  optional uint32 firmware_revision = 8;
 }

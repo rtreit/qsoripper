@@ -52,9 +52,16 @@ internal static class CwCommand
         Console.WriteLine($"CW keyer: {BackendName(status.Backend)}");
         Console.WriteLine($"  Available: {status.Available}");
         Console.WriteLine($"  Speed: {status.SpeedWpm} WPM");
+        Console.WriteLine($"  Hardware transmit enabled: {status.TransmitEnabled}");
+        Console.WriteLine($"  Transmit safety ceiling: {status.MaxTxMs} ms");
         if (status.HasPortName)
         {
             Console.WriteLine($"  Port: {status.PortName}");
+        }
+
+        if (status.HasFirmwareRevision)
+        {
+            Console.WriteLine($"  Firmware revision: {status.FirmwareRevision}");
         }
 
         if (status.HasErrorMessage)
@@ -127,6 +134,7 @@ internal static class CwCommand
         {
             return InvalidUsage("cw speed requires a numeric WPM value.");
         }
+        ValidateSpeed(speedWpm);
 
         var response = await client.SetCwSpeedAsync(new SetCwSpeedRequest
         {
@@ -178,6 +186,7 @@ internal static class CwCommand
                     break;
                 case "--speed":
                     context.SpeedWpm = uint.Parse(value, CultureInfo.InvariantCulture);
+                    ValidateSpeed(context.SpeedWpm);
                     break;
                 default:
                     throw new ArgumentException($"Unknown CW option '{option}'.");
@@ -232,8 +241,22 @@ internal static class CwCommand
             BackendName(status.Backend),
             status.Available,
             status.SpeedWpm,
+            status.TransmitEnabled,
+            status.MaxTxMs,
+            status.HasFirmwareRevision ? status.FirmwareRevision : null,
             status.HasPortName ? status.PortName : string.Empty,
             status.HasErrorMessage ? status.ErrorMessage : string.Empty);
+    }
+
+    private static void ValidateSpeed(uint speedWpm)
+    {
+        if (speedWpm is < 5 or > 99)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(speedWpm),
+                speedWpm,
+                "CW speed must be between 5 and 99 WPM.");
+        }
     }
 
     private static string BackendName(CwKeyerBackend backend)
@@ -252,6 +275,9 @@ internal sealed record CwStatusJson(
     string Backend,
     bool Available,
     uint SpeedWpm,
+    bool TransmitEnabled,
+    ulong MaxTxMs,
+    uint? FirmwareRevision,
     string PortName,
     string ErrorMessage);
 

@@ -1001,15 +1001,13 @@ impl CwService for CwControlSurface {
                 station_profile.as_ref(),
             )
             .map_err(cw_status)?;
-        self.controller
-            .send_text(
-                &expanded_text,
-                request
-                    .context
-                    .as_ref()
-                    .and_then(|context| context.speed_wpm),
-            )
-            .map_err(cw_status)?;
+        let speed_wpm = request
+            .context
+            .as_ref()
+            .and_then(|context| context.speed_wpm);
+        let controller = self.controller.clone();
+        let text_to_send = expanded_text.clone();
+        cw_blocking(move || controller.send_text(&text_to_send, speed_wpm)).await?;
         Ok(Response::new(SendCwMacroResponse {
             state: CwSendState::Accepted as i32,
             expanded_text,
@@ -1031,15 +1029,13 @@ impl CwService for CwControlSurface {
                 station_profile.as_ref(),
             )
             .map_err(cw_status)?;
-        self.controller
-            .send_text(
-                &expanded_text,
-                request
-                    .context
-                    .as_ref()
-                    .and_then(|context| context.speed_wpm),
-            )
-            .map_err(cw_status)?;
+        let speed_wpm = request
+            .context
+            .as_ref()
+            .and_then(|context| context.speed_wpm);
+        let controller = self.controller.clone();
+        let text_to_send = expanded_text.clone();
+        cw_blocking(move || controller.send_text(&text_to_send, speed_wpm)).await?;
         Ok(Response::new(SendCwTextResponse {
             state: CwSendState::Accepted as i32,
             expanded_text,
@@ -1051,7 +1047,8 @@ impl CwService for CwControlSurface {
         &self,
         _request: Request<AbortCwRequest>,
     ) -> Result<Response<AbortCwResponse>, Status> {
-        self.controller.abort().map_err(cw_status)?;
+        let controller = self.controller.clone();
+        cw_blocking(move || controller.abort()).await?;
         Ok(Response::new(AbortCwResponse {
             state: CwSendState::AbortRequested as i32,
             error_message: None,
@@ -1062,11 +1059,13 @@ impl CwService for CwControlSurface {
         &self,
         request: Request<SetCwSpeedRequest>,
     ) -> Result<Response<SetCwSpeedResponse>, Status> {
-        self.controller
-            .set_speed(request.into_inner().speed_wpm)
-            .map_err(cw_status)?;
+        let speed_wpm = request.into_inner().speed_wpm;
+        let controller = self.controller.clone();
+        cw_blocking(move || controller.set_speed(speed_wpm)).await?;
+        let controller = self.controller.clone();
+        let status = cw_blocking(move || Ok(controller.status())).await?;
         Ok(Response::new(SetCwSpeedResponse {
-            status: Some(self.controller.status()),
+            status: Some(status),
         }))
     }
 
@@ -1074,20 +1073,39 @@ impl CwService for CwControlSurface {
         &self,
         _request: Request<GetCwKeyerStatusRequest>,
     ) -> Result<Response<GetCwKeyerStatusResponse>, Status> {
+        let controller = self.controller.clone();
+        let status = cw_blocking(move || Ok(controller.status())).await?;
         Ok(Response::new(GetCwKeyerStatusResponse {
-            status: Some(self.controller.status()),
+            status: Some(status),
         }))
     }
+}
+
+async fn cw_blocking<T>(
+    operation: impl FnOnce() -> Result<T, CwError> + Send + 'static,
+) -> Result<T, Status>
+where
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| Status::internal(format!("CW backend task failed: {error}")))?
+        .map_err(cw_status)
 }
 
 fn cw_status(error: CwError) -> Status {
     match error {
         CwError::UnknownMacro(message) => Status::not_found(message),
+        CwError::MissingTokenValue("MYCALL", _) => Status::failed_precondition(error.to_string()),
         CwError::UnknownToken(_)
         | CwError::UnmatchedOpenBrace
         | CwError::UnmatchedCloseBrace
-        | CwError::MissingTokenValue(_, _) => Status::invalid_argument(error.to_string()),
-        CwError::BackendUnavailable(_) => Status::failed_precondition(error.to_string()),
+        | CwError::MissingTokenValue(_, _)
+        | CwError::InvalidSpeed(_)
+        | CwError::InvalidText(_) => Status::invalid_argument(error.to_string()),
+        CwError::BackendUnavailable(_) | CwError::TransmitDisabled => {
+            Status::failed_precondition(error.to_string())
+        }
         CwError::Io(_) => Status::unavailable(error.to_string()),
     }
 }

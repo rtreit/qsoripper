@@ -138,6 +138,9 @@ internal static class CliHelpText
 
                 Exercise engine-backed CW macro keying.
 
+                CW speed must be 5 through 99 WPM. Hardware text transmission is disabled
+                unless the engine starts with QSORIPPER_CW_TRANSMIT_ENABLED=true.
+
                   cw status
                   cw list
                   cw send <text> [--his-call <call>] [--rst <rst>] [--exchange <text>] [--nr <n>] [--speed <wpm>]

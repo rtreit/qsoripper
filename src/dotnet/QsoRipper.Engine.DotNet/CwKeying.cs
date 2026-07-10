@@ -18,14 +18,21 @@ internal sealed record ManagedCwKeyerConfig(
     ManagedCwBackendKind Backend,
     string? WinkeyerPort,
     int WinkeyerBaud,
-    uint DefaultSpeedWpm)
+    uint DefaultSpeedWpm,
+    bool TransmitEnabled,
+    uint MaxTxMs)
 {
     public const string BackendEnvironmentVariable = "QSORIPPER_CW_KEYER_BACKEND";
     public const string WinkeyerPortEnvironmentVariable = "QSORIPPER_CW_WINKEYER_PORT";
     public const string WinkeyerBaudEnvironmentVariable = "QSORIPPER_CW_WINKEYER_BAUD";
     public const string SpeedWpmEnvironmentVariable = "QSORIPPER_CW_SPEED_WPM";
+    public const string TransmitEnabledEnvironmentVariable = "QSORIPPER_CW_TRANSMIT_ENABLED";
+    public const string MaxTxMsEnvironmentVariable = "QSORIPPER_CW_MAX_TX_MS";
     public const int DefaultWinkeyerBaud = 1200;
     public const uint DefaultCwSpeedWpm = 25;
+    public const uint DefaultMaxTxMs = 120_000;
+    public const uint MinimumMaxTxMs = 1_000;
+    public const uint MaximumMaxTxMs = 300_000;
 
     public static ManagedCwKeyerConfig FromEnvironment()
     {
@@ -33,11 +40,19 @@ internal sealed record ManagedCwKeyerConfig(
         var port = Environment.GetEnvironmentVariable(WinkeyerPortEnvironmentVariable);
         var baud = Environment.GetEnvironmentVariable(WinkeyerBaudEnvironmentVariable);
         var speed = Environment.GetEnvironmentVariable(SpeedWpmEnvironmentVariable);
+        var transmitEnabled = Environment.GetEnvironmentVariable(TransmitEnabledEnvironmentVariable);
+        var maxTxMs = Environment.GetEnvironmentVariable(MaxTxMsEnvironmentVariable);
 
-        return FromValues(backend, port, baud, speed);
+        return FromValues(backend, port, baud, speed, transmitEnabled, maxTxMs);
     }
 
-    internal static ManagedCwKeyerConfig FromValues(string? backend, string? port, string? baud, string? speed)
+    internal static ManagedCwKeyerConfig FromValues(
+        string? backend,
+        string? port,
+        string? baud,
+        string? speed,
+        string? transmitEnabled,
+        string? maxTxMs)
     {
         var backendKind = (backend ?? "null").Trim().ToUpperInvariant() switch
         {
@@ -47,11 +62,22 @@ internal sealed record ManagedCwKeyerConfig(
             var value => throw new InvalidOperationException($"Unsupported CW keyer backend '{value}'."),
         };
 
+        var parsedSpeed = ParseUIntOrDefault(speed, DefaultCwSpeedWpm);
+        ValidateSpeed(parsedSpeed);
+        var parsedMaxTxMs = ParseUIntOrDefault(maxTxMs, DefaultMaxTxMs);
+        if (parsedMaxTxMs is < MinimumMaxTxMs or > MaximumMaxTxMs)
+        {
+            throw new InvalidOperationException(
+                $"{MaxTxMsEnvironmentVariable} must be between {MinimumMaxTxMs} and {MaximumMaxTxMs}, got {parsedMaxTxMs}.");
+        }
+
         return new ManagedCwKeyerConfig(
             backendKind,
             string.IsNullOrWhiteSpace(port) ? null : port.Trim(),
             ParseIntOrDefault(baud, DefaultWinkeyerBaud),
-            ClampSpeed(ParseUIntOrDefault(speed, DefaultCwSpeedWpm)));
+            parsedSpeed,
+            ParseBoolOrDefault(transmitEnabled, false),
+            parsedMaxTxMs);
     }
 
     private static int ParseIntOrDefault(string? value, int defaultValue)
@@ -74,14 +100,91 @@ internal sealed record ManagedCwKeyerConfig(
         return uint.Parse(value, CultureInfo.InvariantCulture);
     }
 
-    public static uint ClampSpeed(uint speedWpm)
+    private static bool ParseBoolOrDefault(string? value, bool defaultValue)
     {
-        return Math.Min(99, Math.Max(5, speedWpm));
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return defaultValue;
+        }
+
+        return value.Trim().ToUpperInvariant() switch
+        {
+            "TRUE" or "1" or "YES" or "ON" => true,
+            "FALSE" or "0" or "NO" or "OFF" => false,
+            _ => throw new InvalidOperationException($"Invalid boolean CW configuration '{value}'."),
+        };
+    }
+
+    public static void ValidateSpeed(uint speedWpm)
+    {
+        if (speedWpm is < 5 or > 99)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(speedWpm),
+                speedWpm,
+                "CW speed must be between 5 and 99 WPM.");
+        }
     }
 }
 
-internal sealed class ManagedCwController(ManagedCwKeyerConfig config)
+internal interface IManagedWinkeyerPort : IDisposable
 {
+    byte Initialize();
+    void SetSpeed(uint speedWpm);
+    void SendText(string text);
+    void ClearBuffer();
+    bool IsBusy();
+    void CloseHostMode();
+}
+
+internal interface IManagedCwWatchdog : IDisposable
+{
+    void Arm(TimeSpan dueTime);
+    void Cancel();
+}
+
+internal sealed class ManagedCwWatchdog(Action callback) : IManagedCwWatchdog
+{
+    private readonly Timer _timer = new(static state => ((Action)state!).Invoke(), callback, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+
+    public void Arm(TimeSpan dueTime) => _timer.Change(dueTime, Timeout.InfiniteTimeSpan);
+
+    public void Cancel() => _timer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+
+    public void Dispose() => _timer.Dispose();
+}
+
+internal sealed class ManagedCwController : IDisposable
+{
+    private readonly object _gate = new();
+    private readonly ManagedCwKeyerConfig _config;
+    private readonly Func<string, int, IManagedWinkeyerPort> _portFactory;
+    private readonly Func<Action, IManagedCwWatchdog> _watchdogFactory;
+    private IManagedWinkeyerPort? _keyer;
+    private IManagedCwWatchdog? _watchdog;
+    private uint _activeSpeedWpm;
+    private uint? _firmwareRevision;
+    private string? _lastError;
+    private bool _disposed;
+
+    public ManagedCwController(ManagedCwKeyerConfig config)
+        : this(
+            config,
+            static (portName, baudRate) => new ManagedWinkeyerPort(portName, baudRate),
+            static callback => new ManagedCwWatchdog(callback))
+    {
+    }
+
+    internal ManagedCwController(
+        ManagedCwKeyerConfig config,
+        Func<string, int, IManagedWinkeyerPort> portFactory,
+        Func<Action, IManagedCwWatchdog>? watchdogFactory = null)
+    {
+        _config = config;
+        _portFactory = portFactory;
+        _watchdogFactory = watchdogFactory ?? (static callback => new ManagedCwWatchdog(callback));
+        _activeSpeedWpm = config.DefaultSpeedWpm;
+    }
     public static IReadOnlyList<CwMacro> BuiltInMacros { get; } =
     [
         new CwMacro { Name = "cq", Label = "CQ", Template = "CQ TEST {MYCALL} {MYCALL}" },
@@ -150,89 +253,129 @@ internal sealed class ManagedCwController(ManagedCwKeyerConfig config)
 
     public void SendText(string text, uint? speedWpm)
     {
-        switch (config.Backend)
+        ValidateText(text);
+        lock (_gate)
         {
-            case ManagedCwBackendKind.Null:
-                return;
-            case ManagedCwBackendKind.Winkeyer:
-                SendWinkeyerText(text, speedWpm ?? config.DefaultSpeedWpm);
-                return;
-            case ManagedCwBackendKind.Cwdaemon:
-                throw new InvalidOperationException("cwdaemon backend is reserved but not implemented.");
-            default:
-                throw new InvalidOperationException($"Unsupported CW keyer backend '{config.Backend}'.");
+            ThrowIfDisposed();
+            var speed = speedWpm ?? _activeSpeedWpm;
+            ManagedCwKeyerConfig.ValidateSpeed(speed);
+            switch (_config.Backend)
+            {
+                case ManagedCwBackendKind.Null:
+                    _activeSpeedWpm = speed;
+                    _lastError = null;
+                    return;
+                case ManagedCwBackendKind.Winkeyer:
+                    if (!_config.TransmitEnabled)
+                    {
+                        throw new InvalidOperationException(
+                            $"CW hardware transmission is disabled; set {ManagedCwKeyerConfig.TransmitEnabledEnvironmentVariable}=true to enable it.");
+                    }
+
+                    ExecuteKeyer(keyer =>
+                    {
+                        keyer.SetSpeed(speed);
+                        keyer.SendText(text);
+                    });
+                    _activeSpeedWpm = speed;
+                    ArmWatchdog();
+                    return;
+                case ManagedCwBackendKind.Cwdaemon:
+                    throw new InvalidOperationException("cwdaemon backend is reserved but not implemented.");
+                default:
+                    throw new InvalidOperationException($"Unsupported CW keyer backend '{_config.Backend}'.");
+            }
         }
     }
 
     public void Abort()
     {
-        switch (config.Backend)
+        lock (_gate)
         {
-            case ManagedCwBackendKind.Null:
-                return;
-            case ManagedCwBackendKind.Winkeyer:
-                using (var keyer = OpenWinkeyer())
-                {
-                    keyer.Initialize();
-                    keyer.ClearBuffer();
-                }
-
-                return;
-            case ManagedCwBackendKind.Cwdaemon:
-                throw new InvalidOperationException("cwdaemon backend is reserved but not implemented.");
-            default:
-                throw new InvalidOperationException($"Unsupported CW keyer backend '{config.Backend}'.");
+            ThrowIfDisposed();
+            CancelWatchdog();
+            switch (_config.Backend)
+            {
+                case ManagedCwBackendKind.Null:
+                    return;
+                case ManagedCwBackendKind.Winkeyer:
+                    ExecuteKeyer(static keyer => keyer.ClearBuffer());
+                    return;
+                case ManagedCwBackendKind.Cwdaemon:
+                    throw new InvalidOperationException("cwdaemon backend is reserved but not implemented.");
+                default:
+                    throw new InvalidOperationException($"Unsupported CW keyer backend '{_config.Backend}'.");
+            }
         }
     }
 
     public void SetSpeed(uint speedWpm)
     {
-        var clamped = ManagedCwKeyerConfig.ClampSpeed(speedWpm);
-        switch (config.Backend)
+        ManagedCwKeyerConfig.ValidateSpeed(speedWpm);
+        lock (_gate)
         {
-            case ManagedCwBackendKind.Null:
-                return;
-            case ManagedCwBackendKind.Winkeyer:
-                using (var keyer = OpenWinkeyer())
-                {
-                    keyer.Initialize();
-                    keyer.SetSpeed(clamped);
-                }
+            ThrowIfDisposed();
+            switch (_config.Backend)
+            {
+                case ManagedCwBackendKind.Null:
+                    break;
+                case ManagedCwBackendKind.Winkeyer:
+                    ExecuteKeyer(keyer => keyer.SetSpeed(speedWpm));
+                    break;
+                case ManagedCwBackendKind.Cwdaemon:
+                    throw new InvalidOperationException("cwdaemon backend is reserved but not implemented.");
+                default:
+                    throw new InvalidOperationException($"Unsupported CW keyer backend '{_config.Backend}'.");
+            }
 
-                return;
-            case ManagedCwBackendKind.Cwdaemon:
-                throw new InvalidOperationException("cwdaemon backend is reserved but not implemented.");
-            default:
-                throw new InvalidOperationException($"Unsupported CW keyer backend '{config.Backend}'.");
+            _activeSpeedWpm = speedWpm;
+            _lastError = null;
         }
     }
 
     public CwKeyerStatus Status()
     {
-        return new CwKeyerStatus
+        lock (_gate)
         {
-            Backend = config.Backend switch
+            ThrowIfDisposed();
+            var available = _config.Backend switch
             {
-                ManagedCwBackendKind.Null => CwKeyerBackend.Null,
-                ManagedCwBackendKind.Winkeyer => CwKeyerBackend.Winkeyer,
-                ManagedCwBackendKind.Cwdaemon => CwKeyerBackend.Cwdaemon,
-                _ => CwKeyerBackend.Unspecified,
-            },
-            Available = config.Backend == ManagedCwBackendKind.Null || (config.Backend == ManagedCwBackendKind.Winkeyer && !string.IsNullOrWhiteSpace(config.WinkeyerPort)),
-            SpeedWpm = config.DefaultSpeedWpm,
-            PortName = config.WinkeyerPort ?? string.Empty,
-            ErrorMessage = LastStatusError(),
-        };
-    }
+                ManagedCwBackendKind.Null => true,
+                ManagedCwBackendKind.Winkeyer => ProbeWinkeyer(),
+                ManagedCwBackendKind.Cwdaemon => RecordUnavailable("cwdaemon backend is not implemented."),
+                _ => RecordUnavailable($"Unsupported CW keyer backend '{_config.Backend}'."),
+            };
+            var status = new CwKeyerStatus
+            {
+                Backend = _config.Backend switch
+                {
+                    ManagedCwBackendKind.Null => CwKeyerBackend.Null,
+                    ManagedCwBackendKind.Winkeyer => CwKeyerBackend.Winkeyer,
+                    ManagedCwBackendKind.Cwdaemon => CwKeyerBackend.Cwdaemon,
+                    _ => CwKeyerBackend.Unspecified,
+                },
+                Available = available,
+                SpeedWpm = _activeSpeedWpm,
+                TransmitEnabled = _config.TransmitEnabled,
+                MaxTxMs = _config.MaxTxMs,
+            };
+            if (_config.WinkeyerPort is not null)
+            {
+                status.PortName = _config.WinkeyerPort;
+            }
 
-    private string LastStatusError()
-    {
-        return config.Backend switch
-        {
-            ManagedCwBackendKind.Winkeyer when string.IsNullOrWhiteSpace(config.WinkeyerPort) => $"{ManagedCwKeyerConfig.WinkeyerPortEnvironmentVariable} is required.",
-            ManagedCwBackendKind.Cwdaemon => "cwdaemon backend is not implemented.",
-            _ => string.Empty,
-        };
+            if (_lastError is not null)
+            {
+                status.ErrorMessage = _lastError;
+            }
+
+            if (_firmwareRevision.HasValue)
+            {
+                status.FirmwareRevision = _firmwareRevision.Value;
+            }
+
+            return status;
+        }
     }
 
     private static string ResolveToken(string token, CwSendContext? context, StationProfile? stationProfile)
@@ -253,22 +396,167 @@ internal sealed class ManagedCwController(ManagedCwKeyerConfig config)
         };
     }
 
-    private void SendWinkeyerText(string text, uint speedWpm)
+    public void Dispose()
     {
-        using var keyer = OpenWinkeyer();
-        keyer.Initialize();
-        keyer.SetSpeed(speedWpm);
-        keyer.SendText(text);
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _watchdog?.Dispose();
+            _watchdog = null;
+            Disconnect();
+        }
     }
 
-    private ManagedWinkeyerPort OpenWinkeyer()
+    private bool ProbeWinkeyer()
     {
-        if (string.IsNullOrWhiteSpace(config.WinkeyerPort))
+        try
         {
-            throw new InvalidOperationException($"{ManagedCwKeyerConfig.WinkeyerPortEnvironmentVariable} is required.");
+            EnsureConnected();
+            return true;
+        }
+        catch (Exception error) when (error is InvalidOperationException or IOException)
+        {
+            _lastError = error.Message;
+            Disconnect();
+            return false;
+        }
+    }
+
+    private bool RecordUnavailable(string message)
+    {
+        _lastError = message;
+        return false;
+    }
+
+    private void EnsureConnected()
+    {
+        if (_keyer is not null)
+        {
+            return;
         }
 
-        return new ManagedWinkeyerPort(config.WinkeyerPort, config.WinkeyerBaud);
+        if (string.IsNullOrWhiteSpace(_config.WinkeyerPort))
+        {
+            throw new InvalidOperationException(
+                $"{ManagedCwKeyerConfig.WinkeyerPortEnvironmentVariable} is required.");
+        }
+
+        var keyer = _portFactory(_config.WinkeyerPort, _config.WinkeyerBaud);
+        try
+        {
+            _firmwareRevision = keyer.Initialize();
+            _keyer = keyer;
+            _lastError = null;
+        }
+        catch
+        {
+            keyer.Dispose();
+            throw;
+        }
+    }
+
+    private void ExecuteKeyer(Action<IManagedWinkeyerPort> operation)
+    {
+        EnsureConnected();
+        try
+        {
+            operation(_keyer!);
+            _lastError = null;
+        }
+        catch (Exception error) when (error is InvalidOperationException or IOException)
+        {
+            _lastError = error.Message;
+            Disconnect();
+            throw;
+        }
+    }
+
+    private void ArmWatchdog()
+    {
+        _watchdog ??= _watchdogFactory(ExpireWatchdog);
+        _watchdog.Arm(TimeSpan.FromMilliseconds(_config.MaxTxMs));
+    }
+
+    private void CancelWatchdog()
+    {
+        _watchdog?.Cancel();
+    }
+
+    private void ExpireWatchdog()
+    {
+        lock (_gate)
+        {
+            if (_disposed || _keyer is null)
+            {
+                return;
+            }
+
+            try
+            {
+                if (_keyer.IsBusy())
+                {
+                    _keyer.ClearBuffer();
+                    _lastError =
+                        $"CW transmit safety ceiling reached after {_config.MaxTxMs} ms; WinKeyer buffer cleared.";
+                }
+                else
+                {
+                    _lastError = null;
+                }
+            }
+            catch (Exception error) when (error is InvalidOperationException or IOException)
+            {
+                _lastError = error.Message;
+                Disconnect();
+            }
+        }
+    }
+
+    private void Disconnect()
+    {
+        if (_keyer is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _keyer.CloseHostMode();
+        }
+        catch (Exception error) when (error is InvalidOperationException or IOException)
+        {
+            _lastError ??= error.Message;
+        }
+        finally
+        {
+            _keyer.Dispose();
+            _keyer = null;
+            _firmwareRevision = null;
+        }
+    }
+
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+    }
+
+    private static void ValidateText(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            throw new ArgumentException("CW text must not be empty.", nameof(text));
+        }
+
+        var nonAscii = text.FirstOrDefault(static character => character > 0x7F);
+        if (nonAscii != default)
+        {
+            throw new ArgumentException($"CW text contains non-ASCII character '{nonAscii}'.", nameof(text));
+        }
     }
 
     private static string? NonEmpty(string? value)
@@ -277,36 +565,56 @@ internal sealed class ManagedCwController(ManagedCwKeyerConfig config)
     }
 }
 
-internal sealed class ManagedWinkeyerPort : IDisposable
+internal sealed class ManagedWinkeyerPort : IManagedWinkeyerPort
 {
     private readonly SerialPort _port;
+    private bool _hostOpen;
 
     public ManagedWinkeyerPort(string portName, int baudRate)
     {
-        _port = new SerialPort(portName, baudRate)
+        _port = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One)
         {
             ReadTimeout = 500,
             WriteTimeout = 500,
+            Handshake = Handshake.None,
         };
-        _port.Open();
+        try
+        {
+            _port.Open();
+        }
+        catch (Exception error) when (error is UnauthorizedAccessException or ArgumentException or InvalidOperationException or IOException)
+        {
+            _port.Dispose();
+            throw new IOException($"Open WinKeyer port {portName}: {error.Message}", error);
+        }
     }
 
-    public void Initialize()
+    public byte Initialize()
     {
         Write([0x00, 0x02]);
-        var version = _port.ReadByte();
+        int version;
+        try
+        {
+            version = _port.ReadByte();
+        }
+        catch (TimeoutException error)
+        {
+            throw new IOException("Timed out reading WinKeyer Host Open response.", error);
+        }
         if (version == 0xFF)
         {
             throw new IOException("WinKeyer returned 0xFF; check serial baud rate.");
         }
 
-        Write([0x00, 0x0B]);
+        _hostOpen = true;
         ClearBuffer();
+        return checked((byte)version);
     }
 
     public void SetSpeed(uint speedWpm)
     {
-        Write([0x02, checked((byte)ManagedCwKeyerConfig.ClampSpeed(speedWpm))]);
+        ManagedCwKeyerConfig.ValidateSpeed(speedWpm);
+        Write([0x02, checked((byte)speedWpm)]);
     }
 
     public void SendText(string text)
@@ -331,21 +639,82 @@ internal sealed class ManagedWinkeyerPort : IDisposable
         Write([0x0A]);
     }
 
+    public bool IsBusy()
+    {
+        try
+        {
+            while (_port.BytesToRead > 0)
+            {
+                _ = _port.ReadByte();
+            }
+
+            Write([0x15]);
+            while (true)
+            {
+                var status = _port.ReadByte();
+                if ((status & 0xE8) == 0xC0)
+                {
+                    return (status & 0x04) != 0;
+                }
+            }
+        }
+        catch (TimeoutException error)
+        {
+            throw new IOException("Timed out reading WinKeyer status response.", error);
+        }
+    }
+
+    public void CloseHostMode()
+    {
+        if (!_hostOpen)
+        {
+            return;
+        }
+
+        Write([0x00, 0x03]);
+        _hostOpen = false;
+    }
+
     public void Dispose()
     {
+        if (_hostOpen)
+        {
+            try
+            {
+                CloseHostMode();
+            }
+            catch (Exception error) when (error is IOException or InvalidOperationException or TimeoutException)
+            {
+                // The transport is already gone; disposal still releases the handle.
+            }
+        }
+
         _port.Dispose();
     }
 
     private void Write(byte[] bytes)
     {
-        _port.Write(bytes, 0, bytes.Length);
+        try
+        {
+            _port.Write(bytes, 0, bytes.Length);
+        }
+        catch (Exception error) when (error is InvalidOperationException or TimeoutException or IOException)
+        {
+            throw new IOException($"WinKeyer serial write failed: {error.Message}", error);
+        }
     }
 }
 
-internal sealed class ManagedCwGrpcService(ManagedEngineState state)
-    : CwService.CwServiceBase
+internal sealed class ManagedCwGrpcService : CwService.CwServiceBase
 {
-    private readonly ManagedCwController _controller = new(ManagedCwKeyerConfig.FromEnvironment());
+    private readonly ManagedEngineState _state;
+    private readonly ManagedCwController _controller;
+
+    public ManagedCwGrpcService(ManagedEngineState state, ManagedCwController controller)
+    {
+        _state = state;
+        _controller = controller;
+    }
 
     public override Task<ListCwMacrosResponse> ListCwMacros(ListCwMacrosRequest request, ServerCallContext context)
     {
@@ -354,21 +723,25 @@ internal sealed class ManagedCwGrpcService(ManagedEngineState state)
         return Task.FromResult(response);
     }
 
-    public override Task<SendCwMacroResponse> SendCwMacro(SendCwMacroRequest request, ServerCallContext context)
+    public override async Task<SendCwMacroResponse> SendCwMacro(SendCwMacroRequest request, ServerCallContext context)
     {
         try
         {
             var expanded = ManagedCwController.ExpandMacro(
                 request.Name,
                 request.Context,
-                state.GetActiveStationContext().EffectiveActiveProfile);
-            _controller.SendText(expanded, request.Context?.HasSpeedWpm == true ? request.Context.SpeedWpm : null);
+                _state.GetActiveStationContext().EffectiveActiveProfile);
+            await Task.Run(
+                () => _controller.SendText(
+                    expanded,
+                    request.Context?.HasSpeedWpm == true ? request.Context.SpeedWpm : null),
+                context.CancellationToken);
 
-            return Task.FromResult(new SendCwMacroResponse
+            return new SendCwMacroResponse
             {
                 State = CwSendState.Accepted,
                 ExpandedText = expanded,
-            });
+            };
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException or KeyNotFoundException)
         {
@@ -376,21 +749,25 @@ internal sealed class ManagedCwGrpcService(ManagedEngineState state)
         }
     }
 
-    public override Task<SendCwTextResponse> SendCwText(SendCwTextRequest request, ServerCallContext context)
+    public override async Task<SendCwTextResponse> SendCwText(SendCwTextRequest request, ServerCallContext context)
     {
         try
         {
             var expanded = ManagedCwController.ExpandTemplate(
                 request.Text,
                 request.Context,
-                state.GetActiveStationContext().EffectiveActiveProfile);
-            _controller.SendText(expanded, request.Context?.HasSpeedWpm == true ? request.Context.SpeedWpm : null);
+                _state.GetActiveStationContext().EffectiveActiveProfile);
+            await Task.Run(
+                () => _controller.SendText(
+                    expanded,
+                    request.Context?.HasSpeedWpm == true ? request.Context.SpeedWpm : null),
+                context.CancellationToken);
 
-            return Task.FromResult(new SendCwTextResponse
+            return new SendCwTextResponse
             {
                 State = CwSendState.Accepted,
                 ExpandedText = expanded,
-            });
+            };
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
@@ -398,44 +775,46 @@ internal sealed class ManagedCwGrpcService(ManagedEngineState state)
         }
     }
 
-    public override Task<AbortCwResponse> AbortCw(AbortCwRequest request, ServerCallContext context)
+    public override async Task<AbortCwResponse> AbortCw(AbortCwRequest request, ServerCallContext context)
     {
         try
         {
-            _controller.Abort();
-            return Task.FromResult(new AbortCwResponse
+            await Task.Run(_controller.Abort, context.CancellationToken);
+            return new AbortCwResponse
             {
                 State = CwSendState.AbortRequested,
-            });
+            };
         }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException)
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
             throw ToRpcException(ex);
         }
     }
 
-    public override Task<SetCwSpeedResponse> SetCwSpeed(SetCwSpeedRequest request, ServerCallContext context)
+    public override async Task<SetCwSpeedResponse> SetCwSpeed(SetCwSpeedRequest request, ServerCallContext context)
     {
         try
         {
-            _controller.SetSpeed(request.SpeedWpm);
-            return Task.FromResult(new SetCwSpeedResponse
+            await Task.Run(() => _controller.SetSpeed(request.SpeedWpm), context.CancellationToken);
+            var status = await Task.Run(_controller.Status, context.CancellationToken);
+            return new SetCwSpeedResponse
             {
-                Status = _controller.Status(),
-            });
+                Status = status,
+            };
         }
-        catch (Exception ex) when (ex is InvalidOperationException or IOException)
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or IOException)
         {
             throw ToRpcException(ex);
         }
     }
 
-    public override Task<GetCwKeyerStatusResponse> GetCwKeyerStatus(GetCwKeyerStatusRequest request, ServerCallContext context)
+    public override async Task<GetCwKeyerStatusResponse> GetCwKeyerStatus(GetCwKeyerStatusRequest request, ServerCallContext context)
     {
-        return Task.FromResult(new GetCwKeyerStatusResponse
+        var status = await Task.Run(_controller.Status, context.CancellationToken);
+        return new GetCwKeyerStatusResponse
         {
-            Status = _controller.Status(),
-        });
+            Status = status,
+        };
     }
 
     private static RpcException ToRpcException(Exception ex)

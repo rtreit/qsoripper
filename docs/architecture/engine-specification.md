@@ -960,11 +960,17 @@ Defined tokens:
 
 `SendCwMacro` and `SendCwText` return the expanded text and a `CwSendState`. `ACCEPTED` means the configured backend accepted the command for dispatch. `COMPLETED` may only be returned by a backend that can prove completion. `AbortCw` sends the backend's abort or clear-buffer command when supported and returns `ABORT_REQUESTED`.
 
+The WinKeyer backend is an engine-lifetime, serialized hardware session. The engine opens the serial port and sends Host Open (`00 02`) on the first status or control operation, retains the returned firmware revision, and reuses that connection for later RPCs. All keyer commands run through one backend worker or lock so concurrent RPCs cannot interleave serial bytes. On shutdown, initialization failure after Host Open, or an I/O failure, the engine makes a best-effort Host Close (`00 03`) before releasing the port. It never opens and abandons a new host session for each RPC.
+
+Hardware transmission is opt-in. `SendCwMacro` and `SendCwText` reject with `FAILED_PRECONDITION` unless `QSORIPPER_CW_TRANSMIT_ENABLED=true`; status and speed operations remain available for setup diagnostics. Each accepted hardware send arms the configured safety ceiling. At expiry the engine requests WinKeyer status (`15`) and clears the input buffer (`0A`) only when the BUSY bit remains set. `AbortCw` cancels the active watchdog and clears the buffer immediately. A subsequent send replaces the previous watchdog deadline.
+
+`CwKeyerStatus` reports the configured backend, probed availability, retained speed, optional port, optional last error, hardware transmit gate, maximum transmit duration, and optional firmware revision. For WinKeyer, status performs a real connection probe instead of inferring availability from configuration alone.
+
 #### Error semantics
 
 - `NOT_FOUND` — unknown macro name.
 - `INVALID_ARGUMENT` — invalid speed, malformed macro text, unknown token, or missing token context.
-- `FAILED_PRECONDITION` — no active station context for `{MYCALL}`, or the configured backend is unavailable.
+- `FAILED_PRECONDITION` — no active station context for `{MYCALL}`, the configured backend is unavailable, or hardware text transmission was requested while the explicit transmit gate is disabled.
 - `UNAVAILABLE` — keyer I/O failure where retrying may help.
 - `INTERNAL` — unexpected backend failure.
 
@@ -1382,6 +1388,8 @@ All configuration is driven by environment variables prefixed with `QSORIPPER_`.
 | `QSORIPPER_CW_WINKEYER_PORT` | String | | Serial port for WinKeyer, such as `COM3` on Windows or `/dev/ttyUSB0` on Linux. Required when backend is `winkeyer`. |
 | `QSORIPPER_CW_WINKEYER_BAUD` | Integer | `1200` | WinKeyer serial baud rate. Most WinKeyer devices use 1200 baud. |
 | `QSORIPPER_CW_SPEED_WPM` | Integer | `25` | Default CW speed in words per minute. Valid range is 5 through 99. |
+| `QSORIPPER_CW_TRANSMIT_ENABLED` | Bool | `false` | Explicit safety gate for hardware text transmission. The WinKeyer backend will not send text until this is `true`. |
+| `QSORIPPER_CW_MAX_TX_MS` | Integer | `120000` | Maximum duration for one hardware send before a still-busy WinKeyer buffer is cleared. Valid range is 1000 through 300000 ms. |
 
 #### Sync
 
