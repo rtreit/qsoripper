@@ -14,6 +14,15 @@ use tokio::sync::broadcast;
 
 use crate::model::{Field, Mode, RadioEventSource, StateChange, StateMutation, Vfo};
 
+/// A cached mode fact that may have been invalidated by a frequency change. The TS-590
+/// recalls mode and DATA independently from its per-band memory, so both facts must be
+/// re-asserted after tuning even when the pre-tune snapshot already held the requested mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ModeFact {
+    Base(Vfo),
+    Data(Vfo),
+}
+
 /// Default IF passband reported for a VFO (Hz). Real backends may refine this; the default
 /// matches the canonical Hamlib `get_mode` second line.
 const DEFAULT_PASSBAND_HZ: u32 = 2_400;
@@ -213,6 +222,7 @@ pub(crate) enum RadioEvent {
 struct Inner {
     snapshot: RwLock<Snapshot>,
     covered: Mutex<HashSet<Field>>,
+    uncertain_mode: Mutex<HashSet<ModeFact>>,
     tx: broadcast::Sender<RadioEvent>,
 }
 
@@ -234,6 +244,7 @@ impl StateHandle {
             inner: Arc::new(Inner {
                 snapshot: RwLock::new(Snapshot::default()),
                 covered: Mutex::new(HashSet::new()),
+                uncertain_mode: Mutex::new(HashSet::new()),
                 tx,
             }),
         }
@@ -258,6 +269,34 @@ impl StateHandle {
                 .unwrap_or_else(PoisonError::into_inner);
             apply_change(&mut snap, change)
         };
+
+        // A TS-590 frequency set can cross a band boundary and synchronously recall that
+        // band's stored MD/DA settings. Until fresh MD and DA facts arrive, the old cached
+        // mode must not suppress a client's immediately following mode re-assertion (the
+        // normal WSJT-X band-change sequence is F then M). Each fact becomes certain again
+        // as soon as it is observed or successfully written, even when its value compares
+        // equal and therefore produced no broadcast change.
+        let mut uncertain = self
+            .inner
+            .uncertain_mode
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match change {
+            StateChange::Freq { vfo, .. }
+                if changed && source == RadioEventSource::OptimisticWrite =>
+            {
+                uncertain.insert(ModeFact::Base(vfo));
+                uncertain.insert(ModeFact::Data(vfo));
+            }
+            StateChange::Mode { vfo, .. } => {
+                uncertain.remove(&ModeFact::Base(vfo));
+            }
+            StateChange::DataMode { vfo, .. } => {
+                uncertain.remove(&ModeFact::Data(vfo));
+            }
+            _ => {}
+        }
+        drop(uncertain);
         if changed {
             // A send error only means there are no subscribers; that is fine.
             let _ = self.inner.tx.send(RadioEvent::Change(change));
@@ -287,6 +326,25 @@ impl StateHandle {
             .snapshot
             .read()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Whether a modeled write is safely redundant against the current cache.
+    ///
+    /// Mode facts invalidated by an optimistic frequency change are deliberately treated as
+    /// non-redundant until the radio reports them or a client re-asserts them. Other fields
+    /// retain the snapshot's ordinary idempotent suppression.
+    pub(crate) fn is_redundant(&self, mutation: &StateMutation) -> bool {
+        let uncertain = self
+            .inner
+            .uncertain_mode
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let invalidated = match *mutation {
+            StateMutation::SetMode { vfo, .. } => uncertain.contains(&ModeFact::Base(vfo)),
+            StateMutation::SetDataMode { vfo, .. } => uncertain.contains(&ModeFact::Data(vfo)),
+            _ => false,
+        };
+        !invalidated && self.snapshot().is_redundant(mutation)
     }
 
     /// Subscribe to the radio-output event stream (for a face's auto-info fan-out).
