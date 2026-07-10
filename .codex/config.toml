@@ -1,0 +1,8 @@
+# Project-scoped Codex defaults. These load only after the project is trusted.
+
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[agents]
+max_threads = 6
+max_depth = 1

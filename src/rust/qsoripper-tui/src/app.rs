@@ -31,7 +31,7 @@ pub(crate) enum EngineStatus {
 
 /// Display-ready rig control snapshot for the TUI.
 pub(crate) struct RigInfo {
-    /// Formatted frequency string (e.g., `"14.225 MHz"`).
+    /// Formatted frequency string (e.g., `"14.225.000 MHz"`).
     pub(crate) frequency_display: String,
     /// Frequency in Hz (for form auto-population).
     pub(crate) frequency_hz: u64,
@@ -83,6 +83,8 @@ pub(crate) struct CallsignInfo {
 pub(crate) struct RecentQso {
     /// QsoRipper-assigned local UUID.
     pub(crate) local_id: String,
+    /// UTC date formatted as `YYYY-MM-DD`.
+    pub(crate) date: String,
     /// UTC time formatted as `HH:MM`.
     pub(crate) utc: String,
     /// Worked callsign.
@@ -138,6 +140,7 @@ impl RecentQso {
                 .unwrap_or("")
                 .to_lowercase()
                 .contains(lower)
+            || self.date.contains(lower)
             || self.utc.contains(lower)
     }
 }
@@ -182,6 +185,11 @@ pub(crate) struct App {
     pub(crate) space_weather: Option<SpaceWeatherInfo>,
     /// Current rig control snapshot.
     pub(crate) rig_info: Option<RigInfo>,
+    /// Last frequency value written into the form from rig control.
+    ///
+    /// If the form still contains this value, later rig snapshots may keep it in sync even
+    /// after the operator starts typing a callsign. A manual frequency edit breaks that match.
+    pub(crate) last_auto_rig_frequency_mhz: Option<String>,
     /// Whether rig control polling is enabled (default: `true`).
     pub(crate) rig_control_enabled: bool,
     /// Transient status bar message.
@@ -227,6 +235,7 @@ impl App {
             recent_qsos: Vec::new(),
             space_weather: None,
             rig_info: None,
+            last_auto_rig_frequency_mhz: None,
             rig_control_enabled: true,
             status_message: None,
             qso_list_focused: false,
@@ -346,6 +355,7 @@ mod tests {
     fn make_qso(id: &str, callsign: &str) -> RecentQso {
         RecentQso {
             local_id: id.to_string(),
+            date: "2026-07-08".to_string(),
             utc: "12:00".to_string(),
             callsign: callsign.to_string(),
             band: "20M".to_string(),
@@ -529,6 +539,7 @@ mod tests {
     fn matches_search_finds_band() {
         let qso = RecentQso {
             local_id: "1".to_string(),
+            date: "2026-07-08".to_string(),
             utc: "12:00".to_string(),
             callsign: "K7ABC".to_string(),
             band: "40M".to_string(),
@@ -549,6 +560,7 @@ mod tests {
         assert!(qso.matches_search("cn87"));
         assert!(qso.matches_search("john"));
         assert!(qso.matches_search("portable"));
+        assert!(qso.matches_search("2026-07-08"));
         assert!(qso.matches_search("12:00"));
     }
 
@@ -562,6 +574,7 @@ mod tests {
     fn matches_search_optional_fields_none() {
         let qso = RecentQso {
             local_id: "1".to_string(),
+            date: "2026-07-08".to_string(),
             utc: "10:00".to_string(),
             callsign: "W1ABC".to_string(),
             band: "20M".to_string(),
@@ -580,7 +593,7 @@ mod tests {
     fn toggle_rig_control_disables_and_clears() {
         let mut app = App::new("http://localhost:50051".to_string());
         app.rig_info = Some(RigInfo {
-            frequency_display: "14.225 MHz".to_string(),
+            frequency_display: "14.225.000 MHz".to_string(),
             frequency_hz: 14_225_000,
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),

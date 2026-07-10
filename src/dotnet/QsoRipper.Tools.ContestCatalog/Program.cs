@@ -30,9 +30,7 @@ internal static class Program
         await JsonSerializer.SerializeAsync(output, catalog, ContestCatalogJsonContext.Default.GeneratedCatalog, CancellationToken.None).ConfigureAwait(false);
         await output.WriteAsync("\n"u8.ToArray()).ConfigureAwait(false);
 
-        Console.WriteLine(string.Create(
-            CultureInfo.InvariantCulture,
-            $"Wrote {catalog.Entries.Length} contest catalog entries to {options.OutputPath}. Review before copying into the engine default catalog."));
+        Console.WriteLine($"Wrote {catalog.Entries.Length} contest catalog entries to {options.OutputPath}. Review before copying into the engine default catalog.");
     }
 }
 
@@ -183,9 +181,7 @@ internal sealed class ContestCatalogGenerator(HttpClient httpClient, TimeProvide
                 }
                 catch (Exception exception) when (!rulesUrlFromSeed && IsRecoverableRulesFetchFailure(exception))
                 {
-                    Console.Error.WriteLine(string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"Skipped official rules URL for {contest.Name}: {exception.Message}"));
+                    Console.Error.WriteLine($"Skipped official rules URL for {contest.Name}: {exception.Message}");
                 }
             }
 
@@ -315,7 +311,7 @@ internal static partial class CalendarDetailExtractor
     {
         var match = Regex.Match(
             html,
-            string.Create(CultureInfo.InvariantCulture, $@"<td[^>]*>\s*{Regex.Escape(label)}:\s*</td>\s*<td[^>]*>(?<value>.*?)</td>"),
+            $@"<td[^>]*>\s*{Regex.Escape(label)}:\s*</td>\s*<td[^>]*>(?<value>.*?)</td>",
             RegexOptions.IgnoreCase | RegexOptions.Singleline,
             TimeSpan.FromMilliseconds(100));
         return match.Success ? CleanHtml(match.Groups["value"].Value) : null;
@@ -339,7 +335,7 @@ internal static partial class CalendarDetailExtractor
         var bands = new SortedSet<string>(BandComparer.Instance);
         foreach (Match match in DetailBandRegex().Matches(text))
         {
-            bands.Add(string.Create(CultureInfo.InvariantCulture, $"{match.Groups[1].Value}m"));
+            bands.Add($"{match.Groups[1].Value}m");
         }
 
         if (DetailSeventyCentimeterRegex().IsMatch(text))
@@ -430,7 +426,7 @@ internal static partial class RuleTextExtractor
         var bands = new SortedSet<string>(BandComparer.Instance);
         foreach (Match match in BandRegex().Matches(text))
         {
-            bands.Add(string.Create(CultureInfo.InvariantCulture, $"{match.Groups[1].Value}m"));
+            bands.Add($"{match.Groups[1].Value}m");
         }
 
         if (SeventyCentimeterRegex().IsMatch(text))
@@ -459,7 +455,7 @@ internal static partial class RuleTextExtractor
 
     public static void AddModeIfPresent(string text, string token, string mode, SortedSet<string> modes)
     {
-        if (Regex.IsMatch(text, string.Create(CultureInfo.InvariantCulture, $@"\b{Regex.Escape(token)}\b"), RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
+        if (Regex.IsMatch(text, $@"\b{Regex.Escape(token)}\b", RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(100)))
         {
             modes.Add(mode);
         }

@@ -16,6 +16,15 @@ namespace QsoRipper.Engine.DotNet;
 
 internal sealed record DeleteQsoOutcome(bool Found, bool RemoteDeleteQueued, bool MissingQrzLogid);
 
+/// <summary>A QSO affected (inserted or refreshed) by a WSJT-X import.</summary>
+internal sealed record WsjtxImportedQsoRef(string LocalId, string WorkedCallsign);
+
+/// <summary>An import result paired with the QSOs it inserted or refreshed.</summary>
+internal sealed record WsjtxImportDetail(ImportAdifResponse Response, IReadOnlyList<WsjtxImportedQsoRef> AffectedQsos);
+
+/// <summary>Per-QSO outcome of a managed QRZ logbook sync triggered by WSJT-X ingestion.</summary>
+internal sealed record WsjtxQrzSyncOutcome(string LocalId, string WorkedCallsign, bool Success, string? Error);
+
 internal sealed record RestoreQsoOutcome(bool Found, QsoRecord? Restored);
 
 internal sealed class QsoSoftDeletedException : InvalidOperationException
@@ -85,6 +94,12 @@ internal sealed class ManagedEngineState
     private QrzLogbookClient? _ownedSyncClient;
     private QrzSyncEngine? _syncEngine;
 
+    // Latest live WSJT-X ingest diagnostics published by the ingest supervisor. A null value means
+    // the supervisor has not published a snapshot yet; BuildSetupStatusNoLock then leaves
+    // SetupStatus.wsjtx_ingest_status unset. Stored as an already-cloned, immutable-by-convention
+    // snapshot and swapped atomically via Volatile reads/writes.
+    private WsjtxIngestStatus? _wsjtxIngestLiveStatus;
+
     public ManagedEngineState(string configPath)
         : this(configPath, new MemoryStorage(), null, null, null, null)
     {
@@ -141,6 +156,11 @@ internal sealed class ManagedEngineState
         _hasQrzLogbookApiKey = _qrzLogbookApiKey is not null;
         _syncConfig = NormalizeSyncConfig(_persistedSetup.SyncConfig);
         _persistedSetup.SyncConfig = _syncConfig.Clone();
+        if (_persistedSetup.WsjtxIngest is not null)
+        {
+            _persistedSetup.WsjtxIngest = NormalizeWsjtxIngest(_persistedSetup.WsjtxIngest);
+        }
+
         _rigControl = _persistedSetup.RigControl?.Clone();
         _stationProfiles = _persistedSetup.StationProfiles
             .Select(static entry => new ManagedPersistedStationProfile
@@ -313,6 +333,17 @@ internal sealed class ManagedEngineState
 
         lock (_gate)
         {
+            // Validate any supplied CAT hub replacement BEFORE mutating state, so an invalid
+            // request rejects cleanly (surfaced as gRPC InvalidArgument) without partially
+            // applying other setup fields.
+            if (request.CatHub is not null)
+            {
+                _ = SharedSetupConfigPersistence.BuildCatHubTableOrThrow(request.CatHub);
+            }
+            var normalizedWsjtxIngest = request.WsjtxIngest is null
+                ? null
+                : NormalizeWsjtxIngest(request.WsjtxIngest);
+
             if (request.StationProfile is not null)
             {
                 SaveStationProfileNoLock(
@@ -360,6 +391,21 @@ internal sealed class ManagedEngineState
             {
                 _rigControl = request.RigControl.Clone();
                 _persistedSetup.RigControl = _rigControl.Clone();
+            }
+
+            if (request.WsjtxIngest is not null)
+            {
+                _persistedSetup.WsjtxIngest = normalizedWsjtxIngest;
+                _persistedSetup.WsjtxIngestWriteOverride = normalizedWsjtxIngest?.Clone();
+            }
+
+            // CONDITIONAL OWNERSHIP: only an explicit cat_hub in the request triggers a
+            // `[cat_hub]` rewrite. The override is consumed (cleared) by PersistNoLock so a
+            // later save without cat_hub preserves the section verbatim.
+            if (request.CatHub is not null)
+            {
+                _persistedSetup.CatHubWriteOverride = request.CatHub.Clone();
+                _persistedSetup.CatHub = request.CatHub.Clone();
             }
 
             UpdatePersistedStorageSettingsNoLock(request);
@@ -530,15 +576,45 @@ internal sealed class ManagedEngineState
         lock (_gate)
         {
             var qso = request.Qso?.Clone() ?? throw new InvalidOperationException("qso is required.");
-            if (string.IsNullOrWhiteSpace(qso.LocalId))
+            var requestedLocalId = qso.LocalId?.Trim();
+            if (string.IsNullOrWhiteSpace(requestedLocalId))
             {
                 return new UpdateQsoResponse { Success = false, Error = "local_id is required." };
             }
+            qso.LocalId = requestedLocalId;
 
-            var existing = Sync(_storage.Logbook.GetQsoAsync(qso.LocalId));
+            var existing = Sync(_storage.Logbook.GetQsoAsync(requestedLocalId));
             if (existing is null)
             {
-                return new UpdateQsoResponse { Success = false, Error = $"QSO '{qso.LocalId}' was not found." };
+                if (!string.IsNullOrWhiteSpace(qso.QrzLogid))
+                {
+                    var matches = Sync(_storage.Logbook.ListQsosAsync(new QsoListQuery
+                    {
+                        DeletedFilter = Storage.DeletedRecordsFilter.All,
+                    }))
+                    .Where(candidate =>
+                        string.Equals(candidate.QrzLogid, qso.QrzLogid, StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+
+                    if (matches.Length == 1)
+                    {
+                        existing = matches[0];
+                        qso.LocalId = existing.LocalId;
+                    }
+                    else if (matches.Length > 1)
+                    {
+                        return new UpdateQsoResponse
+                        {
+                            Success = false,
+                            Error = $"QSO '{requestedLocalId}' was not found and QRZ logid '{qso.QrzLogid}' matched multiple local QSOs.",
+                        };
+                    }
+                }
+            }
+
+            if (existing is null)
+            {
+                return new UpdateQsoResponse { Success = false, Error = $"QSO '{requestedLocalId}' was not found." };
             }
             if (existing.DeletedAt is not null)
             {
@@ -777,12 +853,22 @@ internal sealed class ManagedEngineState
 
     public ImportAdifResponse ImportAdif(byte[] adifBytes, bool refresh)
     {
+        return ImportAdifDetailed(adifBytes, refresh).Response;
+    }
+
+    /// <summary>
+    /// Imports ADIF bytes and reports the QSOs that were inserted or refreshed, so callers
+    /// (such as the WSJT-X ingest supervisor) can drive per-import QRZ sync and live status.
+    /// </summary>
+    public WsjtxImportDetail ImportAdifDetailed(byte[] adifBytes, bool refresh)
+    {
         ArgumentNullException.ThrowIfNull(adifBytes);
 
         var qsos = ManagedAdifCodec.ParseAdiQsos(adifBytes);
         lock (_gate)
         {
             var response = new ImportAdifResponse();
+            var affected = new List<WsjtxImportedQsoRef>();
             var activeStationProfile = GetEffectiveActiveProfileNoLock();
             var allExisting = Sync(_storage.Logbook.ListQsosAsync(new QsoListQuery())).ToList();
 
@@ -827,13 +913,14 @@ internal sealed class ManagedEngineState
                         Sync(_storage.Logbook.UpdateQsoAsync(merged));
                         allExisting[existingMatch] = merged;
                         response.RecordsUpdated++;
+                        affected.Add(new WsjtxImportedQsoRef(merged.LocalId, merged.WorkedCallsign));
                         response.Warnings.Add($"Record {recordNumber}: refreshed existing record '{merged.LocalId}'.");
                     }
                     else
                     {
                         response.RecordsSkipped++;
                         response.Warnings.Add(
-                            $"Record {recordNumber}: duplicate skipped; matched an existing QSO on station_callsign, worked_callsign, utc_timestamp, band, mode, and compatible submode/frequency.");
+                            $"Record {recordNumber}: duplicate skipped; matched an existing QSO on station_callsign, worked_callsign, compatible utc_timestamp, band, mode, and compatible submode/frequency.");
                     }
 
                     continue;
@@ -844,11 +931,97 @@ internal sealed class ManagedEngineState
                 qso.SyncStatus = SyncStatus.LocalOnly;
                 Sync(_storage.Logbook.InsertQsoAsync(qso));
                 allExisting.Add(qso);
+                affected.Add(new WsjtxImportedQsoRef(qso.LocalId, qso.WorkedCallsign));
                 response.RecordsImported++;
             }
 
-            return response;
+            return new WsjtxImportDetail(response, affected);
         }
+    }
+
+    /// <summary>
+    /// Publishes the latest live WSJT-X ingest diagnostics so a subsequent GetSetupStatus call
+    /// surfaces them in SetupStatus.wsjtx_ingest_status. The supervisor owns the snapshot lifecycle.
+    /// </summary>
+    public void SetWsjtxIngestLiveStatus(WsjtxIngestStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+        Volatile.Write(ref _wsjtxIngestLiveStatus, status.Clone());
+    }
+
+    /// <summary>
+    /// Returns a normalized snapshot of the effective WSJT-X ingest settings, applying the same
+    /// defaults as the Rust runtime (enabled=false, udp_enabled=true, udp_bind=127.0.0.1:2237,
+    /// adif_tail_enabled=false, poll_interval_ms=1000, sync_to_qrz=false). The supervisor polls this
+    /// every loop iteration so configuration changes from SaveSetup take effect live.
+    /// </summary>
+    public WsjtxIngestSettings GetWsjtxIngestSettingsSnapshot()
+    {
+        lock (_gate)
+        {
+            if (_persistedSetup.WsjtxIngest is { } persisted)
+            {
+                return NormalizeWsjtxIngestSnapshot(persisted);
+            }
+
+            var defaults = new WsjtxIngestSettings
+            {
+                Enabled = false,
+                UdpEnabled = true,
+                UdpBind = "127.0.0.1:2237",
+                AdifTailEnabled = false,
+                PollIntervalMs = 1000,
+                SyncToQrz = false,
+            };
+            return defaults;
+        }
+    }
+
+    /// <summary>
+    /// Applies managed QRZ logbook sync flags to the supplied imported QSOs, mirroring
+    /// LogQso(sync_to_qrz=true) semantics: when an API key is configured each QSO is marked
+    /// <see cref="SyncStatus.Synced"/> with a synthetic QRZ logid, otherwise it stays
+    /// <see cref="SyncStatus.LocalOnly"/> with a "QRZ logbook is not configured." error. Returns a
+    /// per-QSO outcome list for the supervisor to fold into live status.
+    /// </summary>
+    public IReadOnlyList<WsjtxQrzSyncOutcome> SyncImportedQsosToQrz(IEnumerable<string> localIds)
+    {
+        ArgumentNullException.ThrowIfNull(localIds);
+
+        var outcomes = new List<WsjtxQrzSyncOutcome>();
+        lock (_gate)
+        {
+            foreach (var rawLocalId in localIds)
+            {
+                var localId = rawLocalId?.Trim();
+                if (string.IsNullOrWhiteSpace(localId))
+                {
+                    continue;
+                }
+
+                var existing = Sync(_storage.Logbook.GetQsoAsync(localId));
+                if (existing is null)
+                {
+                    outcomes.Add(new WsjtxQrzSyncOutcome(localId, string.Empty, Success: false, $"QSO '{localId}' was not found."));
+                    continue;
+                }
+
+                if (!_hasQrzLogbookApiKey)
+                {
+                    existing.SyncStatus = SyncStatus.LocalOnly;
+                    Sync(_storage.Logbook.UpdateQsoAsync(existing));
+                    outcomes.Add(new WsjtxQrzSyncOutcome(localId, existing.WorkedCallsign, Success: false, "QRZ logbook is not configured."));
+                    continue;
+                }
+
+                existing.SyncStatus = SyncStatus.Synced;
+                existing.QrzLogid = $"managed-{Guid.NewGuid():N}";
+                Sync(_storage.Logbook.UpdateQsoAsync(existing));
+                outcomes.Add(new WsjtxQrzSyncOutcome(localId, existing.WorkedCallsign, Success: true, Error: null));
+            }
+        }
+
+        return outcomes;
     }
 
     public byte[] ExportAdif(ExportAdifRequest request)
@@ -1276,6 +1449,12 @@ internal sealed class ManagedEngineState
     private void PersistNoLock()
     {
         SharedSetupConfigPersistence.Save(_configPath, _persistedSetup);
+
+        // The CAT hub override is a one-shot replacement signal (mirrors Rust's per-request
+        // cat_hub_update). The WSJT-X override uses the same conditional-ownership model.
+        // Clear both after writing so subsequent saves preserve those sections.
+        _persistedSetup.CatHubWriteOverride = null;
+        _persistedSetup.WsjtxIngestWriteOverride = null;
     }
 
     private SetupStatus BuildSetupStatusNoLock()
@@ -1318,6 +1497,21 @@ internal sealed class ManagedEngineState
         if (_persistedSetup.RigControl is not null)
         {
             status.RigControl = _persistedSetup.RigControl.Clone();
+        }
+
+        if (_persistedSetup.WsjtxIngest is not null)
+        {
+            status.WsjtxIngest = _persistedSetup.WsjtxIngest.Clone();
+        }
+
+        if (Volatile.Read(ref _wsjtxIngestLiveStatus) is { } wsjtxLiveStatus)
+        {
+            status.WsjtxIngestStatus = wsjtxLiveStatus.Clone();
+        }
+
+        if (_persistedSetup.CatHub is not null)
+        {
+            status.CatHub = _persistedSetup.CatHub.Clone();
         }
 
         if (isSqlite)
@@ -1373,6 +1567,13 @@ internal sealed class ManagedEngineState
                 Step = SetupWizardStep.QrzIntegration,
                 Complete = !string.IsNullOrWhiteSpace(_persistedSetup.QrzXmlUsername)
                     && !string.IsNullOrWhiteSpace(_persistedSetup.QrzXmlPassword),
+            },
+            new SetupWizardStepStatus
+            {
+                // CAT hub configuration is entirely optional and fully validated on save, so the
+                // step is always complete. Ordered before Review to match the Rust engine.
+                Step = SetupWizardStep.CatHub,
+                Complete = true,
             },
             new SetupWizardStepStatus
             {
@@ -1858,6 +2059,71 @@ internal sealed class ManagedEngineState
         }
 
         return normalized;
+    }
+
+    private static WsjtxIngestSettings NormalizeWsjtxIngestSnapshot(WsjtxIngestSettings settings)
+    {
+        // Non-throwing variant used by the ingest supervisor's live polling. The persisted settings
+        // were already validated at SaveSetup time, so here we only re-apply trivial defaults and
+        // never throw (the supervisor must remain resilient to any transient config state).
+        var normalized = settings.Clone();
+        normalized.UdpEnabled = settings.HasUdpEnabled ? settings.UdpEnabled : true;
+        if (string.IsNullOrWhiteSpace(normalized.UdpBind))
+        {
+            normalized.UdpBind = "127.0.0.1:2237";
+        }
+
+        if (string.IsNullOrWhiteSpace(normalized.AdifTailPath))
+        {
+            normalized.ClearAdifTailPath();
+        }
+
+        if (normalized.PollIntervalMs == 0)
+        {
+            normalized.PollIntervalMs = 1000;
+        }
+
+        return normalized;
+    }
+
+    private static WsjtxIngestSettings NormalizeWsjtxIngest(WsjtxIngestSettings settings)
+    {
+        var normalized = settings.Clone();
+        normalized.UdpEnabled = settings.HasUdpEnabled ? settings.UdpEnabled : true;
+        normalized.UdpBind = NormalizeOptional(settings.UdpBind) ?? "127.0.0.1:2237";
+        ValidateHostPort(normalized.UdpBind, "WSJT-X UDP bind");
+
+        normalized.AdifTailPath = NormalizeOptional(settings.AdifTailPath) ?? string.Empty;
+        if (string.IsNullOrEmpty(normalized.AdifTailPath))
+        {
+            normalized.ClearAdifTailPath();
+        }
+        if (normalized.AdifTailEnabled && string.IsNullOrWhiteSpace(normalized.AdifTailPath))
+        {
+            throw new InvalidOperationException("WSJT-X ADIF tail path is required when ADIF tailing is enabled.");
+        }
+
+        if (normalized.PollIntervalMs == 0)
+        {
+            normalized.PollIntervalMs = 1000;
+        }
+
+        return normalized;
+    }
+
+    private static void ValidateHostPort(string bind, string label)
+    {
+        var separator = bind.LastIndexOf(':');
+        if (separator <= 0 || separator == bind.Length - 1)
+        {
+            throw new InvalidOperationException($"{label} must be in host:port form.");
+        }
+
+        var portText = bind[(separator + 1)..];
+        if (!ushort.TryParse(portText, out var port) || port == 0)
+        {
+            throw new InvalidOperationException($"{label} port must be between 1 and 65535.");
+        }
     }
 
     private static bool IsTimestampUnset(Timestamp? value)

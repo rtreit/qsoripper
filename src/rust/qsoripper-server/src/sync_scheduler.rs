@@ -31,18 +31,20 @@ pub(crate) struct SyncScheduler {
     is_syncing: Arc<Mutex<bool>>,
     last_error: Arc<Mutex<Option<String>>>,
     next_sync: Arc<Mutex<Option<Timestamp>>>,
+    qrz_upload_lock: Arc<Mutex<()>>,
     cancel_tx: watch::Sender<bool>,
 }
 
 impl SyncScheduler {
     /// Create a new scheduler.  Call [`start`](Self::start) to spawn the
     /// background loop.
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(qrz_upload_lock: Arc<Mutex<()>>) -> Self {
         let (cancel_tx, _) = watch::channel(false);
         Self {
             is_syncing: Arc::new(Mutex::new(false)),
             last_error: Arc::new(Mutex::new(None)),
             next_sync: Arc::new(Mutex::new(None)),
+            qrz_upload_lock,
             cancel_tx,
         }
     }
@@ -56,6 +58,7 @@ impl SyncScheduler {
         let is_syncing = self.is_syncing.clone();
         let last_error = self.last_error.clone();
         let next_sync = self.next_sync.clone();
+        let qrz_upload_lock = self.qrz_upload_lock.clone();
         let mut cancel_rx = self.cancel_tx.subscribe();
 
         tokio::spawn(async move {
@@ -150,6 +153,7 @@ impl SyncScheduler {
                 // Use a channel that we drain immediately — the scheduler does
                 // not stream progress anywhere, it just needs the final result.
                 let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+                let _upload_guard = qrz_upload_lock.lock().await;
                 sync::execute_sync(&client, logbook_store, false, conflict_policy, &tx).await;
                 drop(tx);
 
@@ -246,7 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn scheduler_does_not_sync_when_auto_disabled() {
-        let scheduler = SyncScheduler::new();
+        let scheduler = SyncScheduler::new(Arc::new(Mutex::new(())));
         let config = make_config(&[("QSORIPPER_SYNC_AUTO_ENABLED", "false")]);
         scheduler.start(config);
 
@@ -262,7 +266,7 @@ mod tests {
 
     #[tokio::test]
     async fn scheduler_stops_on_cancel() {
-        let scheduler = SyncScheduler::new();
+        let scheduler = SyncScheduler::new(Arc::new(Mutex::new(())));
         let config = make_config(&[("QSORIPPER_SYNC_AUTO_ENABLED", "false")]);
         scheduler.start(config);
 
@@ -278,7 +282,7 @@ mod tests {
 
     #[tokio::test]
     async fn scheduler_clears_next_sync_when_no_api_key() {
-        let scheduler = SyncScheduler::new();
+        let scheduler = SyncScheduler::new(Arc::new(Mutex::new(())));
         // Auto-sync enabled but no API key.
         let config = make_config(&[("QSORIPPER_SYNC_AUTO_ENABLED", "true")]);
         scheduler.start(config);

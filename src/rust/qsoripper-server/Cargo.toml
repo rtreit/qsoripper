@@ -15,10 +15,16 @@ qsoripper-storage-memory = { path = "../qsoripper-storage-memory", version = "0.
 qsoripper-storage-sqlite = { path = "../qsoripper-storage-sqlite", version = "0.1.0" }
 prost-types = { workspace = true }
 serde = { version = "1", features = ["derive"] }
+sqlite = { workspace = true }
 tokio = { workspace = true, features = ["signal"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 toml = "0.8"
+toml_edit = "0.22"
 tonic = { workspace = true }
+
+[dev-dependencies]
+qsoripper-cathub = { path = "../qsoripper-cathub", version = "0.1.0" }
+tempfile = "3"
 
 [lints]
 workspace = true

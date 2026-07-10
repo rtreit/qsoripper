@@ -194,6 +194,68 @@ fn parse_kv_response(body: &str) -> HashMap<String, String> {
     map
 }
 
+fn decode_form_value(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+
+    while let Some(&byte) = bytes.get(index) {
+        match byte {
+            b'+' => decoded.push(b' '),
+            b'%' if index + 2 < bytes.len() => {
+                if let (Some(high), Some(low)) = (
+                    bytes.get(index + 1).copied().and_then(hex_value),
+                    bytes.get(index + 2).copied().and_then(hex_value),
+                ) {
+                    decoded.push((high << 4) | low);
+                    index += 3;
+                    continue;
+                }
+                decoded.push(byte);
+            }
+            byte => decoded.push(byte),
+        }
+        index += 1;
+    }
+
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn parse_status_data_fields(map: &HashMap<String, String>) -> HashMap<String, String> {
+    let Some(data) = map.get("DATA") else {
+        return HashMap::new();
+    };
+    let decoded = decode_form_value(data).replace(';', "&");
+    parse_kv_response(&decoded)
+}
+
+fn parse_status_response(map: &HashMap<String, String>) -> QrzLogbookStatus {
+    let data = parse_status_data_fields(map);
+    let owner = map
+        .get("CALLSIGN")
+        .or_else(|| map.get("OWNER"))
+        .or_else(|| data.get("CALLSIGN"))
+        .or_else(|| data.get("OWNER"))
+        .cloned()
+        .unwrap_or_default();
+    let qso_count = map
+        .get("COUNT")
+        .or_else(|| data.get("COUNT"))
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
+
+    QrzLogbookStatus { owner, qso_count }
+}
+
 /// Check a parsed key-value response for `RESULT=OK`.
 ///
 /// Returns `Ok(map)` when the result is OK, or an appropriate
@@ -525,18 +587,7 @@ impl QrzLogbookClient {
         let body = self.post_form(&[("ACTION", "STATUS")]).await?;
         let map = parse_kv_response(&body);
         let map = check_result(map)?;
-
-        let owner = map
-            .get("CALLSIGN")
-            .or_else(|| map.get("OWNER"))
-            .cloned()
-            .unwrap_or_default();
-        let qso_count = map
-            .get("COUNT")
-            .and_then(|value| value.parse::<u32>().ok())
-            .unwrap_or(0);
-
-        Ok(QrzLogbookStatus { owner, qso_count })
+        Ok(parse_status_response(&map))
     }
 
     /// Fetch QSO records from the QRZ Logbook.
@@ -951,19 +1002,10 @@ mod tests {
         let body = "RESULT=OK&CALLSIGN=KC7AVA&COUNT=1234";
         let map = parse_kv_response(body);
         let map = check_result(map).unwrap();
+        let status = parse_status_response(&map);
 
-        let owner = map
-            .get("CALLSIGN")
-            .or_else(|| map.get("OWNER"))
-            .cloned()
-            .unwrap_or_default();
-        let qso_count = map
-            .get("COUNT")
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(0);
-
-        assert_eq!(owner, "KC7AVA");
-        assert_eq!(qso_count, 1234);
+        assert_eq!(status.owner, "KC7AVA");
+        assert_eq!(status.qso_count, 1234);
     }
 
     #[test]
@@ -971,14 +1013,9 @@ mod tests {
         let body = "RESULT=OK&OWNER=N0CALL&COUNT=0";
         let map = parse_kv_response(body);
         let map = check_result(map).unwrap();
+        let status = parse_status_response(&map);
 
-        let owner = map
-            .get("CALLSIGN")
-            .or_else(|| map.get("OWNER"))
-            .cloned()
-            .unwrap_or_default();
-
-        assert_eq!(owner, "N0CALL");
+        assert_eq!(status.owner, "N0CALL");
     }
 
     #[test]
@@ -986,13 +1023,31 @@ mod tests {
         let body = "RESULT=OK&CALLSIGN=W1AW";
         let map = parse_kv_response(body);
         let map = check_result(map).unwrap();
+        let status = parse_status_response(&map);
 
-        let qso_count = map
-            .get("COUNT")
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(0);
+        assert_eq!(status.qso_count, 0);
+    }
 
-        assert_eq!(qso_count, 0);
+    #[test]
+    fn status_parsing_reads_unencoded_data_payload() {
+        let body = "RESULT=OK&DATA=COUNT=1323&CALLSIGN=AE7XI&OWNER=AE7XI";
+        let map = parse_kv_response(body);
+        let map = check_result(map).unwrap();
+        let status = parse_status_response(&map);
+
+        assert_eq!(status.owner, "AE7XI");
+        assert_eq!(status.qso_count, 1323);
+    }
+
+    #[test]
+    fn status_parsing_reads_encoded_data_payload() {
+        let body = "RESULT=OK&DATA=COUNT%3D1323%26OWNER%3DAE7XI%26BOOKID%3D123";
+        let map = parse_kv_response(body);
+        let map = check_result(map).unwrap();
+        let status = parse_status_response(&map);
+
+        assert_eq!(status.owner, "AE7XI");
+        assert_eq!(status.qso_count, 1323);
     }
 
     // -- Insert response parsing --------------------------------------------

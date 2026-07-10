@@ -1,0 +1,67 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:QsoRipper.Gui.ViewModels"
+             x:Class="QsoRipper.Gui.Views.WsjtxIngestStepView"
+             x:DataType="vm:WsjtxIngestStepViewModel">
+
+  <StackPanel Spacing="12">
+    <TextBlock TextWrapping="Wrap"
+               Opacity="0.7"
+               Text="Enable this if you want QsoRipper to automatically import contacts you log in WSJT-X." />
+
+    <CheckBox x:Name="WizardWsjtxIngestEnabledCheckBox"
+              AutomationProperties.AutomationId="WizardWsjtxIngestEnabledCheckBox"
+              Content="Enable WSJT-X QSO ingestion"
+              IsChecked="{Binding Enabled, Mode=TwoWay}" />
+
+    <CheckBox x:Name="WizardWsjtxUdpEnabledCheckBox"
+              AutomationProperties.AutomationId="WizardWsjtxUdpEnabledCheckBox"
+              Content="Listen for WSJT-X UDP Logged ADIF packets"
+              IsChecked="{Binding UdpEnabled, Mode=TwoWay}" />
+
+    <StackPanel Spacing="4">
+      <TextBlock Text="UDP bind address:" FontWeight="SemiBold" />
+      <TextBox x:Name="WizardWsjtxUdpBindBox"
+               AutomationProperties.AutomationId="WizardWsjtxUdpBindBox"
+               Text="{Binding UdpBind, Mode=TwoWay}"
+               PlaceholderText="127.0.0.1:2237" />
+      <TextBlock Text="Match this in WSJT-X under Settings → Reporting → UDP Server."
+                 Opacity="0.6"
+                 FontSize="12" />
+    </StackPanel>
+
+    <StackPanel Spacing="4">
+      <TextBlock Text="Poll interval (milliseconds):" FontWeight="SemiBold" />
+      <NumericUpDown x:Name="WizardWsjtxPollIntervalInput"
+                     AutomationProperties.AutomationId="WizardWsjtxPollIntervalInput"
+                     Value="{Binding PollIntervalMs, Mode=TwoWay}"
+                     Minimum="0"
+                     Increment="100"
+                     FormatString="0" />
+    </StackPanel>
+
+    <CheckBox x:Name="WizardWsjtxAdifTailEnabledCheckBox"
+              AutomationProperties.AutomationId="WizardWsjtxAdifTailEnabledCheckBox"
+              Content="Tail WSJT-X ADIF log for missed-QSO recovery"
+              IsChecked="{Binding AdifTailEnabled, Mode=TwoWay}" />
+
+    <StackPanel Spacing="4">
+      <TextBlock Text="ADIF tail path:" FontWeight="SemiBold" />
+      <TextBox x:Name="WizardWsjtxAdifTailPathBox"
+               AutomationProperties.AutomationId="WizardWsjtxAdifTailPathBox"
+               Text="{Binding AdifTailPath, Mode=TwoWay}"
+               PlaceholderText="%LOCALAPPDATA%\WSJT-X\wsjtx_log.adi" />
+    </StackPanel>
+
+    <CheckBox x:Name="WizardWsjtxSyncToQrzCheckBox"
+              AutomationProperties.AutomationId="WizardWsjtxSyncToQrzCheckBox"
+              Content="Upload imported WSJT-X QSOs to QRZ"
+              IsChecked="{Binding SyncToQrz, Mode=TwoWay}" />
+
+    <TextBlock Text="Local logging still works if you skip this step; you can configure WSJT-X later in Settings."
+               Opacity="0.5"
+               TextWrapping="Wrap"
+               FontSize="12"
+               Margin="0,8,0,0" />
+  </StackPanel>
+</UserControl>

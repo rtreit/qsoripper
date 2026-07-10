@@ -27,3 +27,5 @@ pub mod rig_control;
 pub mod space_weather;
 /// Storage ports, errors, and query types for engine-owned persistence.
 pub mod storage;
+/// WSJT-X ingestion helpers that feed the ADIF import path.
+pub mod wsjtx;

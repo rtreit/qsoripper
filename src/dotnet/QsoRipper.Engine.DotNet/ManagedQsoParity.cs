@@ -5,6 +5,8 @@ namespace QsoRipper.Engine.DotNet;
 
 internal static class ManagedQsoParity
 {
+    private const ulong AdifDuplicateFrequencyToleranceHz = 100;
+
     public static StationSnapshot? StationSnapshotFromProfile(StationProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
@@ -600,7 +602,30 @@ internal static class ManagedQsoParity
 
     private static bool TimestampsMatch(Timestamp? left, Timestamp? right)
     {
-        return Equals(left, right);
+        if (Equals(left, right))
+        {
+            return true;
+        }
+
+        if (left is null || right is null)
+        {
+            return false;
+        }
+
+        return TimestampMinuteBucket(left) == TimestampMinuteBucket(right)
+            && (TimestampIsMinutePrecision(left) || TimestampIsMinutePrecision(right));
+    }
+
+    private static long TimestampMinuteBucket(Timestamp timestamp)
+    {
+        return timestamp.Seconds >= 0
+            ? timestamp.Seconds / 60
+            : (timestamp.Seconds - 59) / 60;
+    }
+
+    private static bool TimestampIsMinutePrecision(Timestamp timestamp)
+    {
+        return timestamp.Seconds % 60 == 0 && timestamp.Nanos == 0;
     }
 
     private static bool StringsEqualIgnoreAsciiCase(string left, string right)
@@ -624,13 +649,15 @@ internal static class ManagedQsoParity
 
     /// <summary>
     /// Compare frequencies for duplicate matching. When both sides have Hz fields,
-    /// compare exactly. When one or both lack Hz, fall back to kHz compatibility.
+    /// allow small source-format drift. When one or both lack Hz, fall back to kHz compatibility.
     /// </summary>
     private static bool FrequenciesCompatible(QsoRecord existing, QsoRecord candidate)
     {
         if (existing.HasFrequencyHz && candidate.HasFrequencyHz)
         {
-            return existing.FrequencyHz == candidate.FrequencyHz;
+            return existing.FrequencyHz > candidate.FrequencyHz
+                ? existing.FrequencyHz - candidate.FrequencyHz <= AdifDuplicateFrequencyToleranceHz
+                : candidate.FrequencyHz - existing.FrequencyHz <= AdifDuplicateFrequencyToleranceHz;
         }
 
 #pragma warning disable CS0612

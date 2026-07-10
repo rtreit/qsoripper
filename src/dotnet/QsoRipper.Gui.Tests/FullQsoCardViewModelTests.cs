@@ -16,7 +16,7 @@ public sealed class FullQsoCardViewModelTests
         var logger = new QsoLoggerViewModel(engine)
         {
             Callsign = "kd9su",
-            FrequencyMhz = "14.074",
+            FrequencyMhz = "14.074.123",
             Notes = "Portable op",
             Comment = "Loud signal",
             ContestId = "ARRL-FD",
@@ -49,6 +49,7 @@ public sealed class FullQsoCardViewModelTests
         Assert.Equal("K7RND", qso.StationCallsign);
         Assert.Equal(Band._20M, qso.Band);
         Assert.Equal(Mode.Cw, qso.Mode);
+        Assert.Equal(14_074_123UL, qso.FrequencyHz);
         Assert.Equal("Richard Smith", qso.WorkedOperatorName);
         Assert.Equal("EN52", qso.WorkedGrid);
         Assert.Equal("United States", qso.WorkedCountry);
@@ -71,6 +72,22 @@ public sealed class FullQsoCardViewModelTests
         var card = FullQsoCardViewModel.ForNew(engine, logger);
 
         Assert.Equal("N0CALL", card.WorkedOperatorCallsign);
+    }
+
+    [Fact]
+    public void ForEditPreservesSubKilohertzFrequencyDigits()
+    {
+        var engine = new RecordingEngineClient();
+        var card = FullQsoCardViewModel.ForEdit(
+            engine,
+            new QsoRecord
+            {
+                WorkedCallsign = "W1AW",
+                StationCallsign = "K7RND",
+                FrequencyHz = 28_075_730,
+            });
+
+        Assert.Equal("28.075.730", card.FrequencyMhz);
     }
 
     [Fact]
@@ -173,6 +190,43 @@ public sealed class FullQsoCardViewModelTests
         Assert.Equal("Updated", updated.Comment);
         Assert.Equal("2", updated.ExtraFields["OLD"]);
         Assert.Equal("3", updated.ExtraFields["NEW"]);
+    }
+
+    [Fact]
+    public async Task SaveCommandKeepsCardOpenWhenUpdateFails()
+    {
+        var engine = new RecordingEngineClient
+        {
+            UpdateResponse = new UpdateQsoResponse
+            {
+                Success = false,
+                Error = "QSO 'qso-1' was not found.",
+            },
+        };
+        var existing = new QsoRecord
+        {
+            LocalId = "qso-1",
+            WorkedCallsign = "F6BCW",
+            StationCallsign = "K7RND",
+            UtcTimestamp = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 5, 26, 4, 15, 0, TimeSpan.Zero)),
+            Band = Band._20M,
+            Mode = Mode.Cw,
+        };
+
+        var card = FullQsoCardViewModel.ForEdit(engine, existing);
+        var savedRaised = false;
+        var closeRaised = false;
+        card.Saved += (_, _) => savedRaised = true;
+        card.CloseRequested += (_, _) => closeRaised = true;
+        card.Comment = "Edited in advanced panel";
+
+        await card.SaveCommand.ExecuteAsync(null);
+
+        Assert.NotNull(engine.LastUpdatedQso);
+        Assert.Contains("Update failed", card.StatusText, StringComparison.Ordinal);
+        Assert.Contains("not found", card.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.False(savedRaised);
+        Assert.False(closeRaised);
     }
 
     [Fact]
@@ -478,6 +532,8 @@ public sealed class FullQsoCardViewModelTests
         public Dictionary<string, LookupResponse> LookupResponsesByCallsign { get; } =
             new(StringComparer.OrdinalIgnoreCase);
 
+        public UpdateQsoResponse UpdateResponse { get; init; } = new UpdateQsoResponse { Success = true };
+
         public Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default) =>
             Task.FromResult(new GetSetupWizardStateResponse());
 
@@ -509,7 +565,7 @@ public sealed class FullQsoCardViewModelTests
         public Task<UpdateQsoResponse> UpdateQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default)
         {
             LastUpdatedQso = qso.Clone();
-            return Task.FromResult(new UpdateQsoResponse { Success = true });
+            return Task.FromResult(UpdateResponse);
         }
 
         public Task<SyncWithQrzResponse> SyncWithQrzAsync(CancellationToken ct = default) =>

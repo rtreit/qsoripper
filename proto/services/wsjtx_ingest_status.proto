@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "google/protobuf/timestamp.proto";
+
+// Live diagnostics for the engine-owned WSJT-X ingestion subsystem.
+message WsjtxIngestStatus {
+  // True when ingestion is enabled in configuration.
+  bool enabled = 1;
+  // True when at least one ingestion worker is currently running.
+  bool running = 2;
+  // True when the UDP listener is configured and running.
+  bool udp_running = 3;
+  // UDP bind address currently in use or last attempted.
+  string udp_bind = 4;
+  // True when ADIF tail recovery is configured and running.
+  bool adif_tail_running = 5;
+  // ADIF tail path currently in use or last attempted.
+  optional string adif_tail_path = 6;
+  // Last time any WSJT-X event was processed.
+  optional google.protobuf.Timestamp last_event_at = 7;
+  // Last imported or updated worked callsign.
+  optional string last_imported_callsign = 8;
+  // Last imported or updated local QSO id.
+  optional string last_imported_local_id = 9;
+  // Number of inserted records.
+  uint32 records_imported = 10;
+  // Number of refreshed records.
+  uint32 records_updated = 11;
+  // Number of skipped records, including duplicates and ignored datagrams.
+  uint32 records_skipped = 12;
+  // Number of duplicate records skipped by the import path.
+  uint32 duplicates_skipped = 13;
+  // Number of datagrams or appended chunks that failed parsing.
+  uint32 parse_errors = 14;
+  // Most recent ingestion error, if any.
+  optional string last_error = 15;
+  // True when the last requested per-import QRZ sync succeeded.
+  bool last_qrz_sync_success = 16;
+  // Most recent per-import QRZ sync error, if any.
+  optional string last_qrz_sync_error = 17;
+}

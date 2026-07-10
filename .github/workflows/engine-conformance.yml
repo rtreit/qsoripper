@@ -1,0 +1,71 @@
+name: Engine Conformance
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/engine-conformance.yml"
+      - "global.json"
+      - "rust-toolchain.toml"
+      - "src/dotnet/**"
+      - "src/rust/**"
+      - "proto/**"
+      - "tests/Run-EngineConformance.ps1"
+      - "start-qsoripper.ps1"
+      - "stop-qsoripper.ps1"
+  pull_request:
+  merge_group:
+
+concurrency:
+  group: engine-conformance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  engine-conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup default 1.88.0
+          rustc --version
+          cargo --version
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            src/rust -> target
+
+      - name: Install protobuf and C build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler build-essential pkg-config
+          protoc --version
+
+      - name: Run engine conformance
+        shell: pwsh
+        run: ./tests/Run-EngineConformance.ps1
+
+      - name: Upload conformance artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-conformance
+          path: artifacts/conformance/

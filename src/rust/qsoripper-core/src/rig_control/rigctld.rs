@@ -33,7 +33,12 @@ pub const RIGCTLD_READ_TIMEOUT_MS_ENV_VAR: &str = "QSORIPPER_RIGCTLD_READ_TIMEOU
 pub const RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR: &str = "QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS";
 
 /// Default stale threshold in milliseconds.
-pub const DEFAULT_RIGCTLD_STALE_THRESHOLD_MS: u64 = 500;
+///
+/// Kept at the TUI's fast CAT poll cadence so live frequency/mode changes are
+/// visible in the next interactive refresh instead of being hidden behind a
+/// multi-second cache. This matters most when reading through the cathub front
+/// door, which serves fresh rig state in well under 50 ms.
+pub const DEFAULT_RIGCTLD_STALE_THRESHOLD_MS: u64 = 100;
 
 /// Configuration for the rigctld adapter.
 #[derive(Debug, Clone)]

@@ -12,19 +12,21 @@ use qsoripper_core::lookup::{
 use qsoripper_core::proto::qsoripper::domain::{ConflictPolicy, StationProfile, SyncConfig};
 use qsoripper_core::proto::qsoripper::services::{
     setup_service_server::SetupService, station_profile_service_server::StationProfileService,
-    ActiveStationContext, ClearSessionStationProfileOverrideRequest,
-    ClearSessionStationProfileOverrideResponse, DeleteStationProfileRequest,
-    DeleteStationProfileResponse, GetActiveStationContextRequest, GetActiveStationContextResponse,
-    GetSetupStatusRequest, GetSetupStatusResponse, GetSetupWizardStateRequest,
-    GetSetupWizardStateResponse, GetStationProfileRequest, GetStationProfileResponse,
-    ListStationProfilesRequest, ListStationProfilesResponse, RigControlSettings,
-    RuntimeConfigDefinition, RuntimeConfigValue, SaveSetupRequest, SaveSetupResponse,
-    SaveStationProfileRequest, SaveStationProfileResponse, SetActiveStationProfileRequest,
-    SetActiveStationProfileResponse, SetSessionStationProfileOverrideRequest,
-    SetSessionStationProfileOverrideResponse, SetupFieldValidation, SetupStatus, SetupWizardStep,
-    SetupWizardStepStatus, StationProfileRecord, StorageBackend, TestQrzCredentialsRequest,
-    TestQrzCredentialsResponse, TestQrzLogbookCredentialsRequest,
-    TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest, ValidateSetupStepResponse,
+    ActiveStationContext, CatHubEventSettings, CatHubHamlibNetEndpoint, CatHubPermission,
+    CatHubPollSettings, CatHubPttSettings, CatHubRadioSettings, CatHubSerialFace, CatHubSettings,
+    ClearSessionStationProfileOverrideRequest, ClearSessionStationProfileOverrideResponse,
+    DeleteStationProfileRequest, DeleteStationProfileResponse, GetActiveStationContextRequest,
+    GetActiveStationContextResponse, GetSetupStatusRequest, GetSetupStatusResponse,
+    GetSetupWizardStateRequest, GetSetupWizardStateResponse, GetStationProfileRequest,
+    GetStationProfileResponse, ListStationProfilesRequest, ListStationProfilesResponse,
+    RigControlSettings, RuntimeConfigDefinition, RuntimeConfigValue, SaveSetupRequest,
+    SaveSetupResponse, SaveStationProfileRequest, SaveStationProfileResponse,
+    SetActiveStationProfileRequest, SetActiveStationProfileResponse,
+    SetSessionStationProfileOverrideRequest, SetSessionStationProfileOverrideResponse,
+    SetupFieldValidation, SetupStatus, SetupWizardStep, SetupWizardStepStatus,
+    StationProfileRecord, StorageBackend, TestQrzCredentialsRequest, TestQrzCredentialsResponse,
+    TestQrzLogbookCredentialsRequest, TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest,
+    ValidateSetupStepResponse, WsjtxIngestSettings, WsjtxIngestStatus,
 };
 use qsoripper_core::qrz_logbook::{QrzLogbookClient, QrzLogbookConfig};
 use qsoripper_core::rig_control::{
@@ -32,13 +34,17 @@ use qsoripper_core::rig_control::{
     RIGCTLD_READ_TIMEOUT_MS_ENV_VAR, RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR,
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tonic::{Request, Response, Status};
 
 use crate::runtime_config::{
     RuntimeConfigManager, DEFAULT_QRZ_LOGBOOK_BASE_URL, QRZ_LOGBOOK_API_KEY_ENV_VAR,
     QRZ_LOGBOOK_BASE_URL_ENV_VAR, SQLITE_PATH_ENV_VAR, STORAGE_BACKEND_ENV_VAR,
     SYNC_AUTO_ENABLED_ENV_VAR, SYNC_CONFLICT_POLICY_ENV_VAR, SYNC_INTERVAL_SECONDS_ENV_VAR,
+    WSJTX_INGEST_ADIF_TAIL_ENABLED_ENV_VAR, WSJTX_INGEST_ADIF_TAIL_PATH_ENV_VAR,
+    WSJTX_INGEST_ENABLED_ENV_VAR, WSJTX_INGEST_POLL_INTERVAL_MS_ENV_VAR,
+    WSJTX_INGEST_SYNC_TO_QRZ_ENV_VAR, WSJTX_INGEST_UDP_BIND_ENV_VAR,
+    WSJTX_INGEST_UDP_ENABLED_ENV_VAR,
 };
 use crate::station_profile_support::{
     insert_station_profile_runtime_values, normalize_station_profile as normalize_profile_payload,
@@ -57,6 +63,7 @@ const PERSISTENCE_STEP_LABEL: &str = "Log storage";
 pub(crate) struct SetupControlSurface {
     state: Arc<SetupState>,
     runtime_config: Arc<RuntimeConfigManager>,
+    wsjtx_ingest_status: Option<Arc<Mutex<WsjtxIngestStatus>>>,
 }
 
 impl SetupControlSurface {
@@ -64,7 +71,23 @@ impl SetupControlSurface {
         Self {
             state,
             runtime_config,
+            wsjtx_ingest_status: None,
         }
+    }
+
+    pub(crate) fn with_wsjtx_ingest_status(
+        mut self,
+        status: Arc<Mutex<WsjtxIngestStatus>>,
+    ) -> Self {
+        self.wsjtx_ingest_status = Some(status);
+        self
+    }
+
+    async fn attach_wsjtx_status(&self, mut status: SetupStatus) -> SetupStatus {
+        if let Some(wsjtx_status) = &self.wsjtx_ingest_status {
+            status.wsjtx_ingest_status = Some(wsjtx_status.lock().await.clone());
+        }
+        status
     }
 }
 
@@ -89,8 +112,9 @@ impl SetupService for SetupControlSurface {
         &self,
         _request: Request<GetSetupStatusRequest>,
     ) -> Result<Response<GetSetupStatusResponse>, Status> {
+        let status = self.attach_wsjtx_status(self.state.status().await).await;
         Ok(Response::new(GetSetupStatusResponse {
-            status: Some(self.state.status().await),
+            status: Some(status),
         }))
     }
 
@@ -103,6 +127,7 @@ impl SetupService for SetupControlSurface {
             .save_setup(request.into_inner(), &self.runtime_config)
             .await
             .map_err(Status::invalid_argument)?;
+        let status = self.attach_wsjtx_status(status).await;
         Ok(Response::new(SaveSetupResponse {
             status: Some(status),
         }))
@@ -273,21 +298,25 @@ impl SetupState {
 
     pub(crate) async fn status(&self) -> SetupStatus {
         let persisted_config = self.persisted_config.read().await.clone();
+        let cat_hub = load_cat_hub_config(self.config_path.as_path());
         build_status(
             self.config_path.as_path(),
             self.suggested_log_file_path.as_path(),
             persisted_config.as_ref(),
+            cat_hub.as_ref(),
         )
     }
 
     async fn wizard_state(&self) -> GetSetupWizardStateResponse {
         let persisted_config = self.persisted_config.read().await.clone();
+        let cat_hub = load_cat_hub_config(self.config_path.as_path());
         let status = build_status(
             self.config_path.as_path(),
             self.suggested_log_file_path.as_path(),
             persisted_config.as_ref(),
+            cat_hub.as_ref(),
         );
-        let steps = build_wizard_steps(persisted_config.as_ref());
+        let steps = build_wizard_steps(persisted_config.as_ref(), cat_hub.as_ref());
         let station_profiles = persisted_config
             .as_ref()
             .map_or_else(Vec::new, PersistedSetupConfig::list_station_profile_records);
@@ -314,7 +343,18 @@ impl SetupState {
             .preview_config_file_values(runtime_values.clone())
             .await?;
 
-        write_persisted_config(self.config_path.as_path(), &config)?;
+        let cat_hub_update = request
+            .cat_hub
+            .as_ref()
+            .map(PersistedCatHubConfig::from_proto)
+            .transpose()?;
+        let wsjtx_ingest_update = request.wsjtx_ingest.as_ref().map(|_| &config.wsjtx_ingest);
+        write_persisted_config(
+            self.config_path.as_path(),
+            &config,
+            cat_hub_update.as_ref(),
+            wsjtx_ingest_update,
+        )?;
 
         {
             let mut persisted_config = self.persisted_config.write().await;
@@ -500,7 +540,7 @@ impl SetupState {
         runtime_config
             .preview_config_file_values(runtime_values.clone())
             .await?;
-        write_persisted_config(self.config_path.as_path(), &next)?;
+        write_persisted_config(self.config_path.as_path(), &next, None, None)?;
         {
             let mut persisted_config = self.persisted_config.write().await;
             *persisted_config = Some(next);
@@ -530,6 +570,8 @@ struct PersistedSetupConfig {
     sync: PersistedSyncConfig,
     #[serde(default, skip_serializing_if = "PersistedRigControlConfig::is_empty")]
     rig_control: PersistedRigControlConfig,
+    #[serde(default, skip_serializing_if = "PersistedWsjtxIngestConfig::is_empty")]
+    wsjtx_ingest: PersistedWsjtxIngestConfig,
 }
 
 impl PersistedSetupConfig {
@@ -633,6 +675,9 @@ impl PersistedSetupConfig {
         if let Some(ref rig_control) = request.rig_control {
             config.rig_control = PersistedRigControlConfig::from_proto(rig_control)?;
         }
+        if let Some(ref wsjtx_ingest) = request.wsjtx_ingest {
+            config.wsjtx_ingest = PersistedWsjtxIngestConfig::from_proto(wsjtx_ingest)?;
+        }
 
         config.sync_active_station_profile();
 
@@ -718,6 +763,10 @@ impl PersistedSetupConfig {
                 RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR.to_string(),
                 stale_threshold_ms.to_string(),
             );
+        }
+
+        if !PersistedWsjtxIngestConfig::is_empty(&self.wsjtx_ingest) {
+            self.wsjtx_ingest.insert_runtime_values(&mut values);
         }
 
         values
@@ -1216,6 +1265,612 @@ impl PersistedRigControlConfig {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PersistedWsjtxIngestConfig {
+    enabled: Option<bool>,
+    udp_enabled: Option<bool>,
+    udp_bind: Option<String>,
+    adif_tail_enabled: Option<bool>,
+    adif_tail_path: Option<String>,
+    poll_interval_ms: Option<u32>,
+    sync_to_qrz: Option<bool>,
+}
+
+impl PersistedWsjtxIngestConfig {
+    fn is_empty(config: &Self) -> bool {
+        config.enabled.is_none()
+            && config.udp_enabled.is_none()
+            && normalize_optional_string(config.udp_bind.as_deref()).is_none()
+            && config.adif_tail_enabled.is_none()
+            && normalize_optional_string(config.adif_tail_path.as_deref()).is_none()
+            && config.poll_interval_ms.is_none()
+            && config.sync_to_qrz.is_none()
+    }
+
+    fn from_proto(settings: &WsjtxIngestSettings) -> Result<Self, String> {
+        let udp_bind = normalize_optional_string(Some(&settings.udp_bind))
+            .unwrap_or_else(|| crate::runtime_config::DEFAULT_WSJTX_INGEST_UDP_BIND.to_string());
+        validate_host_port(&udp_bind, "WSJT-X UDP bind")?;
+        let poll_interval_ms = if settings.poll_interval_ms == 0 {
+            crate::runtime_config::DEFAULT_WSJTX_INGEST_POLL_INTERVAL_MS
+                .parse()
+                .unwrap_or(1_000)
+        } else {
+            settings.poll_interval_ms
+        };
+        let adif_tail_path = normalize_optional_string(settings.adif_tail_path.as_deref());
+        if settings.adif_tail_enabled && adif_tail_path.is_none() {
+            return Err(
+                "WSJT-X ADIF tail path is required when ADIF tailing is enabled.".to_string(),
+            );
+        }
+
+        Ok(Self {
+            enabled: Some(settings.enabled),
+            udp_enabled: Some(settings.udp_enabled.unwrap_or(true)),
+            udp_bind: Some(udp_bind),
+            adif_tail_enabled: Some(settings.adif_tail_enabled),
+            adif_tail_path,
+            poll_interval_ms: Some(poll_interval_ms),
+            sync_to_qrz: Some(settings.sync_to_qrz),
+        })
+    }
+
+    fn to_proto(&self) -> Option<WsjtxIngestSettings> {
+        if Self::is_empty(self) {
+            return None;
+        }
+
+        Some(WsjtxIngestSettings {
+            enabled: self.enabled.unwrap_or(false),
+            udp_enabled: Some(self.udp_enabled.unwrap_or(true)),
+            udp_bind: normalize_optional_string(self.udp_bind.as_deref()).unwrap_or_else(|| {
+                crate::runtime_config::DEFAULT_WSJTX_INGEST_UDP_BIND.to_string()
+            }),
+            adif_tail_enabled: self.adif_tail_enabled.unwrap_or(false),
+            adif_tail_path: normalize_optional_string(self.adif_tail_path.as_deref()),
+            poll_interval_ms: self.poll_interval_ms.unwrap_or_else(|| {
+                crate::runtime_config::DEFAULT_WSJTX_INGEST_POLL_INTERVAL_MS
+                    .parse()
+                    .unwrap_or(1_000)
+            }),
+            sync_to_qrz: self.sync_to_qrz.unwrap_or(false),
+        })
+    }
+
+    fn insert_runtime_values(&self, values: &mut BTreeMap<String, String>) {
+        if let Some(enabled) = self.enabled {
+            values.insert(
+                WSJTX_INGEST_ENABLED_ENV_VAR.to_string(),
+                enabled.to_string(),
+            );
+        }
+        if let Some(udp_enabled) = self.udp_enabled {
+            values.insert(
+                WSJTX_INGEST_UDP_ENABLED_ENV_VAR.to_string(),
+                udp_enabled.to_string(),
+            );
+        }
+        if let Some(udp_bind) = normalize_optional_string(self.udp_bind.as_deref()) {
+            values.insert(WSJTX_INGEST_UDP_BIND_ENV_VAR.to_string(), udp_bind);
+        }
+        if let Some(adif_tail_enabled) = self.adif_tail_enabled {
+            values.insert(
+                WSJTX_INGEST_ADIF_TAIL_ENABLED_ENV_VAR.to_string(),
+                adif_tail_enabled.to_string(),
+            );
+        }
+        if let Some(adif_tail_path) = normalize_optional_string(self.adif_tail_path.as_deref()) {
+            values.insert(
+                WSJTX_INGEST_ADIF_TAIL_PATH_ENV_VAR.to_string(),
+                adif_tail_path,
+            );
+        }
+        if let Some(poll_interval_ms) = self.poll_interval_ms {
+            values.insert(
+                WSJTX_INGEST_POLL_INTERVAL_MS_ENV_VAR.to_string(),
+                poll_interval_ms.to_string(),
+            );
+        }
+        if let Some(sync_to_qrz) = self.sync_to_qrz {
+            values.insert(
+                WSJTX_INGEST_SYNC_TO_QRZ_ENV_VAR.to_string(),
+                sync_to_qrz.to_string(),
+            );
+        }
+    }
+}
+
+/// Mirror of the cathub daemon's `[cat_hub.radio]` table. Every field is optional
+/// so the engine only writes what the wizard supplied and the daemon fills in the
+/// rest from its own defaults.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PersistedCatHubRadio {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transport: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baud: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tcp_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    certified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_timeout_ms: Option<u64>,
+}
+
+/// Mirror of the cathub daemon's `[cat_hub.poll]` table.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PersistedCatHubPoll {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baseline_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    heartbeat_ms: Option<u64>,
+}
+
+/// Mirror of the cathub daemon's `[cat_hub.ptt]` table.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PersistedCatHubPtt {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tx_ms: Option<u64>,
+}
+
+/// Mirror of the cathub daemon's `[cat_hub.events]` table.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PersistedCatHubEvents {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    native_push: Option<bool>,
+}
+
+/// Mirror of a cathub daemon `[[cat_hub.face]]` serial endpoint.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PersistedCatHubFace {
+    name: String,
+    transport: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    baud: Option<u32>,
+    dialect: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    perms: Vec<String>,
+}
+
+/// Mirror of a cathub daemon `[[cat_hub.hamlib_net]]` TCP endpoint.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct PersistedCatHubHamlibNet {
+    name: String,
+    bind: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    perms: Vec<String>,
+}
+
+/// Mirror of the cathub daemon's `[cat_hub]` section. This is deliberately NOT a
+/// field of `PersistedSetupConfig`: the engine never parses `[cat_hub]` as part of
+/// loading its own config, so a malformed `[cat_hub]` written by the daemon (or a
+/// future schema the engine does not know about) can never break engine startup.
+/// It is parsed leniently for display and written only when the wizard supplies a
+/// complete replacement.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PersistedCatHubConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    radio: Option<PersistedCatHubRadio>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    poll: Option<PersistedCatHubPoll>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ptt: Option<PersistedCatHubPtt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    events: Option<PersistedCatHubEvents>,
+    // The cathub daemon keys the serial-face array as singular `[[cat_hub.face]]`.
+    #[serde(rename = "face", default, skip_serializing_if = "Vec::is_empty")]
+    faces: Vec<PersistedCatHubFace>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    hamlib_net: Vec<PersistedCatHubHamlibNet>,
+}
+
+const CAT_HUB_RADIO_BACKENDS: [&str; 3] = ["ts590", "rigctld", "loopback"];
+const CAT_HUB_RADIO_TRANSPORTS: [&str; 2] = ["serial", "tcp"];
+const CAT_HUB_FACE_DIALECTS: [&str; 2] = ["ts590", "ts2000"];
+
+/// Map a `CatHubPermission` enum value to the lowercase TOML token the cathub
+/// daemon expects. Unknown/unspecified values are dropped.
+fn cat_hub_perm_token(value: i32) -> Option<&'static str> {
+    match CatHubPermission::try_from(value) {
+        Ok(CatHubPermission::Read) => Some("read"),
+        Ok(CatHubPermission::Write) => Some("write"),
+        Ok(CatHubPermission::Ptt) => Some("ptt"),
+        Ok(CatHubPermission::ConfigWrite) => Some("config_write"),
+        _ => None,
+    }
+}
+
+/// Map a TOML permission token back to its `CatHubPermission` enum value.
+fn cat_hub_perm_from_token(token: &str) -> Option<i32> {
+    let perm = match token {
+        "read" => CatHubPermission::Read,
+        "write" => CatHubPermission::Write,
+        "ptt" => CatHubPermission::Ptt,
+        "config_write" => CatHubPermission::ConfigWrite,
+        _ => return None,
+    };
+    Some(perm as i32)
+}
+
+fn cat_hub_perms_to_tokens(perms: &[i32]) -> Vec<String> {
+    perms
+        .iter()
+        .filter_map(|value| cat_hub_perm_token(*value).map(str::to_string))
+        .collect()
+}
+
+fn cat_hub_perms_to_proto(perms: &[String]) -> Vec<i32> {
+    perms
+        .iter()
+        .filter_map(|token| cat_hub_perm_from_token(token))
+        .collect()
+}
+
+impl PersistedCatHubConfig {
+    fn is_empty(&self) -> bool {
+        self.radio.is_none()
+            && self.poll.is_none()
+            && self.ptt.is_none()
+            && self.events.is_none()
+            && self.faces.is_empty()
+            && self.hamlib_net.is_empty()
+    }
+
+    /// Project the persisted `[cat_hub]` section onto the proto envelope for status
+    /// and wizard display. Returns `None` when nothing is configured.
+    fn to_proto(&self) -> Option<CatHubSettings> {
+        if self.is_empty() {
+            return None;
+        }
+        Some(CatHubSettings {
+            radio: self.radio.as_ref().map(|radio| CatHubRadioSettings {
+                backend: radio.backend.clone(),
+                model: radio.model.clone(),
+                transport: radio.transport.clone(),
+                port: radio.port.clone(),
+                baud: radio.baud,
+                host: radio.host.clone(),
+                tcp_port: radio.tcp_port.map(u32::from),
+                certified: radio.certified,
+                reply_timeout_ms: radio.reply_timeout_ms,
+            }),
+            poll: self.poll.as_ref().map(|poll| CatHubPollSettings {
+                baseline_ms: poll.baseline_ms,
+                heartbeat_ms: poll.heartbeat_ms,
+            }),
+            ptt: self.ptt.as_ref().map(|ptt| CatHubPttSettings {
+                max_tx_ms: ptt.max_tx_ms,
+            }),
+            events: self.events.as_ref().map(|events| CatHubEventSettings {
+                native_push: events.native_push,
+            }),
+            faces: self
+                .faces
+                .iter()
+                .map(|face| CatHubSerialFace {
+                    name: face.name.clone(),
+                    transport: face.transport.clone(),
+                    baud: face.baud.unwrap_or_default(),
+                    dialect: face.dialect.clone(),
+                    perms: cat_hub_perms_to_proto(&face.perms),
+                })
+                .collect(),
+            hamlib_net: self
+                .hamlib_net
+                .iter()
+                .map(|endpoint| CatHubHamlibNetEndpoint {
+                    name: endpoint.name.clone(),
+                    bind: endpoint.bind.clone(),
+                    perms: cat_hub_perms_to_proto(&endpoint.perms),
+                })
+                .collect(),
+        })
+    }
+
+    /// Build a complete, daemon-valid `[cat_hub]` section from a wizard request.
+    /// The proto contract is full-replacement: `radio` (with a backend) is
+    /// required and at least one endpoint must be present. Additional wizard
+    /// safety checks (unique names/transports/binds) keep the written set a strict
+    /// subset of what the daemon accepts.
+    fn from_proto(settings: &CatHubSettings) -> Result<Self, String> {
+        let radio = cat_hub_radio_from_proto(
+            settings
+                .radio
+                .as_ref()
+                .ok_or_else(|| "CAT hub radio settings are required.".to_string())?,
+        )?;
+        let faces = cat_hub_faces_from_proto(&settings.faces, radio.port.as_deref())?;
+        let hamlib_net = cat_hub_endpoints_from_proto(&settings.hamlib_net)?;
+
+        if faces.is_empty() && hamlib_net.is_empty() {
+            return Err(
+                "CAT hub configuration requires at least one serial face or hamlib_net endpoint."
+                    .to_string(),
+            );
+        }
+
+        let mut names: Vec<&str> = Vec::new();
+        for face in &faces {
+            names.push(face.name.as_str());
+        }
+        for endpoint in &hamlib_net {
+            names.push(endpoint.name.as_str());
+        }
+        if let Some(duplicate) = first_duplicate(&names) {
+            return Err(format!(
+                "CAT hub endpoint names must be unique: '{duplicate}'."
+            ));
+        }
+
+        let poll = settings
+            .poll
+            .as_ref()
+            .map(cat_hub_poll_from_proto)
+            .transpose()?;
+        let ptt = settings
+            .ptt
+            .as_ref()
+            .map(cat_hub_ptt_from_proto)
+            .transpose()?;
+        let events = settings
+            .events
+            .as_ref()
+            .map(|events| PersistedCatHubEvents {
+                native_push: events.native_push,
+            });
+
+        Ok(Self {
+            radio: Some(radio),
+            poll,
+            ptt,
+            events,
+            faces,
+            hamlib_net,
+        })
+    }
+}
+
+fn cat_hub_radio_from_proto(radio: &CatHubRadioSettings) -> Result<PersistedCatHubRadio, String> {
+    let backend = normalize_optional_string(radio.backend.as_deref())
+        .ok_or_else(|| "CAT hub radio backend is required.".to_string())?
+        .to_ascii_lowercase();
+    if !CAT_HUB_RADIO_BACKENDS.contains(&backend.as_str()) {
+        return Err(format!(
+            "CAT hub radio backend '{backend}' is not supported (expected one of: {}).",
+            CAT_HUB_RADIO_BACKENDS.join(", ")
+        ));
+    }
+
+    let transport = match normalize_optional_string(radio.transport.as_deref()) {
+        Some(value) => {
+            let value = value.to_ascii_lowercase();
+            if !CAT_HUB_RADIO_TRANSPORTS.contains(&value.as_str()) {
+                return Err(format!(
+                    "CAT hub radio transport '{value}' is not supported (expected one of: {}).",
+                    CAT_HUB_RADIO_TRANSPORTS.join(", ")
+                ));
+            }
+            Some(value)
+        }
+        None => None,
+    };
+
+    let port = normalize_optional_string(radio.port.as_deref());
+    let effective_transport = transport.as_deref().unwrap_or("serial");
+    if backend != "loopback" && effective_transport == "serial" && port.is_none() {
+        return Err("CAT hub radio requires a serial port for the selected backend.".to_string());
+    }
+
+    let tcp_port = match radio.tcp_port {
+        Some(0) => return Err("CAT hub radio tcp_port must be between 1 and 65535.".to_string()),
+        Some(value) => Some(
+            u16::try_from(value)
+                .map_err(|_| "CAT hub radio tcp_port must be between 1 and 65535.".to_string())?,
+        ),
+        None => None,
+    };
+    if let Some(0) = radio.baud {
+        return Err("CAT hub radio baud must be greater than 0.".to_string());
+    }
+    if let Some(0) = radio.reply_timeout_ms {
+        return Err("CAT hub radio reply_timeout_ms must be greater than 0.".to_string());
+    }
+
+    Ok(PersistedCatHubRadio {
+        backend: Some(backend),
+        model: normalize_optional_string(radio.model.as_deref()),
+        transport,
+        port,
+        baud: radio.baud,
+        host: normalize_optional_string(radio.host.as_deref()),
+        tcp_port,
+        certified: radio.certified,
+        reply_timeout_ms: radio.reply_timeout_ms,
+    })
+}
+
+fn cat_hub_poll_from_proto(poll: &CatHubPollSettings) -> Result<PersistedCatHubPoll, String> {
+    if let Some(0) = poll.baseline_ms {
+        return Err("CAT hub poll baseline_ms must be greater than 0.".to_string());
+    }
+    if let Some(0) = poll.heartbeat_ms {
+        return Err("CAT hub poll heartbeat_ms must be greater than 0.".to_string());
+    }
+    Ok(PersistedCatHubPoll {
+        baseline_ms: poll.baseline_ms,
+        heartbeat_ms: poll.heartbeat_ms,
+    })
+}
+
+fn cat_hub_ptt_from_proto(ptt: &CatHubPttSettings) -> Result<PersistedCatHubPtt, String> {
+    if let Some(0) = ptt.max_tx_ms {
+        return Err("CAT hub ptt max_tx_ms must be greater than 0.".to_string());
+    }
+    Ok(PersistedCatHubPtt {
+        max_tx_ms: ptt.max_tx_ms,
+    })
+}
+
+fn cat_hub_faces_from_proto(
+    faces: &[CatHubSerialFace],
+    radio_port: Option<&str>,
+) -> Result<Vec<PersistedCatHubFace>, String> {
+    let mut result = Vec::with_capacity(faces.len());
+    let mut transports: Vec<String> = Vec::new();
+    for face in faces {
+        let name = normalize_optional_string(Some(&face.name))
+            .ok_or_else(|| "CAT hub serial face name is required.".to_string())?;
+        let transport = normalize_optional_string(Some(&face.transport))
+            .ok_or_else(|| format!("CAT hub serial face '{name}' requires a transport."))?;
+        if let Some(port) = radio_port {
+            if transport.eq_ignore_ascii_case(port) {
+                return Err(format!(
+                    "CAT hub serial face '{name}' cannot reuse the radio port '{port}'."
+                ));
+            }
+        }
+        let dialect = normalize_optional_string(Some(&face.dialect))
+            .ok_or_else(|| format!("CAT hub serial face '{name}' requires a dialect."))?
+            .to_ascii_lowercase();
+        if !CAT_HUB_FACE_DIALECTS.contains(&dialect.as_str()) {
+            return Err(format!(
+                "CAT hub serial face '{name}' dialect '{dialect}' is not supported (expected one of: {}).",
+                CAT_HUB_FACE_DIALECTS.join(", ")
+            ));
+        }
+        let baud = match face.baud {
+            0 => None,
+            value => Some(value),
+        };
+        transports.push(transport.clone());
+        result.push(PersistedCatHubFace {
+            name,
+            transport,
+            baud,
+            dialect,
+            perms: cat_hub_perms_to_tokens(&face.perms),
+        });
+    }
+    let transport_refs: Vec<&str> = transports.iter().map(String::as_str).collect();
+    if let Some(duplicate) = first_duplicate(&transport_refs) {
+        return Err(format!(
+            "CAT hub serial faces must use distinct transports: '{duplicate}'."
+        ));
+    }
+    Ok(result)
+}
+
+fn cat_hub_endpoints_from_proto(
+    endpoints: &[CatHubHamlibNetEndpoint],
+) -> Result<Vec<PersistedCatHubHamlibNet>, String> {
+    let mut result = Vec::with_capacity(endpoints.len());
+    let mut binds: Vec<String> = Vec::new();
+    for endpoint in endpoints {
+        let name = normalize_optional_string(Some(&endpoint.name))
+            .ok_or_else(|| "CAT hub hamlib_net endpoint name is required.".to_string())?;
+        let bind = normalize_optional_string(Some(&endpoint.bind)).ok_or_else(|| {
+            format!("CAT hub hamlib_net endpoint '{name}' requires a bind address.")
+        })?;
+        validate_cat_hub_bind(&bind, &name)?;
+        binds.push(bind.clone());
+        result.push(PersistedCatHubHamlibNet {
+            name,
+            bind,
+            perms: cat_hub_perms_to_tokens(&endpoint.perms),
+        });
+    }
+    let bind_refs: Vec<&str> = binds.iter().map(String::as_str).collect();
+    if let Some(duplicate) = first_duplicate(&bind_refs) {
+        return Err(format!(
+            "CAT hub hamlib_net endpoints must use distinct bind addresses: '{duplicate}'."
+        ));
+    }
+    Ok(result)
+}
+
+/// Light validation of a `host:port` bind string. Kept intentionally permissive so
+/// hostnames the daemon accepts are not rejected here.
+fn validate_cat_hub_bind(bind: &str, name: &str) -> Result<(), String> {
+    let (host, port) = bind.rsplit_once(':').ok_or_else(|| {
+        format!("CAT hub hamlib_net endpoint '{name}' bind must be in host:port form.")
+    })?;
+    if host.is_empty() {
+        return Err(format!(
+            "CAT hub hamlib_net endpoint '{name}' bind must include a host."
+        ));
+    }
+    let port: u32 = port
+        .parse()
+        .map_err(|_| format!("CAT hub hamlib_net endpoint '{name}' bind port is not a number."))?;
+    if port == 0 || port > u32::from(u16::MAX) {
+        return Err(format!(
+            "CAT hub hamlib_net endpoint '{name}' bind port must be between 1 and 65535."
+        ));
+    }
+    Ok(())
+}
+
+fn validate_host_port(bind: &str, label: &str) -> Result<(), String> {
+    let (host, port) = bind
+        .rsplit_once(':')
+        .ok_or_else(|| format!("{label} must be in host:port form."))?;
+    if host.trim().is_empty() {
+        return Err(format!("{label} must include a host."));
+    }
+    let port: u32 = port
+        .parse()
+        .map_err(|_| format!("{label} port is not a number."))?;
+    if port == 0 || port > u32::from(u16::MAX) {
+        return Err(format!("{label} port must be between 1 and 65535."));
+    }
+    Ok(())
+}
+
+fn first_duplicate<'a>(values: &[&'a str]) -> Option<&'a str> {
+    let mut seen: Vec<&str> = Vec::with_capacity(values.len());
+    for value in values {
+        if seen
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(value))
+        {
+            return Some(value);
+        }
+        seen.push(value);
+    }
+    None
+}
+
+/// Leniently load the `[cat_hub]` section from the unified config for display.
+/// Any parse failure yields `None` (and a logged warning) instead of failing the
+/// whole engine, mirroring how the engine never hard-depends on `[cat_hub]`.
+fn load_cat_hub_config(config_path: &Path) -> Option<PersistedCatHubConfig> {
+    let content = fs::read_to_string(config_path).ok()?;
+    let document = match content.parse::<toml::Table>() {
+        Ok(document) => document,
+        Err(error) => {
+            eprintln!("Warning: failed to parse config while reading [cat_hub] section: {error}");
+            return None;
+        }
+    };
+    let section = document.get("cat_hub")?;
+    match section.clone().try_into::<PersistedCatHubConfig>() {
+        Ok(config) => Some(config),
+        Err(error) => {
+            eprintln!("Warning: ignoring malformed [cat_hub] section for setup status: {error}");
+            None
+        }
+    }
+}
+
 pub(crate) fn default_config_path() -> Result<PathBuf, String> {
     #[cfg(target_os = "windows")]
     {
@@ -1273,7 +1928,30 @@ fn load_persisted_config(config_path: &Path) -> Result<Option<PersistedSetupConf
     Ok(Some(config))
 }
 
-fn write_persisted_config(config_path: &Path, config: &PersistedSetupConfig) -> Result<(), String> {
+/// Top-level TOML keys owned by the engine setup config. On save these are replaced
+/// wholesale. The `[cat_hub]` and `[wsjtx_ingest]` sections are CONDITIONALLY
+/// engine-managed: they are preserved verbatim when a save does not touch them, and
+/// only removed-and-rewritten when the caller supplies a complete replacement (see
+/// `write_persisted_config`). Every other
+/// unknown top-level table (for example `[launcher]` written by the launcher) is always
+/// preserved untouched so the unified `config.toml` can be shared across all components.
+const ENGINE_OWNED_CONFIG_KEYS: [&str; 8] = [
+    "logbook",
+    "storage",
+    "station_profile",
+    "station_profiles",
+    "qrz_xml",
+    "qrz_logbook",
+    "sync",
+    "rig_control",
+];
+
+fn write_persisted_config(
+    config_path: &Path,
+    config: &PersistedSetupConfig,
+    cat_hub_update: Option<&PersistedCatHubConfig>,
+    wsjtx_ingest_update: Option<&PersistedWsjtxIngestConfig>,
+) -> Result<(), String> {
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
             format!(
@@ -1283,13 +1961,60 @@ fn write_persisted_config(config_path: &Path, config: &PersistedSetupConfig) -> 
         })?;
     }
 
-    let content = toml::to_string_pretty(config).map_err(|error| {
+    // Serialize only the engine-owned config, then splice it into the existing document so
+    // unknown top-level tables survive. Engine-owned tables are canonicalized (their inline
+    // comments/order are not preserved); unknown tables are preserved verbatim.
+    let owned_text = toml::to_string_pretty(config).map_err(|error| {
         format!(
             "Failed to serialize persisted setup config '{}': {error}",
             config_path.display()
         )
     })?;
-    fs::write(config_path, content).map_err(|error| {
+    let owned_doc: toml_edit::DocumentMut = owned_text.parse().map_err(|error| {
+        format!(
+            "Failed to re-parse serialized setup config '{}': {error}",
+            config_path.display()
+        )
+    })?;
+
+    let mut doc: toml_edit::DocumentMut = match fs::read_to_string(config_path) {
+        Ok(existing) => existing.parse().map_err(|error| {
+            format!(
+                "Failed to parse existing config '{}': {error}",
+                config_path.display()
+            )
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => toml_edit::DocumentMut::new(),
+        Err(error) => {
+            return Err(format!(
+                "Failed to read existing config '{}': {error}",
+                config_path.display()
+            ));
+        }
+    };
+
+    // Drop every engine-owned key (clearing tables the wizard intentionally emptied), then
+    // re-insert exactly the keys the serializer produced.
+    for key in ENGINE_OWNED_CONFIG_KEYS {
+        doc.remove(key);
+    }
+    for (key, item) in owned_doc.iter() {
+        if key == "wsjtx_ingest" {
+            continue;
+        }
+        doc.insert(key, item.clone());
+    }
+
+    // Only touch `[cat_hub]` when the caller supplied a complete replacement; otherwise
+    // leave whatever the cathub daemon wrote (comments, ordering, unknown keys) untouched.
+    if let Some(cat_hub) = cat_hub_update {
+        splice_cat_hub_section(&mut doc, cat_hub, config_path)?;
+    }
+    if let Some(wsjtx_ingest) = wsjtx_ingest_update {
+        splice_wsjtx_ingest_section(&mut doc, wsjtx_ingest, config_path)?;
+    }
+
+    fs::write(config_path, doc.to_string()).map_err(|error| {
         format!(
             "Failed to write config '{}': {error}",
             config_path.display()
@@ -1297,10 +2022,68 @@ fn write_persisted_config(config_path: &Path, config: &PersistedSetupConfig) -> 
     })
 }
 
+fn splice_wsjtx_ingest_section(
+    doc: &mut toml_edit::DocumentMut,
+    wsjtx_ingest: &PersistedWsjtxIngestConfig,
+    config_path: &Path,
+) -> Result<(), String> {
+    let owned_text = toml::to_string_pretty(&PersistedSetupConfig {
+        wsjtx_ingest: wsjtx_ingest.clone(),
+        ..PersistedSetupConfig::default()
+    })
+    .map_err(|error| {
+        format!(
+            "Failed to serialize WSJT-X ingest config '{}': {error}",
+            config_path.display()
+        )
+    })?;
+    let owned_doc: toml_edit::DocumentMut = owned_text.parse().map_err(|error| {
+        format!(
+            "Failed to re-parse WSJT-X ingest config '{}': {error}",
+            config_path.display()
+        )
+    })?;
+    doc.remove("wsjtx_ingest");
+    if let Some(item) = owned_doc.get("wsjtx_ingest") {
+        doc.insert("wsjtx_ingest", item.clone());
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct CatHubDocument<'a> {
+    cat_hub: &'a PersistedCatHubConfig,
+}
+
+fn splice_cat_hub_section(
+    doc: &mut toml_edit::DocumentMut,
+    cat_hub: &PersistedCatHubConfig,
+    config_path: &Path,
+) -> Result<(), String> {
+    doc.remove("cat_hub");
+    let wrapped = toml::to_string_pretty(&CatHubDocument { cat_hub }).map_err(|error| {
+        format!(
+            "Failed to serialize CAT hub config for '{}': {error}",
+            config_path.display()
+        )
+    })?;
+    let wrapped_doc: toml_edit::DocumentMut = wrapped.parse().map_err(|error| {
+        format!(
+            "Failed to re-parse serialized CAT hub config for '{}': {error}",
+            config_path.display()
+        )
+    })?;
+    if let Some(item) = wrapped_doc.get("cat_hub") {
+        doc.insert("cat_hub", item.clone());
+    }
+    Ok(())
+}
+
 fn build_status(
     config_path: &Path,
     suggested_log_file_path: &Path,
     persisted_config: Option<&PersistedSetupConfig>,
+    cat_hub: Option<&PersistedCatHubConfig>,
 ) -> SetupStatus {
     let warnings = build_warnings(persisted_config);
     let station_profile = persisted_config.and_then(PersistedSetupConfig::station_profile);
@@ -1342,6 +2125,9 @@ fn build_status(
             .is_some(),
         sync_config: persisted_config.map(|config| config.sync.to_proto()),
         rig_control: persisted_config.and_then(|config| config.rig_control.to_proto()),
+        cat_hub: cat_hub.and_then(PersistedCatHubConfig::to_proto),
+        wsjtx_ingest: persisted_config.and_then(|config| config.wsjtx_ingest.to_proto()),
+        wsjtx_ingest_status: None,
         persistence_step_enabled: true,
         persistence_label: PERSISTENCE_STEP_LABEL.to_string(),
         persistence_description: PERSISTENCE_STEP_DESCRIPTION.to_string(),
@@ -1398,13 +2184,27 @@ fn build_warnings(persisted_config: Option<&PersistedSetupConfig>) -> Vec<String
 
 fn build_wizard_steps(
     persisted_config: Option<&PersistedSetupConfig>,
+    cat_hub: Option<&PersistedCatHubConfig>,
 ) -> Vec<SetupWizardStepStatus> {
     vec![
         build_log_file_step(persisted_config),
         build_station_profiles_step(persisted_config),
         build_qrz_integration_step(persisted_config),
+        build_cat_hub_step(cat_hub),
         build_review_step(persisted_config),
     ]
+}
+
+fn build_cat_hub_step(cat_hub: Option<&PersistedCatHubConfig>) -> SetupWizardStepStatus {
+    // CAT hub configuration is entirely optional. The step is always complete:
+    // operators who do not run the multi-client hub simply leave it unconfigured,
+    // and any supplied configuration is fully validated on save.
+    let _ = cat_hub;
+    SetupWizardStepStatus {
+        step: SetupWizardStep::CatHub.into(),
+        complete: true,
+        issues: Vec::new(),
+    }
 }
 
 fn build_log_file_step(config: Option<&PersistedSetupConfig>) -> SetupWizardStepStatus {
@@ -1483,10 +2283,12 @@ fn validate_step(
         SetupWizardStep::LogFile => validate_log_file_step(request),
         SetupWizardStep::StationProfiles => validate_station_profiles_step(request),
         SetupWizardStep::QrzIntegration => validate_qrz_step(request),
-        SetupWizardStep::Review | SetupWizardStep::Unspecified => ValidateSetupStepResponse {
-            valid: true,
-            fields: Vec::new(),
-        },
+        SetupWizardStep::CatHub | SetupWizardStep::Review | SetupWizardStep::Unspecified => {
+            ValidateSetupStepResponse {
+                valid: true,
+                fields: Vec::new(),
+            }
+        }
     }
 }
 
@@ -1818,23 +2620,25 @@ mod tests {
     use tonic::Request;
 
     use super::{
-        build_log_file_step, build_qrz_integration_step, build_review_step,
-        build_station_profiles_step, build_wizard_steps, default_config_path,
-        suggested_log_file_path, validate_log_file_step, validate_qrz_step,
-        validate_station_profiles_step, PersistedSetupConfig, SetupControlSurface, SetupState,
-        StationProfileControlSurface, DEFAULT_CONFIG_FILE_NAME, RIGCTLD_ENABLED_ENV_VAR,
-        RIGCTLD_HOST_ENV_VAR, RIGCTLD_PORT_ENV_VAR, RIGCTLD_READ_TIMEOUT_MS_ENV_VAR,
-        RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR,
+        build_cat_hub_step, build_log_file_step, build_qrz_integration_step, build_review_step,
+        build_station_profiles_step, build_wizard_steps, default_config_path, load_cat_hub_config,
+        load_persisted_config, suggested_log_file_path, validate_log_file_step, validate_qrz_step,
+        validate_station_profiles_step, write_persisted_config, PersistedCatHubConfig,
+        PersistedSetupConfig, SetupControlSurface, SetupState, StationProfileControlSurface,
+        DEFAULT_CONFIG_FILE_NAME, RIGCTLD_ENABLED_ENV_VAR, RIGCTLD_HOST_ENV_VAR,
+        RIGCTLD_PORT_ENV_VAR, RIGCTLD_READ_TIMEOUT_MS_ENV_VAR, RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR,
     };
     use crate::runtime_config::RuntimeConfigManager;
     use qsoripper_core::proto::qsoripper::domain::{ConflictPolicy, StationProfile, SyncConfig};
     use qsoripper_core::proto::qsoripper::services::{
         setup_service_server::SetupService, station_profile_service_server::StationProfileService,
+        CatHubEventSettings, CatHubHamlibNetEndpoint, CatHubPermission, CatHubPollSettings,
+        CatHubPttSettings, CatHubRadioSettings, CatHubSerialFace, CatHubSettings,
         GetActiveStationContextRequest, GetSetupStatusRequest, GetSetupWizardStateRequest,
         ListStationProfilesRequest, RigControlSettings, SaveSetupRequest,
         SaveStationProfileRequest, SetActiveStationProfileRequest,
         SetSessionStationProfileOverrideRequest, SetupWizardStep, StorageBackend,
-        ValidateSetupStepRequest,
+        ValidateSetupStepRequest, WsjtxIngestSettings,
     };
 
     fn unique_config_path() -> std::path::PathBuf {
@@ -2347,13 +3151,15 @@ station_callsign = "K7RND"
     // ── Wizard step builder tests ───────────────────────────────────────────
 
     #[test]
-    fn build_wizard_steps_none_config_yields_four_steps() {
-        let steps = build_wizard_steps(None);
-        assert_eq!(4, steps.len());
+    fn build_wizard_steps_none_config_yields_five_steps() {
+        let steps = build_wizard_steps(None, None);
+        assert_eq!(5, steps.len());
         assert_eq!(i32::from(SetupWizardStep::LogFile), steps[0].step);
         assert_eq!(i32::from(SetupWizardStep::StationProfiles), steps[1].step);
         assert_eq!(i32::from(SetupWizardStep::QrzIntegration), steps[2].step);
-        assert_eq!(i32::from(SetupWizardStep::Review), steps[3].step);
+        assert_eq!(i32::from(SetupWizardStep::CatHub), steps[3].step);
+        assert!(steps[3].complete);
+        assert_eq!(i32::from(SetupWizardStep::Review), steps[4].step);
     }
 
     #[test]
@@ -2639,7 +3445,7 @@ station_callsign = "K7RND"
         .into_inner();
 
         assert!(response.status.is_some());
-        assert_eq!(4, response.steps.len());
+        assert_eq!(5, response.steps.len());
         assert!(response.station_profiles.is_empty());
 
         // For a fresh config, LogFile should be incomplete
@@ -2936,6 +3742,183 @@ station_callsign = "K7RND"
             runtime_values
                 .get(RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR)
                 .map(String::as_str)
+        );
+
+        drop(service);
+        drop(runtime_config);
+        drop(setup_state);
+
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    #[tokio::test]
+    async fn save_setup_persists_wsjtx_ingest_and_round_trips() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "wsjtx-ingest.db");
+        let adif_tail_path = absolute_log_file_path(&config_path, "wsjtx_log.adi");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+
+        let response = SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                wsjtx_ingest: Some(WsjtxIngestSettings {
+                    enabled: true,
+                    udp_enabled: Some(true),
+                    udp_bind: "127.0.0.1:2237".to_string(),
+                    adif_tail_enabled: true,
+                    adif_tail_path: Some(adif_tail_path.clone()),
+                    poll_interval_ms: 1500,
+                    sync_to_qrz: true,
+                }),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save setup")
+        .into_inner();
+
+        let status = response.status.expect("status payload");
+        let wsjtx = status.wsjtx_ingest.expect("wsjtx settings");
+        assert!(wsjtx.enabled);
+        assert_eq!(Some(true), wsjtx.udp_enabled);
+        assert_eq!("127.0.0.1:2237", wsjtx.udp_bind);
+        assert!(wsjtx.adif_tail_enabled);
+        assert_eq!(
+            Some(adif_tail_path.as_str()),
+            wsjtx.adif_tail_path.as_deref()
+        );
+        assert_eq!(1500, wsjtx.poll_interval_ms);
+        assert!(wsjtx.sync_to_qrz);
+
+        let saved_toml = fs::read_to_string(&config_path).expect("read config");
+        assert!(
+            saved_toml.contains("[wsjtx_ingest]"),
+            "wsjtx_ingest table: {saved_toml}"
+        );
+        let parsed =
+            toml::from_str::<PersistedSetupConfig>(&saved_toml).expect("parse saved config");
+        assert_eq!(Some(true), parsed.wsjtx_ingest.enabled);
+        assert_eq!(
+            Some("127.0.0.1:2237"),
+            parsed.wsjtx_ingest.udp_bind.as_deref()
+        );
+
+        let runtime_values = setup_state.runtime_config_values().await;
+        assert_eq!(
+            Some("true"),
+            runtime_values
+                .get(crate::runtime_config::WSJTX_INGEST_ENABLED_ENV_VAR)
+                .map(String::as_str)
+        );
+        assert_eq!(
+            Some(adif_tail_path.as_str()),
+            runtime_values
+                .get(crate::runtime_config::WSJTX_INGEST_ADIF_TAIL_PATH_ENV_VAR)
+                .map(String::as_str)
+        );
+
+        drop(service);
+        drop(runtime_config);
+        drop(setup_state);
+
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    #[tokio::test]
+    async fn save_setup_without_wsjtx_ingest_preserves_existing_wsjtx_section_verbatim() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "wsjtx-preserve.db");
+        fs::create_dir_all(config_path.parent().expect("config directory"))
+            .expect("create config directory");
+        fs::write(
+            &config_path,
+            format!(
+                r#"
+[wsjtx_ingest]
+# keep operator comment
+enabled = true
+future_key = "preserve-me"
+
+[logbook]
+file_path = "{}"
+"#,
+                log_file_path.replace('\\', "\\\\")
+            ),
+        )
+        .expect("seed config");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+        let replacement_log = absolute_log_file_path(&config_path, "replacement.db");
+
+        let _ = SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(replacement_log),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save setup");
+
+        let saved_toml = fs::read_to_string(&config_path).expect("read config");
+        assert!(saved_toml.contains("# keep operator comment"));
+        assert!(saved_toml.contains("future_key = \"preserve-me\""));
+
+        drop(service);
+        drop(runtime_config);
+        drop(setup_state);
+
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    #[tokio::test]
+    async fn save_setup_rejects_wsjtx_adif_tail_without_path() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "wsjtx-invalid.db");
+        let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config.clone());
+
+        let error = SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                wsjtx_ingest: Some(WsjtxIngestSettings {
+                    enabled: true,
+                    udp_enabled: Some(false),
+                    adif_tail_enabled: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect_err("ADIF tail without path should fail");
+
+        assert!(
+            error
+                .message()
+                .contains("WSJT-X ADIF tail path is required"),
+            "unexpected error: {error}"
         );
 
         drop(service);
@@ -3284,6 +4267,322 @@ password = "legacy_secret"
 
         drop(service);
         let config_directory = config_path.parent().expect("config directory");
+        fs::remove_dir_all(config_directory).expect("remove temp config directory");
+    }
+
+    #[test]
+    fn write_persisted_config_preserves_unknown_tables() {
+        // The unified config.toml is shared with the CAT hub daemon ([cat_hub]) and the
+        // launcher ([launcher]); an engine setup save must not clobber those sections.
+        let config_path = unique_config_path();
+        let config_directory = config_path.parent().expect("config directory");
+        fs::create_dir_all(config_directory).expect("create config directory");
+        fs::write(
+            &config_path,
+            r#"[cat_hub.radio]
+backend = "ts590"
+port = "COM4"
+
+[[cat_hub.face]]
+name = "n1mm"
+transport = "COM11"
+dialect = "ts590"
+
+[[cat_hub.hamlib_net]]
+name = "engine"
+bind = "127.0.0.1:4532"
+
+[launcher]
+engines = [1]
+"#,
+        )
+        .expect("seed config");
+
+        let config = PersistedSetupConfig::default();
+        write_persisted_config(&config_path, &config, None, None).expect("write");
+
+        let saved = fs::read_to_string(&config_path).expect("read");
+        assert!(saved.contains("[cat_hub.radio]"), "cat_hub.radio: {saved}");
+        assert!(saved.contains("port = \"COM4\""), "radio port: {saved}");
+        assert!(saved.contains("[[cat_hub.face]]"), "cat_hub.face: {saved}");
+        assert!(
+            saved.contains("[[cat_hub.hamlib_net]]"),
+            "cat_hub.hamlib_net: {saved}"
+        );
+        assert!(saved.contains("[launcher]"), "launcher: {saved}");
+
+        // The engine can still load its own config from the merged document.
+        load_persisted_config(&config_path)
+            .expect("load")
+            .expect("config present");
+
+        fs::remove_dir_all(config_directory).expect("remove temp config directory");
+    }
+
+    #[test]
+    fn write_persisted_config_removes_cleared_engine_tables() {
+        // When the wizard clears an engine-owned table, the stale section must be removed,
+        // while unknown sections such as [cat_hub] are preserved.
+        let config_path = unique_config_path();
+        let config_directory = config_path.parent().expect("config directory");
+        fs::create_dir_all(config_directory).expect("create config directory");
+        fs::write(
+            &config_path,
+            r#"[rig_control]
+enabled = true
+host = "127.0.0.1"
+port = 4532
+
+[cat_hub.radio]
+backend = "ts590"
+"#,
+        )
+        .expect("seed config");
+
+        let config = PersistedSetupConfig::default();
+        write_persisted_config(&config_path, &config, None, None).expect("write");
+
+        let saved = fs::read_to_string(&config_path).expect("read");
+        assert!(
+            !saved.contains("[rig_control]"),
+            "stale rig_control should be removed: {saved}"
+        );
+        assert!(
+            saved.contains("[cat_hub.radio]"),
+            "cat_hub must survive: {saved}"
+        );
+
+        fs::remove_dir_all(config_directory).expect("remove temp config directory");
+    }
+
+    // ── CAT hub setup tests ─────────────────────────────────────────────────
+
+    fn valid_cat_hub_settings() -> CatHubSettings {
+        CatHubSettings {
+            radio: Some(CatHubRadioSettings {
+                backend: Some("ts590".to_string()),
+                model: None,
+                transport: None,
+                port: Some("COM3".to_string()),
+                baud: Some(4800),
+                host: None,
+                tcp_port: Some(4532),
+                certified: Some(false),
+                reply_timeout_ms: Some(1000),
+            }),
+            poll: Some(CatHubPollSettings {
+                baseline_ms: Some(250),
+                heartbeat_ms: Some(3000),
+            }),
+            ptt: Some(CatHubPttSettings {
+                max_tx_ms: Some(300_000),
+            }),
+            events: Some(CatHubEventSettings {
+                native_push: Some(true),
+            }),
+            faces: vec![CatHubSerialFace {
+                name: "n1mm".to_string(),
+                transport: "COM11".to_string(),
+                baud: 4800,
+                dialect: "ts590".to_string(),
+                perms: vec![
+                    CatHubPermission::Read as i32,
+                    CatHubPermission::Write as i32,
+                ],
+            }],
+            hamlib_net: vec![CatHubHamlibNetEndpoint {
+                name: "engine".to_string(),
+                bind: "127.0.0.1:4532".to_string(),
+                perms: vec![CatHubPermission::Read as i32],
+            }],
+        }
+    }
+
+    #[test]
+    fn cat_hub_from_proto_round_trips_through_to_proto() {
+        let settings = valid_cat_hub_settings();
+        let persisted = PersistedCatHubConfig::from_proto(&settings).expect("valid settings");
+        let projected = persisted.to_proto().expect("non-empty");
+
+        let radio = projected.radio.expect("radio");
+        assert_eq!(radio.backend.as_deref(), Some("ts590"));
+        assert_eq!(radio.port.as_deref(), Some("COM3"));
+        assert_eq!(radio.tcp_port, Some(4532));
+        assert_eq!(projected.faces.len(), 1);
+        assert_eq!(projected.faces[0].name, "n1mm");
+        assert_eq!(projected.faces[0].dialect, "ts590");
+        assert_eq!(
+            projected.faces[0].perms,
+            vec![
+                CatHubPermission::Read as i32,
+                CatHubPermission::Write as i32
+            ]
+        );
+        assert_eq!(projected.hamlib_net.len(), 1);
+        assert_eq!(projected.hamlib_net[0].bind, "127.0.0.1:4532");
+    }
+
+    #[test]
+    fn cat_hub_from_proto_requires_radio() {
+        let mut settings = valid_cat_hub_settings();
+        settings.radio = None;
+        let error = PersistedCatHubConfig::from_proto(&settings).expect_err("radio required");
+        assert!(error.contains("radio settings are required"), "{error}");
+    }
+
+    #[test]
+    fn cat_hub_from_proto_requires_at_least_one_endpoint() {
+        let mut settings = valid_cat_hub_settings();
+        settings.faces.clear();
+        settings.hamlib_net.clear();
+        let error = PersistedCatHubConfig::from_proto(&settings).expect_err("endpoint required");
+        assert!(error.contains("at least one serial face"), "{error}");
+    }
+
+    #[test]
+    fn cat_hub_from_proto_rejects_unknown_backend() {
+        let mut settings = valid_cat_hub_settings();
+        settings.radio.as_mut().expect("radio").backend = Some("icom".to_string());
+        let error = PersistedCatHubConfig::from_proto(&settings).expect_err("bad backend");
+        assert!(error.contains("backend 'icom'"), "{error}");
+    }
+
+    #[test]
+    fn cat_hub_from_proto_rejects_face_reusing_radio_port() {
+        let mut settings = valid_cat_hub_settings();
+        settings.faces[0].transport = "COM3".to_string();
+        let error = PersistedCatHubConfig::from_proto(&settings).expect_err("port reuse");
+        assert!(error.contains("cannot reuse the radio port"), "{error}");
+    }
+
+    #[test]
+    fn cat_hub_from_proto_rejects_duplicate_endpoint_names() {
+        let mut settings = valid_cat_hub_settings();
+        settings.hamlib_net[0].name = "n1mm".to_string();
+        let error = PersistedCatHubConfig::from_proto(&settings).expect_err("duplicate name");
+        assert!(error.contains("names must be unique"), "{error}");
+    }
+
+    #[test]
+    fn cat_hub_from_proto_rejects_unknown_dialect() {
+        let mut settings = valid_cat_hub_settings();
+        settings.faces[0].dialect = "icom".to_string();
+        let error = PersistedCatHubConfig::from_proto(&settings).expect_err("bad dialect");
+        assert!(error.contains("dialect 'icom'"), "{error}");
+    }
+
+    #[test]
+    fn cat_hub_from_proto_rejects_bad_bind() {
+        let mut settings = valid_cat_hub_settings();
+        settings.hamlib_net[0].bind = "127.0.0.1".to_string();
+        let error = PersistedCatHubConfig::from_proto(&settings).expect_err("bad bind");
+        assert!(error.contains("host:port"), "{error}");
+    }
+
+    #[test]
+    fn cat_hub_from_proto_serial_backend_requires_port() {
+        let mut settings = valid_cat_hub_settings();
+        settings.radio.as_mut().expect("radio").port = None;
+        let error = PersistedCatHubConfig::from_proto(&settings).expect_err("port required");
+        assert!(error.contains("requires a serial port"), "{error}");
+    }
+
+    #[test]
+    fn build_cat_hub_step_is_always_complete() {
+        let step = build_cat_hub_step(None);
+        assert!(step.complete);
+        assert!(step.issues.is_empty());
+        assert_eq!(i32::from(SetupWizardStep::CatHub), step.step);
+    }
+
+    #[test]
+    fn load_cat_hub_config_reads_unified_section() {
+        let config_path = unique_config_path();
+        let config_directory = config_path.parent().expect("config directory");
+        fs::create_dir_all(config_directory).expect("create config directory");
+        fs::write(
+            &config_path,
+            r#"[cat_hub.radio]
+backend = "ts590"
+port = "COM3"
+
+[[cat_hub.face]]
+name = "n1mm"
+transport = "COM11"
+dialect = "ts590"
+perms = ["read", "write"]
+
+[[cat_hub.hamlib_net]]
+name = "engine"
+bind = "127.0.0.1:4532"
+"#,
+        )
+        .expect("seed config");
+
+        let loaded = load_cat_hub_config(&config_path).expect("cat_hub present");
+        let projected = loaded.to_proto().expect("non-empty");
+        assert_eq!(
+            projected.radio.expect("radio").port.as_deref(),
+            Some("COM3")
+        );
+        assert_eq!(projected.faces.len(), 1);
+        assert_eq!(projected.hamlib_net.len(), 1);
+
+        fs::remove_dir_all(config_directory).expect("remove temp config directory");
+    }
+
+    #[test]
+    fn load_cat_hub_config_ignores_malformed_section() {
+        let config_path = unique_config_path();
+        let config_directory = config_path.parent().expect("config directory");
+        fs::create_dir_all(config_directory).expect("create config directory");
+        // tcp_port out of range for u16 makes the [cat_hub] section undeserializable.
+        fs::write(
+            &config_path,
+            r#"[cat_hub.radio]
+backend = "ts590"
+tcp_port = 99999
+"#,
+        )
+        .expect("seed config");
+
+        assert!(load_cat_hub_config(&config_path).is_none());
+
+        fs::remove_dir_all(config_directory).expect("remove temp config directory");
+    }
+
+    #[test]
+    fn write_persisted_config_writes_and_preserves_cat_hub() {
+        let config_path = unique_config_path();
+        let config_directory = config_path.parent().expect("config directory");
+        fs::create_dir_all(config_directory).expect("create config directory");
+
+        // First write: supply a complete CAT hub section.
+        let cat_hub =
+            PersistedCatHubConfig::from_proto(&valid_cat_hub_settings()).expect("valid settings");
+        let engine_config = PersistedSetupConfig::default();
+        write_persisted_config(&config_path, &engine_config, Some(&cat_hub), None).expect("write");
+
+        let saved = fs::read_to_string(&config_path).expect("read");
+        assert!(saved.contains("[cat_hub.radio]"), "radio: {saved}");
+        assert!(saved.contains("[[cat_hub.face]]"), "face: {saved}");
+        // The written section must satisfy the real cathub daemon validator.
+        qsoripper_cathub::validate_cat_hub_toml(&saved).expect("daemon-valid cat_hub");
+
+        // Second write WITHOUT a CAT hub update must leave the section untouched.
+        write_persisted_config(&config_path, &engine_config, None, None).expect("second write");
+        let preserved = fs::read_to_string(&config_path).expect("read again");
+        assert!(
+            preserved.contains("[cat_hub.radio]"),
+            "preserved: {preserved}"
+        );
+        assert!(
+            preserved.contains("name = \"n1mm\""),
+            "face preserved: {preserved}"
+        );
+        let reloaded = load_cat_hub_config(&config_path).expect("cat_hub still present");
+        assert!(reloaded.to_proto().is_some());
+
         fs::remove_dir_all(config_directory).expect("remove temp config directory");
     }
 }

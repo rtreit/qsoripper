@@ -218,6 +218,7 @@ fn handle_event_with_channel(
             let band_idx = app.form.band_idx;
             let mode_idx = app.form.mode_idx;
             app.form = LogForm::new();
+            app.last_auto_rig_frequency_mhz = None;
             app.form.band_idx = band_idx;
             app.form.mode_idx = mode_idx;
             app.form.on_band_change();
@@ -233,6 +234,7 @@ fn handle_event_with_channel(
             let band_idx = app.form.band_idx;
             let mode_idx = app.form.mode_idx;
             app.form = LogForm::new();
+            app.last_auto_rig_frequency_mhz = None;
             app.form.band_idx = band_idx;
             app.form.mode_idx = mode_idx;
             app.form.on_band_change();
@@ -495,9 +497,8 @@ fn handle_key_with_channel(
         KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
             spawn_log_qso(app, event_tx, channel);
         }
-        KeyCode::End => {
-            app.form.field_selected = false;
-        }
+        KeyCode::Home => app.form.move_cursor_home(),
+        KeyCode::End => app.form.move_cursor_end(),
         KeyCode::Esc => match app.view {
             app::View::Advanced => {
                 app.view = app::View::LogEntry;
@@ -506,24 +507,31 @@ fn handle_key_with_channel(
             }
             app::View::LogEntry => {
                 app.form = LogForm::new();
+                app.last_auto_rig_frequency_mhz = None;
                 app.lookup_result = None;
                 app.editing_local_id = None;
                 app.reset_timer();
             }
             app::View::Help | app::View::ConfirmDeleteQso | app::View::ConfirmPurge => {}
         },
+        KeyCode::Backspace | KeyCode::Delete if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            clear_focused_field(app, lookup_tx);
+        }
         KeyCode::Left if app.form.is_cycle_field() => cycle_left(app),
         KeyCode::Right if app.form.is_cycle_field() => cycle_right(app),
+        KeyCode::Left => app.form.move_cursor_left(),
+        KeyCode::Right => app.form.move_cursor_right(),
         KeyCode::Backspace => {
             let focused = app.form.focused;
-            if app.form.field_selected {
-                if let Some(text) = app.form.current_field_text_mut() {
-                    text.clear();
-                }
-                app.form.field_selected = false;
-            } else if let Some(text) = app.form.current_field_text_mut() {
-                text.pop();
+            app.form.backspace_at_cursor();
+            if focused == Field::Callsign {
+                let callsign = app.form.callsign.clone();
+                let _ = lookup_tx.send(callsign);
             }
+        }
+        KeyCode::Delete => {
+            let focused = app.form.focused;
+            app.form.delete_at_cursor();
             if focused == Field::Callsign {
                 let callsign = app.form.callsign.clone();
                 let _ = lookup_tx.send(callsign);
@@ -534,6 +542,15 @@ fn handle_key_with_channel(
         }
         KeyCode::Char(c) => handle_char_key(app, c, lookup_tx),
         _ => {}
+    }
+}
+
+fn clear_focused_field(app: &mut App, lookup_tx: &watch::Sender<String>) {
+    let focused = app.form.focused;
+    app.form.clear_focused_text_field();
+    if focused == Field::Callsign {
+        let _ = lookup_tx.send(app.form.callsign.clone());
+        app.lookup_result = None;
     }
 }
 
@@ -757,26 +774,19 @@ fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
         Field::Band => app.form.type_select_band(c),
         Field::Mode => app.form.type_select_mode(c),
         _ => {
-            if app.form.field_selected {
-                if let Some(text) = app.form.current_field_text_mut() {
-                    text.clear();
-                }
-                app.form.field_selected = false;
-            }
-            if let Some(text) = app.form.current_field_text_mut() {
-                if matches!(
-                    focused,
-                    Field::Callsign
-                        | Field::StationCallsign
-                        | Field::WorkedOperatorCallsign
-                        | Field::SnapshotStationCallsign
-                        | Field::SnapshotOperatorCallsign
-                ) {
-                    text.push(c.to_ascii_uppercase());
-                } else {
-                    text.push(c);
-                }
-            }
+            let ch = if matches!(
+                focused,
+                Field::Callsign
+                    | Field::StationCallsign
+                    | Field::WorkedOperatorCallsign
+                    | Field::SnapshotStationCallsign
+                    | Field::SnapshotOperatorCallsign
+            ) {
+                c.to_ascii_uppercase()
+            } else {
+                c
+            };
+            app.form.insert_char_at_cursor(ch);
             if focused == Field::Callsign {
                 let callsign = app.form.callsign.clone();
                 let _ = lookup_tx.send(callsign);
@@ -803,6 +813,7 @@ fn switch_to_tab(app: &mut App, tab: AdvancedTab) {
     app.form.advanced_tab = tab;
     app.form.focused = tab.first_field();
     app.form.field_selected = true;
+    app.form.field_cursor = app.form.focused_text_len();
     app.qso_list_focused = false;
 }
 
@@ -866,6 +877,7 @@ fn jump_to_field(app: &mut App, ch: char) {
     }
     app.form.focused = target;
     app.form.field_selected = true;
+    app.form.field_cursor = app.form.focused_text_len();
     app.qso_list_focused = false;
 }
 
@@ -969,6 +981,7 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
 
     let advanced_tab = app.form.advanced_tab;
     app.form = LogForm::new();
+    app.last_auto_rig_frequency_mhz = None;
     app.form.advanced_tab = advanced_tab;
 
     app.form.callsign = qso.callsign.clone();
@@ -1005,41 +1018,14 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
     app.form.comment = src.comment.clone().unwrap_or_default();
     app.form.notes = src.notes.clone().unwrap_or_default();
     if let Some(hz) = src.frequency_hz {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "ham radio frequencies are well within f64 mantissa range"
-        )]
-        {
-            app.form.frequency_mhz = format!("{:.6}", hz as f64 / 1_000_000.0)
-                .trim_end_matches('0')
-                .trim_end_matches('.')
-                .to_string();
-            // Ensure at least 3 decimal places
-            let dot = app
-                .form
-                .frequency_mhz
-                .find('.')
-                .unwrap_or(app.form.frequency_mhz.len());
-            let decimals = app.form.frequency_mhz.len() - dot - 1;
-            if decimals < 3 {
-                for _ in 0..(3 - decimals) {
-                    app.form.frequency_mhz.push('0');
-                }
-            }
-        }
+        app.form.frequency_mhz = grpc::format_frequency_mhz(hz);
     } else if let Some(khz) = {
         #[allow(deprecated)]
         {
             src.frequency_khz
         }
     } {
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "ham radio frequencies are well within f64 mantissa range"
-        )]
-        {
-            app.form.frequency_mhz = format!("{:.3}", khz as f64 / 1_000.0);
-        }
+        app.form.frequency_mhz = grpc::format_frequency_mhz(khz * 1_000);
     }
     if let Some(ref ts) = src.utc_timestamp {
         if let Some(dt) = chrono::DateTime::from_timestamp(ts.seconds, 0) {
@@ -1317,13 +1303,17 @@ fn apply_rig_snapshot(app: &mut App, rig: Option<app::RigInfo>) {
         // Always track frequency from the VFO when callsign is empty, or when the
         // current frequency field still matches what we last set from the rig.
         if info.frequency_hz > 0 {
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "ham radio frequencies are well within f64 mantissa range"
-            )]
-            let new_freq = format!("{:.3}", info.frequency_hz as f64 / 1_000_000.0);
-            if app.form.callsign.is_empty() || app.form.frequency_mhz.is_empty() {
-                app.form.frequency_mhz = new_freq;
+            let new_freq = grpc::format_frequency_mhz(info.frequency_hz);
+            let frequency_still_auto = app
+                .last_auto_rig_frequency_mhz
+                .as_deref()
+                .is_some_and(|last| last == app.form.frequency_mhz);
+            if app.form.callsign.is_empty()
+                || app.form.frequency_mhz.is_empty()
+                || frequency_still_auto
+            {
+                app.form.frequency_mhz.clone_from(&new_freq);
+                app.last_auto_rig_frequency_mhz = Some(new_freq);
             }
         }
 
@@ -1391,6 +1381,7 @@ mod tests {
         use qsoripper_core::proto::qsoripper::domain::QsoRecord;
         RecentQso {
             local_id: id.to_string(),
+            date: "2026-07-08".to_string(),
             utc: "12:00".to_string(),
             callsign: callsign.to_string(),
             band: "20M".to_string(),
@@ -1984,6 +1975,7 @@ mod tests {
         let mut app = make_app();
         let qso = RecentQso {
             local_id: "q1".to_string(),
+            date: "2026-07-08".to_string(),
             utc: "14:32".to_string(),
             callsign: "K7ABC".to_string(),
             band: "40M".to_string(),
@@ -2044,6 +2036,7 @@ mod tests {
         let mut app = make_app();
         let qso = RecentQso {
             local_id: "adv1".to_string(),
+            date: "2026-07-08".to_string(),
             utc: "09:15".to_string(),
             callsign: "W1AW".to_string(),
             band: "20M".to_string(),
@@ -2824,6 +2817,7 @@ mod tests {
         let mut app = make_app();
         app.form.focused = Field::Callsign;
         app.form.callsign = "K7A".to_string();
+        app.form.field_cursor = app.form.focused_text_len();
         handle_key(
             &mut app,
             make_key(KeyCode::Backspace),
@@ -3076,7 +3070,7 @@ mod tests {
         use crate::app::{RigInfo, RigStatus};
         let mut app = make_app();
         let rig = Some(RigInfo {
-            frequency_display: "14.225 MHz".to_string(),
+            frequency_display: "14.225.000 MHz".to_string(),
             frequency_hz: 14_225_000,
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),
@@ -3086,7 +3080,11 @@ mod tests {
         });
         apply_rig_snapshot(&mut app, rig);
         assert!(app.rig_info.is_some());
-        assert_eq!(app.form.frequency_mhz, "14.225");
+        assert_eq!(app.form.frequency_mhz, "14.225.000");
+        assert_eq!(
+            app.last_auto_rig_frequency_mhz.as_deref(),
+            Some("14.225.000")
+        );
         assert_eq!(BANDS[app.form.band_idx], "20M");
         assert_eq!(MODES[app.form.mode_idx], "SSB");
     }
@@ -3098,7 +3096,7 @@ mod tests {
         app.editing_local_id = Some("qso-123".to_string());
         app.form.band_idx = 3; // 40M
         let rig = Some(RigInfo {
-            frequency_display: "14.225 MHz".to_string(),
+            frequency_display: "14.225.000 MHz".to_string(),
             frequency_hz: 14_225_000,
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),
@@ -3116,8 +3114,9 @@ mod tests {
         let mut app = make_app();
         app.form.callsign = "K7ABC".to_string();
         app.form.band_idx = 3; // 40M
+        let original_freq = app.form.frequency_mhz.clone();
         let rig = Some(RigInfo {
-            frequency_display: "7.150 MHz".to_string(),
+            frequency_display: "7.150.000 MHz".to_string(),
             frequency_hz: 7_150_000,
             band: Some("40M".to_string()),
             mode: Some("CW".to_string()),
@@ -3128,6 +3127,86 @@ mod tests {
         apply_rig_snapshot(&mut app, rig);
         // Band and mode should NOT change when callsign is entered
         assert_eq!(app.form.band_idx, 3);
+        assert_eq!(app.form.frequency_mhz, original_freq);
+    }
+
+    #[test]
+    fn apply_rig_snapshot_keeps_auto_frequency_tracking_after_callsign_entry() {
+        use crate::app::{RigInfo, RigStatus};
+        let mut app = make_app();
+
+        apply_rig_snapshot(
+            &mut app,
+            Some(RigInfo {
+                frequency_display: "14.225.000 MHz".to_string(),
+                frequency_hz: 14_225_000,
+                band: Some("20M".to_string()),
+                mode: Some("SSB".to_string()),
+                submode: None,
+                status: RigStatus::Connected,
+                error_message: None,
+            }),
+        );
+        app.form.callsign = "K7ABC".to_string();
+
+        apply_rig_snapshot(
+            &mut app,
+            Some(RigInfo {
+                frequency_display: "14.230.000 MHz".to_string(),
+                frequency_hz: 14_230_000,
+                band: Some("20M".to_string()),
+                mode: Some("SSB".to_string()),
+                submode: None,
+                status: RigStatus::Connected,
+                error_message: None,
+            }),
+        );
+
+        assert_eq!(app.form.frequency_mhz, "14.230.000");
+        assert_eq!(
+            app.last_auto_rig_frequency_mhz.as_deref(),
+            Some("14.230.000")
+        );
+    }
+
+    #[test]
+    fn apply_rig_snapshot_does_not_overwrite_manually_edited_frequency() {
+        use crate::app::{RigInfo, RigStatus};
+        let mut app = make_app();
+
+        apply_rig_snapshot(
+            &mut app,
+            Some(RigInfo {
+                frequency_display: "14.225.000 MHz".to_string(),
+                frequency_hz: 14_225_000,
+                band: Some("20M".to_string()),
+                mode: Some("SSB".to_string()),
+                submode: None,
+                status: RigStatus::Connected,
+                error_message: None,
+            }),
+        );
+        app.form.callsign = "K7ABC".to_string();
+        app.form.frequency_mhz = "14.229.000".to_string();
+
+        apply_rig_snapshot(
+            &mut app,
+            Some(RigInfo {
+                frequency_display: "14.230.000 MHz".to_string(),
+                frequency_hz: 14_230_000,
+                band: Some("20M".to_string()),
+                mode: Some("SSB".to_string()),
+                submode: None,
+                status: RigStatus::Connected,
+                error_message: None,
+            }),
+        );
+
+        assert_eq!(app.form.frequency_mhz, "14.229.000");
+        assert_eq!(
+            app.last_auto_rig_frequency_mhz.as_deref(),
+            Some("14.225.000")
+        );
     }
 
     #[test]
@@ -3136,7 +3215,7 @@ mod tests {
         let mut app = make_app();
         let original_band = app.form.band_idx;
         let rig = Some(RigInfo {
-            frequency_display: "14.225 MHz".to_string(),
+            frequency_display: "14.225.000 MHz".to_string(),
             frequency_hz: 14_225_000,
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),
@@ -3156,7 +3235,7 @@ mod tests {
         app.rig_control_enabled = false;
         let original_freq = app.form.frequency_mhz.clone();
         let rig = Some(RigInfo {
-            frequency_display: "14.225 MHz".to_string(),
+            frequency_display: "14.225.000 MHz".to_string(),
             frequency_hz: 14_225_000,
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),

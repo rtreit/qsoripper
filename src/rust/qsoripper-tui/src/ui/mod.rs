@@ -114,6 +114,7 @@ mod tests {
         use qsoripper_core::proto::qsoripper::domain::QsoRecord;
         RecentQso {
             local_id: id.to_string(),
+            date: "2026-07-08".to_string(),
             utc: "14:32".to_string(),
             callsign: callsign.to_string(),
             band: "20M".to_string(),
@@ -346,7 +347,7 @@ mod tests {
         let mut terminal = make_terminal();
         let mut app = make_app();
         app.rig_info = Some(RigInfo {
-            frequency_display: "14.225 MHz".to_string(),
+            frequency_display: "14.225.000 MHz".to_string(),
             frequency_hz: 14_225_000,
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),

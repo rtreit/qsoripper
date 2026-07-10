@@ -1001,6 +1001,14 @@ mod tests {
         ) -> Result<bool, StorageError> {
             unimplemented!()
         }
+        async fn update_qrz_sync_metadata(
+            &self,
+            _local_id: &str,
+            _expected_updated_at: Option<&prost_types::Timestamp>,
+            _qrz_logid: &str,
+        ) -> Result<Option<crate::proto::qsoripper::domain::QsoRecord>, StorageError> {
+            unimplemented!()
+        }
         async fn delete_qso(&self, _local_id: &str) -> Result<bool, StorageError> {
             unimplemented!()
         }

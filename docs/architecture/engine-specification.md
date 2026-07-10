@@ -287,7 +287,9 @@ Imports QSO records from a client-streamed ADIF payload.
 4. For each parsed QSO, generate a `local_id`, normalize fields, and insert into storage.
 5. Return a summary: total records parsed, records imported, records skipped (duplicates or validation failures), and any error messages.
 
-**Duplicate handling:** The engine should detect duplicates by matching on callsign + UTC timestamp + band + mode and skip them rather than creating duplicate entries.
+**Duplicate handling:** The engine should detect duplicates by matching on station callsign + worked callsign + band + mode + compatible submode/frequency + compatible UTC timestamp and skip them rather than creating duplicate entries. Timestamp matching must handle minute-precision ADIF sources (for example N1MM contest exports) by matching an existing second-precision QSO in the same displayed minute when either side is minute-precision. Small frequency drift between ADIF sources and QRZ-enriched rows should not create a duplicate when the contact identity otherwise matches.
+
+WSJT-X ingestion, manual ADIF imports, and any future ADIF-based recovery inputs MUST use this same import path so duplicate behavior, active station-profile fallback, refresh semantics, and storage state remain consistent across sources.
 
 **Error semantics:**
 - `INVALID_ARGUMENT` — ADIF content is malformed or unparseable.
@@ -478,7 +480,112 @@ Tests TCP connectivity to the configured rigctld instance.
 **Error semantics:**
 - Connection and protocol errors are reported in the response, not as gRPC errors.
 
-### 3.5 SpaceWeatherService
+#### Rig-control front door: `qsoripper-cathub`
+
+`RigControlService` consumes rig state from a rigctld-compatible endpoint. On a multi-app
+station the engine must **not** connect directly to the radio's serial port, because many
+applications share one radio and direct contention produces VFO A/B oscillation, frequency
+drift, and PTT conflicts.
+
+The supported topology is a single multi-client CAT hub daemon, `qsoripper-cathub`, that owns
+the radio serial port and fans it out to every client over its native protocol. The engine
+points its `RigctldProvider` at one of the hub's read-only Hamlib NET endpoints
+(`QSORIPPER_RIGCTLD_HOST`:`QSORIPPER_RIGCTLD_PORT`); the hub also serves other applications
+(HDSDR/OmniRig, N1MM, ARCP-590, WSJT-X, Log4OM) on their own endpoints simultaneously. The
+hub enforces the no-VFO-retargeting invariant (baseline polling never emits VFO-select/retarget
+commands), serializes all writes, owns the radio's native push stream, and arbitrates PTT with
+a single-owner lease and a hard transmit-time ceiling. The engine's behavior contracts above
+are unchanged: it remains a read-mostly NET rigctl client and is agnostic to whether the
+endpoint is the cathub daemon or a bare `rigctld`.
+
+- Design: `docs/design/cathub-multi-client-cat-hub.md`.
+- Operator setup: `docs/integrations/cathub-setup.md`.
+- Implementation: the `qsoripper-cathub` crate under `src/rust/`.
+
+Native `ts590` faces support an opt-in, per-face **single-VFO operating-VFO virtualization**
+policy (`single_vfo = true`). When enabled, the face never exposes the physical VFO letter:
+it always presents the operating (receive) VFO as VFO A, mirroring `FA`/`FB` reads and writes
+onto whichever VFO the radio is on, intercepting `FR`/`FT` VFO-select verbs, forcing the `IF;`
+active-VFO digit (P10) and split to `0`, and re-presenting an A/B switch by pushing the new
+operating VFO's `FA` + `MD` + `IF`. This makes single-VFO loggers — N1MM Logger+ in SO1V mode,
+which otherwise warns "You should not use VFO B when configured for SO1V" and freezes — track
+the radio seamlessly across A/B switches. It is **off by default** and must stay off for genuine
+dual-VFO faceplates such as ARCP-590. See design §8.4.2.
+
+The **same `single_vfo` policy is available on `[[hamlib_net]]` (rigctld) endpoints** for
+rigctld clients that, like N1MM SO1V, expect to receive on VFO A: WSJT-X stops decoding when
+it sees VFO B as the active VFO, and Log4OM polls the fixed `\get_vfo_info VFOA` and would log
+the inactive VFO's stale frequency on VFO B. On a `single_vfo` Hamlib NET endpoint the face
+uses a **strict** single-VFO contract: `get_vfo` reports `VFOA`; `get_vfo_info` resolves any
+requested VFO to the operating VFO and reports `Split: 0`; `get_split_vfo` reports `0`/`VFOA`;
+`set_split_vfo 1` is **rejected** (`RPRT -11`) because the presentation cannot model a real
+split (use WSJT-X "Fake It"); and `\set_vfo ?` advertises only `VFOA`. Reads and writes already
+target the operating VFO, so the frequency/mode are real on either physical VFO. The engine's
+read-only endpoint leaves `single_vfo = false` so it logs the true operating VFO. Plain
+`get_freq` / `get_mode` already read the operating VFO on every face, which is why a logger that
+polls only `f` (WSJT-X) tracks A/B even without virtualization, whereas one that polls
+`get_vfo_info VFOA` (Log4OM) requires it.
+
+Native TS-590 controllers that speak the radio's exact protocol — notably **ARCP-590**, Kenwood's
+own control panel — get a dedicated **transparent mirror** dialect (`dialect = "ts590-transparent"`)
+instead of the virtualizing `ts590` dialect. A transparent face behaves as if it were wired
+directly to the rig: every request except PTT and auto-information is forwarded to the radio
+verbatim (`format_notification` returns nothing — the face never consumes a synthesized frame),
+and the radio's entire CAT stream — both modeled frames and unmodeled ones — is relayed back
+byte-for-byte whenever the face has auto-information enabled. Because the rig runs in AI2 and
+echoes every change any client makes through the hub, a transparent controller stays perfectly in
+sync with the radio's true VFO/frequency/mode/split state, eliminating the synthesis/snapshot
+drift (stale A/B, frozen frequency) that a virtualizing view can accumulate for a client that
+already knows the native protocol. The hub still owns the single physical port, so three things
+stay hub-mediated even on a mirror face: PTT (`TX`/`RX`) routes through the shared single-owner
+lease; auto-information (`AI`) is virtualized per face (the rig itself stays in hub-owned AI2);
+and identity/keepalive reads (`ID;`/`PS;`) are answered locally so the controller's steady-state
+heartbeat generates zero radio traffic. A lagged mirror face is re-synced by re-presenting the
+full current state as raw frames (`FA`/`FB`/`FR`/`FT`/`MD`/`IF`). `ts590-transparent` is
+mutually exclusive with `single_vfo = true` (a mirror relays the radio's real dual-VFO stream and
+cannot virtualize the operating VFO); the daemon rejects that combination at config validation.
+
+To support transparent relay, the hub broadcasts a modeled native frame **twice** on its internal
+event bus: once as a coalesced modeled change (consumed by virtualizing faces) and once as a
+verbatim raw-native event (consumed only by transparent faces). Unmodeled frames continue to
+broadcast as a single verbatim raw event. This keeps existing virtualizing dialects byte-for-byte
+unchanged while giving a mirror face the radio's exact stream.
+
+The hub's Hamlib NET faces accept both the plain rigctld protocol (WSJT-X, N1MM, the engine)
+and Hamlib's **Extended Response Protocol** (ERP). An ERP request prefixes the command with a
+separator (`+` joins records with newlines; `;`, `|`, or `,` joins them on one line with that
+character), and the reply echoes the long command name, emits labeled data records, and ends
+with `RPRT x`. Log4OM-NG relies on ERP exclusively — it handshakes with `;V ?` (list supported
+VFOs) and polls with `+\get_vfo_info VFOA` — so a conformant hub must implement ERP framing for
+those shapes, not just the plain protocol, or Log4OM stays offline.
+
+##### Unified configuration
+
+The CAT hub daemon, the engine, and the launcher share one per-user `config.toml`
+(`%APPDATA%\qsoripper\config.toml` on Windows, `$XDG_CONFIG_HOME`/`$HOME/.config` on Unix,
+overridable with `QSORIPPER_CONFIG_PATH`). The daemon reads its settings from a `[cat_hub]`
+table in that file (radio/poll/ptt/events plus `[[cat_hub.face]]` and `[[cat_hub.hamlib_net]]`
+arrays); a standalone file with top-level `[radio]` … tables is still accepted via `--config`.
+
+Because multiple components write the same file, every engine setup save is **merge-preserving**:
+the engine replaces only its own top-level tables (`logbook`, `storage`, `station_profile`,
+`station_profiles`, `qrz_xml`, `qrz_logbook`, `sync`, `rig_control`) and preserves all other
+tables (`[cat_hub]`, `[launcher]`, and any future component sections). The conditional
+`[wsjtx_ingest]` setup table is replaced only when `SaveSetup.wsjtx_ingest` is explicitly
+supplied; omitted WSJT-X ingest settings are preserved verbatim. A conformant engine in any
+language must implement this merge-preserving behavior rather than rewriting the whole file,
+so it never clobbers another component's configuration.
+
+`[cat_hub]` is **conditionally engine-owned**: it is preserved verbatim on every save *unless*
+the `SaveSetup` request explicitly carries a `cat_hub` (`CatHubSettings`) message, in which case
+the engine performs a full-replacement rewrite of the section (see SetupService → SaveSetup). For
+status and wizard display, the engine parses `[cat_hub]` **leniently and separately** from its own
+configuration: a malformed or unknown-schema `[cat_hub]` yields an empty projection (and a logged
+warning) but never fails engine load. A conformant engine must keep this read path isolated so the
+daemon's section can never break engine startup, and must only rewrite `[cat_hub]` when an explicit
+replacement is supplied.
+
+
 
 **Proto file:** `proto/services/space_weather_service.proto`
 
@@ -540,6 +647,7 @@ Returns whether initial setup has been completed.
 **Behavior:**
 - Check if a valid configuration and station profile exist.
 - Return a `SetupStatus` indicating `complete` or `incomplete` with details about what is missing.
+- Include current `wsjtx_ingest` settings when configured and live `wsjtx_ingest_status` diagnostics. A conformant engine that runs the WSJT-X ingest supervisor (required when ingestion is enabled — see "WSJT-X ingest runtime behavior") MUST populate `wsjtx_ingest_status` with its current live state.
 
 #### SaveSetup
 
@@ -551,8 +659,77 @@ Persists setup configuration and station profile.
 3. Apply the configuration to the running engine (activate the station profile, enable integrations).
 4. Mark setup as complete.
 
+**CAT hub (`cat_hub`) management:**
+- The optional `cat_hub` field (`CatHubSettings`) lets a setup UI manage the standalone
+  `qsoripper-cathub` daemon's `[cat_hub]` section without hand-editing TOML.
+- The field is **full-replacement**: when present it is the complete desired `[cat_hub]`
+  section. A `radio` (with a `backend`) is required and at least one endpoint (a `faces` or
+  `hamlib_net` entry) is required; the engine rewrites `[cat_hub]` from it.
+- When `cat_hub` is omitted, the engine leaves any existing `[cat_hub]` section **untouched**
+  (verbatim, including comments and unknown keys). Only an explicit `cat_hub` triggers a
+  rewrite — so a routine save (e.g. updating QRZ credentials) never reserializes the daemon's
+  configuration. This mirrors the conditional-ownership rule in the unified-configuration note.
+- Validation enforces the same constraints the daemon accepts: `backend` ∈ {ts590, rigctld,
+  loopback}; radio `transport` ∈ {serial, tcp}; non-loopback serial radios require a `port`;
+  face `dialect` ∈ {ts590, ts590-transparent, ts2000}; endpoint names unique across faces and hamlib_net; face
+  transports distinct; hamlib_net binds distinct and in `host:port` form; a face transport may
+  not reuse the radio port. Violations return `INVALID_ARGUMENT`.
+
+**WSJT-X ingest (`wsjtx_ingest`) management:**
+- The optional `wsjtx_ingest` field (`WsjtxIngestSettings`) lets setup clients manage the
+  engine-owned `[wsjtx_ingest]` section.
+- Omit `wsjtx_ingest` to leave existing WSJT-X ingest settings unchanged. When present, the
+  engine persists a replacement `[wsjtx_ingest]` table with `enabled`, `udp_enabled`,
+  `udp_bind`, `adif_tail_enabled`, `adif_tail_path`, `poll_interval_ms`, and `sync_to_qrz`.
+- Defaults are conservative: ingestion disabled; UDP bind `127.0.0.1:2237`; UDP enabled when
+  ingestion is enabled and the field is omitted; ADIF tail disabled unless a path is supplied;
+  poll interval defaults to a modest nonzero value; immediate QRZ sync disabled.
+- Validation requires `udp_bind` to be `host:port` with port 1-65535 and `adif_tail_path` to
+  be present when ADIF tailing is enabled. `poll_interval_ms=0` means use the engine default;
+  positive values are accepted as supplied. Violations return `INVALID_ARGUMENT`.
+- WSJT-X ingest is a first-class setup surface, not a TOML-only escape hatch. GUI setup wizard,
+  GUI Settings, CLI `setup --status`, CLI `setup --from-env`, and the interactive CLI setup
+  wizard must all project the same `WsjtxIngestSettings` fields. `setup --from-env` recognizes
+  `QSORIPPER_WSJTX_INGEST_ENABLED`, `QSORIPPER_WSJTX_INGEST_UDP_ENABLED`,
+  `QSORIPPER_WSJTX_INGEST_UDP_BIND`, `QSORIPPER_WSJTX_INGEST_ADIF_TAIL_ENABLED`,
+  `QSORIPPER_WSJTX_INGEST_ADIF_TAIL_PATH`, `QSORIPPER_WSJTX_INGEST_POLL_INTERVAL_MS`, and
+  `QSORIPPER_WSJTX_INGEST_SYNC_TO_QRZ`. CLI setup may also accept shorter non-runtime aliases
+  for compatibility, but documentation and examples should prefer the canonical runtime names.
+
+**WSJT-X ingest runtime behavior:**
+- This runtime behavior is engine-neutral and REQUIRED: every conformant engine, regardless of
+  implementation language, MUST provide WSJT-X ingestion when `wsjtx_ingest.enabled=true`. Both the
+  Rust engine (`qsoripper-server`) and the .NET engine (`QsoRipper.Engine.DotNet`) implement this
+  contract; a third-party engine must too. An engine MAY surface a documented capability flag if it
+  cannot host long-running background work, but the default expectation is full parity.
+- When enabled, a conformant engine starts a background supervisor with independent UDP and ADIF-tail
+  inputs. The supervisor MUST NOT block normal logging or engine startup after configuration has
+  been accepted. The supervisor MUST observe `wsjtx_ingest` settings changes applied through
+  `SaveSetup` at runtime (start, stop, rebind, or re-point the tail without a process restart).
+- UDP input listens for WSJT-X Logged ADIF datagrams and ignores non-logged WSJT-X messages. Raw
+  ADIF and lightweight JSON-wrapped ADIF may be accepted by test/simulation helpers, but runtime
+  framed WSJT-X packets must only import logged-QSO ADIF payloads.
+- ADIF-tail input polls `wsjtx_log.adi`, scans from byte 0 on first run for startup recovery, and
+  then imports only appended complete ADIF records while the engine is running. Complete-record
+  detection must honor ADIF field lengths as character counts so literal `<EOR>` text inside a
+  field value cannot move the cursor. It must not advance its cursor past an incomplete trailing
+  record or a failed import. Startup replay is recovery-only: it imports missing QSOs and skips
+  existing duplicates, including soft-deleted or locally edited rows that retain the original import
+  fingerprint, rather than refreshing older ADIF rows over newer local edits.
+- Both inputs feed `LogbookEngine::import_adif_qsos`. Duplicate UDP events, repeated ADIF scans,
+  and later manual imports must not create duplicate QSOs.
+- `WsjtxIngestStatus` reports enabled/running state, UDP/tail health, last event time, last
+  imported callsign/local id, imported/updated/skipped/duplicate counters, parse errors, last
+  ingestion error, and last QRZ sync result.
+- When `sync_to_qrz=true`, imported or refreshed WSJT-X QSOs use the same per-operation QRZ upload
+  semantics as `LogQso(sync_to_qrz=true)`: success writes QRZ metadata back locally, while failure
+  leaves the local QSO persisted and retryable and records an actionable diagnostic. The async
+  writeback must patch only QRZ metadata and sync state onto the current local row so a stale upload
+  task cannot overwrite newer operator edits. QRZ upload work must not block the local UDP/tail
+  ingestion loops.
+
 **Error semantics:**
-- `INVALID_ARGUMENT` — invalid or missing required setup fields.
+- `INVALID_ARGUMENT` — invalid or missing required setup fields, an invalid `cat_hub` section, or invalid `wsjtx_ingest` settings.
 - `INTERNAL` — failed to persist configuration.
 
 #### GetSetupWizardState
@@ -561,7 +738,9 @@ Returns the current state of the setup wizard for multi-step UIs.
 
 **Behavior:**
 - Return the list of `SetupWizardStep` values with their completion status (`SetupWizardStepStatus`).
-- Steps include: station profile, QRZ XML credentials, QRZ logbook credentials, storage backend, rig control, space weather.
+- Steps include: station profile, QRZ XML credentials, QRZ logbook credentials, storage backend, rig control, CAT hub, space weather.
+- The CAT hub step (`SETUP_WIZARD_STEP_CAT_HUB`) is optional and always reported complete; it
+  exposes the current `[cat_hub]` projection for display and editing.
 
 #### ValidateSetupStep
 
@@ -1220,7 +1399,7 @@ All configuration is driven by environment variables prefixed with `QSORIPPER_`.
 | `QSORIPPER_RIGCTLD_HOST` | String | `localhost` | rigctld TCP host |
 | `QSORIPPER_RIGCTLD_PORT` | Integer | `4532` | rigctld TCP port |
 | `QSORIPPER_RIGCTLD_READ_TIMEOUT_MS` | Integer | `2000` | Per-command read timeout |
-| `QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS` | Integer | `5000` | Snapshot staleness threshold |
+| `QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS` | Integer | `100` | Snapshot staleness threshold (kept at the fast interactive poll cadence so live UIs surface rig changes in the next refresh) |
 
 #### Space Weather
 
@@ -1330,6 +1509,7 @@ This pre-download upload prevents a stale QRZ copy from being downloaded first a
        - `CONFLICT_POLICY_LAST_WRITE_WINS` — treat the remote record as authoritative and overwrite local fields; mark the merged row as `SYNCED`.
        - `CONFLICT_POLICY_FLAG_FOR_REVIEW` — when the local row was locally edited (`sync_status = MODIFIED`), preserve the local fields, set `sync_status = CONFLICT`, and increment the sync result's conflict counter so operators can reconcile manually. When the local row is already `SYNCED`, remote wins (no conflict).
        - `CONFLICT_POLICY_UNSPECIFIED` — engines MUST treat the zero value as `FLAG_FOR_REVIEW` (the safe, non-destructive default) per §6.3.
+       - When the matched local row is `SYNC_STATUS_LOCAL_ONLY`, engines MUST link the QRZ identity and mark it `SYNCED` without overwriting locally logged contest/contact fields. Engines MUST fill missing worked-station enrichment fields from the remote QRZ ADIF record (for example `GRIDSQUARE`, `COUNTRY`, `DXCC`, `STATE`, `CNTY`, `CQZ`, `ITUZ`, `CONT`, worked-station lat/lon/altitude, and other remote-only ADIF extras) so QSOs uploaded by external loggers can adopt QRZ Logbook enrichment on the next sync.
     e. If unmatched, insert as a new local record with `sync_status = SYNCED` and populate `qrz_logid` from the remote record.
 4. Filter ghost records: remote QSOs missing required fields (callsign, timestamp) are skipped without incrementing any counter.
 5. **Soft-delete suppression:** before matching, engines MUST load the full local record set including soft-deleted rows (see §7.8) and build the set of `qrz_logid` values associated with locally soft-deleted QSOs. Any remote QSO whose `qrz_logid` is in that set MUST be skipped (no insert, no merge), and the engine MUST increment the `deletes_skipped_remote` counter on the sync result. This prevents resurrection of QSOs the operator has trashed locally before the queued remote-delete (Phase 2.5) has propagated.
@@ -1682,7 +1862,7 @@ A conformant engine must pass all of the following scenarios:
 5. `GetQso` returns the logged QSO with all fields intact.
 6. `ListQsos` returns exactly the expected QSOs with correct ordering.
 7. `UpdateQso` modifies the specified fields and updates `updated_at`.
-8. `DeleteQso` removes the QSO; subsequent `GetQso` returns `NOT_FOUND`.
+8. `DeleteQso` soft-deletes the QSO; default `ListQsos` hides it, and `GetQso` returns it with `deleted_at` set.
 9. Unary success and failure responses with optional scalar fields serialize cleanly at the service boundary without handler exceptions.
 
 #### ADIF Round-Trip

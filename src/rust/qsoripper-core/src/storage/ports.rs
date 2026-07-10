@@ -4,6 +4,7 @@ use crate::proto::qsoripper::domain::QsoRecord;
 use crate::storage::{
     LogbookCounts, LookupSnapshot, QsoHistoryPage, QsoListQuery, StorageError, SyncMetadata,
 };
+use prost_types::Timestamp;
 
 /// Root engine-owned storage abstraction used by application services.
 pub trait EngineStorage: Send + Sync {
@@ -25,6 +26,22 @@ pub trait LogbookStore: Send + Sync {
 
     /// Update an existing QSO. Returns `true` when a row was updated.
     async fn update_qso(&self, qso: &QsoRecord) -> Result<bool, StorageError>;
+
+    /// Patch QRZ sync metadata onto the current row without overwriting other QSO fields.
+    ///
+    /// Implementations must update atomically against their storage lock/transaction so
+    /// concurrent operator edits cannot be replaced by stale upload snapshots. If the
+    /// current row still has `expected_updated_at`, the row becomes `SYNCED`; otherwise
+    /// only QRZ metadata is patched and the row remains pending as `MODIFIED`, except
+    /// existing conflict rows remain `CONFLICT`. If the row was soft-deleted before
+    /// the patch, implementations must preserve the tombstone, record the QRZ logid,
+    /// and set `pending_remote_delete` so a later sync removes the remote row.
+    async fn update_qrz_sync_metadata(
+        &self,
+        local_id: &str,
+        expected_updated_at: Option<&Timestamp>,
+        qrz_logid: &str,
+    ) -> Result<Option<QsoRecord>, StorageError>;
 
     /// Delete a QSO by local ID. Returns `true` when a row was removed.
     async fn delete_qso(&self, local_id: &str) -> Result<bool, StorageError>;

@@ -155,6 +155,59 @@ public sealed class QrzSyncEngineTests
     }
 
     [Fact]
+    public async Task Download_local_only_match_fills_missing_qrz_enrichment_without_overwriting_local_values()
+    {
+        var store = CreateStore();
+        var local = MakeLocalQso("W1AW", BaseTime, Band._20M, Mode.Ft8, SyncStatus.LocalOnly);
+        local.WorkedCountry = "Existing Country";
+        local.ContestId = "ARRL-FIELD-DAY";
+        local.ExchangeReceived = "1D WWA";
+        await store.Logbook.InsertQsoAsync(local);
+
+        var remote = MakeRemoteQso("W1AW", BaseTime.AddSeconds(30), Band._20M, Mode.Ft8, "QRZ-ENRICHED");
+        remote.WorkedGrid = "FN31";
+        remote.WorkedCountry = "United States";
+        remote.WorkedDxcc = 291;
+        remote.WorkedState = "CT";
+        remote.WorkedCounty = "Hartford";
+        remote.WorkedCqZone = 5;
+        remote.WorkedItuZone = 8;
+        remote.WorkedContinent = "NA";
+        remote.WorkedLatitude = 41.0;
+        remote.WorkedLongitude = -72.7;
+        remote.ExtraFields["QRZ_ENRICHED_ONLY"] = "yes";
+        remote.ContestId = "QRZ-CONTEST";
+        remote.ExchangeReceived = "REMOTE";
+
+        var api = new FakeQrzLogbookApi
+        {
+            FetchResult = [remote],
+        };
+        var engine = new QrzSyncEngine(api);
+
+        var result = await engine.ExecuteSyncAsync(store.Logbook, fullSync: true);
+
+        Assert.Equal(1u, result.DownloadedCount);
+        Assert.Equal(0u, result.UploadedCount);
+        var saved = Assert.Single(await store.Logbook.ListQsosAsync(new QsoListQuery()));
+        Assert.Equal(SyncStatus.Synced, saved.SyncStatus);
+        Assert.Equal("QRZ-ENRICHED", saved.QrzLogid);
+        Assert.Equal("FN31", saved.WorkedGrid);
+        Assert.Equal("Existing Country", saved.WorkedCountry);
+        Assert.Equal(291u, saved.WorkedDxcc);
+        Assert.Equal("CT", saved.WorkedState);
+        Assert.Equal("Hartford", saved.WorkedCounty);
+        Assert.Equal(5u, saved.WorkedCqZone);
+        Assert.Equal(8u, saved.WorkedItuZone);
+        Assert.Equal("NA", saved.WorkedContinent);
+        Assert.Equal(41.0, saved.WorkedLatitude);
+        Assert.Equal(-72.7, saved.WorkedLongitude);
+        Assert.Equal("yes", saved.ExtraFields["QRZ_ENRICHED_ONLY"]);
+        Assert.Equal("ARRL-FIELD-DAY", saved.ContestId);
+        Assert.Equal("1D WWA", saved.ExchangeReceived);
+    }
+
+    [Fact]
     public async Task Download_no_fuzzy_match_beyond_60_seconds()
     {
         var store = CreateStore();

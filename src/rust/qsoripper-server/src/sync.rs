@@ -710,6 +710,69 @@ pub(crate) async fn sync_single_qso(
     qso: &QsoRecord,
     book_owner: Option<&str>,
 ) -> Result<SyncOutcome, String> {
+    sync_single_qso_with_metadata_patch(client, store, qso, book_owner).await
+}
+
+pub(crate) async fn sync_single_qso_metadata_only(
+    client: &dyn QrzLogbookApi,
+    store: &dyn LogbookStore,
+    qso: &QsoRecord,
+    book_owner: Option<&str>,
+) -> Result<SyncOutcome, String> {
+    sync_single_qso_with_metadata_patch(client, store, qso, book_owner).await
+}
+
+async fn sync_single_qso_with_metadata_patch(
+    client: &dyn QrzLogbookApi,
+    store: &dyn LogbookStore,
+    qso: &QsoRecord,
+    book_owner: Option<&str>,
+) -> Result<SyncOutcome, String> {
+    let current = store
+        .get_qso(&qso.local_id)
+        .await
+        .map_err(|err| format!("QRZ sync failed to read current local QSO: {err}"))?
+        .ok_or_else(|| {
+            format!(
+                "QRZ sync skipped because local QSO '{}' no longer exists.",
+                qso.local_id
+            )
+        })?;
+    if current.deleted_at.is_some() {
+        return Err(format!(
+            "QRZ sync skipped because local QSO '{}' is deleted.",
+            current.local_id
+        ));
+    }
+    let expected_updated_at = current.updated_at;
+    let (result, was_duplicate_replace) = upload_single_qso(client, &current, book_owner).await?;
+
+    let patched = store
+        .update_qrz_sync_metadata(
+            &current.local_id,
+            expected_updated_at.as_ref(),
+            result.logid.as_str(),
+        )
+        .await
+        .map_err(|err| format!("QRZ upload succeeded but local metadata update failed: {err}"))?
+        .ok_or_else(|| {
+            format!(
+                "QRZ upload succeeded but local QSO '{}' no longer exists.",
+                current.local_id
+            )
+        })?;
+
+    Ok(SyncOutcome {
+        qso: patched,
+        was_duplicate_replace,
+    })
+}
+
+async fn upload_single_qso(
+    client: &dyn QrzLogbookApi,
+    qso: &QsoRecord,
+    book_owner: Option<&str>,
+) -> Result<(QrzUploadResult, bool), String> {
     let existing_logid = qso.qrz_logid.clone().filter(|s| !s.is_empty());
 
     let result = match existing_logid.as_deref() {
@@ -741,19 +804,7 @@ pub(crate) async fn sync_single_qso(
     };
     let result = result?;
 
-    let mut synced = qso.clone();
-    synced.qrz_logid = Some(result.logid);
-    synced.sync_status = SyncStatus::Synced as i32;
-
-    store
-        .update_qso(&synced)
-        .await
-        .map_err(|err| format!("QRZ upload succeeded but local update failed: {err}"))?;
-
-    Ok(SyncOutcome {
-        qso: synced,
-        was_duplicate_replace,
-    })
+    Ok((result, was_duplicate_replace))
 }
 
 /// Check whether a QRZ API error reason indicates a duplicate QSO.
@@ -946,8 +997,10 @@ async fn merge_with_local(
         }
         Ok(SyncStatus::LocalOnly) => {
             // The QSO was already on QRZ (e.g. uploaded outside QsoRipper).
-            // Link it and mark synced to avoid a duplicate upload in Phase 2.
+            // Link it and mark synced to avoid a duplicate upload in Phase 2,
+            // while filling blank local enrichment from QRZ's ADIF copy.
             let mut linked = local.clone();
+            fill_missing_remote_enrichment(&mut linked, remote);
             linked.sync_status = SyncStatus::Synced as i32;
             if let Some(logid) = remote_logid {
                 linked.qrz_logid = Some(logid.to_string());
@@ -970,6 +1023,82 @@ async fn merge_with_local(
         }
         _ => {
             // Conflict or unknown — leave untouched.
+        }
+    }
+}
+
+fn fill_missing_remote_enrichment(target: &mut QsoRecord, remote: &QsoRecord) {
+    copy_string_if_missing(
+        &mut target.worked_operator_callsign,
+        remote.worked_operator_callsign.as_deref(),
+    );
+    copy_string_if_missing(
+        &mut target.worked_operator_name,
+        remote.worked_operator_name.as_deref(),
+    );
+    copy_string_if_missing(&mut target.worked_grid, remote.worked_grid.as_deref());
+    copy_string_if_missing(&mut target.worked_country, remote.worked_country.as_deref());
+    copy_u32_if_missing(&mut target.worked_dxcc, remote.worked_dxcc);
+    copy_string_if_missing(&mut target.worked_state, remote.worked_state.as_deref());
+    copy_u32_if_missing(&mut target.worked_cq_zone, remote.worked_cq_zone);
+    copy_u32_if_missing(&mut target.worked_itu_zone, remote.worked_itu_zone);
+    copy_string_if_missing(&mut target.worked_county, remote.worked_county.as_deref());
+    copy_string_if_missing(&mut target.worked_iota, remote.worked_iota.as_deref());
+    copy_string_if_missing(
+        &mut target.worked_continent,
+        remote.worked_continent.as_deref(),
+    );
+    copy_string_if_missing(
+        &mut target.worked_arrl_section,
+        remote.worked_arrl_section.as_deref(),
+    );
+    copy_string_if_missing(&mut target.skcc, remote.skcc.as_deref());
+    copy_f64_if_missing(&mut target.worked_latitude, remote.worked_latitude);
+    copy_f64_if_missing(&mut target.worked_longitude, remote.worked_longitude);
+    copy_f64_if_missing(
+        &mut target.worked_altitude_meters,
+        remote.worked_altitude_meters,
+    );
+    copy_string_if_missing(
+        &mut target.worked_gridsquare_ext,
+        remote.worked_gridsquare_ext.as_deref(),
+    );
+
+    for (key, value) in &remote.extra_fields {
+        if !value.trim().is_empty()
+            && target
+                .extra_fields
+                .get(key)
+                .is_none_or(|existing| existing.trim().is_empty())
+        {
+            target.extra_fields.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+fn copy_string_if_missing(target: &mut Option<String>, remote: Option<&str>) {
+    if target
+        .as_deref()
+        .is_none_or(|value| value.trim().is_empty())
+    {
+        if let Some(value) = remote.map(str::trim).filter(|value| !value.is_empty()) {
+            *target = Some(value.to_owned());
+        }
+    }
+}
+
+fn copy_u32_if_missing(target: &mut Option<u32>, remote: Option<u32>) {
+    if target.is_none_or(|value| value == 0) {
+        if let Some(value) = remote.filter(|value| *value > 0) {
+            *target = Some(value);
+        }
+    }
+}
+
+fn copy_f64_if_missing(target: &mut Option<f64>, remote: Option<f64>) {
+    if target.is_none_or(|value| !value.is_finite()) {
+        if let Some(value) = remote.filter(|value| value.is_finite()) {
+            *target = Some(value);
         }
     }
 }
@@ -1196,11 +1325,154 @@ mod tests {
         Band, ConflictPolicy, Mode, QsoRecord, SyncStatus,
     };
     use qsoripper_core::qrz_logbook::{QrzLogbookError, QrzLogbookStatus, QrzUploadResult};
-    use qsoripper_core::storage::{DeletedRecordsFilter, LogbookStore, QsoListQuery, SyncMetadata};
+    use qsoripper_core::storage::{
+        DeletedRecordsFilter, LogbookCounts, LogbookStore, QsoHistoryPage, QsoListQuery,
+        SyncMetadata,
+    };
     use qsoripper_storage_memory::MemoryStorage;
     use tokio::sync::mpsc;
 
-    use super::{execute_sync, sync_single_qso, QrzLogbookApi};
+    use super::{execute_sync, sync_single_qso, sync_single_qso_metadata_only, QrzLogbookApi};
+
+    struct EditAfterReadStorage {
+        inner: MemoryStorage,
+        injected: Mutex<bool>,
+    }
+
+    impl EditAfterReadStorage {
+        fn new() -> Self {
+            Self {
+                inner: MemoryStorage::new(),
+                injected: Mutex::new(false),
+            }
+        }
+    }
+
+    #[tonic::async_trait]
+    impl LogbookStore for EditAfterReadStorage {
+        async fn insert_qso(
+            &self,
+            qso: &QsoRecord,
+        ) -> Result<(), qsoripper_core::storage::StorageError> {
+            self.inner.insert_qso(qso).await
+        }
+
+        async fn update_qso(
+            &self,
+            qso: &QsoRecord,
+        ) -> Result<bool, qsoripper_core::storage::StorageError> {
+            self.inner.update_qso(qso).await
+        }
+
+        async fn update_qrz_sync_metadata(
+            &self,
+            local_id: &str,
+            expected_updated_at: Option<&Timestamp>,
+            qrz_logid: &str,
+        ) -> Result<Option<QsoRecord>, qsoripper_core::storage::StorageError> {
+            self.inner
+                .update_qrz_sync_metadata(local_id, expected_updated_at, qrz_logid)
+                .await
+        }
+
+        async fn delete_qso(
+            &self,
+            local_id: &str,
+        ) -> Result<bool, qsoripper_core::storage::StorageError> {
+            self.inner.delete_qso(local_id).await
+        }
+
+        async fn soft_delete_qso(
+            &self,
+            local_id: &str,
+            deleted_at_ms: i64,
+            pending_remote_delete: bool,
+        ) -> Result<bool, qsoripper_core::storage::StorageError> {
+            self.inner
+                .soft_delete_qso(local_id, deleted_at_ms, pending_remote_delete)
+                .await
+        }
+
+        async fn restore_qso(
+            &self,
+            local_id: &str,
+        ) -> Result<bool, qsoripper_core::storage::StorageError> {
+            self.inner.restore_qso(local_id).await
+        }
+
+        async fn get_qso(
+            &self,
+            local_id: &str,
+        ) -> Result<Option<QsoRecord>, qsoripper_core::storage::StorageError> {
+            let record = self.inner.get_qso(local_id).await?;
+            let should_inject = {
+                let mut injected = self.injected.lock().unwrap();
+                if *injected {
+                    false
+                } else {
+                    *injected = true;
+                    true
+                }
+            };
+            if should_inject {
+                if let Some(mut edited) = record.clone() {
+                    edited.notes = Some("operator edit after QRZ readback".into());
+                    edited.updated_at = Some(Timestamp {
+                        seconds: edited
+                            .updated_at
+                            .as_ref()
+                            .map_or(1, |stamp| stamp.seconds + 1),
+                        nanos: 0,
+                    });
+                    edited.sync_status = SyncStatus::Modified as i32;
+                    self.inner.update_qso(&edited).await?;
+                }
+            }
+            Ok(record)
+        }
+
+        async fn list_qsos(
+            &self,
+            query: &QsoListQuery,
+        ) -> Result<Vec<QsoRecord>, qsoripper_core::storage::StorageError> {
+            self.inner.list_qsos(query).await
+        }
+
+        async fn list_qso_history(
+            &self,
+            worked_callsign: &str,
+            limit: u32,
+        ) -> Result<QsoHistoryPage, qsoripper_core::storage::StorageError> {
+            self.inner.list_qso_history(worked_callsign, limit).await
+        }
+
+        async fn qso_counts(&self) -> Result<LogbookCounts, qsoripper_core::storage::StorageError> {
+            self.inner.qso_counts().await
+        }
+
+        async fn get_sync_metadata(
+            &self,
+        ) -> Result<SyncMetadata, qsoripper_core::storage::StorageError> {
+            self.inner.get_sync_metadata().await
+        }
+
+        async fn upsert_sync_metadata(
+            &self,
+            metadata: &SyncMetadata,
+        ) -> Result<(), qsoripper_core::storage::StorageError> {
+            self.inner.upsert_sync_metadata(metadata).await
+        }
+
+        async fn purge_deleted_qsos(
+            &self,
+            local_ids: &[String],
+            older_than_ms: Option<i64>,
+        ) -> Result<u32, qsoripper_core::storage::StorageError> {
+            self.inner
+                .purge_deleted_qsos(local_ids, older_than_ms)
+                .await
+        }
+    }
 
     // -- Mock API -----------------------------------------------------------
 
@@ -1637,6 +1909,217 @@ mod tests {
         let saved = store.get_qso(&q.local_id).await.unwrap().unwrap();
         assert_eq!(saved.sync_status, SyncStatus::LocalOnly as i32);
         assert!(saved.qrz_logid.is_none());
+    }
+
+    #[tokio::test]
+    async fn sync_single_qso_uses_current_logid_before_upload() {
+        let store = MemoryStorage::new();
+        let mut stale_snapshot =
+            make_qso("W1AW", "K7SYNC", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        stale_snapshot.qrz_logid = None;
+        stale_snapshot.sync_status = SyncStatus::LocalOnly as i32;
+        stale_snapshot.updated_at = Some(Timestamp {
+            seconds: 1_700_000_010,
+            nanos: 0,
+        });
+        store.insert_qso(&stale_snapshot).await.unwrap();
+
+        let mut current = stale_snapshot.clone();
+        current.qrz_logid = Some("QRZ-SYNC".into());
+        current.sync_status = SyncStatus::Modified as i32;
+        current.updated_at = Some(Timestamp {
+            seconds: 1_700_000_011,
+            nanos: 0,
+        });
+        store.update_qso(&current).await.unwrap();
+
+        let api = MockQrzApi::new(Ok(vec![]), vec![]);
+        let outcome = sync_single_qso(&api, &store, &stale_snapshot, None)
+            .await
+            .expect("sync should use current row");
+
+        assert_eq!(outcome.qso.qrz_logid.as_deref(), Some("QRZ-SYNC"));
+        assert_eq!(api.upload_calls.lock().unwrap().len(), 0);
+        let replace_calls = api.replace_calls.lock().unwrap().clone();
+        assert_eq!(replace_calls.len(), 1);
+        assert_eq!(replace_calls[0].0, "QRZ-SYNC");
+    }
+
+    #[tokio::test]
+    async fn sync_single_qso_does_not_overwrite_edit_between_read_and_write() {
+        let store = EditAfterReadStorage::new();
+        let mut imported = make_qso("W1AW", "K7SYNC2", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        imported.qrz_logid = None;
+        imported.sync_status = SyncStatus::LocalOnly as i32;
+        imported.updated_at = Some(Timestamp {
+            seconds: 1_700_000_010,
+            nanos: 0,
+        });
+        store.insert_qso(&imported).await.unwrap();
+
+        let api = MockQrzApi::new(
+            Ok(vec![]),
+            vec![Ok(QrzUploadResult {
+                logid: "QRZ-SYNC2".into(),
+            })],
+        );
+
+        let outcome = sync_single_qso(&api, &store, &imported, None)
+            .await
+            .expect("sync should preserve concurrent edit");
+
+        assert_eq!(
+            outcome.qso.notes.as_deref(),
+            Some("operator edit after QRZ readback")
+        );
+        assert_eq!(outcome.qso.qrz_logid.as_deref(), Some("QRZ-SYNC2"));
+        assert_eq!(outcome.qso.sync_status, SyncStatus::Modified as i32);
+    }
+
+    #[tokio::test]
+    async fn sync_single_qso_metadata_only_preserves_newer_local_edits() {
+        let store = MemoryStorage::new();
+        let mut imported = make_qso("W1AW", "K7RACE", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        imported.qrz_logid = None;
+        imported.sync_status = SyncStatus::LocalOnly as i32;
+        imported.updated_at = Some(Timestamp {
+            seconds: 1_700_000_010,
+            nanos: 0,
+        });
+        store.insert_qso(&imported).await.unwrap();
+
+        let mut edited = imported.clone();
+        edited.notes = Some("operator corrected note".into());
+        edited.updated_at = Some(Timestamp {
+            seconds: imported.updated_at.as_ref().unwrap().seconds + 1,
+            nanos: 0,
+        });
+        edited.sync_status = SyncStatus::Modified as i32;
+        store.update_qso(&edited).await.unwrap();
+
+        let api = MockQrzApi::new(
+            Ok(vec![]),
+            vec![Ok(QrzUploadResult {
+                logid: "QRZ-RACE".into(),
+            })],
+        );
+
+        let outcome = sync_single_qso_metadata_only(&api, &store, &imported, None)
+            .await
+            .expect("metadata-only sync should succeed");
+        assert_eq!(
+            outcome.qso.notes.as_deref(),
+            Some("operator corrected note")
+        );
+        assert_eq!(outcome.qso.qrz_logid.as_deref(), Some("QRZ-RACE"));
+        assert_eq!(outcome.qso.sync_status, SyncStatus::Synced as i32);
+
+        let saved = store.get_qso(&imported.local_id).await.unwrap().unwrap();
+        assert_eq!(saved.notes.as_deref(), Some("operator corrected note"));
+        assert_eq!(saved.qrz_logid.as_deref(), Some("QRZ-RACE"));
+        assert_eq!(saved.sync_status, SyncStatus::Synced as i32);
+    }
+
+    #[tokio::test]
+    async fn sync_single_qso_metadata_only_uses_current_logid_before_upload() {
+        let store = MemoryStorage::new();
+        let mut stale_snapshot =
+            make_qso("W1AW", "K7CURRENT", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        stale_snapshot.qrz_logid = None;
+        stale_snapshot.sync_status = SyncStatus::LocalOnly as i32;
+        stale_snapshot.updated_at = Some(Timestamp {
+            seconds: 1_700_000_010,
+            nanos: 0,
+        });
+        store.insert_qso(&stale_snapshot).await.unwrap();
+
+        let mut current = stale_snapshot.clone();
+        current.qrz_logid = Some("QRZ-CURRENT".into());
+        current.sync_status = SyncStatus::Modified as i32;
+        current.updated_at = Some(Timestamp {
+            seconds: 1_700_000_011,
+            nanos: 0,
+        });
+        store.update_qso(&current).await.unwrap();
+
+        let api = MockQrzApi::new(Ok(vec![]), vec![]);
+        let outcome = sync_single_qso_metadata_only(&api, &store, &stale_snapshot, None)
+            .await
+            .expect("metadata-only sync should use current row");
+
+        assert_eq!(outcome.qso.qrz_logid.as_deref(), Some("QRZ-CURRENT"));
+        assert_eq!(api.upload_calls.lock().unwrap().len(), 0);
+        let replace_calls = api.replace_calls.lock().unwrap().clone();
+        assert_eq!(replace_calls.len(), 1);
+        assert_eq!(replace_calls[0].0, "QRZ-CURRENT");
+    }
+
+    #[tokio::test]
+    async fn sync_single_qso_metadata_only_does_not_overwrite_edit_between_read_and_write() {
+        let store = EditAfterReadStorage::new();
+        let mut imported = make_qso("W1AW", "K7CAS", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        imported.qrz_logid = None;
+        imported.sync_status = SyncStatus::LocalOnly as i32;
+        imported.updated_at = Some(Timestamp {
+            seconds: 1_700_000_010,
+            nanos: 0,
+        });
+        store.insert_qso(&imported).await.unwrap();
+
+        let api = MockQrzApi::new(
+            Ok(vec![]),
+            vec![Ok(QrzUploadResult {
+                logid: "QRZ-CAS".into(),
+            })],
+        );
+
+        let outcome = sync_single_qso_metadata_only(&api, &store, &imported, None)
+            .await
+            .expect("metadata-only sync should preserve concurrent edit");
+
+        assert_eq!(
+            outcome.qso.notes.as_deref(),
+            Some("operator edit after QRZ readback")
+        );
+        assert_eq!(outcome.qso.qrz_logid.as_deref(), Some("QRZ-CAS"));
+        assert_eq!(outcome.qso.sync_status, SyncStatus::Modified as i32);
+
+        let saved = store.get_qso(&imported.local_id).await.unwrap().unwrap();
+        assert_eq!(
+            saved.notes.as_deref(),
+            Some("operator edit after QRZ readback")
+        );
+        assert_eq!(saved.qrz_logid.as_deref(), Some("QRZ-CAS"));
+        assert_eq!(saved.sync_status, SyncStatus::Modified as i32);
+    }
+
+    #[tokio::test]
+    async fn sync_single_qso_skips_deleted_current_row_without_uploading() {
+        let store = MemoryStorage::new();
+        let mut imported = make_qso("W1AW", "K7DEL1", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        imported.sync_status = SyncStatus::Modified as i32;
+        store.insert_qso(&imported).await.unwrap();
+        store
+            .soft_delete_qso(&imported.local_id, 1_700_000_500_000, false)
+            .await
+            .unwrap();
+        let api = MockQrzApi::new(
+            Ok(Vec::new()),
+            vec![Ok(QrzUploadResult {
+                logid: "QRZ-DEL1".into(),
+            })],
+        );
+
+        let err = sync_single_qso(&api, &store, &imported, None)
+            .await
+            .expect_err("deleted current row should skip upload");
+
+        assert!(err.contains("deleted"), "{err}");
+        assert!(api.upload_calls.lock().unwrap().is_empty());
+        let stored = store.get_qso(&imported.local_id).await.unwrap().unwrap();
+        assert!(stored.deleted_at.is_some());
+        assert_eq!(stored.qrz_logid, None);
+        assert!(!stored.pending_remote_delete);
     }
 
     #[tokio::test]
@@ -2151,6 +2634,73 @@ mod tests {
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].sync_status, SyncStatus::Synced as i32);
         assert_eq!(all[0].qrz_logid.as_deref(), Some("QRZ600"));
+    }
+
+    #[tokio::test]
+    async fn local_only_linked_to_remote_fills_missing_qrz_enrichment_without_overwriting_local_values(
+    ) {
+        let store = MemoryStorage::new();
+
+        let mut local = make_qso("W1AW", "K7LINK", Band::Band20m, Mode::Ft8, 1_700_000_000);
+        local.worked_country = Some("Existing Country".into());
+        local.contest_id = Some("ARRL-FIELD-DAY".into());
+        local.exchange_received = Some("1D WWA".into());
+        store.insert_qso(&local).await.unwrap();
+
+        let mut remote = make_qso("W1AW", "K7LINK", Band::Band20m, Mode::Ft8, 1_700_000_010);
+        remote.qrz_logid = Some("QRZ-ENRICHED".into());
+        remote.worked_grid = Some("FN31".into());
+        remote.worked_country = Some("United States".into());
+        remote.worked_dxcc = Some(291);
+        remote.worked_state = Some("CT".into());
+        remote.worked_county = Some("Hartford".into());
+        remote.worked_cq_zone = Some(5);
+        remote.worked_itu_zone = Some(8);
+        remote.worked_continent = Some("NA".into());
+        remote.worked_latitude = Some(41.0);
+        remote.worked_longitude = Some(-72.7);
+        remote
+            .extra_fields
+            .insert("QRZ_ENRICHED_ONLY".into(), "yes".into());
+        remote.contest_id = Some("QRZ-CONTEST".into());
+        remote.exchange_received = Some("REMOTE".into());
+
+        let api = MockQrzApi::new(Ok(vec![remote]), vec![]);
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::LastWriteWins, &tx).await;
+        drop(tx);
+
+        let final_msg = collect_final(rx).await;
+        assert!(final_msg.complete);
+        assert_eq!(final_msg.downloaded_records, 1);
+        assert_eq!(final_msg.uploaded_records, 0);
+        assert!(final_msg.error.is_none());
+
+        let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
+        assert_eq!(all.len(), 1);
+        let saved = &all[0];
+        assert_eq!(saved.sync_status, SyncStatus::Synced as i32);
+        assert_eq!(saved.qrz_logid.as_deref(), Some("QRZ-ENRICHED"));
+        assert_eq!(saved.worked_grid.as_deref(), Some("FN31"));
+        assert_eq!(saved.worked_country.as_deref(), Some("Existing Country"));
+        assert_eq!(saved.worked_dxcc, Some(291));
+        assert_eq!(saved.worked_state.as_deref(), Some("CT"));
+        assert_eq!(saved.worked_county.as_deref(), Some("Hartford"));
+        assert_eq!(saved.worked_cq_zone, Some(5));
+        assert_eq!(saved.worked_itu_zone, Some(8));
+        assert_eq!(saved.worked_continent.as_deref(), Some("NA"));
+        assert_eq!(saved.worked_latitude, Some(41.0));
+        assert_eq!(saved.worked_longitude, Some(-72.7));
+        assert_eq!(
+            saved
+                .extra_fields
+                .get("QRZ_ENRICHED_ONLY")
+                .map(String::as_str),
+            Some("yes")
+        );
+        assert_eq!(saved.contest_id.as_deref(), Some("ARRL-FIELD-DAY"));
+        assert_eq!(saved.exchange_received.as_deref(), Some("1D WWA"));
     }
 
     #[tokio::test]

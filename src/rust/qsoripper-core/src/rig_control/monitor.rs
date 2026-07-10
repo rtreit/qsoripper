@@ -190,4 +190,62 @@ mod tests {
 
         assert_eq!(RigConnectionStatus::Disabled as i32, snapshot.status);
     }
+
+    /// Provider whose snapshot can change between reads, mimicking a radio that
+    /// retunes underneath the monitor.
+    struct MutableProvider {
+        snapshot: std::sync::Mutex<RigSnapshot>,
+    }
+
+    impl MutableProvider {
+        fn new(frequency_hz: u64) -> Self {
+            Self {
+                snapshot: std::sync::Mutex::new(RigSnapshot {
+                    frequency_hz,
+                    ..RigSnapshot::default()
+                }),
+            }
+        }
+
+        fn set_frequency(&self, frequency_hz: u64) {
+            self.snapshot.lock().unwrap().frequency_hz = frequency_hz;
+        }
+    }
+
+    #[tonic::async_trait]
+    impl RigControlProvider for MutableProvider {
+        async fn get_snapshot(&self) -> Result<RigSnapshot, RigControlProviderError> {
+            Ok(self.snapshot.lock().unwrap().clone())
+        }
+    }
+
+    /// Regression test for cathub rig-status lag: an interactive UI polls rig state
+    /// at a fast cadence, so the default staleness threshold must surface a
+    /// frequency change within that budget rather than masking it behind a
+    /// multi-second cached snapshot.
+    #[tokio::test]
+    async fn default_threshold_reflects_rig_changes_within_interactive_budget() {
+        use crate::rig_control::rigctld::DEFAULT_RIGCTLD_STALE_THRESHOLD_MS;
+
+        const INTERACTIVE_BUDGET_MS: u64 = 150;
+
+        let provider = Arc::new(MutableProvider::new(14_074_000));
+        let monitor = RigControlMonitor::new(
+            provider.clone(),
+            Duration::from_millis(DEFAULT_RIGCTLD_STALE_THRESHOLD_MS),
+        );
+
+        // Prime the cache, then retune the radio.
+        let _ = monitor.refresh_snapshot().await;
+        provider.set_frequency(14_055_000);
+
+        // After one interactive poll window a fresh read must see the new freq.
+        tokio::time::sleep(Duration::from_millis(INTERACTIVE_BUDGET_MS)).await;
+        let snapshot = monitor.current_snapshot().await;
+
+        assert_eq!(
+            14_055_000, snapshot.frequency_hz,
+            "default stale threshold must surface rig changes within {INTERACTIVE_BUDGET_MS} ms",
+        );
+    }
 }

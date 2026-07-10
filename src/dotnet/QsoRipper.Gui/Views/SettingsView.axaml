@@ -57,7 +57,7 @@
                      TextWrapping="Wrap"
                      IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
           <TextBlock Classes="settingsSectionHint"
-                     Text="Sections: Ctrl+1 Station  Ctrl+2 Display  Ctrl+3 Storage  Ctrl+4 QRZ  Ctrl+5 Rig  Ctrl+Tab Next"
+                     Text="Sections: Ctrl+1 Station  Ctrl+2 Display  Ctrl+3 Storage  Ctrl+4 QRZ  Ctrl+5 Rig  Ctrl+6 CAT Hub  Ctrl+7 WSJT-X  Ctrl+Tab Next"
                      IsVisible="{Binding ErrorMessage, Converter={x:Static StringConverters.IsNullOrEmpty}}" />
         </StackPanel>
 
@@ -505,6 +505,332 @@
                      PlaceholderText="5000" />
           </Grid>
         </StackPanel>
+      </TabItem>
+
+      <TabItem AutomationProperties.AutomationId="SettingsCatHubTab">
+        <TabItem.Header>
+          <StackPanel Spacing="1">
+            <TextBlock Text="CAT Hub" />
+            <TextBlock Classes="settingsTabShortcut" Text="Ctrl+6" />
+          </StackPanel>
+        </TabItem.Header>
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      Padding="16">
+          <StackPanel Spacing="16">
+            <TextBlock Classes="settingsSectionHeader" Text="CAT Hub" />
+            <TextBlock Classes="settingsSectionHint"
+                       Text="The multi-client CAT hub owns the radio link and fans it out to every connected app (HDSDR, OmniRig, N1MM, WSJT-X, Log4OM, ARCP-590). These map to the [cat_hub] section of config.toml." />
+
+            <Border x:Name="SettingsCatHubRewriteWarning"
+                    AutomationProperties.AutomationId="SettingsCatHubRewriteWarning"
+                    IsVisible="{Binding ShowCatHubRewriteWarning}"
+                    Background="#332E1A"
+                    BorderBrush="#B8862B"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="12,8">
+              <TextBlock TextWrapping="Wrap"
+                         Foreground="#E8C76B"
+                         Text="Saving rewrites the entire [cat_hub] section. Comments and any keys not shown here will be dropped." />
+            </Border>
+
+            <TextBlock Classes="settingsSectionHeader" FontSize="14" Text="Radio" />
+            <Grid ColumnDefinitions="120,*,120,*"
+                  RowDefinitions="Auto,Auto,Auto,Auto,Auto"
+                  ColumnSpacing="12"
+                  RowSpacing="6">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="Backend:" VerticalAlignment="Center" />
+              <TextBox x:Name="SettingsCatHubBackendBox"
+                       AutomationProperties.AutomationId="SettingsCatHubBackendBox"
+                       Grid.Row="0" Grid.Column="1"
+                       Text="{Binding CatHubBackend, Mode=TwoWay}"
+                       PlaceholderText="ts590 / rigctld / loopback" />
+
+              <TextBlock Grid.Row="0" Grid.Column="2" Text="Model:" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubModelBox"
+                       Grid.Row="0" Grid.Column="3"
+                       Text="{Binding CatHubModel, Mode=TwoWay}"
+                       PlaceholderText="optional rigctld model id" />
+
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="Transport:" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubTransportBox"
+                       Grid.Row="1" Grid.Column="1"
+                       Text="{Binding CatHubTransport, Mode=TwoWay}"
+                       PlaceholderText="serial / tcp" />
+
+              <TextBlock Grid.Row="1" Grid.Column="2" Text="Port:" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubPortBox"
+                       Grid.Row="1" Grid.Column="3"
+                       Text="{Binding CatHubPort, Mode=TwoWay}"
+                       PlaceholderText="COM3" />
+
+              <TextBlock Grid.Row="2" Grid.Column="0" Text="Baud:" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubBaudBox"
+                       Grid.Row="2" Grid.Column="1"
+                       Text="{Binding CatHubBaud, Mode=TwoWay}"
+                       PlaceholderText="115200" />
+
+              <TextBlock Grid.Row="2" Grid.Column="2" Text="Host:" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubHostBox"
+                       Grid.Row="2" Grid.Column="3"
+                       Text="{Binding CatHubHost, Mode=TwoWay}"
+                       PlaceholderText="127.0.0.1 (tcp backend)" />
+
+              <TextBlock Grid.Row="3" Grid.Column="0" Text="TCP port:" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubTcpPortBox"
+                       Grid.Row="3" Grid.Column="1"
+                       Text="{Binding CatHubTcpPort, Mode=TwoWay}"
+                       PlaceholderText="4532 (rigctld backend)" />
+
+              <TextBlock Grid.Row="3" Grid.Column="2" Text="Certified:" VerticalAlignment="Center" />
+              <ComboBox AutomationProperties.AutomationId="SettingsCatHubCertifiedCombo"
+                        Grid.Row="3" Grid.Column="3"
+                        HorizontalAlignment="Stretch"
+                        SelectedIndex="{Binding CatHubCertifiedIndex, Mode=TwoWay}">
+                <ComboBoxItem Content="Default" />
+                <ComboBoxItem Content="Yes" />
+                <ComboBoxItem Content="No" />
+              </ComboBox>
+
+              <TextBlock Grid.Row="4" Grid.Column="0" Text="Reply timeout (ms):" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubReplyTimeoutBox"
+                       Grid.Row="4" Grid.Column="1"
+                       Text="{Binding CatHubReplyTimeoutMs, Mode=TwoWay}"
+                       PlaceholderText="700" />
+            </Grid>
+
+            <TextBlock Classes="settingsSectionHeader" FontSize="14" Text="Polling, PTT &amp; events" />
+            <Grid ColumnDefinitions="140,*,140,*"
+                  RowDefinitions="Auto,Auto"
+                  ColumnSpacing="12"
+                  RowSpacing="6">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="Poll baseline (ms):" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubPollBaselineBox"
+                       Grid.Row="0" Grid.Column="1"
+                       Text="{Binding CatHubPollBaselineMs, Mode=TwoWay}"
+                       PlaceholderText="250" />
+
+              <TextBlock Grid.Row="0" Grid.Column="2" Text="Poll heartbeat (ms):" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubPollHeartbeatBox"
+                       Grid.Row="0" Grid.Column="3"
+                       Text="{Binding CatHubPollHeartbeatMs, Mode=TwoWay}"
+                       PlaceholderText="1000" />
+
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="PTT max TX (ms):" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubPttMaxTxBox"
+                       Grid.Row="1" Grid.Column="1"
+                       Text="{Binding CatHubPttMaxTxMs, Mode=TwoWay}"
+                       PlaceholderText="180000" />
+
+              <TextBlock Grid.Row="1" Grid.Column="2" Text="Native push:" VerticalAlignment="Center" />
+              <ComboBox AutomationProperties.AutomationId="SettingsCatHubNativePushCombo"
+                        Grid.Row="1" Grid.Column="3"
+                        HorizontalAlignment="Stretch"
+                        SelectedIndex="{Binding CatHubNativePushIndex, Mode=TwoWay}">
+                <ComboBoxItem Content="Default" />
+                <ComboBoxItem Content="On" />
+                <ComboBoxItem Content="Off" />
+              </ComboBox>
+            </Grid>
+
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Left"
+                         Classes="settingsSectionHeader" FontSize="14"
+                         VerticalAlignment="Center"
+                         Text="Serial faces" />
+              <Button DockPanel.Dock="Right"
+                      AutomationProperties.AutomationId="SettingsCatHubAddFaceButton"
+                      HorizontalAlignment="Right"
+                      Content="Add face"
+                      Command="{Binding AddCatHubFaceCommand}" />
+            </DockPanel>
+            <TextBlock Classes="settingsSectionHint"
+                       Text="Each face is a local serial endpoint (com0com pair) an app connects to. Transport is the COM path or host:port." />
+            <ItemsControl AutomationProperties.AutomationId="SettingsCatHubFacesList"
+                          ItemsSource="{Binding CatHubFaces}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                          BorderThickness="1"
+                          CornerRadius="4"
+                          Padding="10"
+                          Margin="0,0,0,8">
+                    <StackPanel Spacing="6">
+                      <Grid ColumnDefinitions="80,*,70,90,70,90,Auto"
+                            ColumnSpacing="8">
+                        <TextBlock Grid.Column="0" Text="Name:" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="1" Text="{Binding Name, Mode=TwoWay}" PlaceholderText="omnirig" />
+                        <TextBlock Grid.Column="2" Text="Baud:" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="3" Text="{Binding Baud, Mode=TwoWay}" PlaceholderText="57600" />
+                        <TextBlock Grid.Column="4" Text="Dialect:" VerticalAlignment="Center" />
+                        <ComboBox Grid.Column="5"
+                                  HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding DialectOptions}"
+                                  SelectedItem="{Binding Dialect, Mode=TwoWay}" />
+                        <Button Grid.Column="6"
+                                Content="Remove"
+                                Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).RemoveCatHubFaceCommand}"
+                                CommandParameter="{Binding}" />
+                      </Grid>
+                      <Grid ColumnDefinitions="80,*" ColumnSpacing="8">
+                        <TextBlock Grid.Column="0" Text="Transport:" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="1" Text="{Binding Transport, Mode=TwoWay}" PlaceholderText="COM11 or 127.0.0.1:7811" />
+                      </Grid>
+                      <StackPanel Orientation="Horizontal" Spacing="14">
+                        <CheckBox Content="Read" IsChecked="{Binding PermRead, Mode=TwoWay}" />
+                        <CheckBox Content="Write" IsChecked="{Binding PermWrite, Mode=TwoWay}" />
+                        <CheckBox Content="PTT" IsChecked="{Binding PermPtt, Mode=TwoWay}" />
+                        <CheckBox Content="Config write" IsChecked="{Binding PermConfigWrite, Mode=TwoWay}" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Left"
+                         Classes="settingsSectionHeader" FontSize="14"
+                         VerticalAlignment="Center"
+                         Text="Network endpoints (Hamlib rigctld)" />
+              <Button DockPanel.Dock="Right"
+                      AutomationProperties.AutomationId="SettingsCatHubAddEndpointButton"
+                      HorizontalAlignment="Right"
+                      Content="Add endpoint"
+                      Command="{Binding AddCatHubEndpointCommand}" />
+            </DockPanel>
+            <TextBlock Classes="settingsSectionHint"
+                       Text="Each endpoint is a rigctld-compatible TCP server (host:port) for apps like WSJT-X, N1MM and Log4OM." />
+            <ItemsControl AutomationProperties.AutomationId="SettingsCatHubEndpointsList"
+                          ItemsSource="{Binding CatHubEndpoints}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                          BorderThickness="1"
+                          CornerRadius="4"
+                          Padding="10"
+                          Margin="0,0,0,8">
+                    <StackPanel Spacing="6">
+                      <Grid ColumnDefinitions="80,*,80,*,Auto" ColumnSpacing="8">
+                        <TextBlock Grid.Column="0" Text="Name:" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="1" Text="{Binding Name, Mode=TwoWay}" PlaceholderText="wsjtx" />
+                        <TextBlock Grid.Column="2" Text="Bind:" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="3" Text="{Binding Bind, Mode=TwoWay}" PlaceholderText="127.0.0.1:4532" />
+                        <Button Grid.Column="4"
+                                Content="Remove"
+                                Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).RemoveCatHubEndpointCommand}"
+                                CommandParameter="{Binding}" />
+                      </Grid>
+                      <StackPanel Orientation="Horizontal" Spacing="14">
+                        <CheckBox Content="Read" IsChecked="{Binding PermRead, Mode=TwoWay}" />
+                        <CheckBox Content="Write" IsChecked="{Binding PermWrite, Mode=TwoWay}" />
+                        <CheckBox Content="PTT" IsChecked="{Binding PermPtt, Mode=TwoWay}" />
+                        <CheckBox Content="Config write" IsChecked="{Binding PermConfigWrite, Mode=TwoWay}" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem AutomationProperties.AutomationId="SettingsWsjtxTab">
+        <TabItem.Header>
+          <StackPanel Spacing="1">
+            <TextBlock Text="WSJT-X" />
+            <TextBlock Classes="settingsTabShortcut" Text="Ctrl+7" />
+          </StackPanel>
+        </TabItem.Header>
+        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      Padding="16">
+          <StackPanel Spacing="16">
+            <TextBlock Classes="settingsSectionHeader" Text="WSJT-X ingestion" />
+            <TextBlock Classes="settingsSectionHint"
+                       Text="Import QSOs logged in WSJT-X. The UDP listener handles normal Log QSO packets; ADIF tail recovery can catch records missed while QsoRipper was offline." />
+
+            <Border AutomationProperties.AutomationId="SettingsWsjtxRewriteWarning"
+                    IsVisible="{Binding ShowWsjtxIngestRewriteWarning}"
+                    Background="#332E1A"
+                    BorderBrush="#B8862B"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="12,8">
+              <TextBlock TextWrapping="Wrap"
+                         Foreground="#E8C76B"
+                         Text="Saving rewrites the entire [wsjtx_ingest] section. Comments and any keys not shown here will be dropped." />
+            </Border>
+
+            <CheckBox x:Name="SettingsWsjtxIngestEnabledCheckBox"
+                      AutomationProperties.AutomationId="SettingsWsjtxIngestEnabledCheckBox"
+                      Content="Enable WSJT-X QSO ingestion"
+                      IsChecked="{Binding WsjtxIngestEnabled, Mode=TwoWay}" />
+
+            <Grid ColumnDefinitions="150,*,150,*"
+                  RowDefinitions="Auto,Auto,Auto"
+                  ColumnSpacing="12"
+                  RowSpacing="8">
+              <CheckBox x:Name="SettingsWsjtxUdpEnabledCheckBox"
+                        AutomationProperties.AutomationId="SettingsWsjtxUdpEnabledCheckBox"
+                        Grid.Row="0"
+                        Grid.Column="0"
+                        Grid.ColumnSpan="2"
+                        Content="Listen for WSJT-X UDP Logged ADIF packets"
+                        IsChecked="{Binding WsjtxUdpEnabled, Mode=TwoWay}" />
+
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="UDP bind:" VerticalAlignment="Center" />
+              <TextBox x:Name="SettingsWsjtxUdpBindBox"
+                       AutomationProperties.AutomationId="SettingsWsjtxUdpBindBox"
+                       Grid.Row="1"
+                       Grid.Column="1"
+                       Text="{Binding WsjtxUdpBind, Mode=TwoWay}"
+                       PlaceholderText="127.0.0.1:2237" />
+
+              <TextBlock Grid.Row="1" Grid.Column="2" Text="Poll interval (ms):" VerticalAlignment="Center" />
+              <TextBox x:Name="SettingsWsjtxPollIntervalBox"
+                       AutomationProperties.AutomationId="SettingsWsjtxPollIntervalBox"
+                       Grid.Row="1"
+                       Grid.Column="3"
+                       Text="{Binding WsjtxPollIntervalMs, Mode=TwoWay}"
+                       PlaceholderText="1000" />
+
+              <CheckBox x:Name="SettingsWsjtxAdifTailEnabledCheckBox"
+                        AutomationProperties.AutomationId="SettingsWsjtxAdifTailEnabledCheckBox"
+                        Grid.Row="2"
+                        Grid.Column="0"
+                        Grid.ColumnSpan="2"
+                        Content="Tail WSJT-X ADIF log for missed-QSO recovery"
+                        IsChecked="{Binding WsjtxAdifTailEnabled, Mode=TwoWay}" />
+
+              <CheckBox x:Name="SettingsWsjtxSyncToQrzCheckBox"
+                        AutomationProperties.AutomationId="SettingsWsjtxSyncToQrzCheckBox"
+                        Grid.Row="2"
+                        Grid.Column="2"
+                        Grid.ColumnSpan="2"
+                        Content="Upload imported WSJT-X QSOs to QRZ"
+                        IsChecked="{Binding WsjtxSyncToQrz, Mode=TwoWay}" />
+            </Grid>
+
+            <Grid ColumnDefinitions="150,*"
+                  ColumnSpacing="12">
+              <TextBlock Grid.Column="0" Text="ADIF tail path:" VerticalAlignment="Center" />
+              <TextBox x:Name="SettingsWsjtxAdifTailPathBox"
+                       AutomationProperties.AutomationId="SettingsWsjtxAdifTailPathBox"
+                       Grid.Column="1"
+                       Text="{Binding WsjtxAdifTailPath, Mode=TwoWay}"
+                       PlaceholderText="%LOCALAPPDATA%\WSJT-X\wsjtx_log.adi"
+                       TextWrapping="NoWrap"
+                       ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                       ToolTip.Tip="{Binding WsjtxAdifTailPath}" />
+            </Grid>
+
+            <TextBlock Classes="settingsSectionHint"
+                       Text="In WSJT-X, configure Reporting → UDP Server to match the bind address above. The default local-only listener is 127.0.0.1:2237." />
+          </StackPanel>
+        </ScrollViewer>
       </TabItem>
     </TabControl>
   </DockPanel>

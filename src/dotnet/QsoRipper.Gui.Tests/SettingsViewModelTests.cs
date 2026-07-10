@@ -2,6 +2,7 @@ using QsoRipper.EngineSelection;
 using QsoRipper.Gui.Inspection;
 using QsoRipper.Gui.Services;
 using QsoRipper.Gui.ViewModels;
+using QsoRipper.Services;
 
 namespace QsoRipper.Gui.Tests;
 
@@ -156,5 +157,293 @@ public class SettingsViewModelTests
 
         Assert.Same(loopbackDevice, viewModel.SelectedRadioMonitorDevice);
         Assert.True(viewModel.ResolvedIsLoopback);
+    }
+
+    [Fact]
+    public async Task LoadAsyncPopulatesCatHubSectionFromStatus()
+    {
+        var client = new UxFixtureEngineClient(
+            new UxCaptureFixture
+            {
+                CatHubBackend = "ts590",
+                CatHubTransport = "serial",
+                CatHubPort = "COM3",
+                CatHubBaud = 115200,
+                CatHubFaceName = "omnirig",
+                CatHubFaceDialect = "ts2000",
+                CatHubEndpointName = "wsjtx",
+                CatHubEndpointBind = "127.0.0.1:4532"
+            });
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+
+        Assert.Equal("ts590", viewModel.CatHubBackend);
+        Assert.Equal("serial", viewModel.CatHubTransport);
+        Assert.Equal("COM3", viewModel.CatHubPort);
+        Assert.Equal("115200", viewModel.CatHubBaud);
+
+        var face = Assert.Single(viewModel.CatHubFaces);
+        Assert.Equal("omnirig", face.Name);
+        Assert.Equal("ts2000", face.Dialect);
+        Assert.True(face.PermRead);
+        Assert.True(face.PermWrite);
+        Assert.False(face.PermPtt);
+
+        var endpoint = Assert.Single(viewModel.CatHubEndpoints);
+        Assert.Equal("wsjtx", endpoint.Name);
+        Assert.Equal("127.0.0.1:4532", endpoint.Bind);
+        Assert.True(endpoint.PermRead);
+
+        // Loading must not look like an operator edit.
+        Assert.False(viewModel.IsCatHubDirty);
+        Assert.False(viewModel.ShowCatHubRewriteWarning);
+    }
+
+    [Fact]
+    public async Task SaveOmitsCatHubWhenSectionUntouched()
+    {
+        var client = new UxFixtureEngineClient(
+            new UxCaptureFixture
+            {
+                CatHubBackend = "ts590",
+                CatHubTransport = "serial",
+                CatHubPort = "COM3",
+                CatHubBaud = 115200,
+                CatHubEndpointName = "wsjtx",
+                CatHubEndpointBind = "127.0.0.1:4532"
+            });
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        // Edit an unrelated section only.
+        viewModel.OperatorName = "Changed Operator";
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.DidSave);
+        Assert.NotNull(client.LastSaveSetupRequest);
+        // Omitted cat_hub means the engine preserves the section verbatim.
+        Assert.Null(client.LastSaveSetupRequest!.CatHub);
+    }
+
+    [Fact]
+    public async Task SaveEmitsCatHubWhenEdited()
+    {
+        var client = new UxFixtureEngineClient(
+            new UxCaptureFixture
+            {
+                CatHubBackend = "ts590",
+                CatHubTransport = "serial",
+                CatHubPort = "COM3",
+                CatHubBaud = 115200,
+                CatHubEndpointName = "wsjtx",
+                CatHubEndpointBind = "127.0.0.1:4532"
+            });
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        viewModel.CatHubBaud = "57600";
+
+        Assert.True(viewModel.IsCatHubDirty);
+        Assert.True(viewModel.ShowCatHubRewriteWarning);
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.DidSave);
+        var request = client.LastSaveSetupRequest;
+        Assert.NotNull(request!.CatHub);
+        Assert.Equal("ts590", request.CatHub.Radio.Backend);
+        Assert.Equal(57600u, request.CatHub.Radio.Baud);
+        var endpoint = Assert.Single(request.CatHub.HamlibNet);
+        Assert.Equal("wsjtx", endpoint.Name);
+        Assert.Contains(CatHubPermission.Read, endpoint.Perms);
+    }
+
+    [Fact]
+    public async Task LoadAsyncPopulatesWsjtxIngestSectionFromStatus()
+    {
+        var client = new UxFixtureEngineClient(
+            new UxCaptureFixture
+            {
+                WsjtxIngestEnabled = true,
+                WsjtxUdpEnabled = true,
+                WsjtxUdpBind = "0.0.0.0:2237",
+                WsjtxAdifTailEnabled = true,
+                WsjtxAdifTailPath = @"C:\Users\randy\AppData\Local\WSJT-X\wsjtx_log.adi",
+                WsjtxPollIntervalMs = 1500,
+                WsjtxSyncToQrz = true
+            });
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+
+        Assert.True(viewModel.WsjtxIngestEnabled);
+        Assert.True(viewModel.WsjtxUdpEnabled);
+        Assert.Equal("0.0.0.0:2237", viewModel.WsjtxUdpBind);
+        Assert.True(viewModel.WsjtxAdifTailEnabled);
+        Assert.Equal(@"C:\Users\randy\AppData\Local\WSJT-X\wsjtx_log.adi", viewModel.WsjtxAdifTailPath);
+        Assert.Equal("1500", viewModel.WsjtxPollIntervalMs);
+        Assert.True(viewModel.WsjtxSyncToQrz);
+    }
+
+    [Fact]
+    public async Task LoadAsyncDefaultsWsjtxUdpToEnabledWhenUnset()
+    {
+        var client = new UxFixtureEngineClient(
+            new UxCaptureFixture
+            {
+                WsjtxIngestEnabled = true,
+                WsjtxUdpBind = "127.0.0.1:2237"
+            });
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+
+        Assert.True(viewModel.WsjtxUdpEnabled);
+    }
+
+    [Fact]
+    public async Task SaveEmitsWsjtxIngestSettings()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        viewModel.WsjtxIngestEnabled = true;
+        viewModel.WsjtxUdpEnabled = true;
+        viewModel.WsjtxUdpBind = "127.0.0.1:2237";
+        viewModel.WsjtxAdifTailEnabled = true;
+        viewModel.WsjtxAdifTailPath = @"C:\logs\wsjtx_log.adi";
+        viewModel.WsjtxPollIntervalMs = "500";
+        viewModel.WsjtxSyncToQrz = true;
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.DidSave);
+        var settings = client.LastSaveSetupRequest!.WsjtxIngest;
+        Assert.NotNull(settings);
+        Assert.True(settings.Enabled);
+        Assert.True(settings.UdpEnabled);
+        Assert.Equal("127.0.0.1:2237", settings.UdpBind);
+        Assert.True(settings.AdifTailEnabled);
+        Assert.Equal(@"C:\logs\wsjtx_log.adi", settings.AdifTailPath);
+        Assert.Equal(500u, settings.PollIntervalMs);
+        Assert.True(settings.SyncToQrz);
+    }
+
+    [Fact]
+    public async Task SaveAllowsZeroWsjtxPollIntervalForEngineDefault()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        viewModel.WsjtxIngestEnabled = true;
+        viewModel.WsjtxPollIntervalMs = "0";
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.DidSave);
+        Assert.Equal(0u, client.LastSaveSetupRequest!.WsjtxIngest.PollIntervalMs);
+    }
+
+    [Fact]
+    public async Task SaveAllowsSmallPositiveWsjtxPollIntervalAcceptedByEngine()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        viewModel.WsjtxIngestEnabled = true;
+        viewModel.WsjtxPollIntervalMs = "50";
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.DidSave);
+        Assert.Equal(50u, client.LastSaveSetupRequest!.WsjtxIngest.PollIntervalMs);
+    }
+
+    [Fact]
+    public async Task SaveRejectsInvalidWsjtxUdpBindPort()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        viewModel.WsjtxIngestEnabled = true;
+        viewModel.WsjtxUdpBind = "127.0.0.1:notaport";
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.False(viewModel.DidSave);
+        Assert.Equal(
+            "WSJT-X UDP bind must be host:port with a port between 1 and 65535.",
+            viewModel.ErrorMessage);
+        Assert.Null(client.LastSaveSetupRequest);
+    }
+
+    [Fact]
+    public async Task SaveRejectsManagedCatHubWithoutEndpoints()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        viewModel.CatHubBackend = "ts590";
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.False(viewModel.DidSave);
+        Assert.Equal(
+            "A managed CAT hub radio needs at least one face or network endpoint.",
+            viewModel.ErrorMessage);
+        Assert.Null(client.LastSaveSetupRequest);
+    }
+
+    [Fact]
+    public async Task SaveRejectsCatHubEndpointWithoutHostPortBind()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        viewModel.CatHubBackend = "ts590";
+        viewModel.AddCatHubEndpointCommand.Execute(null);
+        var endpoint = Assert.Single(viewModel.CatHubEndpoints);
+        endpoint.Name = "wsjtx";
+        endpoint.Bind = "localhost-no-port";
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.False(viewModel.DidSave);
+        Assert.Contains("bind must be host:port", viewModel.ErrorMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CatHubCertifiedTriStateRoundTripsExplicitFalse()
+    {
+        var client = new UxFixtureEngineClient(
+            new UxCaptureFixture
+            {
+                CatHubBackend = "ts590",
+                CatHubEndpointName = "wsjtx",
+                CatHubEndpointBind = "127.0.0.1:4532"
+            });
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        // Default (omit) on load.
+        Assert.Equal(0, viewModel.CatHubCertifiedIndex);
+
+        // Explicit "No" -> certified=false must round-trip, not be dropped.
+        viewModel.CatHubCertifiedIndex = 2;
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.DidSave);
+        var radio = client.LastSaveSetupRequest!.CatHub.Radio;
+        Assert.True(radio.HasCertified);
+        Assert.False(radio.Certified);
     }
 }

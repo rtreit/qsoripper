@@ -16,7 +16,7 @@ const CALLSIGN_WIDTH: usize = 12;
 /// Fixed display width for RST fields.
 const RST_WIDTH: usize = 5;
 /// Fixed display width for the frequency field.
-const FREQ_WIDTH: usize = 9;
+const FREQ_WIDTH: usize = 12;
 /// Fixed display width for the date field.
 const DATE_WIDTH: usize = 10;
 /// Fixed display width for the time field.
@@ -77,7 +77,13 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
 fn render_callsign_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
     let cs_focused = form.focused == Field::Callsign;
     let cs_selected = cs_focused && form.field_selected;
-    let cs_val = field_value(&form.callsign, cs_focused, cs_selected, CALLSIGN_WIDTH);
+    let cs_val = field_value(
+        &form.callsign,
+        cs_focused,
+        cs_selected,
+        form.field_cursor,
+        CALLSIGN_WIDTH,
+    );
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.extend(label_m("", 'C', "allsign "));
     spans.push(styled_field(cs_val, cs_focused, cs_selected));
@@ -103,8 +109,20 @@ fn render_rst_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
     let sent_selected = sent_focused && form.field_selected;
     let rcvd_focused = form.focused == Field::RstRcvd;
     let rcvd_selected = rcvd_focused && form.field_selected;
-    let sent_val = field_value(&form.rst_sent, sent_focused, sent_selected, RST_WIDTH);
-    let rcvd_val = field_value(&form.rst_rcvd, rcvd_focused, rcvd_selected, RST_WIDTH);
+    let sent_val = field_value(
+        &form.rst_sent,
+        sent_focused,
+        sent_selected,
+        form.field_cursor,
+        RST_WIDTH,
+    );
+    let rcvd_val = field_value(
+        &form.rst_rcvd,
+        rcvd_focused,
+        rcvd_selected,
+        form.field_cursor,
+        RST_WIDTH,
+    );
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.extend(label_m("RST ", 'S', "nt "));
     spans.push(styled_field(sent_val, sent_focused, sent_selected));
@@ -120,7 +138,7 @@ fn render_comment_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm
     let width = (area.width as usize).saturating_sub(label_len + 2).max(10);
     let focused = form.focused == Field::Comment;
     let selected = focused && form.field_selected;
-    let val = field_value(&form.comment, focused, selected, width);
+    let val = field_value(&form.comment, focused, selected, form.field_cursor, width);
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.extend(label_m("C", 'o', "mment  "));
     spans.push(styled_field(val, focused, selected));
@@ -133,7 +151,7 @@ fn render_notes_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) 
     let width = (area.width as usize).saturating_sub(label_len + 2).max(10);
     let focused = form.focused == Field::Notes;
     let selected = focused && form.field_selected;
-    let val = field_value(&form.notes, focused, selected, width);
+    let val = field_value(&form.notes, focused, selected, form.field_cursor, width);
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.extend(label_m("", 'N', "otes    "));
     spans.push(styled_field(val, focused, selected));
@@ -148,9 +166,27 @@ fn render_freq_row(frame: &mut Frame, area: Rect, form: &crate::form::LogForm) {
     let date_selected = date_focused && form.field_selected;
     let time_focused = form.focused == Field::Time;
     let time_selected = time_focused && form.field_selected;
-    let freq_val = field_value(&form.frequency_mhz, freq_focused, freq_selected, FREQ_WIDTH);
-    let date_val = field_value(&form.date, date_focused, date_selected, DATE_WIDTH);
-    let time_val = field_value(&form.time, time_focused, time_selected, TIME_WIDTH);
+    let freq_val = field_value(
+        &form.frequency_mhz,
+        freq_focused,
+        freq_selected,
+        form.field_cursor,
+        FREQ_WIDTH,
+    );
+    let date_val = field_value(
+        &form.date,
+        date_focused,
+        date_selected,
+        form.field_cursor,
+        DATE_WIDTH,
+    );
+    let time_val = field_value(
+        &form.time,
+        time_focused,
+        time_selected,
+        form.field_cursor,
+        TIME_WIDTH,
+    );
     let mut spans: Vec<Span<'static>> = Vec::new();
     spans.extend(label_m("", 'F', "req MHz "));
     spans.push(styled_field(freq_val, freq_focused, freq_selected));
@@ -208,7 +244,7 @@ fn render_hints_row(frame: &mut Frame, area: Rect) {
             ),
             Span::raw("  "),
             Span::styled(
-                " Esc Clear ",
+                " Esc Clear QSO ",
                 Style::default().fg(Color::Black).bg(Color::DarkGray),
             ),
             Span::raw("  "),
@@ -245,7 +281,7 @@ fn label_m(before: &'static str, mnemonic: char, after: &'static str) -> [Span<'
 ///
 /// When `selected`, shows text padded to width without a cursor.
 /// When focused (not selected), appends `|` cursor and scrolls right when long.
-fn field_value(text: &str, focused: bool, selected: bool, width: usize) -> String {
+fn field_value(text: &str, focused: bool, selected: bool, cursor: usize, width: usize) -> String {
     if selected {
         let len = text.chars().count();
         if len >= width {
@@ -254,17 +290,38 @@ fn field_value(text: &str, focused: bool, selected: bool, width: usize) -> Strin
             format!("{text:<width$}")
         }
     } else {
-        let mut s = text.to_string();
-        if focused {
-            s.push('|');
-        }
+        let s = if focused {
+            text_with_cursor(text, cursor)
+        } else {
+            text.to_string()
+        };
         let len = s.chars().count();
         if len > width {
-            s.chars().skip(len - width).collect()
+            let skip = if focused {
+                cursor.saturating_add(1).saturating_sub(width)
+            } else {
+                len - width
+            };
+            s.chars().skip(skip).take(width).collect()
         } else {
             format!("{s:<width$}")
         }
     }
+}
+
+fn text_with_cursor(text: &str, cursor: usize) -> String {
+    let cursor = cursor.min(text.chars().count());
+    let mut value = String::new();
+    for (idx, ch) in text.chars().enumerate() {
+        if idx == cursor {
+            value.push('|');
+        }
+        value.push(ch);
+    }
+    if cursor == text.chars().count() {
+        value.push('|');
+    }
+    value
 }
 
 /// Format a cycle selector value with arrow hints.
@@ -309,5 +366,16 @@ fn styled_cycle(text: String, focused: bool) -> Span<'static> {
         )
     } else {
         Span::styled(text, Style::default().fg(Color::Gray))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{field_value, FREQ_WIDTH};
+
+    #[test]
+    fn frequency_field_width_preserves_precise_mhz_value() {
+        let value = field_value("1296.123456", false, false, 0, FREQ_WIDTH);
+        assert_eq!(value.trim_end(), "1296.123456");
     }
 }

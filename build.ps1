@@ -23,7 +23,7 @@
 
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('build', 'check', 'rust', 'cw-decoder', 'dotnet', 'win32', 'check-rust', 'check-dotnet', 'proto', 'help')]
+    [ValidateSet('build', 'check', 'rust', 'cw-decoder', 'dotnet', 'win32', 'cathub-probe-native', 'check-rust', 'check-dotnet', 'proto', 'help')]
     [string]$Command = 'build',
 
     [ValidateSet('Release', 'Debug')]
@@ -161,17 +161,113 @@ $Win32ResourcesDir = Join-Path $Win32SourceDir 'resources'
 $Win32ResourceScript = Join-Path $Win32ResourcesDir 'app.rc'
 $Win32PublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-win32' | Join-Path -ChildPath $Configuration
 $ServerPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-server' | Join-Path -ChildPath $Configuration
+$CatHubPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-cathub' | Join-Path -ChildPath $Configuration
 $DotnetEnginePublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-engine-dotnet' | Join-Path -ChildPath $Configuration
 $DotnetDebugHostPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-debughost' | Join-Path -ChildPath $Configuration
 $CwScopeGuiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'cw-decoder-gui' | Join-Path -ChildPath $Configuration
 $DotnetEngineProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.Engine.DotNet' 'QsoRipper.Engine.DotNet.csproj'
 $DotnetDebugHostProject = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.DebugHost' 'QsoRipper.DebugHost.csproj'
 $CwScopeGuiProject = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'gui' 'CwDecoderGui.csproj'
+$CatHubNativeProbeSourceDir = Join-Path $PSScriptRoot 'experiments' 'cathub-frequency-probe-native'
+$CatHubNativeProbeBuildDir = Join-Path $PSScriptRoot 'artifacts' 'build' 'cathub-frequency-probe-native'
 $ServerBinary = if ($IsWindows) { 'qsoripper-server.exe' } else { 'qsoripper-server' }
+$CatHubBinary = if ($IsWindows) { 'qsoripper-cathub.exe' } else { 'qsoripper-cathub' }
 $CwDecoderRustManifest = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'Cargo.toml'
 $CwDecoderRustTargetDir = Join-Path $PSScriptRoot 'experiments' 'cw-decoder' 'target' | Join-Path -ChildPath $RustTargetProfile
 $CwDecoderRustBinary = if ($IsWindows) { 'cw-decoder.exe' } else { 'cw-decoder' }
 $CwDecoderEvalBinary = if ($IsWindows) { 'eval.exe' } else { 'eval' }
+
+function Copy-PublishArtifact {
+    param(
+        [Parameter(Mandatory)] [string] $Path,
+        [Parameter(Mandatory)] [string] $DestinationDir
+    )
+
+    $fileName = Split-Path -Path $Path -Leaf
+    $destination = Join-Path $DestinationDir $fileName
+
+    try {
+        Copy-Item -Path $Path -Destination $destination -Force -ErrorAction Stop
+        return
+    }
+    catch {
+        # The destination is likely locked because a published binary is still
+        # running (common with launcher.ps1 -Rebuild while the app is open). On
+        # Windows a running executable or loaded DLL can be renamed but not
+        # overwritten, so move the locked file aside and copy the fresh build
+        # into place. The running process keeps using the renamed file; the next
+        # launch picks up the new binary.
+        if (-not (Test-Path -LiteralPath $destination)) {
+            throw
+        }
+
+        Get-ChildItem -LiteralPath $DestinationDir -Filter '*.locked-*.old' -ErrorAction SilentlyContinue |
+            ForEach-Object {
+                try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop } catch { }
+            }
+
+        $stamp = [DateTimeOffset]::UtcNow.ToString('yyyyMMddHHmmssfff')
+        $sidelined = "$destination.locked-$stamp.old"
+        Move-Item -LiteralPath $destination -Destination $sidelined -Force -ErrorAction Stop
+        Copy-Item -Path $Path -Destination $destination -Force -ErrorAction Stop
+        Write-Host "  (replaced in-use file; previous binary moved aside as $(Split-Path -Leaf $sidelined))" -ForegroundColor DarkYellow
+    }
+}
+
+function Test-FileLocked {
+    param([Parameter(Mandatory)] [string] $Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $false
+    }
+
+    try {
+        $stream = [System.IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
+        $stream.Close()
+        $stream.Dispose()
+        return $false
+    }
+    catch [System.IO.IOException] {
+        return $true
+    }
+    catch [System.UnauthorizedAccessException] {
+        return $true
+    }
+}
+
+function Clear-LockedPublishArtifacts {
+    param([Parameter(Mandatory)] [string] $DestinationDir)
+
+    # Before `dotnet publish` overwrites an output directory, side-line any files
+    # that are still locked by a running app (common with launcher.ps1 -Rebuild
+    # while the GUI/engine is open). MSBuild's own copy retries then fails hard
+    # (MSB3021/MSB3027) when a published DLL/EXE is in use. On Windows a running
+    # executable or loaded DLL can be renamed but not overwritten, so renaming the
+    # locked file aside frees the path for the fresh publish output. The running
+    # process keeps using the renamed file; the next launch picks up the new build.
+    if (-not (Test-Path -LiteralPath $DestinationDir)) {
+        return
+    }
+
+    Get-ChildItem -LiteralPath $DestinationDir -Recurse -Filter '*.locked-*.old' -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop } catch { }
+        }
+
+    $stamp = [DateTimeOffset]::UtcNow.ToString('yyyyMMddHHmmssfff')
+    Get-ChildItem -LiteralPath $DestinationDir -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike '*.locked-*.old' } |
+        ForEach-Object {
+            if (Test-FileLocked -Path $_.FullName) {
+                $sidelined = "$($_.FullName).locked-$stamp.old"
+                try {
+                    Move-Item -LiteralPath $_.FullName -Destination $sidelined -Force -ErrorAction Stop
+                    Write-Host "  (side-lined in-use file $($_.Name); previous binary moved aside)" -ForegroundColor DarkYellow
+                }
+                catch { }
+            }
+        }
+}
 
 function Build-Rust {
     $arguments = @('build', '--manifest-path', $RustManifest)
@@ -185,7 +281,7 @@ function Build-Rust {
     if (Test-Path $tuiSrc) {
         Write-Step "Publishing qsoripper-tui ($Configuration)"
         $null = New-Item -ItemType Directory -Force -Path $TuiPublishDir
-        Copy-Item -Path $tuiSrc -Destination $TuiPublishDir -Force
+        Copy-PublishArtifact -Path $tuiSrc -DestinationDir $TuiPublishDir
         Write-Host "  -> $TuiPublishDir"
     }
 
@@ -193,7 +289,7 @@ function Build-Rust {
     if (Test-Path $stressTuiSrc) {
         Write-Step "Publishing qsoripper-stress-tui ($Configuration)"
         $null = New-Item -ItemType Directory -Force -Path $StressTuiPublishDir
-        Copy-Item -Path $stressTuiSrc -Destination $StressTuiPublishDir -Force
+        Copy-PublishArtifact -Path $stressTuiSrc -DestinationDir $StressTuiPublishDir
         Write-Host "  -> $StressTuiPublishDir"
     }
 
@@ -201,8 +297,16 @@ function Build-Rust {
     if (Test-Path $serverSrc) {
         Write-Step "Publishing qsoripper-server ($Configuration)"
         $null = New-Item -ItemType Directory -Force -Path $ServerPublishDir
-        Copy-Item -Path $serverSrc -Destination $ServerPublishDir -Force
+        Copy-PublishArtifact -Path $serverSrc -DestinationDir $ServerPublishDir
         Write-Host "  -> $ServerPublishDir"
+    }
+
+    $catHubSrc = Join-Path $PSScriptRoot 'src' 'rust' 'target' $RustTargetProfile $CatHubBinary
+    if (Test-Path $catHubSrc) {
+        Write-Step "Publishing qsoripper-cathub ($Configuration)"
+        $null = New-Item -ItemType Directory -Force -Path $CatHubPublishDir
+        Copy-PublishArtifact -Path $catHubSrc -DestinationDir $CatHubPublishDir
+        Write-Host "  -> $CatHubPublishDir"
     }
 
     # Publish qsoripper-ffi DLL and import library (Windows only)
@@ -213,9 +317,9 @@ function Build-Rust {
             Write-Step "Publishing qsoripper-ffi ($Configuration)"
             $ffiPublishDir = Join-Path $PSScriptRoot 'artifacts' 'publish' | Join-Path -ChildPath 'qsoripper-ffi' | Join-Path -ChildPath $Configuration
             $null = New-Item -ItemType Directory -Force -Path $ffiPublishDir
-            Copy-Item -Path $ffiDll -Destination $ffiPublishDir -Force
+            Copy-PublishArtifact -Path $ffiDll -DestinationDir $ffiPublishDir
             if (Test-Path $ffiLib) {
-                Copy-Item -Path $ffiLib -Destination $ffiPublishDir -Force
+                Copy-PublishArtifact -Path $ffiLib -DestinationDir $ffiPublishDir
             }
             Write-Host "  -> $ffiPublishDir"
         }
@@ -260,22 +364,10 @@ function Build-Dotnet {
     $needsVcEnv = $false
     $extraPublishArgs = @()
 
-    if ($vcvarsAll) {
-        # Test if ILCompiler's own detection works
-        $ilcFindScript = Join-Path $env:USERPROFILE '.nuget' 'packages' 'microsoft.dotnet.ilcompiler' '*' 'build' 'findvcvarsall.bat' |
-            Resolve-Path -ErrorAction SilentlyContinue |
-            Sort-Object -Descending |
-            Select-Object -First 1
-
-        if ($ilcFindScript) {
-            $testResult = cmd /c "`"$($ilcFindScript.Path)`" x64 >nul 2>&1 && echo OK" 2>$null
-            if ($testResult -ne 'OK') {
-                Write-Host "  ILCompiler cannot find the platform linker via vswhere." -ForegroundColor Yellow
-                Write-Host "  Using vcvarsall.bat workaround: $vcvarsAll" -ForegroundColor Yellow
-                $needsVcEnv = $true
-                $extraPublishArgs = @('-p:IlcUseEnvironmentalTools=true')
-            }
-        }
+    if ($IsWindows -and $vcvarsAll) {
+        Write-Host "  Using vcvarsall.bat for Native AOT toolchain: $vcvarsAll" -ForegroundColor Yellow
+        $needsVcEnv = $true
+        $extraPublishArgs = @('-p:IlcUseEnvironmentalTools=true')
     }
 
     $publishArgs = @(
@@ -291,6 +383,7 @@ function Build-Dotnet {
     if ($needsVcEnv) {
         $arch = if ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq 'Arm64') { 'arm64' } else { 'amd64' }
         Write-Step "Publishing QsoRipper.Cli Native AOT ($Configuration)"
+        Clear-LockedPublishArtifacts -DestinationDir $DotnetCliPublishDir
         cmd /c "call `"$vcvarsAll`" $arch >nul 2>&1 && dotnet $($publishArgs -join ' ')"
         if ($LASTEXITCODE -ne 0) {
             Write-Host "FAILED: Publishing QsoRipper.Cli Native AOT ($Configuration)" -ForegroundColor Red
@@ -298,9 +391,11 @@ function Build-Dotnet {
         }
     }
     else {
+        Clear-LockedPublishArtifacts -DestinationDir $DotnetCliPublishDir
         Invoke-Build "Publishing QsoRipper.Cli Native AOT ($Configuration)" dotnet $publishArgs
     }
 
+    Clear-LockedPublishArtifacts -DestinationDir $DotnetGuiPublishDir
     Invoke-Build "Publishing QsoRipper.Gui ($Configuration)" dotnet @(
         'publish',
         $DotnetGuiProject,
@@ -311,6 +406,7 @@ function Build-Dotnet {
         $DotnetGuiPublishDir
     )
 
+    Clear-LockedPublishArtifacts -DestinationDir $DotnetEnginePublishDir
     Invoke-Build "Publishing QsoRipper.Engine.DotNet ($Configuration)" dotnet @(
         'publish',
         $DotnetEngineProject,
@@ -321,6 +417,7 @@ function Build-Dotnet {
         $DotnetEnginePublishDir
     )
 
+    Clear-LockedPublishArtifacts -DestinationDir $DotnetDebugHostPublishDir
     Invoke-Build "Publishing QsoRipper.DebugHost ($Configuration)" dotnet @(
         'publish',
         $DotnetDebugHostProject,
@@ -332,6 +429,7 @@ function Build-Dotnet {
     )
 
     if (Test-Path $CwScopeGuiProject) {
+        Clear-LockedPublishArtifacts -DestinationDir $CwScopeGuiPublishDir
         Invoke-Build "Publishing CwDecoderGui ($Configuration)" dotnet @(
             'publish',
             $CwScopeGuiProject,
@@ -389,6 +487,11 @@ function Build-Win32 {
     }
 
     $null = New-Item -ItemType Directory -Force -Path $Win32PublishDir
+    # The MSVC linker writes qsoripper-win32.exe directly into the publish dir and
+    # fails with LNK1104 if a previously built instance is still running (common
+    # with launcher.ps1 -Rebuild). Side-line any in-use outputs first so the link
+    # can create a fresh exe; the running process keeps its renamed handle.
+    Clear-LockedPublishArtifacts -DestinationDir $Win32PublishDir
     $optFlags = if ($IsReleaseBuild) { '/O2' } else { '/Od /Zi' }
     $exe = Join-Path $Win32PublishDir 'qsoripper-win32.exe'
 
@@ -415,7 +518,7 @@ cl /W4 /WX /analyze $optFlags /DUNICODE /D_UNICODE /I"$ffiInclude" /I"$Win32Reso
 
     # Copy FFI DLL alongside the win32 executable
     if (Test-Path $ffiDll) {
-        Copy-Item -Path $ffiDll -Destination $Win32PublishDir -Force
+        Copy-PublishArtifact -Path $ffiDll -DestinationDir $Win32PublishDir
     }
 
     # Clean intermediate files
@@ -455,6 +558,74 @@ function Build-CwDecoderRust {
         else {
             Write-Host "  Warning: expected $binaryName at $binaryPath but it was not found." -ForegroundColor Yellow
         }
+    }
+}
+
+function Build-CatHubNativeProbe {
+    if (-not $IsWindows) {
+        Write-Step 'CatHub native frequency probe'
+        Write-Host 'The native CatHub frequency probe is Win32-only; skipping on this platform.' -ForegroundColor Yellow
+        return
+    }
+
+    $cmake = Get-Command cmake -ErrorAction SilentlyContinue
+    if (-not $cmake) {
+        Write-Step 'CatHub native frequency probe'
+        Write-Host 'CMake not found, skipping native CatHub frequency probe. Install CMake and the Visual Studio C++ workload.' -ForegroundColor Yellow
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath (Join-Path $CatHubNativeProbeSourceDir 'CMakeLists.txt'))) {
+        Write-Step 'CatHub native frequency probe'
+        Write-Host "Source not found at $CatHubNativeProbeSourceDir, skipping." -ForegroundColor Yellow
+        return
+    }
+
+    $catHubNativeProbeOutputDir = Join-Path $CatHubNativeProbeBuildDir $Configuration
+    Clear-LockedPublishArtifacts -DestinationDir $catHubNativeProbeOutputDir
+
+    Measure-BuildStep "Configuring CatHub native frequency probe ($Configuration)" {
+        $configured = $false
+        $generators = @('Visual Studio 18 2026')
+        foreach ($generator in $generators) {
+            Write-Host "  Trying CMake generator: $generator"
+            cmake -S $CatHubNativeProbeSourceDir -B $CatHubNativeProbeBuildDir -G $generator -A x64
+            if ($LASTEXITCODE -eq 0) {
+                $configured = $true
+                break
+            }
+
+            Remove-Item (Join-Path $CatHubNativeProbeBuildDir 'CMakeCache.txt') -Force -ErrorAction SilentlyContinue
+            Remove-Item (Join-Path $CatHubNativeProbeBuildDir 'CMakeFiles') -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        if (-not $configured) {
+            Write-Host 'FAILED: no supported Visual Studio CMake generator found for native CatHub frequency probe.' -ForegroundColor Red
+            exit 1
+        }
+    }
+
+    Invoke-Build "Building CatHub native frequency probe ($Configuration)" cmake @(
+        '--build',
+        $CatHubNativeProbeBuildDir,
+        '--config',
+        $Configuration
+    )
+
+    $ffiDll = Join-Path $PSScriptRoot 'src' 'rust' 'target' $RustTargetProfile 'qsoripper_ffi.dll'
+    if (Test-Path -LiteralPath $ffiDll) {
+        Copy-PublishArtifact -Path $ffiDll -DestinationDir $catHubNativeProbeOutputDir
+    }
+    else {
+        Write-Host "  Warning: qsoripper_ffi.dll not found at $ffiDll; native probe will run direct cathub reads but ENGINE SKEW will show ERR." -ForegroundColor Yellow
+    }
+
+    $exe = Join-Path $catHubNativeProbeOutputDir 'CatHubFrequencyProbeNative.exe'
+    if (Test-Path -LiteralPath $exe) {
+        Write-Host "  -> $exe"
+    }
+    else {
+        Write-Host "  Warning: expected CatHubFrequencyProbeNative.exe at $exe but it was not found." -ForegroundColor Yellow
     }
 }
 
@@ -535,7 +706,7 @@ function Check-Rust {
         Write-Step 'cargo deny'
         Push-Location $RustDir
         try {
-            cargo deny check --config deny.toml
+            cargo deny check
             if ($LASTEXITCODE -ne 0) {
                 Write-Host "FAILED: cargo deny" -ForegroundColor Red
                 exit $LASTEXITCODE
@@ -619,6 +790,8 @@ Commands:
   cw-decoder    Build the experiments/cw-decoder Rust binaries (cw-decoder + eval) only
   dotnet        Publish the CLI and GUI apps only
   win32         Build the Win32 C GUI app only
+  cathub-probe-native
+                Build the native C++ CatHub frequency probe only
   check-rust    Rust quality: fmt, clippy, test + coverage threshold, buf lint, cargo deny
   check-dotnet  .NET quality: format, build, test + coverage threshold, vulnerable package check
   proto         Run buf lint
@@ -641,6 +814,7 @@ try {
         'cw-decoder'   { Build-CwDecoderRust }
         'dotnet'       { Build-Dotnet }
         'win32'        { Build-Win32 }
+        'cathub-probe-native' { Build-CatHubNativeProbe }
         'check-rust'   { Check-Rust }
         'check-dotnet' { Check-Dotnet }
         'proto'        { Check-Proto }

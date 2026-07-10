@@ -7,6 +7,7 @@ using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.EngineSelection;
 using QsoRipper.Gui.Utilities;
+using QsoRipper.Shared.Formatting;
 
 namespace QsoRipper.Gui.ViewModels;
 
@@ -930,12 +931,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         }
 
         return report.Tone == 0
-            ? string.Create(
-                CultureInfo.InvariantCulture,
-                $"{report.Readability}{report.Strength}")
-            : string.Create(
-                CultureInfo.InvariantCulture,
-                $"{report.Readability}{report.Strength}{report.Tone}");
+            ? $"{report.Readability}{report.Strength}"
+            : $"{report.Readability}{report.Strength}{report.Tone}";
     }
 
     private static (string Sent, string Received) SplitCombinedReport(string value)
@@ -1008,9 +1005,8 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
             return false;
         }
 
-        if (double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out var mhz) && mhz > 0)
+        if (FrequencyFormatter.TryParseMhzToHz(normalized, out hz))
         {
-            hz = (ulong)Math.Round(mhz * 1_000_000.0, MidpointRounding.AwayFromZero);
             return true;
         }
 
@@ -1029,14 +1025,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
 
     private static string FormatFrequencyMhz(ulong hz)
     {
-        ulong whole = hz / 1_000_000;
-        ulong frac = hz % 1_000_000;
-        string full = $"{whole}.{frac:000000}";
-        int dotPos = full.IndexOf('.', StringComparison.Ordinal);
-        int minLen = dotPos + 4; // dot + 3 digits minimum
-        var trimmed = full.AsSpan().TrimEnd('0');
-        int end = Math.Max(trimmed.Length, minLen);
-        return full[..end];
+        return FrequencyFormatter.FormatMhz(hz);
     }
 
     private static bool TryParseOptionalUInt(string? value, out uint parsed)

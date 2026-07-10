@@ -1,0 +1,52 @@
+{
+  "inspectSurface": "Settings",
+  "window": {
+    "title": "Settings",
+    "x": 120,
+    "y": 80,
+    "width": 720,
+    "height": 900
+  },
+  "actions": [
+    {
+      "type": "wait",
+      "milliseconds": 600
+    },
+    {
+      "type": "click",
+      "automationId": "SettingsCatHubTab"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 250
+    },
+    {
+      "type": "screenshot",
+      "path": "cathub-start.png"
+    },
+    {
+      "type": "click",
+      "automationId": "SettingsCatHubAddFaceButton"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 150
+    },
+    {
+      "type": "click",
+      "automationId": "SettingsCatHubAddEndpointButton"
+    },
+    {
+      "type": "wait",
+      "milliseconds": 150
+    },
+    {
+      "type": "screenshot",
+      "path": "cathub-rows-added.png"
+    },
+    {
+      "type": "dump-tree",
+      "path": "cathub-tree.json"
+    }
+  ]
+}

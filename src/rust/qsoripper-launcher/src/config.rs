@@ -54,6 +54,17 @@ fn extract_selection(doc: &DocumentMut) -> Selection {
         return sel;
     };
 
+    if let Some(daemons) = launcher.get("daemons").and_then(Item::as_array) {
+        let mut out = Vec::new();
+        for v in daemons {
+            if let Some(s) = v.as_str() {
+                if let Some(id) = resolve_known_id(s, ComponentKind::Daemon) {
+                    out.push(id);
+                }
+            }
+        }
+        sel.daemons = out;
+    }
     if let Some(engines) = launcher.get("engines").and_then(Item::as_array) {
         let mut out = Vec::new();
         for v in engines {
@@ -121,6 +132,12 @@ pub(crate) fn save(path: &Path, selection: &Selection) -> Result<()> {
         .as_table_mut()
         .context("[launcher] is not a table")?;
 
+    let mut daemons = Array::new();
+    for id in &selection.daemons {
+        daemons.push(*id);
+    }
+    launcher.insert("daemons", value(daemons));
+
     let mut engines = Array::new();
     for id in &selection.engines {
         engines.push(*id);
@@ -163,7 +180,7 @@ pub(crate) fn save(path: &Path, selection: &Selection) -> Result<()> {
 )]
 mod tests {
     use super::*;
-    use crate::catalog::{ENGINE_DOTNET, ENGINE_RUST, UI_DEBUGHOST, UI_GUI};
+    use crate::catalog::{DAEMON_CATHUB, ENGINE_DOTNET, ENGINE_RUST, UI_DEBUGHOST, UI_GUI};
     use tempfile::tempdir;
 
     #[test]
@@ -216,6 +233,17 @@ mod tests {
         let sel = load(&p).unwrap();
         assert_eq!(sel.bindings.get(&UI_GUI), Some(&ENGINE_DOTNET));
         assert_eq!(sel.bindings.get(&UI_DEBUGHOST), Some(&ENGINE_DOTNET));
+    }
+
+    #[test]
+    fn round_trips_selected_daemons() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("config.toml");
+        let mut sel = Selection::default_preset();
+        sel.daemons = vec![DAEMON_CATHUB];
+        save(&p, &sel).unwrap();
+        let reloaded = load(&p).unwrap();
+        assert_eq!(reloaded.daemons, vec![DAEMON_CATHUB]);
     }
 
     #[test]

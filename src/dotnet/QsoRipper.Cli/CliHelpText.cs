@@ -247,6 +247,10 @@ internal static class CliHelpText
                   QSORIPPER_GRID                  Grid square
                   QSORIPPER_QRZ_XML_USERNAME      QRZ XML username (optional)
                   QSORIPPER_QRZ_XML_PASSWORD      QRZ XML password (optional)
+                  QSORIPPER_WSJTX_INGEST_ENABLED  Enable WSJT-X QSO ingestion (optional)
+                  QSORIPPER_WSJTX_INGEST_UDP_BIND WSJT-X UDP bind, e.g. 127.0.0.1:2237
+                  QSORIPPER_WSJTX_INGEST_ADIF_TAIL_PATH
+                                                   WSJT-X ADIF log path for tail recovery
 
                 Examples:
                   setup                           Start the interactive wizard

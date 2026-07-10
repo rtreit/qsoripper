@@ -91,6 +91,36 @@ internal sealed record UxCaptureFixture
 
     public ulong? RigControlStaleThresholdMs { get; init; }
 
+    public string? CatHubBackend { get; init; }
+
+    public string? CatHubTransport { get; init; }
+
+    public string? CatHubPort { get; init; }
+
+    public uint? CatHubBaud { get; init; }
+
+    public string? CatHubFaceName { get; init; }
+
+    public string? CatHubFaceDialect { get; init; }
+
+    public string? CatHubEndpointName { get; init; }
+
+    public string? CatHubEndpointBind { get; init; }
+
+    public bool? WsjtxIngestEnabled { get; init; }
+
+    public bool? WsjtxUdpEnabled { get; init; }
+
+    public string? WsjtxUdpBind { get; init; }
+
+    public bool? WsjtxAdifTailEnabled { get; init; }
+
+    public string? WsjtxAdifTailPath { get; init; }
+
+    public uint? WsjtxPollIntervalMs { get; init; }
+
+    public bool? WsjtxSyncToQrz { get; init; }
+
     public bool IsSyncing { get; init; }
 
     public IReadOnlyList<UxCaptureQsoFixtureItem> RecentQsos { get; init; } = CreateDefaultRecentQsos();
@@ -193,6 +223,122 @@ internal sealed record UxCaptureFixture
         if (RigControlStaleThresholdMs.HasValue)
         {
             settings.StaleThresholdMs = RigControlStaleThresholdMs.Value;
+        }
+
+        return settings;
+    }
+
+    public CatHubSettings? BuildCatHubSettings()
+    {
+        var hasValues = !string.IsNullOrWhiteSpace(CatHubBackend)
+            || !string.IsNullOrWhiteSpace(CatHubTransport)
+            || !string.IsNullOrWhiteSpace(CatHubPort)
+            || CatHubBaud.HasValue
+            || !string.IsNullOrWhiteSpace(CatHubFaceName)
+            || !string.IsNullOrWhiteSpace(CatHubEndpointName);
+
+        if (!hasValues)
+        {
+            return null;
+        }
+
+        var settings = new CatHubSettings { Radio = new CatHubRadioSettings() };
+        if (!string.IsNullOrWhiteSpace(CatHubBackend))
+        {
+            settings.Radio.Backend = CatHubBackend;
+        }
+
+        if (!string.IsNullOrWhiteSpace(CatHubTransport))
+        {
+            settings.Radio.Transport = CatHubTransport;
+        }
+
+        if (!string.IsNullOrWhiteSpace(CatHubPort))
+        {
+            settings.Radio.Port = CatHubPort;
+        }
+
+        if (CatHubBaud.HasValue)
+        {
+            settings.Radio.Baud = CatHubBaud.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(CatHubFaceName))
+        {
+            var face = new CatHubSerialFace
+            {
+                Name = CatHubFaceName,
+                Transport = "COM11",
+                Dialect = string.IsNullOrWhiteSpace(CatHubFaceDialect) ? "ts590" : CatHubFaceDialect,
+            };
+            face.Perms.Add(CatHubPermission.Read);
+            face.Perms.Add(CatHubPermission.Write);
+            settings.Faces.Add(face);
+        }
+
+        if (!string.IsNullOrWhiteSpace(CatHubEndpointName))
+        {
+            var endpoint = new CatHubHamlibNetEndpoint
+            {
+                Name = CatHubEndpointName,
+                Bind = string.IsNullOrWhiteSpace(CatHubEndpointBind) ? "127.0.0.1:4532" : CatHubEndpointBind,
+            };
+            endpoint.Perms.Add(CatHubPermission.Read);
+            settings.HamlibNet.Add(endpoint);
+        }
+
+        return settings;
+    }
+
+    public WsjtxIngestSettings? BuildWsjtxIngestSettings()
+    {
+        var hasValues = WsjtxIngestEnabled.HasValue
+            || WsjtxUdpEnabled.HasValue
+            || !string.IsNullOrWhiteSpace(WsjtxUdpBind)
+            || WsjtxAdifTailEnabled.HasValue
+            || !string.IsNullOrWhiteSpace(WsjtxAdifTailPath)
+            || WsjtxPollIntervalMs.HasValue
+            || WsjtxSyncToQrz.HasValue;
+
+        if (!hasValues)
+        {
+            return null;
+        }
+
+        var settings = new WsjtxIngestSettings();
+        if (WsjtxIngestEnabled.HasValue)
+        {
+            settings.Enabled = WsjtxIngestEnabled.Value;
+        }
+
+        if (WsjtxUdpEnabled.HasValue)
+        {
+            settings.UdpEnabled = WsjtxUdpEnabled.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(WsjtxUdpBind))
+        {
+            settings.UdpBind = WsjtxUdpBind;
+        }
+
+        if (WsjtxAdifTailEnabled.HasValue)
+        {
+            settings.AdifTailEnabled = WsjtxAdifTailEnabled.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(WsjtxAdifTailPath))
+        {
+            settings.AdifTailPath = WsjtxAdifTailPath;
+        }
+
+        if (WsjtxPollIntervalMs.HasValue)
+        {
+            settings.PollIntervalMs = WsjtxPollIntervalMs.Value;
+        }
+
+        if (WsjtxSyncToQrz.HasValue)
+        {
+            settings.SyncToQrz = WsjtxSyncToQrz.Value;
         }
 
         return settings;

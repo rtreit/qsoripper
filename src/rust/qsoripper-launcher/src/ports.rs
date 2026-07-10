@@ -24,6 +24,21 @@ pub(crate) fn wait_for_port(port: u16, total: Duration, per_attempt: Duration) -
     }
 }
 
+/// Poll until nothing is listening on `port` (the previous owner has fully
+/// released it) or `total` elapses. Returns `true` when the port is free.
+pub(crate) fn wait_for_port_release(port: u16, total: Duration) -> bool {
+    let deadline = Instant::now() + total;
+    loop {
+        if !is_port_listening(port, Duration::from_millis(100)) {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
 #[cfg(test)]
 #[allow(
     clippy::expect_used,

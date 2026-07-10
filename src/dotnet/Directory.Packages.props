@@ -16,6 +16,7 @@
     <PackageVersion Include="System.IO.Ports" Version="10.0.0" />
     <PackageVersion Include="Roslynator.Analyzers" Version="4.15.0" />
     <PackageVersion Include="Roslynator.Formatting.Analyzers" Version="4.15.0" />
+    <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
     <PackageVersion Include="Tomlyn" Version="0.17.0" />
     <PackageVersion Include="ToListinator" Version="0.0.10" />
     <PackageVersion Include="xunit" Version="2.9.2" />

@@ -49,6 +49,7 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
         Steps.Add(new StationProfileStepViewModel());
         Steps.Add(new QrzStepViewModel(engine));
         Steps.Add(new QrzLogbookStepViewModel());
+        Steps.Add(new WsjtxIngestStepViewModel());
         Steps.Add(new ReviewStepViewModel());
     }
 
@@ -126,6 +127,11 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
                         logbookStep.SyncIntervalSeconds = (int)syncConfig.SyncIntervalSeconds;
                     }
                 }
+
+                if (Steps[4] is WsjtxIngestStepViewModel wsjtxStep)
+                {
+                    wsjtxStep.ConfigureFromSettings(state.Status.WsjtxIngest);
+                }
             }
 
             foreach (var ss in state.Steps)
@@ -166,10 +172,18 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
         ErrorMessage = null;
         try
         {
-            // QRZ Logbook step uses client-side validation only (no server round-trip).
+            // QRZ Logbook and WSJT-X use client-side validation only (no server round-trip).
             if (CurrentStep is QrzLogbookStepViewModel logbookStep)
             {
                 if (!logbookStep.ValidateLocally())
+                {
+                    ErrorMessage = "Please fix the errors above before continuing.";
+                    return;
+                }
+            }
+            else if (CurrentStep is WsjtxIngestStepViewModel wsjtxStep)
+            {
+                if (!wsjtxStep.ValidateLocally())
                 {
                     ErrorMessage = "Please fix the errors above before continuing.";
                     return;
@@ -222,7 +236,7 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
     [RelayCommand]
     private void Skip()
     {
-        if (CurrentStep is QrzStepViewModel or QrzLogbookStepViewModel)
+        if (CurrentStep is QrzStepViewModel or QrzLogbookStepViewModel or WsjtxIngestStepViewModel)
         {
             CurrentStep.IsComplete = true;
             CurrentStep.ClearErrors();
@@ -264,6 +278,7 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
             var stationStep = Steps.OfType<StationProfileStepViewModel>().First();
             var qrzStep = Steps.OfType<QrzStepViewModel>().First();
             var logbookStep = Steps.OfType<QrzLogbookStepViewModel>().First();
+            var wsjtxStep = Steps.OfType<WsjtxIngestStepViewModel>().First();
 
             var request = new SaveSetupRequest
             {
@@ -291,6 +306,11 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
                     AutoSyncEnabled = logbookStep.AutoSyncEnabled,
                     SyncIntervalSeconds = (uint)logbookStep.SyncIntervalSeconds,
                 };
+            }
+
+            if (wsjtxStep.ShouldSave)
+            {
+                request.WsjtxIngest = wsjtxStep.BuildSettings();
             }
 
             var response = await _engine.SaveSetupAsync(request);
@@ -335,8 +355,8 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
         SetupWizardStep.LogFile => 0,
         SetupWizardStep.StationProfiles => 1,
         SetupWizardStep.QrzIntegration => 2,
-        // Index 3 (QrzLogbook) has no server-side wizard step.
-        SetupWizardStep.Review => 4,
+        // Indexes 3 (QrzLogbook) and 4 (WSJT-X) have no server-side wizard step.
+        SetupWizardStep.Review => 5,
         _ => -1,
     };
 
@@ -345,8 +365,8 @@ internal sealed partial class SetupWizardViewModel : ObservableObject
         0 => SetupWizardStep.LogFile,
         1 => SetupWizardStep.StationProfiles,
         2 => SetupWizardStep.QrzIntegration,
-        // Index 3 (QrzLogbook) is client-validated only.
-        4 => SetupWizardStep.Review,
+        // Indexes 3 (QrzLogbook) and 4 (WSJT-X) are client-validated only.
+        5 => SetupWizardStep.Review,
         _ => SetupWizardStep.Unspecified,
     };
 

@@ -9,6 +9,7 @@ using Grpc.Core;
 using QsoRipper.Domain;
 using QsoRipper.Gui.Services;
 using QsoRipper.Gui.Utilities;
+using QsoRipper.Shared.Formatting;
 
 namespace QsoRipper.Gui.ViewModels;
 
@@ -440,7 +441,15 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
         {
             if (IsEditingExisting)
             {
-                await _engine.UpdateQsoAsync(qso);
+                var response = await _engine.UpdateQsoAsync(qso);
+                if (!response.Success)
+                {
+                    StatusText = string.IsNullOrWhiteSpace(response.Error)
+                        ? $"Update failed for {qso.WorkedCallsign}."
+                        : $"Update failed: {response.Error}";
+                    return;
+                }
+
                 StatusText = $"Updated {qso.WorkedCallsign}.";
             }
             else
@@ -1139,9 +1148,9 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
             return true;
         }
 
-        if (double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out var mhz) && mhz > 0)
+        if (FrequencyFormatter.TryParseMhzToHz(normalized, out var hz))
         {
-            setter((ulong)Math.Round(mhz * 1_000_000.0, MidpointRounding.AwayFromZero));
+            setter(hz);
             return true;
         }
 
@@ -1151,14 +1160,7 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
 
     private static string FormatFrequencyMhz(ulong hz)
     {
-        ulong whole = hz / 1_000_000;
-        ulong frac = hz % 1_000_000;
-        string full = $"{whole}.{frac:000000}";
-        int dotPos = full.IndexOf('.', StringComparison.Ordinal);
-        int minLen = dotPos + 4; // dot + 3 digits minimum
-        var trimmed = full.AsSpan().TrimEnd('0');
-        int end = Math.Max(trimmed.Length, minLen);
-        return full[..end];
+        return FrequencyFormatter.FormatMhz(hz);
     }
 
     private static bool TryApplyOptionalRst(
@@ -1335,12 +1337,8 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
         }
 
         return report.Tone == 0
-            ? string.Create(
-                CultureInfo.InvariantCulture,
-                $"{report.Readability}{report.Strength}")
-            : string.Create(
-                CultureInfo.InvariantCulture,
-                $"{report.Readability}{report.Strength}{report.Tone}");
+            ? $"{report.Readability}{report.Strength}"
+            : $"{report.Readability}{report.Strength}{report.Tone}";
     }
 
     private static string FormatQslStatus(QslStatus value) =>

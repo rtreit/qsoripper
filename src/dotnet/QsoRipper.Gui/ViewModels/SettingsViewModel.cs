@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
@@ -114,6 +116,100 @@ internal sealed partial class SettingsViewModel : ObservableObject
 
     [ObservableProperty]
     private string _rigControlStaleThresholdMs = string.Empty;
+
+    // CAT hub ([cat_hub]) — the engine owns this whole section. The editor below
+    // only emits it on save when the operator actually edits it (IsCatHubDirty),
+    // so an untouched section keeps its comments and unknown keys verbatim.
+    [ObservableProperty]
+    private string _catHubBackend = string.Empty;
+
+    [ObservableProperty]
+    private string _catHubModel = string.Empty;
+
+    [ObservableProperty]
+    private string _catHubTransport = string.Empty;
+
+    [ObservableProperty]
+    private string _catHubPort = string.Empty;
+
+    [ObservableProperty]
+    private string _catHubBaud = string.Empty;
+
+    [ObservableProperty]
+    private string _catHubHost = string.Empty;
+
+    [ObservableProperty]
+    private string _catHubTcpPort = string.Empty;
+
+    // Tri-state ComboBox index: 0 = daemon default (omit), 1 = yes, 2 = no.
+    [ObservableProperty]
+    private int _catHubCertifiedIndex;
+
+    [ObservableProperty]
+    private string _catHubReplyTimeoutMs = string.Empty;
+
+    [ObservableProperty]
+    private string _catHubPollBaselineMs = string.Empty;
+
+    [ObservableProperty]
+    private string _catHubPollHeartbeatMs = string.Empty;
+
+    [ObservableProperty]
+    private string _catHubPttMaxTxMs = string.Empty;
+
+    // Tri-state ComboBox index: 0 = daemon default (omit), 1 = on, 2 = off.
+    [ObservableProperty]
+    private int _catHubNativePushIndex;
+
+    private bool _hasPersistedCatHub;
+    private bool _catHubLoading;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowCatHubRewriteWarning))]
+    private bool _isCatHubDirty;
+
+    /// <summary>
+    /// True once the operator edits a CAT hub field for a section that already
+    /// exists on disk. Surfacing this warns that saving rewrites the whole
+    /// <c>[cat_hub]</c> section and drops comments / unknown keys.
+    /// </summary>
+    public bool ShowCatHubRewriteWarning => IsCatHubDirty && _hasPersistedCatHub;
+
+    public ObservableCollection<CatHubFaceRowViewModel> CatHubFaces { get; } = [];
+
+    public ObservableCollection<CatHubEndpointRowViewModel> CatHubEndpoints { get; } = [];
+
+    // WSJT-X ingestion ([wsjtx_ingest]) is conditionally engine-owned like CAT hub.
+    // Untouched settings are omitted on save so existing comments and unknown keys stay intact.
+    [ObservableProperty]
+    private bool _wsjtxIngestEnabled;
+
+    [ObservableProperty]
+    private bool _wsjtxUdpEnabled = true;
+
+    [ObservableProperty]
+    private string _wsjtxUdpBind = "127.0.0.1:2237";
+
+    [ObservableProperty]
+    private bool _wsjtxAdifTailEnabled;
+
+    [ObservableProperty]
+    private string _wsjtxAdifTailPath = string.Empty;
+
+    [ObservableProperty]
+    private string _wsjtxPollIntervalMs = "1000";
+
+    [ObservableProperty]
+    private bool _wsjtxSyncToQrz;
+
+    private bool _hasPersistedWsjtxIngest;
+    private bool _wsjtxIngestLoading;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowWsjtxIngestRewriteWarning))]
+    private bool _isWsjtxIngestDirty;
+
+    public bool ShowWsjtxIngestRewriteWarning => IsWsjtxIngestDirty && _hasPersistedWsjtxIngest;
 
     [ObservableProperty]
     private string _persistenceDescription = "Where should QsoRipper store persisted logbook data?";
@@ -231,6 +327,123 @@ internal sealed partial class SettingsViewModel : ObservableObject
     public SettingsViewModel(IEngineClient engine)
     {
         _engine = engine;
+        CatHubFaces.CollectionChanged += OnCatHubCollectionChanged;
+        CatHubEndpoints.CollectionChanged += OnCatHubCollectionChanged;
+    }
+
+    private static readonly HashSet<string> CatHubScalarPropertyNames = new(StringComparer.Ordinal)
+    {
+        nameof(CatHubBackend),
+        nameof(CatHubModel),
+        nameof(CatHubTransport),
+        nameof(CatHubPort),
+        nameof(CatHubBaud),
+        nameof(CatHubHost),
+        nameof(CatHubTcpPort),
+        nameof(CatHubCertifiedIndex),
+        nameof(CatHubReplyTimeoutMs),
+        nameof(CatHubPollBaselineMs),
+        nameof(CatHubPollHeartbeatMs),
+        nameof(CatHubPttMaxTxMs),
+        nameof(CatHubNativePushIndex),
+    };
+
+    private static readonly HashSet<string> WsjtxIngestScalarPropertyNames = new(StringComparer.Ordinal)
+    {
+        nameof(WsjtxIngestEnabled),
+        nameof(WsjtxUdpEnabled),
+        nameof(WsjtxUdpBind),
+        nameof(WsjtxAdifTailEnabled),
+        nameof(WsjtxAdifTailPath),
+        nameof(WsjtxPollIntervalMs),
+        nameof(WsjtxSyncToQrz),
+    };
+
+    protected override void OnPropertyChanged(PropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+        if (e.PropertyName is not null && CatHubScalarPropertyNames.Contains(e.PropertyName))
+        {
+            MarkCatHubDirty();
+        }
+
+        if (e.PropertyName is not null && WsjtxIngestScalarPropertyNames.Contains(e.PropertyName))
+        {
+            MarkWsjtxIngestDirty();
+        }
+    }
+
+    private void MarkCatHubDirty()
+    {
+        if (_catHubLoading)
+        {
+            return;
+        }
+
+        IsCatHubDirty = true;
+    }
+
+    private void MarkWsjtxIngestDirty()
+    {
+        if (_wsjtxIngestLoading)
+        {
+            return;
+        }
+
+        IsWsjtxIngestDirty = true;
+    }
+
+    private void OnCatHubCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.OldItems is not null)
+        {
+            foreach (ObservableObject row in e.OldItems)
+            {
+                row.PropertyChanged -= OnCatHubRowChanged;
+            }
+        }
+
+        if (e.NewItems is not null)
+        {
+            foreach (ObservableObject row in e.NewItems)
+            {
+                row.PropertyChanged += OnCatHubRowChanged;
+            }
+        }
+
+        MarkCatHubDirty();
+    }
+
+    private void OnCatHubRowChanged(object? sender, PropertyChangedEventArgs e) => MarkCatHubDirty();
+
+    [RelayCommand]
+    private void AddCatHubFace()
+    {
+        CatHubFaces.Add(new CatHubFaceRowViewModel());
+    }
+
+    [RelayCommand]
+    private void RemoveCatHubFace(CatHubFaceRowViewModel? row)
+    {
+        if (row is not null)
+        {
+            CatHubFaces.Remove(row);
+        }
+    }
+
+    [RelayCommand]
+    private void AddCatHubEndpoint()
+    {
+        CatHubEndpoints.Add(new CatHubEndpointRowViewModel());
+    }
+
+    [RelayCommand]
+    private void RemoveCatHubEndpoint(CatHubEndpointRowViewModel? row)
+    {
+        if (row is not null)
+        {
+            CatHubEndpoints.Remove(row);
+        }
     }
 
     /// <summary>
@@ -369,6 +582,18 @@ internal sealed partial class SettingsViewModel : ObservableObject
                 return;
             }
 
+            if (IsCatHubDirty && !TryValidateCatHubInputs(out var catHubError))
+            {
+                ErrorMessage = catHubError;
+                return;
+            }
+
+            if (IsWsjtxIngestDirty && !TryValidateWsjtxIngestInputs(out var wsjtxError))
+            {
+                ErrorMessage = wsjtxError;
+                return;
+            }
+
             var request = BuildSaveRequest();
             await _engine.SaveSetupAsync(request);
             DidSave = true;
@@ -406,10 +631,16 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private void SelectRigSection() => SelectedSectionIndex = 4;
 
     [RelayCommand]
-    private void SelectNextSection() => SelectedSectionIndex = (SelectedSectionIndex + 1) % 5;
+    private void SelectCatHubSection() => SelectedSectionIndex = 5;
 
     [RelayCommand]
-    private void SelectPreviousSection() => SelectedSectionIndex = (SelectedSectionIndex + 4) % 5;
+    private void SelectWsjtxSection() => SelectedSectionIndex = 6;
+
+    [RelayCommand]
+    private void SelectNextSection() => SelectedSectionIndex = (SelectedSectionIndex + 1) % 7;
+
+    [RelayCommand]
+    private void SelectPreviousSection() => SelectedSectionIndex = (SelectedSectionIndex + 6) % 7;
 
     [RelayCommand]
     private async Task TestQrzXmlAsync()
@@ -532,6 +763,118 @@ internal sealed partial class SettingsViewModel : ObservableObject
 
         // Password and API key are never returned by the engine for security;
         // leave them empty so the user can re-enter if they want to change them.
+        ApplyCatHub(status.CatHub);
+        ApplyWsjtxIngest(status.WsjtxIngest);
+    }
+
+    private void ApplyWsjtxIngest(WsjtxIngestSettings? settings)
+    {
+        _wsjtxIngestLoading = true;
+        try
+        {
+            _hasPersistedWsjtxIngest = settings is not null;
+            WsjtxIngestEnabled = settings?.Enabled ?? false;
+            WsjtxUdpEnabled = settings is { HasUdpEnabled: true } ? settings.UdpEnabled : true;
+            WsjtxUdpBind = !string.IsNullOrWhiteSpace(settings?.UdpBind)
+                ? settings.UdpBind
+                : WsjtxIngestSetup.DefaultUdpBind;
+            WsjtxAdifTailEnabled = settings?.AdifTailEnabled ?? false;
+            WsjtxAdifTailPath = settings is { HasAdifTailPath: true }
+                ? settings.AdifTailPath
+                : string.Empty;
+            WsjtxPollIntervalMs = settings is { PollIntervalMs: > 0 }
+                ? settings.PollIntervalMs.ToString(CultureInfo.InvariantCulture)
+                : WsjtxIngestSetup.DefaultPollIntervalMs.ToString(CultureInfo.InvariantCulture);
+            WsjtxSyncToQrz = settings?.SyncToQrz ?? false;
+        }
+        finally
+        {
+            _wsjtxIngestLoading = false;
+            IsWsjtxIngestDirty = false;
+        }
+    }
+
+    private void ApplyCatHub(CatHubSettings? catHub)
+    {
+        _catHubLoading = true;
+        try
+        {
+            foreach (var row in CatHubFaces)
+            {
+                row.PropertyChanged -= OnCatHubRowChanged;
+            }
+
+            foreach (var row in CatHubEndpoints)
+            {
+                row.PropertyChanged -= OnCatHubRowChanged;
+            }
+
+            CatHubFaces.Clear();
+            CatHubEndpoints.Clear();
+
+            _hasPersistedCatHub = catHub is not null;
+
+            var radio = catHub?.Radio;
+            CatHubBackend = radio is { HasBackend: true } ? radio.Backend : string.Empty;
+            CatHubModel = radio is { HasModel: true } ? radio.Model : string.Empty;
+            CatHubTransport = radio is { HasTransport: true } ? radio.Transport : string.Empty;
+            CatHubPort = radio is { HasPort: true } ? radio.Port : string.Empty;
+            CatHubBaud = radio is { HasBaud: true } ? radio.Baud.ToString(CultureInfo.InvariantCulture) : string.Empty;
+            CatHubHost = radio is { HasHost: true } ? radio.Host : string.Empty;
+            CatHubTcpPort = radio is { HasTcpPort: true } ? radio.TcpPort.ToString(CultureInfo.InvariantCulture) : string.Empty;
+            CatHubCertifiedIndex = radio is { HasCertified: true } ? (radio.Certified ? 1 : 2) : 0;
+            CatHubReplyTimeoutMs = radio is { HasReplyTimeoutMs: true }
+                ? radio.ReplyTimeoutMs.ToString(CultureInfo.InvariantCulture) : string.Empty;
+
+            var poll = catHub?.Poll;
+            CatHubPollBaselineMs = poll is { HasBaselineMs: true }
+                ? poll.BaselineMs.ToString(CultureInfo.InvariantCulture) : string.Empty;
+            CatHubPollHeartbeatMs = poll is { HasHeartbeatMs: true }
+                ? poll.HeartbeatMs.ToString(CultureInfo.InvariantCulture) : string.Empty;
+
+            var ptt = catHub?.Ptt;
+            CatHubPttMaxTxMs = ptt is { HasMaxTxMs: true }
+                ? ptt.MaxTxMs.ToString(CultureInfo.InvariantCulture) : string.Empty;
+
+            var events = catHub?.Events;
+            CatHubNativePushIndex = events is { HasNativePush: true } ? (events.NativePush ? 1 : 2) : 0;
+
+            if (catHub is not null)
+            {
+                foreach (var face in catHub.Faces)
+                {
+                    CatHubFaces.Add(new CatHubFaceRowViewModel
+                    {
+                        Name = face.Name,
+                        Transport = face.Transport,
+                        Baud = face.Baud != 0 ? face.Baud.ToString(CultureInfo.InvariantCulture) : string.Empty,
+                        Dialect = string.IsNullOrWhiteSpace(face.Dialect) ? "ts590" : face.Dialect,
+                        PermRead = face.Perms.Contains(CatHubPermission.Read),
+                        PermWrite = face.Perms.Contains(CatHubPermission.Write),
+                        PermPtt = face.Perms.Contains(CatHubPermission.Ptt),
+                        PermConfigWrite = face.Perms.Contains(CatHubPermission.ConfigWrite),
+                    });
+                }
+
+                foreach (var endpoint in catHub.HamlibNet)
+                {
+                    CatHubEndpoints.Add(new CatHubEndpointRowViewModel
+                    {
+                        Name = endpoint.Name,
+                        Bind = endpoint.Bind,
+                        PermRead = endpoint.Perms.Contains(CatHubPermission.Read),
+                        PermWrite = endpoint.Perms.Contains(CatHubPermission.Write),
+                        PermPtt = endpoint.Perms.Contains(CatHubPermission.Ptt),
+                        PermConfigWrite = endpoint.Perms.Contains(CatHubPermission.ConfigWrite),
+                    });
+                }
+            }
+        }
+        finally
+        {
+            _catHubLoading = false;
+            IsCatHubDirty = false;
+        }
     }
 
     private void ApplyStationProfile(StationProfile profile)
@@ -612,7 +955,132 @@ internal sealed partial class SettingsViewModel : ObservableObject
             request.RigControl = rigControl;
         }
 
+        if (IsCatHubDirty)
+        {
+            request.CatHub = BuildCatHubSettings();
+        }
+
+        if (IsWsjtxIngestDirty)
+        {
+            request.WsjtxIngest = BuildWsjtxIngestSettings();
+        }
+
         return request;
+    }
+
+    private WsjtxIngestSettings BuildWsjtxIngestSettings()
+    {
+        var settings = new WsjtxIngestSettings
+        {
+            Enabled = WsjtxIngestEnabled,
+            UdpEnabled = WsjtxUdpEnabled,
+            AdifTailEnabled = WsjtxAdifTailEnabled,
+            SyncToQrz = WsjtxSyncToQrz,
+        };
+
+        SetOptionalString(WsjtxUdpBind, value => settings.UdpBind = value);
+        SetOptionalString(WsjtxAdifTailPath, value => settings.AdifTailPath = value);
+        SetUInt32Field(WsjtxPollIntervalMs, value => settings.PollIntervalMs = value);
+        return settings;
+    }
+
+    private CatHubSettings BuildCatHubSettings()
+    {
+        var settings = new CatHubSettings();
+
+        var radio = new CatHubRadioSettings();
+        SetOptionalString(CatHubBackend, value => radio.Backend = value.ToLowerInvariant());
+        SetOptionalString(CatHubModel, value => radio.Model = value);
+        SetOptionalString(CatHubTransport, value => radio.Transport = value.ToLowerInvariant());
+        SetOptionalString(CatHubPort, value => radio.Port = value);
+        SetUInt32Field(CatHubBaud, value => radio.Baud = value);
+        SetOptionalString(CatHubHost, value => radio.Host = value);
+        SetUInt32Field(CatHubTcpPort, value => radio.TcpPort = value);
+        if (CatHubCertifiedIndex != 0)
+        {
+            radio.Certified = CatHubCertifiedIndex == 1;
+        }
+
+        SetUInt64Field(CatHubReplyTimeoutMs, value => radio.ReplyTimeoutMs = value);
+        settings.Radio = radio;
+
+        if (!string.IsNullOrWhiteSpace(CatHubPollBaselineMs) || !string.IsNullOrWhiteSpace(CatHubPollHeartbeatMs))
+        {
+            var poll = new CatHubPollSettings();
+            SetUInt64Field(CatHubPollBaselineMs, value => poll.BaselineMs = value);
+            SetUInt64Field(CatHubPollHeartbeatMs, value => poll.HeartbeatMs = value);
+            settings.Poll = poll;
+        }
+
+        if (!string.IsNullOrWhiteSpace(CatHubPttMaxTxMs))
+        {
+            var ptt = new CatHubPttSettings();
+            SetUInt64Field(CatHubPttMaxTxMs, value => ptt.MaxTxMs = value);
+            settings.Ptt = ptt;
+        }
+
+        if (CatHubNativePushIndex != 0)
+        {
+            settings.Events = new CatHubEventSettings { NativePush = CatHubNativePushIndex == 1 };
+        }
+
+        foreach (var face in CatHubFaces)
+        {
+            var proto = new CatHubSerialFace
+            {
+                Name = face.Name.Trim(),
+                Transport = face.Transport.Trim(),
+                Dialect = string.IsNullOrWhiteSpace(face.Dialect) ? "ts590" : face.Dialect.Trim().ToLowerInvariant(),
+            };
+            if (uint.TryParse(face.Baud, CultureInfo.InvariantCulture, out var baud))
+            {
+                proto.Baud = baud;
+            }
+
+            AddPerms(proto.Perms, face.PermRead, face.PermWrite, face.PermPtt, face.PermConfigWrite);
+            settings.Faces.Add(proto);
+        }
+
+        foreach (var endpoint in CatHubEndpoints)
+        {
+            var proto = new CatHubHamlibNetEndpoint
+            {
+                Name = endpoint.Name.Trim(),
+                Bind = endpoint.Bind.Trim(),
+            };
+            AddPerms(proto.Perms, endpoint.PermRead, endpoint.PermWrite, endpoint.PermPtt, endpoint.PermConfigWrite);
+            settings.HamlibNet.Add(proto);
+        }
+
+        return settings;
+    }
+
+    private static void AddPerms(
+        Google.Protobuf.Collections.RepeatedField<CatHubPermission> perms,
+        bool read,
+        bool write,
+        bool ptt,
+        bool configWrite)
+    {
+        if (read)
+        {
+            perms.Add(CatHubPermission.Read);
+        }
+
+        if (write)
+        {
+            perms.Add(CatHubPermission.Write);
+        }
+
+        if (ptt)
+        {
+            perms.Add(CatHubPermission.Ptt);
+        }
+
+        if (configWrite)
+        {
+            perms.Add(CatHubPermission.ConfigWrite);
+        }
     }
 
     private RigControlSettings? BuildRigControlSettings()
@@ -682,6 +1150,144 @@ internal sealed partial class SettingsViewModel : ObservableObject
             1,
             "Rig control stale threshold",
             out validationError);
+    }
+
+    private bool TryValidateWsjtxIngestInputs(out string? validationError)
+    {
+        validationError = null;
+
+        if (!string.IsNullOrWhiteSpace(WsjtxUdpBind)
+            && !WsjtxIngestSetup.TryValidateHostPort(
+                WsjtxUdpBind,
+                "WSJT-X UDP bind",
+                out validationError))
+        {
+            return false;
+        }
+
+        if (WsjtxAdifTailEnabled && string.IsNullOrWhiteSpace(WsjtxAdifTailPath))
+        {
+            validationError = "WSJT-X ADIF tail path is required when ADIF tail recovery is enabled.";
+            return false;
+        }
+
+        if (!uint.TryParse(WsjtxPollIntervalMs, CultureInfo.InvariantCulture, out var pollInterval)
+            && !string.IsNullOrWhiteSpace(WsjtxPollIntervalMs))
+        {
+            validationError = "WSJT-X poll interval must be a whole number.";
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(WsjtxPollIntervalMs)
+            && !WsjtxIngestSetup.IsValidPollInterval(pollInterval))
+        {
+            validationError = "WSJT-X poll interval must be 0 for the engine default or a positive whole number.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TryValidateCatHubInputs(out string? validationError)
+    {
+        validationError = null;
+
+        var backend = CatHubBackend.Trim().ToLowerInvariant();
+        var managed = backend is not ("" or "loopback");
+        if (managed && backend is not ("ts590" or "rigctld"))
+        {
+            validationError = "CAT hub backend must be ts590, rigctld, or loopback.";
+            return false;
+        }
+
+        var transport = CatHubTransport.Trim().ToLowerInvariant();
+        if (transport.Length > 0 && transport is not ("serial" or "tcp"))
+        {
+            validationError = "CAT hub transport must be serial or tcp.";
+            return false;
+        }
+
+        if (managed && transport == "serial" && string.IsNullOrWhiteSpace(CatHubPort))
+        {
+            validationError = "CAT hub serial transport requires a port (e.g. COM3).";
+            return false;
+        }
+
+        if (!TryValidateUInt32Field(CatHubBaud, 1, 4_000_000, "CAT hub baud", out validationError))
+        {
+            return false;
+        }
+
+        if (!TryValidateUInt32Field(CatHubTcpPort, 1, 65_535, "CAT hub TCP port", out validationError))
+        {
+            return false;
+        }
+
+        if (!TryValidateUInt64Field(CatHubReplyTimeoutMs, 1, "CAT hub reply timeout", out validationError)
+            || !TryValidateUInt64Field(CatHubPollBaselineMs, 1, "CAT hub poll baseline", out validationError)
+            || !TryValidateUInt64Field(CatHubPollHeartbeatMs, 1, "CAT hub poll heartbeat", out validationError)
+            || !TryValidateUInt64Field(CatHubPttMaxTxMs, 1, "CAT hub PTT max TX", out validationError))
+        {
+            return false;
+        }
+
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var face in CatHubFaces)
+        {
+            if (string.IsNullOrWhiteSpace(face.Name))
+            {
+                validationError = "Every CAT hub face needs a name.";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(face.Transport))
+            {
+                validationError = $"CAT hub face '{face.Name}' needs a transport (path or host:port).";
+                return false;
+            }
+
+            var dialect = face.Dialect.Trim().ToLowerInvariant();
+            if (dialect is not ("ts590" or "ts2000"))
+            {
+                validationError = $"CAT hub face '{face.Name}' dialect must be ts590 or ts2000.";
+                return false;
+            }
+
+            if (!names.Add(face.Name.Trim()))
+            {
+                validationError = $"CAT hub endpoint name '{face.Name}' is used more than once.";
+                return false;
+            }
+        }
+
+        foreach (var endpoint in CatHubEndpoints)
+        {
+            if (string.IsNullOrWhiteSpace(endpoint.Name))
+            {
+                validationError = "Every CAT hub network endpoint needs a name.";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(endpoint.Bind) || !endpoint.Bind.Contains(':', StringComparison.Ordinal))
+            {
+                validationError = $"CAT hub endpoint '{endpoint.Name}' bind must be host:port (e.g. 127.0.0.1:4532).";
+                return false;
+            }
+
+            if (!names.Add(endpoint.Name.Trim()))
+            {
+                validationError = $"CAT hub endpoint name '{endpoint.Name}' is used more than once.";
+                return false;
+            }
+        }
+
+        if (managed && CatHubEndpoints.Count == 0 && CatHubFaces.Count == 0)
+        {
+            validationError = "A managed CAT hub radio needs at least one face or network endpoint.";
+            return false;
+        }
+
+        return true;
     }
 
     private static void SetOptionalString(string input, Action<string> setter)

@@ -149,6 +149,6 @@ internal static class Wa7bnmRssParser
             hash *= 1099511628211UL;
         }
 
-        return string.Create(CultureInfo.InvariantCulture, $"wa7bnm-{hash:x16}");
+        return $"wa7bnm-{hash:x16}";
     }
 }

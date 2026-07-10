@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// Engine-owned WSJT-X ingestion configuration. Omit this message from
+// SaveSetupRequest to leave the existing [wsjtx_ingest] config untouched.
+message WsjtxIngestSettings {
+  // Enables the WSJT-X ingestion subsystem.
+  bool enabled = 1;
+  // Enables the real-time UDP Logged ADIF listener.
+  optional bool udp_enabled = 2;
+  // UDP bind address in host:port form, for example "127.0.0.1:2237".
+  string udp_bind = 3;
+  // Enables recovery by tailing WSJT-X's wsjtx_log.adi file.
+  bool adif_tail_enabled = 4;
+  // Path to WSJT-X's wsjtx_log.adi file.
+  optional string adif_tail_path = 5;
+  // ADIF tail polling interval in milliseconds.
+  uint32 poll_interval_ms = 6;
+  // Immediately sync imported WSJT-X QSOs to QRZ Logbook.
+  bool sync_to_qrz = 7;
+}

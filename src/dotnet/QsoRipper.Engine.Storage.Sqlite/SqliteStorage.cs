@@ -288,9 +288,7 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
                 ? "WHERE " + string.Join(" AND ", whereClauses)
                 : string.Empty;
 
-            var sql = string.Create(
-                CultureInfo.InvariantCulture,
-                $"SELECT record FROM qsos {whereClause} ORDER BY utc_timestamp_ms {orderDirection}, local_id {orderDirection}");
+            var sql = $"SELECT record FROM qsos {whereClause} ORDER BY utc_timestamp_ms {orderDirection}, local_id {orderDirection}";
 
             if (query.Limit is { } limit)
             {
