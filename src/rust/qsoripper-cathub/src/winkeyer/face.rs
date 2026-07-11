@@ -594,10 +594,14 @@ mod tests {
         device.write_u8(0xc0).await.expect("idle status");
         tokio::time::sleep(Duration::from_millis(150)).await;
         let mut pending = [0_u8; 16];
-        while tokio::time::timeout(Duration::from_millis(10), device.read(&mut pending))
-            .await
-            .is_ok()
-        {}
+        // Drain any pending buffered data with a bounded timeout to avoid spinning forever.
+        let drain_start = tokio::time::Instant::now();
+        while drain_start.elapsed() < Duration::from_millis(100) {
+            match tokio::time::timeout(Duration::from_millis(10), device.read(&mut pending)).await {
+                Ok(Ok(_)) => {}
+                _ => break,
+            }
+        }
         client.write_u8(b'T').await.expect("keyboard T");
 
         let mut text_job = [0_u8; 4];
