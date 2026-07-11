@@ -7,8 +7,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use super::broker::{
-    BrokerCore, BrokerSnapshot, ClientId, JobId, PhysicalAction, SpeedMode, MAX_JOB_BYTES,
-    MAX_QUEUED_JOBS,
+    BrokerCore, BrokerSnapshot, ClientId, JobId, PhysicalAction, SpeedMode, TransmitPayload,
+    MAX_JOB_BYTES, MAX_QUEUED_JOBS,
 };
 use super::protocol::DeviceEvent;
 use crate::ptt::{PttDenied, PttManager};
@@ -75,7 +75,7 @@ enum Request {
     },
     Enqueue {
         client_id: ClientId,
-        bytes: Vec<u8>,
+        payload: TransmitPayload,
         speed: Option<SpeedMode>,
         stream: bool,
         reply: oneshot::Sender<Result<JobId, BrokerError>>,
@@ -169,7 +169,7 @@ impl BrokerHandle {
         let (reply, response) = oneshot::channel();
         self.send(Request::Enqueue {
             client_id,
-            bytes,
+            payload: TransmitPayload::plain_text(bytes),
             speed,
             stream: false,
             reply,
@@ -181,12 +181,13 @@ impl BrokerHandle {
     pub(crate) async fn stream(
         &self,
         client_id: ClientId,
-        bytes: Vec<u8>,
+        control_prefix: Vec<u8>,
+        intended_text: Vec<u8>,
     ) -> Result<JobId, BrokerError> {
         let (reply, response) = oneshot::channel();
         self.send(Request::Enqueue {
             client_id,
-            bytes,
+            payload: TransmitPayload::legacy_stream(control_prefix, intended_text),
             speed: None,
             stream: true,
             reply,
@@ -472,6 +473,7 @@ async fn run_actor<T, O, F>(
             byte = read_transport_byte(&mut reader, zero_is_idle) => {
                     match byte {
                     Ok(byte) => {
+                        tracing::trace!(byte, "WinKeyer physical rx");
                         if maintenance_reopen_pending {
                             maintenance_reopen_pending = false;
                             if byte == 0xff {
@@ -715,7 +717,7 @@ where
         }
         Request::Enqueue {
             client_id,
-            bytes,
+            payload,
             speed,
             stream,
             reply,
@@ -725,7 +727,7 @@ where
                 return Ok(false);
             }
             let snapshot = core.snapshot();
-            if bytes.is_empty() || bytes.len() > MAX_JOB_BYTES {
+            if payload.wire_bytes().is_empty() || payload.wire_bytes().len() > MAX_JOB_BYTES {
                 let _ = reply.send(Err(BrokerError::Invalid(format!(
                     "job payload must contain 1 through {MAX_JOB_BYTES} bytes"
                 ))));
@@ -754,7 +756,13 @@ where
                     }
                 }
             }
-            match core.enqueue(client_id, bytes, speed, stream, Instant::now()) {
+            tracing::trace!(
+                client_id,
+                intended_text = %String::from_utf8_lossy(payload.intended_text()),
+                wire_bytes = ?payload.wire_bytes(),
+                "WinKeyer transmit payload"
+            );
+            match core.enqueue(client_id, payload, speed, stream, Instant::now()) {
                 Some((job_id, actions)) => {
                     let _ = reply.send(Ok(job_id));
                     actions
@@ -897,6 +905,7 @@ where
     for action in actions {
         match action {
             PhysicalAction::Write(bytes) => {
+                tracing::trace!(bytes = ?bytes, "WinKeyer physical tx");
                 writer.write_all(&bytes).await.map_err(transport_error)?;
             }
             PhysicalAction::Completed { job_id, client_id } => {

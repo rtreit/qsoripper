@@ -54,10 +54,56 @@ pub(crate) enum PhysicalAction {
 struct Job {
     id: JobId,
     client_id: ClientId,
-    bytes: Vec<u8>,
+    payload: TransmitPayload,
     speed: SpeedMode,
     queued_at: Instant,
     stream: bool,
+}
+
+/// A transmit request keeps operator text distinct from WinKeyer wire-control bytes.
+/// Only `wire_bytes` are written to the device; `intended_text` is the authoritative
+/// character payload used for diagnostics and conformance tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TransmitPayload {
+    wire_bytes: Vec<u8>,
+    intended_text: Vec<u8>,
+}
+
+impl TransmitPayload {
+    pub(crate) fn plain_text(intended_text: Vec<u8>) -> Self {
+        Self {
+            wire_bytes: intended_text.clone(),
+            intended_text,
+        }
+    }
+
+    pub(crate) fn legacy_stream(control_prefix: Vec<u8>, intended_text: Vec<u8>) -> Self {
+        let mut wire_bytes = control_prefix;
+        wire_bytes.extend_from_slice(&intended_text);
+        Self {
+            wire_bytes,
+            intended_text,
+        }
+    }
+
+    pub(crate) fn wire_bytes(&self) -> &[u8] {
+        &self.wire_bytes
+    }
+
+    pub(crate) fn intended_text(&self) -> &[u8] {
+        &self.intended_text
+    }
+
+    fn append(&mut self, other: &Self) {
+        self.wire_bytes.extend_from_slice(&other.wire_bytes);
+        self.intended_text.extend_from_slice(&other.intended_text);
+    }
+}
+
+impl From<Vec<u8>> for TransmitPayload {
+    fn from(value: Vec<u8>) -> Self {
+        Self::plain_text(value)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -97,6 +143,7 @@ pub(crate) struct BrokerSnapshot {
 #[derive(Debug)]
 pub(crate) struct BrokerCore {
     clients: BTreeMap<ClientId, ClientState>,
+    applied_profile_client_id: Option<ClientId>,
     queue: VecDeque<Job>,
     active: Option<ActiveJob>,
     next_job_id: JobId,
@@ -115,6 +162,7 @@ impl BrokerCore {
     pub(crate) fn new(max_tx: Duration) -> Self {
         Self {
             clients: BTreeMap::new(),
+            applied_profile_client_id: None,
             queue: VecDeque::new(),
             active: None,
             next_job_id: 1,
@@ -140,12 +188,14 @@ impl BrokerCore {
     pub(crate) fn connect_physical(&mut self, firmware_revision: u8) {
         self.firmware_revision = Some(firmware_revision);
         self.connected = true;
+        self.applied_profile_client_id = None;
         self.last_error = None;
     }
 
     pub(crate) fn physical_error(&mut self, error: impl Into<String>) -> Vec<PhysicalAction> {
         self.connected = false;
         self.firmware_revision = None;
+        self.applied_profile_client_id = None;
         self.last_error = Some(error.into());
         let mut actions = Vec::new();
         if let Some(active) = self.active.take() {
@@ -180,6 +230,9 @@ impl BrokerCore {
 
     pub(crate) fn unregister_client(&mut self, client_id: ClientId) -> Vec<PhysicalAction> {
         self.clients.remove(&client_id);
+        if self.applied_profile_client_id == Some(client_id) {
+            self.applied_profile_client_id = None;
+        }
         let mut actions = Vec::new();
         self.queue.retain(|job| {
             if job.client_id == client_id {
@@ -243,8 +296,13 @@ impl BrokerCore {
                 self.physical_pot_min_wpm = minimum;
                 self.refresh_pot_wpm();
             }
+        } else if self.applied_profile_client_id == Some(client_id) {
+            // The profile changed while this client owned an active stream. It could not
+            // be applied mid-stream, so force a replay at the next ownership boundary.
+            self.applied_profile_client_id = None;
         }
         Some(if applies_now {
+            self.applied_profile_client_id = Some(client_id);
             vec![PhysicalAction::Write(command)]
         } else {
             Vec::new()
@@ -267,34 +325,43 @@ impl BrokerCore {
         allowed.then(|| vec![PhysicalAction::Write(command)])
     }
 
-    pub(crate) fn enqueue(
+    pub(crate) fn enqueue<P: Into<TransmitPayload>>(
         &mut self,
         client_id: ClientId,
-        bytes: Vec<u8>,
+        payload: P,
         speed: Option<SpeedMode>,
         stream: bool,
         now: Instant,
     ) -> Option<(JobId, Vec<PhysicalAction>)> {
-        if bytes.is_empty() || bytes.len() > MAX_JOB_BYTES || !self.connected {
+        let payload = payload.into();
+        if payload.wire_bytes.is_empty()
+            || payload.wire_bytes.len() > MAX_JOB_BYTES
+            || !self.connected
+        {
             return None;
         }
         let client = self.clients.get(&client_id)?;
         if stream {
             if let Some(active) = self.active.as_mut() {
                 if active.job.client_id == client_id && active.job.stream {
-                    if active.job.bytes.len() + bytes.len() > MAX_JOB_BYTES {
+                    if active.job.payload.wire_bytes.len() + payload.wire_bytes.len()
+                        > MAX_JOB_BYTES
+                    {
                         return None;
                     }
-                    active.job.bytes.extend_from_slice(&bytes);
-                    return Some((active.job.id, vec![PhysicalAction::Write(bytes)]));
+                    active.job.payload.append(&payload);
+                    return Some((
+                        active.job.id,
+                        vec![PhysicalAction::Write(payload.wire_bytes)],
+                    ));
                 }
             }
             if let Some(queued) = self.queue.back_mut() {
                 if queued.client_id == client_id && queued.stream {
-                    if queued.bytes.len() + bytes.len() > MAX_JOB_BYTES {
+                    if queued.payload.wire_bytes.len() + payload.wire_bytes.len() > MAX_JOB_BYTES {
                         return None;
                     }
-                    queued.bytes.extend(bytes);
+                    queued.payload.append(&payload);
                     return Some((queued.id, Vec::new()));
                 }
             }
@@ -307,7 +374,7 @@ impl BrokerCore {
         self.queue.push_back(Job {
             id: job_id,
             client_id,
-            bytes,
+            payload,
             speed: speed.unwrap_or(client.desired_speed),
             queued_at: now,
             stream,
@@ -337,9 +404,8 @@ impl BrokerCore {
                 true
             }
         });
-        if include_active
-            && self.active.as_ref().map(|active| active.job.client_id) == Some(client_id)
-        {
+        let active_client_id = self.active.as_ref().map(|active| active.job.client_id);
+        if include_active && active_client_id == Some(client_id) {
             if let Some(active) = self.active.take() {
                 actions.insert(0, PhysicalAction::Write(vec![0x0a]));
                 actions.push(PhysicalAction::Canceled {
@@ -348,6 +414,17 @@ impl BrokerCore {
                 });
             }
             actions.extend(self.start_next_or_restore());
+        } else if include_active
+            && active_client_id.is_none()
+            && self
+                .clients
+                .get(&client_id)
+                .is_some_and(|client| client.primary)
+        {
+            // A primary idle controller is allowed to clear stale bytes left in the
+            // physical FIFO. N1MM sends this when Ctrl+K opens; dropping it can make a
+            // later character transmit remnants from an earlier stream.
+            actions.insert(0, PhysicalAction::Write(vec![0x0a]));
         }
         actions
     }
@@ -497,27 +574,40 @@ impl BrokerCore {
     fn start_next_or_restore(&mut self) -> Vec<PhysicalAction> {
         if let Some(job) = self.queue.pop_front() {
             debug_assert!(job.queued_at <= Instant::now());
-            let mut actions = self
-                .clients
-                .get(&job.client_id)
-                .map_or_else(Vec::new, |client| {
-                    client
-                        .profile
-                        .values()
-                        .cloned()
-                        .map(PhysicalAction::Write)
-                        .collect()
-                });
-            if let Some(minimum) = self
-                .clients
-                .get(&job.client_id)
-                .and_then(|client| profile_pot_minimum(&client.profile))
-            {
-                self.physical_pot_min_wpm = minimum;
-                self.refresh_pot_wpm();
+            let profile_changed = self.applied_profile_client_id != Some(job.client_id);
+            let mut actions = if profile_changed {
+                self.clients
+                    .get(&job.client_id)
+                    .map_or_else(Vec::new, |client| {
+                        client
+                            .profile
+                            .values()
+                            .cloned()
+                            .map(PhysicalAction::Write)
+                            .collect()
+                    })
+            } else {
+                Vec::new()
+            };
+            if profile_changed {
+                if let Some(minimum) = self
+                    .clients
+                    .get(&job.client_id)
+                    .and_then(|client| profile_pot_minimum(&client.profile))
+                {
+                    self.physical_pot_min_wpm = minimum;
+                    self.refresh_pot_wpm();
+                }
+                self.applied_profile_client_id = Some(job.client_id);
             }
-            actions.push(PhysicalAction::Write(job.speed.command().to_vec()));
-            actions.push(PhysicalAction::Write(job.bytes.clone()));
+            // A legacy WinKeyer stream may carry Buffered Speed (0x1c) after pointer
+            // setup. Inserting an unbuffered speed command between those operations
+            // breaks N1MM's pointer context and keys the WPM byte as a phantom character.
+            // Typed/plain-text jobs still require the broker-selected speed command.
+            if job.payload.wire_bytes.first() != Some(&0x1c) {
+                actions.push(PhysicalAction::Write(job.speed.command().to_vec()));
+            }
+            actions.push(PhysicalAction::Write(job.payload.wire_bytes.clone()));
             actions.push(PhysicalAction::Write(vec![0x15]));
             self.active = Some(ActiveJob {
                 job,
@@ -532,15 +622,28 @@ impl BrokerCore {
     }
 
     fn restore_foreground_speed(&mut self) -> Vec<PhysicalAction> {
-        let foreground = self.clients.values().find(|client| client.primary);
-        let mut actions: Vec<_> = foreground
-            .into_iter()
-            .flat_map(|client| client.profile.values().cloned())
-            .map(PhysicalAction::Write)
-            .collect();
-        let speed = foreground.map_or(SpeedMode::Pot, |client| client.desired_speed);
+        let foreground = self
+            .clients
+            .iter()
+            .find(|(_, client)| client.primary)
+            .map(|(id, client)| (*id, client));
+        let profile_changed =
+            foreground.is_some_and(|(id, _)| Some(id) != self.applied_profile_client_id);
+        let mut actions: Vec<_> = if profile_changed {
+            foreground
+                .into_iter()
+                .flat_map(|(_, client)| client.profile.values().cloned())
+                .map(PhysicalAction::Write)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if profile_changed {
+            self.applied_profile_client_id = foreground.map(|(id, _)| id);
+        }
+        let speed = foreground.map_or(SpeedMode::Pot, |(_, client)| client.desired_speed);
         self.physical_pot_min_wpm = foreground
-            .and_then(|client| profile_pot_minimum(&client.profile))
+            .and_then(|(_, client)| profile_pot_minimum(&client.profile))
             .unwrap_or(5);
         self.refresh_pot_wpm();
         actions.push(PhysicalAction::Write(speed.command().to_vec()));
@@ -719,6 +822,16 @@ mod tests {
     }
 
     #[test]
+    fn primary_idle_clear_reaches_the_physical_fifo() {
+        let mut broker = connected();
+        assert_eq!(
+            broker.cancel_client(1, true),
+            vec![PhysicalAction::Write(vec![0x0a])]
+        );
+        assert!(broker.cancel_client(2, true).is_empty());
+    }
+
+    #[test]
     fn cancel_job_cannot_cancel_another_clients_job() {
         let mut broker = connected();
         broker.enqueue(1, b"CQ".to_vec(), None, false, Instant::now());
@@ -816,5 +929,47 @@ mod tests {
         assert_eq!(actions[0], PhysicalAction::Write(vec![0x0e, 0x04]));
         assert_eq!(actions[1], PhysicalAction::Write(vec![0x02, 0]));
         assert_eq!(actions[2], PhysicalAction::Write(b"E".to_vec()));
+    }
+
+    #[test]
+    fn already_applied_primary_profile_is_not_inserted_into_keyboard_stream() {
+        let mut broker = connected();
+        assert_eq!(
+            broker
+                .set_client_command(1, vec![0x0e, 0x04])
+                .expect("primary"),
+            vec![PhysicalAction::Write(vec![0x0e, 0x04])]
+        );
+        let payload = TransmitPayload::legacy_stream(vec![0x1c, 23], b"TEST".to_vec());
+        assert_eq!(payload.intended_text(), b"TEST");
+        assert_eq!(payload.wire_bytes(), b"\x1c\x17TEST");
+        let (_, actions) = broker
+            .enqueue(1, payload, None, true, Instant::now())
+            .expect("keyboard stream");
+        assert_eq!(
+            actions,
+            vec![
+                PhysicalAction::Write(b"\x1c\x17TEST".to_vec()),
+                PhysicalAction::Write(vec![0x15]),
+            ]
+        );
+    }
+
+    #[test]
+    fn profile_change_during_active_stream_is_replayed_at_next_boundary() {
+        let mut broker = connected();
+        broker
+            .enqueue(1, b"T".to_vec(), None, true, Instant::now())
+            .expect("active stream");
+        assert_eq!(broker.applied_profile_client_id, Some(1));
+        assert!(broker
+            .set_client_command(1, vec![0x0e, 0x04])
+            .expect("active client")
+            .is_empty());
+        assert_eq!(broker.applied_profile_client_id, None);
+
+        broker.observe_status(busy());
+        let actions = broker.observe_status(idle());
+        assert!(actions.contains(&PhysicalAction::Write(vec![0x0e, 0x04])));
     }
 }

@@ -41,15 +41,6 @@ impl ClientParser {
         if self.expected_len == Some(self.command.len()) {
             self.expected_len = None;
             let command = std::mem::take(&mut self.command);
-            // N1MM Logger+ prefixes its buffered-speed command with an extra Admin byte.
-            // Physical WinKeyer implementations tolerate this de facto wire sequence.
-            // Normalize only this exact quirk; other invalid Admin commands remain intact
-            // for the face policy to reject.
-            let command = if command.starts_with(&[0x00, 0x1c]) {
-                command.into_iter().skip(1).collect()
-            } else {
-                command
-            };
             return Some(ClientItem::Command(command));
         }
         None
@@ -78,8 +69,12 @@ impl ClientParser {
                     admin_command_len(admin)
                 });
             }
-        } else if opcode == 0x16 && self.command.len() == 2 && self.command.get(1) == Some(&0x03) {
-            self.expected_len = Some(3);
+        } else if opcode == 0x16 && self.command.len() == 2 {
+            // Pointer reset (00) is complete in two bytes. Move-overwrite (01),
+            // move-append (02), and add-nulls (03) each carry a third position/count byte.
+            if matches!(self.command.get(1), Some(0x01..=0x03)) {
+                self.expected_len = Some(3);
+            }
         }
         debug_assert!(
             self.expected_len.unwrap_or(MAX_COMMAND_LEN) <= MAX_COMMAND_LEN,
@@ -199,7 +194,10 @@ pub(crate) fn command_policy(command: &[u8]) -> CommandPolicy {
         };
     }
     match opcode {
-        0x0a..=0x0b | 0x14 | 0x18..=0x1a => CommandPolicy::ActiveOwner,
+        // Buffer-pointer commands are one-shot edits of the current stream. Persisting
+        // opcode 0x16 in a per-client profile and replaying it before later text moves the
+        // physical pointer a second time, corrupting keyboard CW from N1MM.
+        0x0a..=0x0b | 0x14 | 0x16 | 0x18..=0x1a => CommandPolicy::ActiveOwner,
         _ => CommandPolicy::Transient,
     }
 }
@@ -266,10 +264,14 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_n1mm_extra_admin_prefix_before_buffered_speed() {
+    fn pointer_move_append_consumes_position_before_buffered_speed() {
         assert_eq!(
-            parse(&[0x00, 0x1c, 22, b'Q']),
-            vec![ClientItem::Command(vec![0x1c, 22]), ClientItem::Data(b'Q')]
+            parse(&[0x16, 0x02, 0x00, 0x1c, 22, b'Q']),
+            vec![
+                ClientItem::Command(vec![0x16, 0x02, 0x00]),
+                ClientItem::Command(vec![0x1c, 22]),
+                ClientItem::Data(b'Q')
+            ]
         );
     }
 
@@ -312,6 +314,7 @@ mod tests {
         assert_eq!(command_policy(&[0x00, 0x0c]), CommandPolicy::Maintenance);
         assert_eq!(command_policy(&[0x00, 0x10]), CommandPolicy::Maintenance);
         assert_eq!(command_policy(&[0x0a]), CommandPolicy::ActiveOwner);
+        assert_eq!(command_policy(&[0x16, 0x02]), CommandPolicy::ActiveOwner);
         assert_eq!(command_policy(&[0x02, 20]), CommandPolicy::Transient);
     }
 }

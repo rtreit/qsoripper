@@ -141,9 +141,10 @@ hub on its own (for example with `-DryRun` to validate config).
   this face). See design §8.4.2.
 - Keep the everyday `n1mm-cw` WinKeyer face limited to `status`, `send`, `control`, and `ptt`.
   Persistent EEPROM/reset access belongs on a separate, normally disabled maintenance face.
-- CatHub accepts N1MM's observed `00 1C <wpm>` compatibility sequence and normalizes it to the
-  standard buffered-speed command. This keeps QRL and function-key messages working without
-  granting the N1MM face disruptive WinKeyer maintenance access.
+- CatHub preserves N1MM's authorized runtime stream byte-for-byte. In particular, the observed
+  `16 02 <position> 1C <wpm> <text>` sequence remains an append-pointer command followed by a
+  buffered-speed command and the intended text. CatHub does not reinterpret the position byte as
+  an Admin prefix or inject configuration between those bytes.
 
 ### ARCP-590
 - Set ARCP-590's COM port to **COM31**, 115200, 8-N-1.
