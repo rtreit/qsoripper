@@ -528,8 +528,11 @@ mod tests {
         assert_eq!(client.read_u8().await.expect("pot reply"), 0x80);
         assert_eq!(client.read_u8().await.expect("status reply"), 0xc0);
 
-        client.write_all(b"TEST").await.expect("N1MM text");
-        let mut job = vec![0_u8; 27];
+        client
+            .write_all(&[0x00, 0x1c, 22, b'T', b'E', b'S', b'T'])
+            .await
+            .expect("N1MM buffered speed and text");
+        let mut job = vec![0_u8; 29];
         device
             .read_exact(&mut job)
             .await
@@ -537,8 +540,9 @@ mod tests {
         assert_eq!(&job[..4], &[0x05, 10, 20, 0]);
         assert_eq!(&job[4..20], defaults.as_slice());
         assert_eq!(&job[20..22], &[0x02, 0]);
-        assert_eq!(&job[22..26], b"TEST");
-        assert_eq!(job[26], 0x15);
+        assert_eq!(&job[22..24], &[0x1c, 22]);
+        assert_eq!(&job[24..28], b"TEST");
+        assert_eq!(job[28], 0x15);
 
         client.write_u8(0x0a).await.expect("N1MM Escape");
         let mut abort = vec![0_u8; 23];
