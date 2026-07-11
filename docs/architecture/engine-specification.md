@@ -174,6 +174,10 @@ Updates an existing QSO record by `local_id`.
 6. If `sync_to_qrz=true`, immediately push the updated record to QRZ Logbook (per-operation sync; see §7.3 below). If the row already has a `qrz_logid`, use REPLACE so the same remote row is updated in place; otherwise INSERT. On success, write back the QRZ-assigned `qrz_logid` and `sync_status=SYNC_STATUS_SYNCED`, and set `UpdateQsoResponse.sync_success=true`. On failure, leave the local row in its current state (`SYNC_STATUS_MODIFIED` or `SYNC_STATUS_NOT_SYNCED`), set `sync_success=false`, and put a human-readable message in `sync_error`. The local persist MUST succeed regardless.
 7. Return the updated `QsoRecord`.
 
+Clients that round-trip a complete `QsoRecord` while editing MUST preserve `RstReport.raw`.
+Signed digital reports such as `+11` and `-10` are not legacy RST digit fields and MUST
+round-trip exactly when an unrelated field, including QRZ enrichment, is changed.
+
 **Error semantics:**
 - `NOT_FOUND` — no QSO with the given `local_id`.
 - `INVALID_ARGUMENT` — invalid field values.

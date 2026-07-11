@@ -91,6 +91,36 @@ public sealed class FullQsoCardViewModelTests
     }
 
     [Fact]
+    public async Task SaveCommandPreservesSignedDigitalReportsDuringEnrichmentEdit()
+    {
+        var engine = new RecordingEngineClient();
+        var existing = new QsoRecord
+        {
+            LocalId = "qso-ft8",
+            WorkedCallsign = "AE7XI",
+            StationCallsign = "KC7AVA",
+            UtcTimestamp = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 7, 11, 2, 24, 0, TimeSpan.Zero)),
+            Band = Band._80M,
+            Mode = Mode.Ft8,
+            RstSent = new RstReport { Raw = "+11" },
+            RstReceived = new RstReport { Raw = "-10" },
+        };
+
+        var card = FullQsoCardViewModel.ForEdit(engine, existing);
+
+        Assert.Equal("+11", card.RstSent);
+        Assert.Equal("-10", card.RstReceived);
+
+        card.WorkedOperatorName = "MIKE A TREIT, JR";
+        await card.SaveCommand.ExecuteAsync(null);
+
+        Assert.NotNull(engine.LastUpdatedQso);
+        Assert.Equal("+11", engine.LastUpdatedQso!.RstSent.Raw);
+        Assert.Equal("-10", engine.LastUpdatedQso.RstReceived.Raw);
+    }
+
+    [Fact]
     public void ForNewMapsLoggerBandAndModeToCardOptions()
     {
         var engine = new RecordingEngineClient();
