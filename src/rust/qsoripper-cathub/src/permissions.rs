@@ -1,8 +1,11 @@
 //! Per-face capability sets and command classification.
 //!
-//! The coarse face flags (`read`, `write`, `ptt`, `config_write`) gate the command
-//! classes a dialect assigns to each inbound command. Unknown passthrough writes default
-//! to denied unless the face opts into unsafe full control.
+//! The face flags gate the command classes a dialect assigns to each inbound command.
+//! `frequency_write` grants narrow tuning authority without mode or VFO control, while
+//! `write` retains full modeled-write authority. Unknown passthrough writes default to
+//! denied unless the face opts into unsafe full control.
+
+use crate::model::StateMutation;
 
 /// How a dialect classifies a single inbound command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +37,8 @@ pub(crate) struct FacePermissions {
     pub(crate) read: bool,
     /// May issue modeled writes (frequency, mode, split).
     pub(crate) write: bool,
+    /// May tune frequency, without authority to change mode, VFO, split, RIT, or XIT.
+    pub(crate) frequency_write: bool,
     /// May key PTT.
     pub(crate) ptt: bool,
     /// May issue persistent/config writes (`EX` menu).
@@ -47,6 +52,7 @@ impl FacePermissions {
         FacePermissions {
             read: true,
             write: false,
+            frequency_write: false,
             ptt: false,
             config_write: false,
         }
@@ -57,6 +63,7 @@ impl FacePermissions {
         let mut perms = FacePermissions {
             read: false,
             write: false,
+            frequency_write: false,
             ptt: false,
             config_write: false,
         };
@@ -64,6 +71,7 @@ impl FacePermissions {
             match token.as_ref() {
                 "read" => perms.read = true,
                 "write" => perms.write = true,
+                "frequency_write" => perms.frequency_write = true,
                 "ptt" => perms.ptt = true,
                 "config_write" => perms.config_write = true,
                 _ => {}
@@ -85,6 +93,14 @@ impl FacePermissions {
             CommandClass::Denied => false,
         }
     }
+
+    /// Whether this face may apply a specific modeled mutation.
+    pub(crate) fn allows_mutation(self, class: CommandClass, mutation: &StateMutation) -> bool {
+        if class != CommandClass::ModeledWrite {
+            return self.allows(class);
+        }
+        self.write || (self.frequency_write && matches!(mutation, StateMutation::SetVfoFreq { .. }))
+    }
 }
 
 #[cfg(test)]
@@ -96,7 +112,29 @@ mod tests {
     fn tokens_parse_into_flags() {
         let perms = FacePermissions::from_tokens(&["read", "write", "ptt"]);
         assert!(perms.read && perms.write && perms.ptt);
+        assert!(!perms.frequency_write);
         assert!(!perms.config_write);
+    }
+
+    #[test]
+    fn frequency_write_is_narrowly_scoped() {
+        let perms = FacePermissions::from_tokens(&["read", "frequency_write"]);
+        assert!(perms.frequency_write);
+        assert!(!perms.write);
+        assert!(perms.allows_mutation(
+            CommandClass::ModeledWrite,
+            &StateMutation::SetVfoFreq {
+                vfo: crate::model::Vfo::A,
+                hz: 14_074_000,
+            }
+        ));
+        assert!(!perms.allows_mutation(
+            CommandClass::ModeledWrite,
+            &StateMutation::SetMode {
+                vfo: crate::model::Vfo::A,
+                mode: crate::model::Mode::Cw,
+            }
+        ));
     }
 
     #[test]

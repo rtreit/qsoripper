@@ -103,7 +103,7 @@ impl FaceContext {
         mutation: StateMutation,
         class: CommandClass,
     ) -> ApplyOutcome {
-        if !self.perms.allows(class) {
+        if !self.perms.allows_mutation(class, &mutation) {
             return ApplyOutcome::Denied;
         }
         // Idempotent suppression: never re-send a value the radio already holds. This keeps
@@ -391,6 +391,34 @@ mod tests {
             .await;
         assert_eq!(outcome, ApplyOutcome::Ok);
         assert_eq!(backend.mutations().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn frequency_write_does_not_grant_mode_control() {
+        let (ctx, backend) = ctx_with(
+            FacePermissions::from_tokens(&["read", "frequency_write"]),
+            1,
+        );
+
+        let frequency = StateMutation::SetVfoFreq {
+            vfo: Vfo::A,
+            hz: 14_074_000,
+        };
+        assert_eq!(
+            ctx.apply_modeled(frequency, CommandClass::ModeledWrite)
+                .await,
+            ApplyOutcome::Ok
+        );
+
+        let mode = StateMutation::SetMode {
+            vfo: Vfo::A,
+            mode: Mode::Cw,
+        };
+        assert_eq!(
+            ctx.apply_modeled(mode, CommandClass::ModeledWrite).await,
+            ApplyOutcome::Denied
+        );
+        assert_eq!(backend.mutations(), vec![frequency]);
     }
 
     #[tokio::test]

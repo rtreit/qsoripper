@@ -122,10 +122,11 @@ hub on its own (for example with `-DryRun` to validate config).
 
 ### HDSDR (via OmniRig)
 - OmniRig: Rig type `Kenwood TS-2000`, port **COM11**, baud 115200, 8-N-1.
-- The `hdsdr-omnirig` face is `dialect = "ts2000"`, `perms = ["read", "write"]`. The panadapter
-  follows the radio, and click-to-tune on the waterfall sets the radio frequency/mode
-  (`FA`/`FB`/`MD`). VFO-target writes (`FR`/`FT`) from the TS-2000 dialect are still rejected by
-  design, so HDSDR can tune but can never oscillate the TS-590's A/B VFO selection.
+- The `hdsdr-omnirig` face is `dialect = "ts2000"`,
+  `perms = ["read", "frequency_write"]`. The panadapter follows the radio and click-to-tune
+  on the waterfall sets frequency. OmniRig mode writes are denied, preventing its band-plan
+  mode selection from changing WSJT-X's USB+Data operation to CW after a frequency update.
+  VFO-target writes (`FR`/`FT`) remain rejected by design.
 
 ### N1MM Logger+
 - Configurer > Hardware: radio `Kenwood`, port **COM21**, 115200, 8-N-1, no flow control.
@@ -140,6 +141,9 @@ hub on its own (for example with `-DryRun` to validate config).
   this face). See design §8.4.2.
 - Keep the everyday `n1mm-cw` WinKeyer face limited to `status`, `send`, `control`, and `ptt`.
   Persistent EEPROM/reset access belongs on a separate, normally disabled maintenance face.
+- CatHub accepts N1MM's observed `00 1C <wpm>` compatibility sequence and normalizes it to the
+  standard buffered-speed command. This keeps QRL and function-key messages working without
+  granting the N1MM face disruptive WinKeyer maintenance access.
 
 ### ARCP-590
 - Set ARCP-590's COM port to **COM31**, 115200, 8-N-1.

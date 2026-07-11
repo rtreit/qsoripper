@@ -40,7 +40,17 @@ impl ClientParser {
 
         if self.expected_len == Some(self.command.len()) {
             self.expected_len = None;
-            return Some(ClientItem::Command(std::mem::take(&mut self.command)));
+            let command = std::mem::take(&mut self.command);
+            // N1MM Logger+ prefixes its buffered-speed command with an extra Admin byte.
+            // Physical WinKeyer implementations tolerate this de facto wire sequence.
+            // Normalize only this exact quirk; other invalid Admin commands remain intact
+            // for the face policy to reject.
+            let command = if command.starts_with(&[0x00, 0x1c]) {
+                command.into_iter().skip(1).collect()
+            } else {
+                command
+            };
+            return Some(ClientItem::Command(command));
         }
         None
     }
@@ -61,7 +71,12 @@ impl ClientParser {
         };
         if opcode == 0x00 && self.command.len() == 2 {
             if let Some(admin) = self.command.get(1).copied() {
-                self.expected_len = Some(admin_command_len(admin));
+                self.expected_len = Some(if admin == 0x1c {
+                    // N1MM's extra Admin prefix plus buffered-speed command and WPM.
+                    3
+                } else {
+                    admin_command_len(admin)
+                });
             }
         } else if opcode == 0x16 && self.command.len() == 2 && self.command.get(1) == Some(&0x03) {
             self.expected_len = Some(3);
@@ -247,6 +262,14 @@ mod tests {
                 ClientItem::Command(vec![0x16, 0x03, 0x20]),
                 ClientItem::Data(b'A')
             ]
+        );
+    }
+
+    #[test]
+    fn normalizes_n1mm_extra_admin_prefix_before_buffered_speed() {
+        assert_eq!(
+            parse(&[0x00, 0x1c, 22, b'Q']),
+            vec![ClientItem::Command(vec![0x1c, 22]), ClientItem::Data(b'Q')]
         );
     }
 

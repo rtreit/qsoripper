@@ -145,7 +145,7 @@ pub(crate) struct FaceConfig {
     pub(crate) baud: u32,
     /// Dialect: `ts590` or `ts2000`.
     pub(crate) dialect: String,
-    /// Permission tokens (`read`, `write`, `ptt`, `config_write`).
+    /// Permission tokens (`read`, `frequency_write`, `write`, `ptt`, `config_write`).
     #[serde(default)]
     pub(crate) perms: Vec<String>,
     /// Present the *operating* VFO as VFO A to this face (operating-VFO virtualization).
@@ -174,7 +174,7 @@ pub(crate) struct HamlibNetConfig {
     pub(crate) name: String,
     /// The bind address (e.g. `127.0.0.1:4532`).
     pub(crate) bind: String,
-    /// Permission tokens (`read`, `write`, `ptt`, `config_write`).
+    /// Permission tokens (`read`, `frequency_write`, `write`, `ptt`, `config_write`).
     #[serde(default)]
     pub(crate) perms: Vec<String>,
     /// Present the *operating* VFO as VFO A to this endpoint (operating-VFO virtualization).

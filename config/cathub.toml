@@ -94,8 +94,9 @@ perms = ["read", "write"]
 #   COM20 <-> COM21      COM20                      COM21  (N1MM)
 #   COM30 <-> COM31      COM30                      COM31  (ARCP-590)
 
-# HDSDR via OmniRig as a TS-2000-style controller. Read + write: the panadapter follows the
-# radio, and click-to-tune on the waterfall sets the radio frequency/mode (FA/FB/MD writes).
+# HDSDR via OmniRig as a TS-2000-style controller. The panadapter follows the radio, and
+# click-to-tune on the waterfall may set frequency. Mode writes are denied so OmniRig cannot
+# overwrite WSJT-X's USB+Data mode after following a digital-band frequency change.
 # The ts2000 dialect still rejects VFO-target writes (FR/FT) by design, so HDSDR can tune but
 # can never oscillate the TS-590's A/B VFO selection.
 [[face]]
@@ -103,7 +104,7 @@ name = "hdsdr-omnirig"
 transport = "COM10"      # OmniRig binds COM11
 baud = 115200
 dialect = "ts2000"
-perms = ["read", "write"]
+perms = ["read", "frequency_write"]
 
 # N1MM Logger+ as a native TS-590.
 # N1MM in SO1V mode rejects VFO B ("You should not use VFO B when configured for SO1V"),

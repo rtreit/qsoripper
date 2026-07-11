@@ -677,7 +677,9 @@ Persists setup configuration and station profile.
   loopback}; radio `transport` ∈ {serial, tcp}; non-loopback serial radios require a `port`;
   face `dialect` ∈ {ts590, ts590-transparent, ts2000}; endpoint names unique across faces and hamlib_net; face
   transports distinct; hamlib_net binds distinct and in `host:port` form; a face transport may
-  not reuse the radio port. Violations return `INVALID_ARGUMENT`.
+  not reuse the radio port. CAT face permission tokens include `read`, `frequency_write`,
+  `write`, `ptt`, and `config_write`; `frequency_write` grants tuning without other modeled
+  mutations, while `write` grants all modeled writes. Violations return `INVALID_ARGUMENT`.
 
 **WSJT-X ingest (`wsjtx_ingest`) management:**
 - The optional `wsjtx_ingest` field (`WsjtxIngestSettings`) lets setup clients manage the

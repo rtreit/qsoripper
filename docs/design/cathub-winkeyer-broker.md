@@ -15,6 +15,8 @@ physical WinKeyer <-- 8-N-2 --> CatHub WinKeyer actor
 
 One incremental parser consumes every WinKeyer command from a virtual face. It retains partial fixed and variable-length commands across reads, bounds the largest command to the 258-byte EEPROM load frame, and emits ordinary Morse data separately. Host Open, Host Close, firmware revision, status requests, and speed-pot requests are virtualized per client. A virtual close never closes the physical session during routine operation.
 
+The parser includes one narrowly scoped N1MM Logger+ compatibility rule. N1MM may emit `00 1C <wpm>` when beginning a message, inserting an extra Admin prefix before the standard buffered-speed command. CatHub normalizes that captured wire sequence to `1C <wpm>`. Other invalid or disruptive Admin commands remain subject to the normal fail-closed maintenance policy.
+
 Device bytes are classified by the WinKeyer tag bits as status, speed-pot, or echo events. Status and pot events are fanned out. Echo bytes are visible only to the active stream owner, or to the primary face during physical paddle break-in. Maintenance response bytes are private to the maintenance owner and never enter typed event streams.
 
 Virtual sessions keep independent WK1/WK2/WK3 modes so one client's pushbutton/status choice does not alter another client's status format.
