@@ -1272,8 +1272,11 @@ All backends must implement the `EngineStorage` trait, which decomposes into:
 
 **Polling model:**
 - The engine polls rigctld at a configurable interval.
-- Each poll reads frequency and mode, constructs a `RigSnapshot`, and caches it.
-- If the TCP connection fails, the rig status transitions to `Disconnected` or `Error`.
+- The provider keeps one serialized TCP session and reads frequency and mode on that session for
+  each poll. It MUST NOT create a new TCP connection for every snapshot.
+- A timeout, EOF, or transport failure discards the session and permits one bounded reconnect and
+  retry. If that retry fails, the rig status transitions to `Disconnected` or `Error`.
+- Each successful poll constructs a `RigSnapshot` and caches it.
 - If the snapshot is older than `QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS`, it is marked stale.
 
 **Read timeout:** `QSORIPPER_RIGCTLD_READ_TIMEOUT_MS` controls the per-command TCP read timeout.
