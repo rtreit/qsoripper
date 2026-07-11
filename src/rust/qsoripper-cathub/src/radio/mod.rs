@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant;
 
 use crate::backend::{BackendError, Framing, RadioBackend};
 use crate::events::enable_native_push;
@@ -219,7 +220,7 @@ where
         }
     });
 
-    let mut pending: Option<(Matcher, ReplyTx)> = None;
+    let mut pending: Option<(Matcher, ReplyTx, Instant)> = None;
     let reason: ExitReason;
 
     loop {
@@ -239,7 +240,11 @@ where
                             let _ = cmd.reply.send(Ok(Vec::new()));
                         }
                         Expect::Reply(verbs) => {
-                            pending = Some((Matcher::Verb(verbs), cmd.reply));
+                            pending = Some((
+                                Matcher::Verb(verbs),
+                                cmd.reply,
+                                Instant::now() + REPLY_TIMEOUT,
+                            ));
                         }
                         Expect::Lines(n) => {
                             if n == 0 {
@@ -248,6 +253,7 @@ where
                                 pending = Some((
                                     Matcher::Lines { remaining: n, acc: Vec::new() },
                                     cmd.reply,
+                                    Instant::now() + REPLY_TIMEOUT,
                                 ));
                             }
                         }
@@ -260,10 +266,14 @@ where
                 }
             }
         } else {
-            let recv = tokio::time::timeout(REPLY_TIMEOUT, frame_rx.recv()).await;
+            let Some((_, _, deadline)) = pending.as_ref() else {
+                continue;
+            };
+            let deadline = *deadline;
+            let recv = tokio::time::timeout_at(deadline, frame_rx.recv()).await;
             match recv {
                 Err(_elapsed) => {
-                    if let Some((matcher, reply)) = pending.take() {
+                    if let Some((matcher, reply, _)) = pending.take() {
                         if let Matcher::Verb(verbs) = &matcher {
                             let awaited: Vec<String> = verbs
                                 .iter()
@@ -283,16 +293,16 @@ where
                 Ok(Some(frame)) => {
                     tracing::trace!(rx = %String::from_utf8_lossy(&frame), "radio rx (pending)");
                     pending = match pending.take() {
-                        Some((Matcher::Verb(verbs), reply)) => {
+                        Some((Matcher::Verb(verbs), reply, deadline)) => {
                             if frame_matches(&frame, &verbs) {
                                 let _ = reply.send(Ok(frame));
                                 None
                             } else {
                                 route_event(&backend, &state, &frame);
-                                Some((Matcher::Verb(verbs), reply))
+                                Some((Matcher::Verb(verbs), reply, deadline))
                             }
                         }
-                        Some((Matcher::Lines { remaining, mut acc }, reply)) => {
+                        Some((Matcher::Lines { remaining, mut acc }, reply, deadline)) => {
                             acc.extend_from_slice(&frame);
                             let left = remaining.saturating_sub(1);
                             if left == 0 {
@@ -305,6 +315,7 @@ where
                                         acc,
                                     },
                                     reply,
+                                    deadline,
                                 ))
                             }
                         }
@@ -315,7 +326,7 @@ where
         }
     }
 
-    if let Some((_, reply)) = pending.take() {
+    if let Some((_, reply, _)) = pending.take() {
         let _ = reply.send(Err(BackendError::Transport("transport closed".into())));
     }
     reader_task.abort();
@@ -654,6 +665,41 @@ mod tests {
         assert!(Priority::Ptt < Priority::Write);
         assert!(Priority::Write < Priority::Read);
         assert!(Priority::Read < Priority::Poll);
+    }
+
+    #[tokio::test]
+    async fn unsolicited_frames_do_not_extend_reply_deadline() {
+        let backend: Arc<dyn RadioBackend> = Arc::new(Ts590Backend::new());
+        let state = StateHandle::new();
+        let (link, raw_rx) = link_channel();
+        let (radio, server) = tokio::io::duplex(1024);
+
+        let transport_task = tokio::spawn(run_transport(server, backend, state, raw_rx));
+        let radio_task = tokio::spawn(async move {
+            let (mut rd, mut wr) = tokio::io::split(radio);
+            let mut command = [0u8; 3];
+            rd.read_exact(&mut command)
+                .await
+                .expect("transport should send a command");
+
+            loop {
+                wr.write_all(b"NB0;")
+                    .await
+                    .expect("transport should accept unsolicited frames");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        });
+
+        let result = tokio::time::timeout(
+            REPLY_TIMEOUT + Duration::from_millis(300),
+            link.submit(b"FA;".to_vec(), Expect::Reply(vec![b"FA".to_vec()])),
+        )
+        .await
+        .expect("an absolute reply deadline must not be extended by unsolicited frames");
+
+        assert!(matches!(result, Err(BackendError::Timeout)));
+        radio_task.abort();
+        transport_task.abort();
     }
 
     #[tokio::test]
