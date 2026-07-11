@@ -227,7 +227,7 @@ The sync follows a three-phase lifecycle:
 
 1. **Download phase** — Fetch all QSOs from the QRZ logbook API via ADIF. Parse the ADIF response. For each remote QSO, attempt to match it against local records using fuzzy matching on callsign + timestamp + band + mode. Filter out ghost/duplicate records. Insert new remote-only records and update local records that have newer remote data (per the configured `ConflictPolicy`).
 
-2. **Upload phase** — Find all local QSOs with `sync_status` of `SYNC_STATUS_NOT_SYNCED` or `SYNC_STATUS_MODIFIED`. For each, serialize to ADIF and upload via the QRZ logbook API. On success, update `sync_status` to `SYNC_STATUS_SYNCED` and record the `qrz_logid` returned by QRZ.
+2. **Upload phase** — Find all local QSOs with `sync_status` of `SYNC_STATUS_NOT_SYNCED` or `SYNC_STATUS_MODIFIED`. For each, serialize to ADIF and upload via the QRZ logbook API. New records use a normal INSERT. Modified records use the documented `OPTION=REPLACE` value exactly; engines must not append a `LOGID` selector to that option. QRZ matches the duplicate from the ADIF identity fields and returns the affected `qrz_logid`. On success, update `sync_status` to `SYNC_STATUS_SYNCED` and record that returned value.
 
    **Previous-callsign rewrite (issue #337).** QRZ logbooks are bound to a single callsign and reject ADIF whose `STATION_CALLSIGN` does not match the logbook owner. Operators who have changed callsigns (e.g. KB7QOP → AE7XI) keep historical QSOs locally with the old call. To avoid those rejections, engines MUST:
 
@@ -1505,7 +1505,7 @@ The QRZ logbook sync is a multi-phase operation:
 
 #### Phase 0.5: Push local corrections before download
 
-Before fetching remote QSOs, engines MUST resolve the QRZ logbook owner callsign (via `STATUS`, falling back to cached metadata on transient failure) and push local rows with `sync_status = MODIFIED` and a non-empty `qrz_logid` when the effective conflict policy is `CONFLICT_POLICY_FLAG_FOR_REVIEW` or `CONFLICT_POLICY_UNSPECIFIED`. This uses the documented replace form `ACTION=INSERT&OPTION=REPLACE,LOGID:<logid>`.
+Before fetching remote QSOs, engines MUST resolve the QRZ logbook owner callsign (via `STATUS`, falling back to cached metadata on transient failure) and push local rows with `sync_status = MODIFIED` and a non-empty `qrz_logid` when the effective conflict policy is `CONFLICT_POLICY_FLAG_FOR_REVIEW` or `CONFLICT_POLICY_UNSPECIFIED`. This uses the documented replace form `ACTION=INSERT&OPTION=REPLACE`. QRZ identifies the existing record from the ADIF identity fields.
 
 This pre-download upload prevents a stale QRZ copy from being downloaded first and converting a normal local correction into `CONFLICT` before the upload phase can update QRZ. Engines MUST remember the `qrz_logid` values successfully uploaded during this phase and ignore matching remote rows returned by the same sync's subsequent `FETCH`, because QRZ may briefly return the stale pre-replace copy.
 
@@ -1531,7 +1531,7 @@ This pre-download upload prevents a stale QRZ copy from being downloaded first a
 1. Query local QSOs with `sync_status` in (`NOT_SYNCED`, `MODIFIED`). Soft-deleted rows MUST NOT be uploaded as inserts/updates regardless of `sync_status`; they are handled by Phase 2.5.
 2. For each QSO, serialize to ADIF and call the QRZ logbook API:
    - If `sync_status = NOT_SYNCED` (new record, no `qrz_logid`), use `ACTION=INSERT`.
-   - If `sync_status = MODIFIED` and the record has a `qrz_logid`, use the documented replace form `ACTION=INSERT&OPTION=REPLACE,LOGID:<logid>`. Engines MUST NOT use the undocumented `ACTION=REPLACE` form, which can silently produce duplicate inserts on the remote logbook.
+   - If `sync_status = MODIFIED` and the record has a `qrz_logid`, use the documented replace form `ACTION=INSERT&OPTION=REPLACE`. QRZ identifies the existing record from the ADIF identity fields. Engines MUST NOT append a `LOGID` selector to `OPTION` or use the undocumented `ACTION=REPLACE` form.
    - If `sync_status = MODIFIED` but no `qrz_logid` is available (e.g., first sync after upgrading from an engine that didn't persist the logid), fall back to `ACTION=INSERT`. Engines SHOULD additionally run the repair pass described in §7.7 before the first sync so modified-without-logid rows are rare.
 3. Accept both `RESULT=OK` (insert) and `RESULT=REPLACE` (update) as success indicators when parsing the QRZ response.
 4. On success, set `sync_status = SYNCED` and store the returned `LOGID` (or the supplied one for a REPLACE that echoes nothing) in `qrz_logid`.
@@ -1561,7 +1561,7 @@ This pre-download upload prevents a stale QRZ copy from being downloaded first a
 When `LogQso.sync_to_qrz=true` or `UpdateQso.sync_to_qrz=true`, engines MUST attempt to push the affected row to QRZ immediately after the local persist. This is independent of the bulk sync flow (`SyncWithQrz`) and lets clients log a QSO and get an authoritative QRZ logid back in a single round-trip.
 
 **Selection rule (mirrors Phase 2):**
-- If the local row has a non-empty `qrz_logid`, REPLACE in place (`ACTION=INSERT&OPTION=REPLACE,LOGID:<logid>`).
+- If the local row has a non-empty `qrz_logid`, replace it using `ACTION=INSERT&OPTION=REPLACE`; QRZ identifies the existing record from the ADIF identity fields.
 - Otherwise INSERT (`ACTION=INSERT`).
 
 **Success path:** adopt the QRZ-assigned `LOGID`, set `sync_status=SYNC_STATUS_SYNCED`, write the row back to local storage, and populate the response's `sync_success=true` (and `qrz_logid` for `LogQsoResponse`).

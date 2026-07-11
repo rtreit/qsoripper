@@ -263,7 +263,7 @@ fn parse_status_response(map: &HashMap<String, String>) -> QrzLogbookStatus {
 fn check_result(map: HashMap<String, String>) -> Result<HashMap<String, String>, QrzLogbookError> {
     match map.get("RESULT").map(String::as_str) {
         // QRZ returns RESULT=OK for INSERT/FETCH/STATUS/DELETE successes and
-        // RESULT=REPLACE for `INSERT&OPTION=REPLACE,LOGID:...` successes.
+        // RESULT=REPLACE for `INSERT&OPTION=REPLACE` successes.
         // Treat both as success per docs/integrations/qrz-logbook-api.md.
         Some("OK" | "REPLACE") => Ok(map),
         Some("FAIL") => {
@@ -727,10 +727,10 @@ impl QrzLogbookClient {
     /// Replace an existing QSO on the QRZ Logbook in place.
     ///
     /// Per the QRZ Logbook API contract this is `ACTION=INSERT` with
-    /// `OPTION=REPLACE,LOGID:<id>`. The server keeps the same `LOGID`
-    /// rather than minting a new one. Modified QSOs that already have a
-    /// `qrz_logid` MUST go through this path instead of `upload_qso` to
-    /// avoid creating duplicate rows on QRZ.
+    /// `OPTION=REPLACE`. QRZ matches the duplicate from the ADIF identity
+    /// fields and returns its `LOGID`. Modified QSOs that already have a
+    /// `qrz_logid` must go through this path instead of `upload_qso` to avoid
+    /// creating duplicate rows on QRZ.
     ///
     /// # Errors
     ///
@@ -749,12 +749,11 @@ impl QrzLogbookClient {
             ));
         }
         let adif_record = qso_to_qrz_adif(qso, book_owner);
-        let option = format!("REPLACE,LOGID:{logid}");
 
         let body = self
             .post_form(&[
                 ("ACTION", "INSERT"),
-                ("OPTION", option.as_str()),
+                ("OPTION", "REPLACE"),
                 ("ADIF", &adif_record),
             ])
             .await?;
@@ -1702,13 +1701,14 @@ mod tests {
     // -- delete_qso integration ---------------------------------------------
 
     #[tokio::test]
-    async fn replace_qso_sends_replace_option_with_logid() {
+    async fn replace_qso_sends_documented_replace_option() {
         let (base_url, requests) =
             spawn_logbook_server(&[("text/plain", "RESULT=REPLACE&LOGID=555444333")]).await;
         let client = QrzLogbookClient::new(test_config(base_url)).expect("client");
 
         let qso = QsoRecord {
             worked_callsign: "W1AW".to_string(),
+            qrz_logid: Some("555444333".to_string()),
             ..Default::default()
         };
         let result = client
@@ -1723,16 +1723,21 @@ mod tests {
 
         let body = &requests.lock().expect("requests")[0];
         assert!(body.contains("ACTION=INSERT"));
-        // OPTION=REPLACE,LOGID:555444333 — the comma and colon are URL-encoded
-        // so we just verify the discriminating substrings are present.
         assert!(
-            body.contains("OPTION=REPLACE"),
-            "missing OPTION=REPLACE: {body}"
+            body.contains("OPTION=REPLACE&"),
+            "OPTION must be exactly REPLACE: {body}"
         );
-        assert!(body.contains("LOGID"), "missing logid in OPTION: {body}");
+        assert!(
+            !body.contains("OPTION=REPLACE%2C"),
+            "OPTION must not embed a LOGID selector: {body}"
+        );
+        assert!(
+            body.contains("APP_QRZLOG_LOGID"),
+            "ADIF must carry the existing logid: {body}"
+        );
         assert!(
             body.contains("555444333"),
-            "missing logid value in OPTION: {body}"
+            "missing logid value in ADIF: {body}"
         );
     }
 
