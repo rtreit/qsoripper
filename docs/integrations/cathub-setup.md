@@ -174,6 +174,14 @@ hub on its own (for example with `-DryRun` to validate config).
   accepts both that decimal form and a plain integer, so `Test CAT` and band changes
   set the dial correctly.
 
+### JS8Call
+
+- Settings > Radio: Rig `Hamlib NET rigctl`, Network Server **127.0.0.1:4535**.
+- PTT method `CAT`, Split Operation **Fake It**.
+- Give JS8Call its own writable/PTT endpoint. Do not point it at WSJT-X's port 4533. Both
+  applications set mode and PTT, and sharing a port allows one application's plain-USB mode
+  selection to clear the TS-590 DATA flag required by the other.
+
 ### TS-590 PC-control beep (fixed in the hub)
 
 Earlier builds made the TS-590 emit a short Morse **"U"** (di-di-dah) tone during WSJT-X

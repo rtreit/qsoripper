@@ -39,13 +39,12 @@ baud = 1200
 max_tx_ms = 30000
 api_bind = "127.0.0.1:50071"
 
-# Uncomment after installing the COM40 <-> COM41 pair.
-# [[winkeyer_face]]
-# name = "n1mm-cw"
-# transport = "COM40"    # N1MM WinKeyer port is the paired COM41
-# baud = 1200
-# primary = true
-# perms = ["status", "send", "control", "ptt"]
+[[winkeyer_face]]
+name = "n1mm-cw"
+transport = "COM40"    # N1MM WinKeyer port is the paired COM41
+baud = 1200
+primary = true
+perms = ["status", "send", "control", "ptt"]
 
 # --- Hamlib NET (rigctld-compatible) TCP endpoints -------------------------------------
 
@@ -63,6 +62,15 @@ perms = ["read"]
 [[hamlib_net]]
 name = "wsjtx"
 bind = "127.0.0.1:4533"
+single_vfo = true
+perms = ["read", "write", "ptt"]
+
+# Write + PTT endpoint dedicated to JS8Call. Do not share the WSJT-X endpoint: both clients
+# control mode and PTT, and JS8Call's plain-USB setting can clear the TS-590 DATA flag while
+# WSJT-X is operating. Configure JS8Call as Hamlib NET rigctl at 127.0.0.1:4535 with Fake It.
+[[hamlib_net]]
+name = "js8call"
+bind = "127.0.0.1:4535"
 single_vfo = true
 perms = ["read", "write", "ptt"]
 
