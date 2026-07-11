@@ -40,11 +40,12 @@ each pair; the application binds the second. Using the com0com "setupc" tool, cr
     install PortName=COM20 PortName=COM21    # N1MM Logger+     (daemon COM20, app COM21)
     install PortName=COM30 PortName=COM31    # ARCP-590         (daemon COM30, app COM31)
     install PortName=COM40 PortName=COM41    # N1MM WinKeyer    (daemon COM40, app COM41)
+    install PortName=COM42 PortName=COM43    # WKTools          (daemon COM42, app COM43)
 
 WSJT-X, Log4OM, and the QsoRipper engine use the Hamlib NET (TCP) endpoints instead and need
 no serial pair.
 
-The WinKeyer pair is separate from N1MM's radio-CAT pair. N1MM uses COM21 for its TS-590 radio and COM41 for WinKeyer. CatHub owns physical WinKeyer COM3 and the hub side COM40. This permits N1MM and QsoRipper to remain connected to one keyer without attempting an unsafe shared open of COM3.
+The WinKeyer pairs are separate from N1MM's radio-CAT pair. N1MM uses COM21 for its TS-590 radio and COM41 for WinKeyer. WKTools uses COM43 only for maintenance. CatHub owns physical WinKeyer COM3 and the hub sides COM40 and COM42. This permits N1MM and QsoRipper to remain connected to one keyer without attempting an unsafe shared open of COM3, while device maintenance receives a separately permissioned face.
 
 Each pair has two COM numbers: a **daemon side** (the lower, even number COM10/20/30 that the
 hub opens via `transport`) and an **application side** (the partner COM11/21/31). Point each
@@ -132,6 +133,8 @@ hub on its own (for example with `-DryRun` to validate config).
 - Configurer > Hardware: radio `Kenwood`, port **COM21**, 115200, 8-N-1, no flow control.
 - Configurer > Hardware: enable WinKeyer on **COM41**, 1200 baud. COM41 is the application
   side of the dedicated COM40/COM41 keyer pair; never select physical COM3 or CatHub's COM40.
+- Configure WKTools for **COM43**, 1200 baud. COM43 is the application side of the maintenance
+  COM42/COM43 pair. Close WKTools after maintenance so the port is released.
 - The `n1mm` face is `dialect = "ts590"`, `single_vfo = true`, `perms = ["read", "write", "ptt"]`.
 - **`single_vfo = true` is required for SO1V.** N1MM in single-VFO (SO1V) mode refuses VFO B
   ("You should not use VFO B when configured for SO1V") and freezes its frequency display when

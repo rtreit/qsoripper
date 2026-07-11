@@ -46,6 +46,13 @@ baud = 1200
 primary = true
 perms = ["status", "send", "control", "ptt"]
 
+[[winkeyer_face]]
+name = "wktools-maintenance"
+transport = "COM42"    # WKTools maintenance port is the paired COM43
+baud = 1200
+primary = false
+perms = ["status", "control", "config_write"]
+
 # --- Hamlib NET (rigctld-compatible) TCP endpoints -------------------------------------
 
 # Read-only endpoint for the QsoRipper engine's RigctldProvider.

@@ -38,6 +38,8 @@ qsoripper cw speed 28
 
 Create a dedicated com0com pair such as `COM40 <-> COM41`. CatHub opens `COM40`; N1MM opens `COM41`. Neither N1MM nor a QsoRipper engine opens physical `COM3`.
 
+Create a second pair such as `COM42 <-> COM43` for device maintenance. CatHub opens `COM42`; WKTools opens `COM43`. Do not make WKTools and N1MM share COM41.
+
 Add this to the unified configuration:
 
 ```toml
@@ -54,6 +56,13 @@ baud = 1200
 primary = true
 perms = ["status", "send", "control", "ptt"]
 
+[[cat_hub.winkeyer_face]]
+name = "wktools-maintenance"
+transport = "COM42"
+baud = 1200
+primary = false
+perms = ["status", "control", "config_write"]
+
 [cw_keying]
 backend = "cathub"
 cathub_endpoint = "http://127.0.0.1:50071"
@@ -63,13 +72,13 @@ transmit_enabled = false
 max_tx_ms = 30000
 ```
 
-Start CatHub before either engine. Configure N1MM's WinKeyer port as `COM41`, 1200 baud. QsoRipper talks to the typed API and can remain connected while N1MM uses the virtual serial face.
+Start CatHub before either engine. Configure N1MM's WinKeyer port as `COM41`, 1200 baud. Configure WKTools for `COM43`, 1200 baud. QsoRipper talks to the typed API and can remain connected while N1MM uses the virtual serial face.
 
 CatHub schedules complete jobs without interleaving. N1MM Escape clears only N1MM's active stream; QsoRipper cancellation affects only its named client. The station-wide emergency stop remains global. A fixed-speed QsoRipper job temporarily overrides the keyer and restores the primary face's fixed or pot-controlled speed afterward.
 
 The speed-pot notification contains an offset from the active `MIN_WPM` setting. CatHub tracks each client's Speed Pot Setup command, reports the canonical actual WPM through the typed API, and forwards the original protocol byte unchanged to N1MM.
 
-Routine operation never writes EEPROM. Reset, EEPROM, firmware, calibration, and baud-changing commands require a face with `config_write`, an empty transmit queue, and an exclusive maintenance lease. During maintenance, CatHub safely closes the physical host session, keeps replies private to the maintenance face, rejects other transmission, then reopens the host session and restores foreground transient state. Do not grant `config_write` to the everyday N1MM face.
+Routine operation never writes EEPROM. Reset, EEPROM, firmware, calibration, and baud-changing commands require a face with `config_write`, an empty transmit queue, and an exclusive maintenance lease. During maintenance, CatHub safely closes the physical host session, keeps replies private to the maintenance face, rejects other transmission, then reopens the host session and restores foreground transient state. Close WKTools when maintenance is complete so it releases COM43. Do not grant `config_write` to the everyday N1MM face.
 
 ### Direct single-client connection
 
