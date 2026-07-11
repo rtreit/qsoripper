@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// A capability granted to one virtual WinKeyer serial face.
+enum WinkeyerFacePermission {
+  WINKEYER_FACE_PERMISSION_UNSPECIFIED = 0;
+  WINKEYER_FACE_PERMISSION_STATUS = 1;
+  WINKEYER_FACE_PERMISSION_SEND = 2;
+  WINKEYER_FACE_PERMISSION_CONTROL = 3;
+  WINKEYER_FACE_PERMISSION_PTT = 4;
+  WINKEYER_FACE_PERMISSION_CONFIG_WRITE = 5;
+}

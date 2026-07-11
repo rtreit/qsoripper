@@ -634,6 +634,80 @@
               </ComboBox>
             </Grid>
 
+            <TextBlock Classes="settingsSectionHeader" FontSize="14" Text="WinKeyer broker" />
+            <TextBlock Classes="settingsSectionHint"
+                       Text="CatHub can exclusively own one physical WinKeyer and expose it concurrently to QsoRipper over loopback gRPC and legacy applications over dedicated virtual COM pairs." />
+            <Grid ColumnDefinitions="140,*,140,*"
+                  RowDefinitions="Auto,Auto"
+                  ColumnSpacing="12"
+                  RowSpacing="6">
+              <TextBlock Grid.Row="0" Grid.Column="0" Text="Physical port:" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubWinkeyerPortBox"
+                       Grid.Row="0" Grid.Column="1"
+                       Text="{Binding CatHubWinkeyerPort, Mode=TwoWay}"
+                       PlaceholderText="COM3 (blank disables)" />
+              <TextBlock Grid.Row="0" Grid.Column="2" Text="Baud:" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubWinkeyerBaudBox"
+                       Grid.Row="0" Grid.Column="3"
+                       Text="{Binding CatHubWinkeyerBaud, Mode=TwoWay}"
+                       PlaceholderText="1200" />
+              <TextBlock Grid.Row="1" Grid.Column="0" Text="Max TX (ms):" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubWinkeyerMaxTxBox"
+                       Grid.Row="1" Grid.Column="1"
+                       Text="{Binding CatHubWinkeyerMaxTxMs, Mode=TwoWay}"
+                       PlaceholderText="30000" />
+              <TextBlock Grid.Row="1" Grid.Column="2" Text="Loopback API:" VerticalAlignment="Center" />
+              <TextBox AutomationProperties.AutomationId="SettingsCatHubWinkeyerApiBindBox"
+                       Grid.Row="1" Grid.Column="3"
+                       Text="{Binding CatHubWinkeyerApiBind, Mode=TwoWay}"
+                       PlaceholderText="127.0.0.1:50071" />
+            </Grid>
+
+            <DockPanel>
+              <TextBlock DockPanel.Dock="Left"
+                         Classes="settingsSectionHeader" FontSize="14"
+                         VerticalAlignment="Center"
+                         Text="Virtual WinKeyer faces" />
+              <Button DockPanel.Dock="Right"
+                      AutomationProperties.AutomationId="SettingsCatHubAddWinkeyerFaceButton"
+                      HorizontalAlignment="Right"
+                      Content="Add WinKeyer face"
+                      Command="{Binding AddCatHubWinkeyerFaceCommand}" />
+            </DockPanel>
+            <TextBlock Classes="settingsSectionHint"
+                       Text="The hub opens Transport; configure the application (for example N1MM) to use the other side of that com0com pair at 1200 baud, 8-N-2." />
+            <ItemsControl AutomationProperties.AutomationId="SettingsCatHubWinkeyerFacesList"
+                          ItemsSource="{Binding CatHubWinkeyerFaces}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                          BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,8">
+                    <StackPanel Spacing="6">
+                      <Grid ColumnDefinitions="70,*,80,*,70,90,Auto" ColumnSpacing="8">
+                        <TextBlock Grid.Column="0" Text="Name:" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="1" Text="{Binding Name, Mode=TwoWay}" PlaceholderText="n1mm-cw" />
+                        <TextBlock Grid.Column="2" Text="Transport:" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="3" Text="{Binding Transport, Mode=TwoWay}" PlaceholderText="COM40" />
+                        <TextBlock Grid.Column="4" Text="Baud:" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="5" Text="{Binding Baud, Mode=TwoWay}" PlaceholderText="1200" />
+                        <Button Grid.Column="6" Content="Remove"
+                                Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).RemoveCatHubWinkeyerFaceCommand}"
+                                CommandParameter="{Binding}" />
+                      </Grid>
+                      <StackPanel Orientation="Horizontal" Spacing="14">
+                        <CheckBox Content="Primary" IsChecked="{Binding Primary, Mode=TwoWay}" />
+                        <CheckBox Content="Status" IsChecked="{Binding PermStatus, Mode=TwoWay}" />
+                        <CheckBox Content="Send" IsChecked="{Binding PermSend, Mode=TwoWay}" />
+                        <CheckBox Content="Control" IsChecked="{Binding PermControl, Mode=TwoWay}" />
+                        <CheckBox Content="PTT" IsChecked="{Binding PermPtt, Mode=TwoWay}" />
+                        <CheckBox Content="Maintenance writes" IsChecked="{Binding PermConfigWrite, Mode=TwoWay}" />
+                      </StackPanel>
+                    </StackPanel>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
             <DockPanel>
               <TextBlock DockPanel.Dock="Left"
                          Classes="settingsSectionHeader" FontSize="14"

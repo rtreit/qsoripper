@@ -27,6 +27,26 @@ max_tx_ms = 300000       # 5-minute hard transmit ceiling (backstop for a crashe
 [events]
 native_push = true       # daemon enables and owns the TS-590 AI2; stream
 
+# --- WinKeyer broker ------------------------------------------------------------------
+#
+# CatHub owns the physical keyer. QsoRipper uses the typed loopback API; N1MM uses the
+# application side of a separate com0com pair. Change COM40/COM41 if that pair is not
+# installed on this station.
+
+[winkeyer]
+port = "COM3"
+baud = 1200
+max_tx_ms = 30000
+api_bind = "127.0.0.1:50071"
+
+# Uncomment after installing the COM40 <-> COM41 pair.
+# [[winkeyer_face]]
+# name = "n1mm-cw"
+# transport = "COM40"    # N1MM WinKeyer port is the paired COM41
+# baud = 1200
+# primary = true
+# perms = ["status", "send", "control", "ptt"]
+
 # --- Hamlib NET (rigctld-compatible) TCP endpoints -------------------------------------
 
 # Read-only endpoint for the QsoRipper engine's RigctldProvider.

@@ -154,6 +154,8 @@ public sealed class ManagedEngineStateTests : IDisposable
             backend = "winkeyer"
             winkeyer_port = "COM3"
             winkeyer_baud = 1200
+            cathub_endpoint = "http://127.0.0.1:50071"
+            cathub_client_name = "dotnet-engine"
             speed_wpm = 20
             transmit_enabled = true
             max_tx_ms = 30000
@@ -175,6 +177,8 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal("winkeyer", loaded.Config.CwKeying.Backend);
         Assert.Equal("COM3", loaded.Config.CwKeying.WinkeyerPort);
         Assert.Equal(1_200, loaded.Config.CwKeying.WinkeyerBaud);
+        Assert.Equal("http://127.0.0.1:50071", loaded.Config.CwKeying.CathubEndpoint);
+        Assert.Equal("dotnet-engine", loaded.Config.CwKeying.CathubClientName);
         Assert.Equal(20u, loaded.Config.CwKeying.SpeedWpm);
         Assert.True(loaded.Config.CwKeying.TransmitEnabled);
         Assert.Equal(30_000u, loaded.Config.CwKeying.MaxTxMs);
@@ -1330,6 +1334,8 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Contains("[cat_hub.radio]", content, StringComparison.Ordinal);
         Assert.Contains("[[cat_hub.face]]", content, StringComparison.Ordinal);
         Assert.Contains("[[cat_hub.hamlib_net]]", content, StringComparison.Ordinal);
+        Assert.Contains("[cat_hub.winkeyer]", content, StringComparison.Ordinal);
+        Assert.Contains("[[cat_hub.winkeyer_face]]", content, StringComparison.Ordinal);
 
         // Re-load from disk to confirm the lenient projection round-trips the written values.
         var reloaded = CreateState();
@@ -1347,6 +1353,13 @@ public sealed class ManagedEngineStateTests : IDisposable
         var endpoint = Assert.Single(status.CatHub.HamlibNet);
         Assert.Equal("engine", endpoint.Name);
         Assert.Equal("127.0.0.1:4532", endpoint.Bind);
+        Assert.NotNull(status.CatHub.Winkeyer);
+        Assert.Equal("COM3", status.CatHub.Winkeyer.Port);
+        Assert.Equal("127.0.0.1:50071", status.CatHub.Winkeyer.ApiBind);
+        var winkeyerFace = Assert.Single(status.CatHub.WinkeyerFaces);
+        Assert.Equal("n1mm-cw", winkeyerFace.Name);
+        Assert.True(winkeyerFace.Primary);
+        Assert.Contains(WinkeyerFacePermission.Send, winkeyerFace.Perms);
     }
 
     [Fact]
@@ -1713,6 +1726,29 @@ public sealed class ManagedEngineStateTests : IDisposable
             Poll = new CatHubPollSettings { BaselineMs = 250 },
             Ptt = new CatHubPttSettings { MaxTxMs = 60000 },
             Events = new CatHubEventSettings { NativePush = true },
+            Winkeyer = new CatHubWinkeyerSettings
+            {
+                Port = "COM3",
+                Baud = 1200,
+                MaxTxMs = 30000,
+                ApiBind = "127.0.0.1:50071",
+            },
+            WinkeyerFaces =
+            {
+                new CatHubWinkeyerFace
+                {
+                    Name = "n1mm-cw",
+                    Transport = "COM40",
+                    Baud = 1200,
+                    Primary = true,
+                    Perms =
+                    {
+                        WinkeyerFacePermission.Status,
+                        WinkeyerFacePermission.Send,
+                        WinkeyerFacePermission.Control,
+                    },
+                },
+            },
             Faces =
             {
                 new CatHubSerialFace

@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// Physical WinKeyer broker settings stored in `[cat_hub.winkeyer]`.
+message CatHubWinkeyerSettings {
+  // Physical serial port exclusively owned by CatHub.
+  string port = 1;
+  // Physical serial baud rate. WinKeyer uses 1200 baud.
+  optional uint32 baud = 2;
+  // Broker-wide maximum continuous transmit duration.
+  optional uint64 max_tx_ms = 3;
+  // Loopback gRPC bind address used by QsoRipper engines.
+  optional string api_bind = 4;
+}

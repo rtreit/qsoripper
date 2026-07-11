@@ -1384,13 +1384,15 @@ All configuration is driven by environment variables prefixed with `QSORIPPER_`.
 
 #### CW Keying
 
-The same keys may be persisted under `[cw_keying]` in the shared `config.toml`: `backend`, `winkeyer_port`, `winkeyer_baud`, `speed_wpm`, `transmit_enabled`, and `max_tx_ms`. Environment variables in the table below override their corresponding persisted values.
+The same keys may be persisted under `[cw_keying]` in the shared `config.toml`: `backend`, `winkeyer_port`, `winkeyer_baud`, `cathub_endpoint`, `cathub_client_name`, `speed_wpm`, `transmit_enabled`, and `max_tx_ms`. Environment variables in the table below override their corresponding persisted values.
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `QSORIPPER_CW_KEYER_BACKEND` | Enum | `null` | CW keying backend: `null` or `winkeyer`. `cwdaemon` is reserved for a future backend. |
+| `QSORIPPER_CW_KEYER_BACKEND` | Enum | `null` | CW keying backend: `null`, direct `winkeyer`, or shared `cathub`. `cwdaemon` is reserved for a future backend. |
 | `QSORIPPER_CW_WINKEYER_PORT` | String | | Serial port for WinKeyer, such as `COM3` on Windows or `/dev/ttyUSB0` on Linux. Required when backend is `winkeyer`. |
 | `QSORIPPER_CW_WINKEYER_BAUD` | Integer | `1200` | WinKeyer serial baud rate. Most WinKeyer devices use 1200 baud. |
+| `QSORIPPER_CW_CATHUB_ENDPOINT` | URL | `http://127.0.0.1:50071` | Loopback WinKeyer broker endpoint. Used only by the `cathub` backend. |
+| `QSORIPPER_CW_CATHUB_CLIENT_NAME` | String | `qsoripper-engine` | Stable broker client identity used for scoped queue cancellation and telemetry. |
 | `QSORIPPER_CW_SPEED_WPM` | Integer | `25` | Default CW speed in words per minute. Valid range is 5 through 99. |
 | `QSORIPPER_CW_TRANSMIT_ENABLED` | Bool | `false` | Explicit safety gate for hardware text transmission. The WinKeyer backend will not send text until this is `true`. |
 | `QSORIPPER_CW_MAX_TX_MS` | Integer | `120000` | Maximum duration for one hardware send before a still-busy WinKeyer buffer is cleared. Valid range is 1000 through 300000 ms. |

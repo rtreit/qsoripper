@@ -38,6 +38,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 bytes = "1"
+tokio-stream = { version = "0.1", features = ["net", "sync"] }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

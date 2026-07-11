@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/winkeyer_face_permission.proto";
+
+// A virtual WinKeyer serial endpoint stored in `[[cat_hub.winkeyer_face]]`.
+message CatHubWinkeyerFace {
+  // Stable face name used for logging and ownership status.
+  string name = 1;
+  // Hub side of the com0com or PTY pair.
+  string transport = 2;
+  // Virtual serial baud rate. WinKeyer uses 1200 baud.
+  optional uint32 baud = 3;
+  // Whether this face owns idle paddle and foreground settings.
+  optional bool primary = 4;
+  // Capabilities granted to clients of this face.
+  repeated WinkeyerFacePermission perms = 5;
+}

@@ -39,9 +39,12 @@ each pair; the application binds the second. Using the com0com "setupc" tool, cr
     install PortName=COM10 PortName=COM11    # HDSDR / OmniRig  (daemon COM10, app COM11)
     install PortName=COM20 PortName=COM21    # N1MM Logger+     (daemon COM20, app COM21)
     install PortName=COM30 PortName=COM31    # ARCP-590         (daemon COM30, app COM31)
+    install PortName=COM40 PortName=COM41    # N1MM WinKeyer    (daemon COM40, app COM41)
 
 WSJT-X, Log4OM, and the QsoRipper engine use the Hamlib NET (TCP) endpoints instead and need
 no serial pair.
+
+The WinKeyer pair is separate from N1MM's radio-CAT pair. N1MM uses COM21 for its TS-590 radio and COM41 for WinKeyer. CatHub owns physical WinKeyer COM3 and the hub side COM40. This permits N1MM and QsoRipper to remain connected to one keyer without attempting an unsafe shared open of COM3.
 
 Each pair has two COM numbers: a **daemon side** (the lower, even number COM10/20/30 that the
 hub opens via `transport`) and an **application side** (the partner COM11/21/31). Point each
@@ -59,7 +62,8 @@ launcher, under a `[cat_hub]` table:
 - Override the location for every component with the `QSORIPPER_CONFIG_PATH` environment variable.
 
 Settings nest under `[cat_hub]`, for example `[cat_hub.radio]`, `[cat_hub.poll]`,
-`[cat_hub.ptt]`, `[cat_hub.events]`, `[[cat_hub.face]]`, and `[[cat_hub.hamlib_net]]`. The
+`[cat_hub.ptt]`, `[cat_hub.events]`, `[[cat_hub.face]]`, `[[cat_hub.hamlib_net]]`,
+`[cat_hub.winkeyer]`, and `[[cat_hub.winkeyer_face]]`. The
 engine and launcher own other top-level tables in the same file (`[station_profile]`,
 `[launcher]`, `[rig_control]`, …); each component preserves the others' tables when it saves,
 so the file is safe to share.
@@ -125,6 +129,8 @@ hub on its own (for example with `-DryRun` to validate config).
 
 ### N1MM Logger+
 - Configurer > Hardware: radio `Kenwood`, port **COM21**, 115200, 8-N-1, no flow control.
+- Configurer > Hardware: enable WinKeyer on **COM41**, 1200 baud. COM41 is the application
+  side of the dedicated COM40/COM41 keyer pair; never select physical COM3 or CatHub's COM40.
 - The `n1mm` face is `dialect = "ts590"`, `single_vfo = true`, `perms = ["read", "write", "ptt"]`.
 - **`single_vfo = true` is required for SO1V.** N1MM in single-VFO (SO1V) mode refuses VFO B
   ("You should not use VFO B when configured for SO1V") and freezes its frequency display when
@@ -132,6 +138,8 @@ hub on its own (for example with `-DryRun` to validate config).
   on as VFO A, so N1MM tracks the radio across A/B switches with no warning. If you run N1MM in
   SO2V instead, you may set `single_vfo = false`; for SO1V leave it on (the shipped default for
   this face). See design §8.4.2.
+- Keep the everyday `n1mm-cw` WinKeyer face limited to `status`, `send`, `control`, and `ptt`.
+  Persistent EEPROM/reset access belongs on a separate, normally disabled maintenance face.
 
 ### ARCP-590
 - Set ARCP-590's COM port to **COM31**, 115200, 8-N-1.
@@ -246,6 +254,11 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
   holds that port open, so applications only see the partner port. Select COM11/21/31 instead.
 - An app sees no data on its serial port: the com0com pair is reversed or the app is on the
   daemon's half of the pair. The app binds the **second** port of each pair (COM11/21/31).
+- N1MM cannot open the WinKeyer: select COM41, not COM3 or COM40, and confirm the hub log says
+  the `n1mm-cw` face opened COM40 at 1200 baud, 8-N-2.
+- A physical WinKeyer USB disconnect cancels queued keying, releases station PTT, and starts
+  capped reconnect attempts without stopping the radio hub. N1MM may need to reopen its
+  logical keyer session after the physical device reconnects.
 - A NET client cannot connect: confirm the bind address/port in `config\cathub.toml` matches
   the app, and that the hub log shows the endpoint listening.
 - An app that relies on Kenwood auto-information (notably **ARCP-590**) connects but never

@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+enum WinkeyerSpeedMode {
+  WINKEYER_SPEED_MODE_UNSPECIFIED = 0;
+  WINKEYER_SPEED_MODE_POT = 1;
+  WINKEYER_SPEED_MODE_FIXED = 2;
+}

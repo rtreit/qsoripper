@@ -161,6 +161,18 @@ internal sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private int _catHubNativePushIndex;
 
+    [ObservableProperty]
+    private string _catHubWinkeyerPort = string.Empty;
+
+    [ObservableProperty]
+    private string _catHubWinkeyerBaud = string.Empty;
+
+    [ObservableProperty]
+    private string _catHubWinkeyerMaxTxMs = string.Empty;
+
+    [ObservableProperty]
+    private string _catHubWinkeyerApiBind = string.Empty;
+
     private bool _hasPersistedCatHub;
     private bool _catHubLoading;
 
@@ -178,6 +190,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
     public ObservableCollection<CatHubFaceRowViewModel> CatHubFaces { get; } = [];
 
     public ObservableCollection<CatHubEndpointRowViewModel> CatHubEndpoints { get; } = [];
+
+    public ObservableCollection<CatHubWinkeyerFaceRowViewModel> CatHubWinkeyerFaces { get; } = [];
 
     // WSJT-X ingestion ([wsjtx_ingest]) is conditionally engine-owned like CAT hub.
     // Untouched settings are omitted on save so existing comments and unknown keys stay intact.
@@ -329,6 +343,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
         _engine = engine;
         CatHubFaces.CollectionChanged += OnCatHubCollectionChanged;
         CatHubEndpoints.CollectionChanged += OnCatHubCollectionChanged;
+        CatHubWinkeyerFaces.CollectionChanged += OnCatHubCollectionChanged;
     }
 
     private static readonly HashSet<string> CatHubScalarPropertyNames = new(StringComparer.Ordinal)
@@ -346,6 +361,10 @@ internal sealed partial class SettingsViewModel : ObservableObject
         nameof(CatHubPollHeartbeatMs),
         nameof(CatHubPttMaxTxMs),
         nameof(CatHubNativePushIndex),
+        nameof(CatHubWinkeyerPort),
+        nameof(CatHubWinkeyerBaud),
+        nameof(CatHubWinkeyerMaxTxMs),
+        nameof(CatHubWinkeyerApiBind),
     };
 
     private static readonly HashSet<string> WsjtxIngestScalarPropertyNames = new(StringComparer.Ordinal)
@@ -443,6 +462,19 @@ internal sealed partial class SettingsViewModel : ObservableObject
         if (row is not null)
         {
             CatHubEndpoints.Remove(row);
+        }
+    }
+
+    [RelayCommand]
+    private void AddCatHubWinkeyerFace() =>
+        CatHubWinkeyerFaces.Add(new CatHubWinkeyerFaceRowViewModel());
+
+    [RelayCommand]
+    private void RemoveCatHubWinkeyerFace(CatHubWinkeyerFaceRowViewModel? row)
+    {
+        if (row is not null)
+        {
+            CatHubWinkeyerFaces.Remove(row);
         }
     }
 
@@ -809,10 +841,24 @@ internal sealed partial class SettingsViewModel : ObservableObject
                 row.PropertyChanged -= OnCatHubRowChanged;
             }
 
+            foreach (var row in CatHubWinkeyerFaces)
+            {
+                row.PropertyChanged -= OnCatHubRowChanged;
+            }
+
             CatHubFaces.Clear();
             CatHubEndpoints.Clear();
+            CatHubWinkeyerFaces.Clear();
 
             _hasPersistedCatHub = catHub is not null;
+            var winkeyer = catHub?.Winkeyer;
+            CatHubWinkeyerPort = winkeyer?.Port ?? string.Empty;
+            CatHubWinkeyerBaud = winkeyer is { HasBaud: true }
+                ? winkeyer.Baud.ToString(CultureInfo.InvariantCulture) : string.Empty;
+            CatHubWinkeyerMaxTxMs = winkeyer is { HasMaxTxMs: true }
+                ? winkeyer.MaxTxMs.ToString(CultureInfo.InvariantCulture) : string.Empty;
+            CatHubWinkeyerApiBind = winkeyer is { HasApiBind: true }
+                ? winkeyer.ApiBind : string.Empty;
 
             var radio = catHub?.Radio;
             CatHubBackend = radio is { HasBackend: true } ? radio.Backend : string.Empty;
@@ -866,6 +912,22 @@ internal sealed partial class SettingsViewModel : ObservableObject
                         PermWrite = endpoint.Perms.Contains(CatHubPermission.Write),
                         PermPtt = endpoint.Perms.Contains(CatHubPermission.Ptt),
                         PermConfigWrite = endpoint.Perms.Contains(CatHubPermission.ConfigWrite),
+                    });
+                }
+
+                foreach (var face in catHub.WinkeyerFaces)
+                {
+                    CatHubWinkeyerFaces.Add(new CatHubWinkeyerFaceRowViewModel
+                    {
+                        Name = face.Name,
+                        Transport = face.Transport,
+                        Baud = face.HasBaud ? face.Baud.ToString(CultureInfo.InvariantCulture) : string.Empty,
+                        Primary = face.HasPrimary && face.Primary,
+                        PermStatus = face.Perms.Contains(WinkeyerFacePermission.Status),
+                        PermSend = face.Perms.Contains(WinkeyerFacePermission.Send),
+                        PermControl = face.Perms.Contains(WinkeyerFacePermission.Control),
+                        PermPtt = face.Perms.Contains(WinkeyerFacePermission.Ptt),
+                        PermConfigWrite = face.Perms.Contains(WinkeyerFacePermission.ConfigWrite),
                     });
                 }
             }
@@ -1022,6 +1084,54 @@ internal sealed partial class SettingsViewModel : ObservableObject
         if (CatHubNativePushIndex != 0)
         {
             settings.Events = new CatHubEventSettings { NativePush = CatHubNativePushIndex == 1 };
+        }
+
+        if (!string.IsNullOrWhiteSpace(CatHubWinkeyerPort))
+        {
+            var winkeyer = new CatHubWinkeyerSettings { Port = CatHubWinkeyerPort.Trim() };
+            SetUInt32Field(CatHubWinkeyerBaud, value => winkeyer.Baud = value);
+            SetUInt64Field(CatHubWinkeyerMaxTxMs, value => winkeyer.MaxTxMs = value);
+            SetOptionalString(CatHubWinkeyerApiBind, value => winkeyer.ApiBind = value);
+            settings.Winkeyer = winkeyer;
+        }
+
+        foreach (var face in CatHubWinkeyerFaces)
+        {
+            var proto = new CatHubWinkeyerFace
+            {
+                Name = face.Name.Trim(),
+                Transport = face.Transport.Trim(),
+                Primary = face.Primary,
+            };
+            if (uint.TryParse(face.Baud, CultureInfo.InvariantCulture, out var baud))
+            {
+                proto.Baud = baud;
+            }
+            if (face.PermStatus)
+            {
+                proto.Perms.Add(WinkeyerFacePermission.Status);
+            }
+
+            if (face.PermSend)
+            {
+                proto.Perms.Add(WinkeyerFacePermission.Send);
+            }
+
+            if (face.PermControl)
+            {
+                proto.Perms.Add(WinkeyerFacePermission.Control);
+            }
+
+            if (face.PermPtt)
+            {
+                proto.Perms.Add(WinkeyerFacePermission.Ptt);
+            }
+
+            if (face.PermConfigWrite)
+            {
+                proto.Perms.Add(WinkeyerFacePermission.ConfigWrite);
+            }
+            settings.WinkeyerFaces.Add(proto);
         }
 
         foreach (var face in CatHubFaces)
@@ -1279,6 +1389,65 @@ internal sealed partial class SettingsViewModel : ObservableObject
                 validationError = $"CAT hub endpoint name '{endpoint.Name}' is used more than once.";
                 return false;
             }
+        }
+
+        if (CatHubWinkeyerFaces.Count > 0 && string.IsNullOrWhiteSpace(CatHubWinkeyerPort))
+        {
+            validationError = "WinKeyer faces require a physical WinKeyer port.";
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(CatHubWinkeyerPort))
+        {
+            if (!TryValidateUInt32Field(CatHubWinkeyerBaud, 1200, 1200, "WinKeyer baud", out validationError)
+                || !TryValidateUInt64Field(CatHubWinkeyerMaxTxMs, 1000, "WinKeyer max TX", out validationError))
+            {
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(CatHubWinkeyerApiBind)
+                && !(CatHubWinkeyerApiBind.StartsWith("127.", StringComparison.Ordinal)
+                    || CatHubWinkeyerApiBind.StartsWith("[::1]:", StringComparison.Ordinal)))
+            {
+                validationError = "WinKeyer API bind must use a loopback address.";
+                return false;
+            }
+        }
+
+        var winkeyerTransports = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var primaryFaces = 0;
+        foreach (var face in CatHubWinkeyerFaces)
+        {
+            if (string.IsNullOrWhiteSpace(face.Name) || string.IsNullOrWhiteSpace(face.Transport))
+            {
+                validationError = "Every WinKeyer face needs a name and virtual serial transport.";
+                return false;
+            }
+
+            if (!winkeyerTransports.Add(face.Transport.Trim()))
+            {
+                validationError = $"WinKeyer transport '{face.Transport}' is used more than once.";
+                return false;
+            }
+
+            if (face.Primary)
+            {
+                primaryFaces++;
+            }
+
+            if (face.PermSend && !face.PermStatus
+                || face.PermPtt && (!face.PermSend || !face.PermControl)
+                || face.PermConfigWrite && (!face.PermStatus || !face.PermControl))
+            {
+                validationError = $"WinKeyer face '{face.Name}' has an invalid permission combination.";
+                return false;
+            }
+        }
+
+        if (primaryFaces > 1)
+        {
+            validationError = "Only one WinKeyer face may be primary.";
+            return false;
         }
 
         if (managed && CatHubEndpoints.Count == 0 && CatHubFaces.Count == 0)

@@ -15,4 +15,8 @@ message CwKeyerStatus {
   bool transmit_enabled = 6;
   uint64 max_tx_ms = 7;
   optional uint32 firmware_revision = 8;
+  optional string broker_endpoint = 9;
+  optional uint32 pot_wpm = 10;
+  bool busy = 11;
+  optional string last_safety_action = 12;
 }

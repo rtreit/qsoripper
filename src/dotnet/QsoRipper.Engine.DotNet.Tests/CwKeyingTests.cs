@@ -58,9 +58,54 @@ public sealed class CwKeyingTests
     }
 
     [Fact]
+    public void CathubConfigurationUsesTypedBrokerWithoutOpeningSerialPort()
+    {
+        var config = ManagedCwKeyerConfig.FromValues(
+            "cathub",
+            null,
+            null,
+            "http://127.0.0.1:50071",
+            "dotnet-test",
+            "24",
+            "true",
+            "30000");
+        using var keyer = new FakeWinkeyerPort
+        {
+            BrokerStatus = new ManagedBrokerHardwareStatus(true, 19, "watchdog recovered"),
+        };
+        var serialOpens = 0;
+        var brokerOpens = 0;
+        using var controller = new ManagedCwController(
+            config,
+            (_, _) =>
+            {
+                serialOpens++;
+                return keyer;
+            },
+            cathubFactory: (endpoint, clientName) =>
+            {
+                Assert.Equal("http://127.0.0.1:50071", endpoint);
+                Assert.Equal("dotnet-test", clientName);
+                brokerOpens++;
+                return keyer;
+            });
+
+        controller.SendText("TEST", null);
+        var status = controller.Status();
+
+        Assert.Equal(0, serialOpens);
+        Assert.Equal(1, brokerOpens);
+        Assert.Equal(CwKeyerBackend.Cathub, status.Backend);
+        Assert.Equal("http://127.0.0.1:50071", status.BrokerEndpoint);
+        Assert.Equal(19u, status.PotWpm);
+        Assert.True(status.Busy);
+        Assert.Equal("watchdog recovered", status.LastSafetyAction);
+    }
+
+    [Fact]
     public void ConfigDefaultsToSafeNullBackend()
     {
-        var config = ManagedCwKeyerConfig.FromValues(null, null, null, null, null, null);
+        var config = ManagedCwKeyerConfig.FromValues(null, null, null, null, null, null, null, null);
 
         Assert.Equal(ManagedCwBackendKind.Null, config.Backend);
         Assert.False(config.TransmitEnabled);
@@ -74,7 +119,14 @@ public sealed class CwKeyingTests
     public void ConfigRejectsUnsafeSpeed(string speed)
     {
         Assert.Throws<ArgumentOutOfRangeException>(
-            () => ManagedCwKeyerConfig.FromValues(null, null, null, speed, null, null));
+            () => ManagedCwKeyerConfig.FromValues(null, null, null, null, null, speed, null, null));
+    }
+
+    [Fact]
+    public void ConfigRejectsNonLoopbackCathubEndpoint()
+    {
+        Assert.Throws<InvalidOperationException>(() => ManagedCwKeyerConfig.FromValues(
+            "cathub", null, null, "http://192.168.1.10:50071", null, null, null, null));
     }
 
     [Fact]
@@ -199,7 +251,15 @@ public sealed class CwKeyingTests
     public void NullBackendRetainsRequestedSpeedWithoutOpeningHardware()
     {
         using var controller = new ManagedCwController(
-            new ManagedCwKeyerConfig(ManagedCwBackendKind.Null, null, 1_200, 25, false, 120_000));
+            new ManagedCwKeyerConfig(
+                ManagedCwBackendKind.Null,
+                null,
+                1_200,
+                ManagedCwKeyerConfig.DefaultCathubEndpoint,
+                ManagedCwKeyerConfig.DefaultCathubClientName,
+                25,
+                false,
+                120_000));
 
         controller.SendText("TEST", 38);
 
@@ -253,6 +313,8 @@ public sealed class CwKeyingTests
             ManagedCwBackendKind.Winkeyer,
             "COM_TEST",
             1_200,
+            ManagedCwKeyerConfig.DefaultCathubEndpoint,
+            ManagedCwKeyerConfig.DefaultCathubClientName,
             25,
             transmitEnabled,
             1_000);
@@ -267,6 +329,7 @@ public sealed class CwKeyingTests
         public int CloseCount { get; private set; }
         public bool Disposed { get; private set; }
         public bool Busy { get; init; } = true;
+        public ManagedBrokerHardwareStatus? BrokerStatus { get; init; }
 
         public byte Initialize()
         {
@@ -283,6 +346,8 @@ public sealed class CwKeyingTests
         public bool IsBusy() => Busy;
 
         public void CloseHostMode() => CloseCount++;
+
+        public ManagedBrokerHardwareStatus? GetBrokerStatus() => BrokerStatus;
 
         public void Dispose() => Disposed = true;
     }
