@@ -893,6 +893,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
                     {
                         Name = face.Name,
                         Transport = face.Transport,
+                        ApplicationTransport = face.HasApplicationTransport ? face.ApplicationTransport : string.Empty,
                         Baud = face.Baud != 0 ? face.Baud.ToString(CultureInfo.InvariantCulture) : string.Empty,
                         Dialect = string.IsNullOrWhiteSpace(face.Dialect) ? "ts590" : face.Dialect,
                         PermRead = face.Perms.Contains(CatHubPermission.Read),
@@ -921,6 +922,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
                     {
                         Name = face.Name,
                         Transport = face.Transport,
+                        ApplicationTransport = face.HasApplicationTransport ? face.ApplicationTransport : string.Empty,
                         Baud = face.HasBaud ? face.Baud.ToString(CultureInfo.InvariantCulture) : string.Empty,
                         Primary = face.HasPrimary && face.Primary,
                         PermStatus = face.Perms.Contains(WinkeyerFacePermission.Status),
@@ -1103,6 +1105,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
                 Transport = face.Transport.Trim(),
                 Primary = face.Primary,
             };
+            SetOptionalString(face.ApplicationTransport, value => proto.ApplicationTransport = value);
             if (uint.TryParse(face.Baud, CultureInfo.InvariantCulture, out var baud))
             {
                 proto.Baud = baud;
@@ -1142,6 +1145,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
                 Transport = face.Transport.Trim(),
                 Dialect = string.IsNullOrWhiteSpace(face.Dialect) ? "ts590" : face.Dialect.Trim().ToLowerInvariant(),
             };
+            SetOptionalString(face.ApplicationTransport, value => proto.ApplicationTransport = value);
             if (uint.TryParse(face.Baud, CultureInfo.InvariantCulture, out var baud))
             {
                 proto.Baud = baud;
@@ -1356,6 +1360,13 @@ internal sealed partial class SettingsViewModel : ObservableObject
                 return false;
             }
 
+            if (!string.IsNullOrWhiteSpace(face.ApplicationTransport)
+                && string.Equals(face.Transport.Trim(), face.ApplicationTransport.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                validationError = $"CAT hub face '{face.Name}' application port must differ from its hub port.";
+                return false;
+            }
+
             var dialect = face.Dialect.Trim().ToLowerInvariant();
             if (dialect is not ("ts590" or "ts2000"))
             {
@@ -1427,6 +1438,13 @@ internal sealed partial class SettingsViewModel : ObservableObject
             if (!winkeyerTransports.Add(face.Transport.Trim()))
             {
                 validationError = $"WinKeyer transport '{face.Transport}' is used more than once.";
+                return false;
+            }
+
+            if (!string.IsNullOrWhiteSpace(face.ApplicationTransport)
+                && string.Equals(face.Transport.Trim(), face.ApplicationTransport.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                validationError = $"WinKeyer face '{face.Name}' application port must differ from its hub port.";
                 return false;
             }
 

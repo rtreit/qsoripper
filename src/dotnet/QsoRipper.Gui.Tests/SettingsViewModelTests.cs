@@ -185,6 +185,8 @@ public class SettingsViewModelTests
 
         var face = Assert.Single(viewModel.CatHubFaces);
         Assert.Equal("omnirig", face.Name);
+        Assert.Equal("COM10", face.Transport);
+        Assert.Equal("COM11", face.ApplicationTransport);
         Assert.Equal("ts2000", face.Dialect);
         Assert.True(face.PermRead);
         Assert.True(face.PermWrite);
@@ -418,6 +420,29 @@ public class SettingsViewModelTests
 
         Assert.False(viewModel.DidSave);
         Assert.Contains("bind must be host:port", viewModel.ErrorMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SaveRejectsCatHubFaceWithMatchingHubAndApplicationPorts()
+    {
+        var client = new UxFixtureEngineClient(new UxCaptureFixture());
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+        viewModel.CatHubBackend = "ts590";
+        viewModel.CatHubPort = "COM4";
+        viewModel.AddCatHubFaceCommand.Execute(null);
+        var face = Assert.Single(viewModel.CatHubFaces);
+        face.Name = "n1mm";
+        face.Transport = "COM20";
+        face.ApplicationTransport = "com20";
+
+        await viewModel.SaveCommand.ExecuteAsync(null);
+
+        Assert.False(viewModel.DidSave);
+        Assert.Equal(
+            "CAT hub face 'n1mm' application port must differ from its hub port.",
+            viewModel.ErrorMessage);
     }
 
     [Fact]

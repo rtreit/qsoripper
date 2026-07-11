@@ -42,6 +42,7 @@ api_bind = "127.0.0.1:50071"
 [[winkeyer_face]]
 name = "n1mm-cw"
 transport = "COM40"    # N1MM WinKeyer port is the paired COM41
+application_transport = "COM41"
 baud = 1200
 primary = true
 perms = ["status", "send", "control", "ptt"]
@@ -49,6 +50,7 @@ perms = ["status", "send", "control", "ptt"]
 [[winkeyer_face]]
 name = "wktools-maintenance"
 transport = "COM42"    # WKTools maintenance port is the paired COM43
+application_transport = "COM43"
 baud = 1200
 primary = false
 perms = ["status", "control", "config_write"]
@@ -109,6 +111,7 @@ perms = ["read", "write"]
 [[face]]
 name = "hdsdr-omnirig"
 transport = "COM10"      # OmniRig binds COM11
+application_transport = "COM11"
 baud = 115200
 dialect = "ts2000"
 perms = ["read", "frequency_write"]
@@ -120,6 +123,7 @@ perms = ["read", "frequency_write"]
 [[face]]
 name = "n1mm"
 transport = "COM20"      # N1MM binds COM21
+application_transport = "COM21"
 baud = 115200
 dialect = "ts590"
 single_vfo = true
@@ -131,6 +135,7 @@ perms = ["read", "write", "ptt"]
 [[face]]
 name = "arcp590"
 transport = "COM30"      # ARCP-590 binds COM31
+application_transport = "COM31"
 baud = 115200
 dialect = "ts590"
 perms = ["read", "write", "ptt", "config_write"]

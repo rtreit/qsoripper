@@ -268,7 +268,8 @@ internal sealed record UxCaptureFixture
             var face = new CatHubSerialFace
             {
                 Name = CatHubFaceName,
-                Transport = "COM11",
+                Transport = "COM10",
+                ApplicationTransport = "COM11",
                 Dialect = string.IsNullOrWhiteSpace(CatHubFaceDialect) ? "ts590" : CatHubFaceDialect,
             };
             face.Perms.Add(CatHubPermission.Read);

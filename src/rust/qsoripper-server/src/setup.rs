@@ -1496,6 +1496,8 @@ struct PersistedCatHubFace {
     name: String,
     transport: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    application_transport: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     baud: Option<u32>,
     dialect: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1528,6 +1530,8 @@ struct PersistedCatHubWinkeyer {
 struct PersistedCatHubWinkeyerFace {
     name: String,
     transport: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    application_transport: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     baud: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1674,6 +1678,7 @@ impl PersistedCatHubConfig {
                 .map(|face| CatHubSerialFace {
                     name: face.name.clone(),
                     transport: face.transport.clone(),
+                    application_transport: face.application_transport.clone(),
                     baud: face.baud.unwrap_or_default(),
                     dialect: face.dialect.clone(),
                     perms: cat_hub_perms_to_proto(&face.perms),
@@ -1703,6 +1708,7 @@ impl PersistedCatHubConfig {
                 .map(|face| CatHubWinkeyerFace {
                     name: face.name.clone(),
                     transport: face.transport.clone(),
+                    application_transport: face.application_transport.clone(),
                     baud: face.baud,
                     primary: face.primary,
                     perms: face
@@ -1846,6 +1852,16 @@ fn cat_hub_winkeyer_faces_from_proto(
             .ok_or_else(|| "CAT hub WinKeyer face name is required.".to_string())?;
         let transport = normalize_optional_string(Some(&face.transport))
             .ok_or_else(|| format!("CAT hub WinKeyer face '{name}' requires a transport."))?;
+        let application_transport =
+            normalize_optional_string(face.application_transport.as_deref());
+        if application_transport
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case(&transport))
+        {
+            return Err(format!(
+                "CAT hub WinKeyer face '{name}' application transport must differ from its hub transport."
+            ));
+        }
         if radio_port.is_some_and(|port| transport.eq_ignore_ascii_case(port)) {
             return Err(format!(
                 "CAT hub WinKeyer face '{name}' cannot reuse the radio port."
@@ -1888,6 +1904,7 @@ fn cat_hub_winkeyer_faces_from_proto(
         result.push(PersistedCatHubWinkeyerFace {
             name,
             transport,
+            application_transport,
             baud: face.baud,
             primary: face.primary,
             perms: face
@@ -2001,6 +2018,16 @@ fn cat_hub_faces_from_proto(
             .ok_or_else(|| "CAT hub serial face name is required.".to_string())?;
         let transport = normalize_optional_string(Some(&face.transport))
             .ok_or_else(|| format!("CAT hub serial face '{name}' requires a transport."))?;
+        let application_transport =
+            normalize_optional_string(face.application_transport.as_deref());
+        if application_transport
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case(&transport))
+        {
+            return Err(format!(
+                "CAT hub serial face '{name}' application transport must differ from its hub transport."
+            ));
+        }
         if let Some(port) = radio_port {
             if transport.eq_ignore_ascii_case(port) {
                 return Err(format!(
@@ -2025,6 +2052,7 @@ fn cat_hub_faces_from_proto(
         result.push(PersistedCatHubFace {
             name,
             transport,
+            application_transport,
             baud,
             dialect,
             perms: cat_hub_perms_to_tokens(&face.perms),
@@ -4655,7 +4683,8 @@ backend = "ts590"
             }),
             faces: vec![CatHubSerialFace {
                 name: "n1mm".to_string(),
-                transport: "COM11".to_string(),
+                transport: "COM20".to_string(),
+                application_transport: Some("COM21".to_string()),
                 baud: 4800,
                 dialect: "ts590".to_string(),
                 perms: vec![
@@ -4676,7 +4705,8 @@ backend = "ts590"
             }),
             winkeyer_faces: vec![CatHubWinkeyerFace {
                 name: "n1mm-cw".to_string(),
-                transport: "COM41".to_string(),
+                transport: "COM40".to_string(),
+                application_transport: Some("COM41".to_string()),
                 baud: Some(1200),
                 primary: Some(true),
                 perms: vec![
@@ -4700,6 +4730,10 @@ backend = "ts590"
         assert_eq!(radio.tcp_port, Some(4532));
         assert_eq!(projected.faces.len(), 1);
         assert_eq!(projected.faces[0].name, "n1mm");
+        assert_eq!(
+            projected.faces[0].application_transport.as_deref(),
+            Some("COM21")
+        );
         assert_eq!(projected.faces[0].dialect, "ts590");
         assert_eq!(
             projected.faces[0].perms,
@@ -4714,6 +4748,10 @@ backend = "ts590"
         assert_eq!(winkeyer.port, "COM3-WK");
         assert_eq!(winkeyer.api_bind.as_deref(), Some("127.0.0.1:50071"));
         assert_eq!(projected.winkeyer_faces.len(), 1);
+        assert_eq!(
+            projected.winkeyer_faces[0].application_transport.as_deref(),
+            Some("COM41")
+        );
         assert!(projected.winkeyer_faces[0].primary.unwrap_or_default());
     }
 
@@ -4748,6 +4786,25 @@ backend = "ts590"
         settings.faces[0].transport = "COM3".to_string();
         let error = PersistedCatHubConfig::from_proto(&settings).expect_err("port reuse");
         assert!(error.contains("cannot reuse the radio port"), "{error}");
+    }
+
+    #[test]
+    fn cat_hub_from_proto_rejects_matching_hub_and_application_transports() {
+        let mut settings = valid_cat_hub_settings();
+        settings.faces[0].application_transport = Some("com20".to_string());
+        let error = PersistedCatHubConfig::from_proto(&settings).expect_err("matching pair");
+        assert!(
+            error.contains("must differ from its hub transport"),
+            "{error}"
+        );
+
+        let mut settings = valid_cat_hub_settings();
+        settings.winkeyer_faces[0].application_transport = Some("com40".to_string());
+        let error = PersistedCatHubConfig::from_proto(&settings).expect_err("matching keyer pair");
+        assert!(
+            error.contains("must differ from its hub transport"),
+            "{error}"
+        );
     }
 
     #[test]

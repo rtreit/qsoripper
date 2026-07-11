@@ -7,6 +7,7 @@ internal sealed partial class CatHubWinkeyerFaceRowViewModel : ObservableObject
 {
     [ObservableProperty] private string _name = string.Empty;
     [ObservableProperty] private string _transport = string.Empty;
+    [ObservableProperty] private string _applicationTransport = string.Empty;
     [ObservableProperty] private string _baud = "1200";
     [ObservableProperty] private bool _primary;
     [ObservableProperty] private bool _permStatus = true;

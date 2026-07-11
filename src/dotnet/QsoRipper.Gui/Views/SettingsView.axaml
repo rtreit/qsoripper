@@ -675,7 +675,7 @@
                       Command="{Binding AddCatHubWinkeyerFaceCommand}" />
             </DockPanel>
             <TextBlock Classes="settingsSectionHint"
-                       Text="The hub opens Transport; configure the application (for example N1MM) to use the other side of that com0com pair at 1200 baud, 8-N-2." />
+                       Text="Record both sides of each virtual pair. CatHub opens the hub port; the named application opens the application port at 1200 baud, 8-N-2." />
             <ItemsControl AutomationProperties.AutomationId="SettingsCatHubWinkeyerFacesList"
                           ItemsSource="{Binding CatHubWinkeyerFaces}">
               <ItemsControl.ItemTemplate>
@@ -683,16 +683,20 @@
                   <Border BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
                           BorderThickness="1" CornerRadius="4" Padding="10" Margin="0,0,0,8">
                     <StackPanel Spacing="6">
-                      <Grid ColumnDefinitions="70,*,80,*,70,90,Auto" ColumnSpacing="8">
+                      <Grid ColumnDefinitions="70,*,70,90,Auto" ColumnSpacing="8">
                         <TextBlock Grid.Column="0" Text="Name:" VerticalAlignment="Center" />
                         <TextBox Grid.Column="1" Text="{Binding Name, Mode=TwoWay}" PlaceholderText="n1mm-cw" />
-                        <TextBlock Grid.Column="2" Text="Transport:" VerticalAlignment="Center" />
-                        <TextBox Grid.Column="3" Text="{Binding Transport, Mode=TwoWay}" PlaceholderText="COM40" />
-                        <TextBlock Grid.Column="4" Text="Baud:" VerticalAlignment="Center" />
-                        <TextBox Grid.Column="5" Text="{Binding Baud, Mode=TwoWay}" PlaceholderText="1200" />
-                        <Button Grid.Column="6" Content="Remove"
+                        <TextBlock Grid.Column="2" Text="Baud:" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="3" Text="{Binding Baud, Mode=TwoWay}" PlaceholderText="1200" />
+                        <Button Grid.Column="4" Content="Remove"
                                 Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).RemoveCatHubWinkeyerFaceCommand}"
                                 CommandParameter="{Binding}" />
+                      </Grid>
+                      <Grid ColumnDefinitions="110,*,130,*" ColumnSpacing="8">
+                        <TextBlock Grid.Column="0" Text="CatHub port:" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="1" Text="{Binding Transport, Mode=TwoWay}" PlaceholderText="COM40" />
+                        <TextBlock Grid.Column="2" Text="Application port:" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="3" Text="{Binding ApplicationTransport, Mode=TwoWay}" PlaceholderText="COM41" />
                       </Grid>
                       <StackPanel Orientation="Horizontal" Spacing="14">
                         <CheckBox Content="Primary" IsChecked="{Binding Primary, Mode=TwoWay}" />
@@ -720,7 +724,7 @@
                       Command="{Binding AddCatHubFaceCommand}" />
             </DockPanel>
             <TextBlock Classes="settingsSectionHint"
-                       Text="Each face is a local serial endpoint (com0com pair) an app connects to. Transport is the COM path or host:port." />
+                       Text="Record both endpoints of each com0com pair. CatHub opens the hub port; the named application opens the application port." />
             <ItemsControl AutomationProperties.AutomationId="SettingsCatHubFacesList"
                           ItemsSource="{Binding CatHubFaces}">
               <ItemsControl.ItemTemplate>
@@ -747,9 +751,11 @@
                                 Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).RemoveCatHubFaceCommand}"
                                 CommandParameter="{Binding}" />
                       </Grid>
-                      <Grid ColumnDefinitions="80,*" ColumnSpacing="8">
-                        <TextBlock Grid.Column="0" Text="Transport:" VerticalAlignment="Center" />
-                        <TextBox Grid.Column="1" Text="{Binding Transport, Mode=TwoWay}" PlaceholderText="COM11 or 127.0.0.1:7811" />
+                      <Grid ColumnDefinitions="110,*,130,*" ColumnSpacing="8">
+                        <TextBlock Grid.Column="0" Text="CatHub port:" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="1" Text="{Binding Transport, Mode=TwoWay}" PlaceholderText="COM10" />
+                        <TextBlock Grid.Column="2" Text="Application port:" VerticalAlignment="Center" />
+                        <TextBox Grid.Column="3" Text="{Binding ApplicationTransport, Mode=TwoWay}" PlaceholderText="COM11" />
                       </Grid>
                       <StackPanel Orientation="Horizontal" Spacing="14">
                         <CheckBox Content="Read" IsChecked="{Binding PermRead, Mode=TwoWay}" />

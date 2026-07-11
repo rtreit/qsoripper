@@ -52,6 +52,7 @@ api_bind = "127.0.0.1:50071"
 [[cat_hub.winkeyer_face]]
 name = "n1mm-cw"
 transport = "COM40"
+application_transport = "COM41"
 baud = 1200
 primary = true
 perms = ["status", "send", "control", "ptt"]
@@ -59,6 +60,7 @@ perms = ["status", "send", "control", "ptt"]
 [[cat_hub.winkeyer_face]]
 name = "wktools-maintenance"
 transport = "COM42"
+application_transport = "COM43"
 baud = 1200
 primary = false
 perms = ["status", "control", "config_write"]

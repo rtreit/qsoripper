@@ -828,6 +828,15 @@ internal static class SharedSetupConfigPersistence
                 ?? throw new InvalidOperationException("CAT hub serial face name is required.");
             var transport = NormalizeOptional(face.Transport)
                 ?? throw new InvalidOperationException($"CAT hub serial face '{name}' requires a transport.");
+            var applicationTransport = face.HasApplicationTransport
+                ? NormalizeOptional(face.ApplicationTransport)
+                : null;
+            if (applicationTransport is not null
+                && string.Equals(transport, applicationTransport, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"CAT hub serial face '{name}' application transport must differ from its hub transport.");
+            }
             if (radioPort is not null && string.Equals(transport, radioPort, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
@@ -848,6 +857,7 @@ internal static class SharedSetupConfigPersistence
                 ["name"] = name,
                 ["transport"] = transport,
             };
+            AddIfValue(table, "application_transport", applicationTransport);
             if (face.Baud != 0)
             {
                 table["baud"] = face.Baud;
@@ -1073,6 +1083,15 @@ internal static class SharedSetupConfigPersistence
             var transport = NormalizeOptional(face.Transport)
                 ?? throw new InvalidOperationException(
                     $"CAT hub WinKeyer face '{name}' requires a transport.");
+            var applicationTransport = face.HasApplicationTransport
+                ? NormalizeOptional(face.ApplicationTransport)
+                : null;
+            if (applicationTransport is not null
+                && string.Equals(transport, applicationTransport, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    $"CAT hub WinKeyer face '{name}' application transport must differ from its hub transport.");
+            }
             if ((radioPort is not null && string.Equals(transport, radioPort, StringComparison.OrdinalIgnoreCase))
                 || (physicalPort is not null && string.Equals(transport, physicalPort, StringComparison.OrdinalIgnoreCase)))
             {
@@ -1114,6 +1133,7 @@ internal static class SharedSetupConfigPersistence
             }
 
             var table = new TomlTable { ["name"] = name, ["transport"] = transport };
+            AddIfValue(table, "application_transport", applicationTransport);
             if (face.HasBaud)
             {
                 table["baud"] = face.Baud;
@@ -1294,6 +1314,9 @@ internal static class SharedSetupConfigPersistence
                         Transport = GetString(faceTable, "transport") ?? string.Empty,
                         Dialect = GetString(faceTable, "dialect") ?? string.Empty,
                     };
+                    AssignIfPresent(
+                        GetString(faceTable, "application_transport"),
+                        value => face.ApplicationTransport = value);
                     AssignIfPresent(GetUInt32(faceTable, "baud"), value => face.Baud = value);
                     face.Perms.AddRange(ParseCatHubPermTokens(GetStringArray(faceTable, "perms")));
                     settings.Faces.Add(face);
@@ -1328,6 +1351,9 @@ internal static class SharedSetupConfigPersistence
                         Name = GetString(faceTable, "name") ?? string.Empty,
                         Transport = GetString(faceTable, "transport") ?? string.Empty,
                     };
+                    AssignIfPresent(
+                        GetString(faceTable, "application_transport"),
+                        value => face.ApplicationTransport = value);
                     AssignIfPresent(GetUInt32(faceTable, "baud"), value => face.Baud = value);
                     AssignIfPresent(GetBoolean(faceTable, "primary"), value => face.Primary = value);
                     face.Perms.AddRange(ParseWinkeyerPermTokens(GetStringArray(faceTable, "perms")));

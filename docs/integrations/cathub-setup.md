@@ -53,6 +53,11 @@ application at its application-side port. The daemon-side port is held open by t
 typically will **not** appear in an application's COM-port dropdown at all -- that is expected,
 and the partner port (COM11/21/31) is the one to select.
 
+Record the application side as `application_transport` on each `[[cat_hub.face]]` and
+`[[cat_hub.winkeyer_face]]`. CatHub does not open this endpoint. It uses the value in setup
+status and dry-run guidance so the application port remains discoverable after comments are
+removed from the active configuration.
+
 ## 3. Configure the daemon
 
 The daemon settings live in the unified per-user `config.toml` shared with the engine and the

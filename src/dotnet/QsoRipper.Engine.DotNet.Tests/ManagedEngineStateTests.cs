@@ -1347,6 +1347,7 @@ public sealed class ManagedEngineStateTests : IDisposable
         var face = Assert.Single(status.CatHub.Faces);
         Assert.Equal("HDSDR", face.Name);
         Assert.Equal("CNCB0", face.Transport);
+        Assert.Equal("CNCA0", face.ApplicationTransport);
         Assert.Equal("ts590", face.Dialect);
         Assert.Contains(CatHubPermission.Read, face.Perms);
         Assert.Contains(CatHubPermission.Write, face.Perms);
@@ -1358,6 +1359,7 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal("127.0.0.1:50071", status.CatHub.Winkeyer.ApiBind);
         var winkeyerFace = Assert.Single(status.CatHub.WinkeyerFaces);
         Assert.Equal("n1mm-cw", winkeyerFace.Name);
+        Assert.Equal("COM41", winkeyerFace.ApplicationTransport);
         Assert.True(winkeyerFace.Primary);
         Assert.Contains(WinkeyerFacePermission.Send, winkeyerFace.Perms);
     }
@@ -1593,6 +1595,26 @@ public sealed class ManagedEngineStateTests : IDisposable
             "CAT hub serial faces must use distinct transports: 'cncb0'.",
         };
 
+        // Application transport must be the other side of the virtual pair.
+        yield return new object[]
+        {
+            new CatHubSettings
+            {
+                Radio = new CatHubRadioSettings { Backend = "ts590", Port = "COM4" },
+                Faces =
+                {
+                    new CatHubSerialFace
+                    {
+                        Name = "n1mm",
+                        Transport = "COM20",
+                        ApplicationTransport = "com20",
+                        Dialect = "ts590",
+                    },
+                },
+            },
+            "CAT hub serial face 'n1mm' application transport must differ from its hub transport.",
+        };
+
         // Face reusing the radio port.
         yield return new object[]
         {
@@ -1635,6 +1657,27 @@ public sealed class ManagedEngineStateTests : IDisposable
                 HamlibNet = { new CatHubHamlibNetEndpoint { Name = "engine", Bind = "127.0.0.1:70000" } },
             },
             "CAT hub hamlib_net endpoint 'engine' bind port must be between 1 and 65535.",
+        };
+
+        // WinKeyer application transport must be the other side of the virtual pair.
+        yield return new object[]
+        {
+            new CatHubSettings
+            {
+                Radio = new CatHubRadioSettings { Backend = "loopback" },
+                HamlibNet = { ValidEndpoint() },
+                Winkeyer = new CatHubWinkeyerSettings { Port = "COM3" },
+                WinkeyerFaces =
+                {
+                    new CatHubWinkeyerFace
+                    {
+                        Name = "wktools",
+                        Transport = "COM42",
+                        ApplicationTransport = "com42",
+                    },
+                },
+            },
+            "CAT hub WinKeyer face 'wktools' application transport must differ from its hub transport.",
         };
     }
 
@@ -1739,6 +1782,7 @@ public sealed class ManagedEngineStateTests : IDisposable
                 {
                     Name = "n1mm-cw",
                     Transport = "COM40",
+                    ApplicationTransport = "COM41",
                     Baud = 1200,
                     Primary = true,
                     Perms =
@@ -1755,6 +1799,7 @@ public sealed class ManagedEngineStateTests : IDisposable
                 {
                     Name = "HDSDR",
                     Transport = "CNCB0",
+                    ApplicationTransport = "CNCA0",
                     Baud = 9600,
                     Dialect = "ts590",
                     Perms = { CatHubPermission.Read, CatHubPermission.Write },

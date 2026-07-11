@@ -16,6 +16,9 @@ internal sealed partial class CatHubFaceRowViewModel : ObservableObject
     private string _transport = string.Empty;
 
     [ObservableProperty]
+    private string _applicationTransport = string.Empty;
+
+    [ObservableProperty]
     private string _baud = string.Empty;
 
     [ObservableProperty]

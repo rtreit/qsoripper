@@ -664,6 +664,10 @@ Persists setup configuration and station profile.
 4. Mark setup as complete.
 
 **CAT hub (`cat_hub`) management:**
+- Serial and WinKeyer faces may include `application_transport`, the paired virtual endpoint
+  opened by the client application. The hub opens only `transport`. Engines preserve and return
+  the application-side value for setup guidance and reject a face whose two transports are the
+  same.
 - The optional `cat_hub` field (`CatHubSettings`) lets a setup UI manage the standalone
   `qsoripper-cathub` daemon's `[cat_hub]` section without hand-editing TOML.
 - The field is **full-replacement**: when present it is the complete desired `[cat_hub]`
