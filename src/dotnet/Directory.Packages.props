@@ -13,6 +13,7 @@
     <PackageVersion Include="Grpc.Tools" Version="2.80.0" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.6" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageVersion Include="System.IO.Ports" Version="10.0.0" />
     <PackageVersion Include="Roslynator.Analyzers" Version="4.15.0" />
     <PackageVersion Include="Roslynator.Formatting.Analyzers" Version="4.15.0" />
     <PackageVersion Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />

@@ -340,6 +340,38 @@ function Invoke-ConformanceScenario {
         throw "$EngineProfile status output did not advertise engine id '$expectedEngineId'.`n$($statusText.StdOut)"
     }
 
+    Write-Step "Running CW null-backend workflow against $EngineProfile"
+    $cwStatusResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'cw', 'status', '--json')
+    Assert-CommandSucceeded -Result $cwStatusResult -Description "$EngineProfile cw status --json"
+    $cwStatus = $cwStatusResult.StdOut | ConvertFrom-Json
+    if ($cwStatus.backend -ne 'null' -or -not $cwStatus.available -or $cwStatus.transmitEnabled) {
+        throw "$EngineProfile did not report the safe default CW status.`n$($cwStatusResult.StdOut)"
+    }
+    if ($cwStatus.speedWpm -ne 29 -or $cwStatus.maxTxMs -ne 45000) {
+        throw "$EngineProfile did not load the shared CW TOML settings.`n$($cwStatusResult.StdOut)"
+    }
+
+    $cwListResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'cw', 'list', '--json')
+    Assert-CommandSucceeded -Result $cwListResult -Description "$EngineProfile cw list --json"
+    $cwMacros = @(ConvertFrom-JsonArray $cwListResult.StdOut)
+    if ($cwMacros.Count -ne 4 -or 'cq' -notin $cwMacros.name) {
+        throw "$EngineProfile did not expose the shared built-in CW macros.`n$($cwListResult.StdOut)"
+    }
+
+    $cwSpeedResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'cw', 'speed', '32', '--json')
+    Assert-CommandSucceeded -Result $cwSpeedResult -Description "$EngineProfile cw speed 32 --json"
+    $cwSpeed = $cwSpeedResult.StdOut | ConvertFrom-Json
+    if ($cwSpeed.speedWpm -ne 32) {
+        throw "$EngineProfile did not retain CW speed 32.`n$($cwSpeedResult.StdOut)"
+    }
+
+    $cwSendResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'cw', 'send', 'CQ {MYCALL}', '--json')
+    Assert-CommandSucceeded -Result $cwSendResult -Description "$EngineProfile cw send --json"
+    $cwSend = $cwSendResult.StdOut | ConvertFrom-Json
+    if ($cwSend.state -ne 'Accepted' -or $cwSend.expandedText -ne "CQ $stationCallsign") {
+        throw "$EngineProfile CW expansion or null dispatch did not match the contract.`n$($cwSendResult.StdOut)"
+    }
+
     Write-Step "Logging QSO through CLI against $EngineProfile"
     $logResult = Invoke-Cli -Arguments @(
         '--engine', $EngineProfile,
@@ -413,6 +445,7 @@ function Invoke-ConformanceScenario {
         EngineId = $expectedEngineId
         SetupStatus = $setupStatusJson.status
         SyncStatus = $statusJson
+        CwStatus = $cwSpeed
         Qso = Normalize-QsoRecord $getJson.qso
         ListQso = Normalize-QsoRecord $listJson[0]
         ExportQso = Normalize-AdifRecord $exportRecords[0]
@@ -541,6 +574,14 @@ try {
 
     $sharedConfigPath = Join-Path $runDirectory 'config.toml'
     $persistencePath = Join-Path $runDirectory 'conformance-log.db'
+    @'
+[cw_keying]
+backend = "null"
+speed_wpm = 29
+transmit_enabled = false
+max_tx_ms = 45000
+future_key = "preserve-me"
+'@ | Set-Content -LiteralPath $sharedConfigPath
 
     $rustScenarioOutput = @(Invoke-ConformanceScenario -EngineProfile 'rust' -ConfigPath $sharedConfigPath -PersistencePath $persistencePath -Storage 'sqlite')
     $rustResult = Select-ScenarioResult -Results $rustScenarioOutput -EngineProfile 'rust'
@@ -550,12 +591,21 @@ try {
     $dotnetResult = Select-ScenarioResult -Results $dotnetScenarioOutput -EngineProfile 'dotnet'
     Stop-TestEngine
 
+    $sharedConfigContent = Get-Content -LiteralPath $sharedConfigPath -Raw
+    if ($sharedConfigContent -notmatch 'future_key\s*=\s*"preserve-me"') {
+        throw 'An engine setup save did not preserve the shared [cw_keying] table verbatim.'
+    }
+
     Assert-SharedSetupRoundTrip -FirstEngineProfile 'rust' -SecondEngineProfile 'dotnet' -ScenarioId 'rust-to-dotnet'
     Assert-SharedSetupRoundTrip -FirstEngineProfile 'dotnet' -SecondEngineProfile 'rust' -ScenarioId 'dotnet-to-rust'
 
     Assert-EquivalentRecords -Left $rustResult.Qso -Right $dotnetResult.Qso -Description 'GetQso'
     Assert-EquivalentRecords -Left $rustResult.ListQso -Right $dotnetResult.ListQso -Description 'ListQsos'
     Assert-EquivalentRecords -Left $rustResult.ExportQso -Right $dotnetResult.ExportQso -Description 'ExportAdif'
+
+    if (($rustResult.CwStatus | ConvertTo-Json -Compress) -ne ($dotnetResult.CwStatus | ConvertTo-Json -Compress)) {
+        throw "Rust and .NET CW status responses did not match after the shared null-backend workflow."
+    }
 
     if ($rustResult.SyncStatus.localQsoCount -ne 1 -or $dotnetResult.SyncStatus.localQsoCount -ne 1) {
         throw "Expected both engines to report one local QSO after the shared CLI scenario."

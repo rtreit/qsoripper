@@ -7,6 +7,8 @@ pub mod adif;
 pub mod application;
 /// Contest calendar providers, caching, and filtering.
 pub mod contest_calendar;
+/// CW keying macro expansion and engine-side keyer adapters.
+pub mod cw;
 /// Domain helpers for QSO and lookup-related types.
 pub mod domain;
 /// FFI boundary for DSP helpers.

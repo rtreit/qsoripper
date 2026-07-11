@@ -209,6 +209,7 @@ internal sealed class ManagedEngineState
                 "rig-control",
                 "contest-calendar",
                 "space-weather",
+                "cw-keying",
                 "purge",
             }
         };

@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/abort_cw_request.proto";
+import "services/abort_cw_response.proto";
+import "services/get_cw_keyer_status_request.proto";
+import "services/get_cw_keyer_status_response.proto";
+import "services/list_cw_macros_request.proto";
+import "services/list_cw_macros_response.proto";
+import "services/send_cw_macro_request.proto";
+import "services/send_cw_macro_response.proto";
+import "services/send_cw_text_request.proto";
+import "services/send_cw_text_response.proto";
+import "services/set_cw_speed_request.proto";
+import "services/set_cw_speed_response.proto";
+
+service CwService {
+  rpc ListCwMacros(ListCwMacrosRequest) returns (ListCwMacrosResponse);
+  rpc SendCwMacro(SendCwMacroRequest) returns (SendCwMacroResponse);
+  rpc SendCwText(SendCwTextRequest) returns (SendCwTextResponse);
+  rpc AbortCw(AbortCwRequest) returns (AbortCwResponse);
+  rpc SetCwSpeed(SetCwSpeedRequest) returns (SetCwSpeedResponse);
+  rpc GetCwKeyerStatus(GetCwKeyerStatusRequest) returns (GetCwKeyerStatusResponse);
+}

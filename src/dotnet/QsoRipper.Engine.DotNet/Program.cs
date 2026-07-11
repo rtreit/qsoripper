@@ -17,6 +17,10 @@ var persistedSetup = SharedSetupConfigPersistence.Load(options.ConfigPath);
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(kestrel => ConfigureListenEndpoint(kestrel, options.ListenAddress));
 builder.Services.AddGrpc();
+builder.Services.AddSingleton(_ =>
+    new ManagedCwController(ManagedCwKeyerConfig.FromSources(
+        persistedSetup.Config.CwKeying,
+        Environment.GetEnvironmentVariable)));
 
 var resolvedStorage = CreateStorage(persistedSetup.Config);
 builder.Services.AddSingleton(resolvedStorage.Storage);
@@ -53,6 +57,7 @@ app.MapGrpcService<ManagedContestCalendarGrpcService>();
 app.MapGrpcService<ManagedRigControlGrpcService>();
 app.MapGrpcService<ManagedSpaceWeatherGrpcService>();
 app.MapGrpcService<ManagedGreatCircleGrpcService>();
+app.MapGrpcService<ManagedCwGrpcService>();
 app.MapGet("/", () => "QsoRipper .NET engine host. Use a gRPC client.");
 
 Console.WriteLine($"Starting QsoRipper .NET engine on {options.ListenAddress} using config {options.ConfigPath} (storage: {resolvedStorage.Storage.BackendName})");

@@ -20,6 +20,7 @@ use std::{
 
 use qsoripper_core::adif::{parse_adi_qsos, serialize_adi_qsos};
 use qsoripper_core::application::logbook::LogbookError;
+use qsoripper_core::cw::{CwController, CwError, CwKeyerConfig};
 use qsoripper_core::lookup::QRZ_USER_AGENT_ENV_VAR;
 use qsoripper_core::storage::{
     DeletedRecordsFilter, EngineStorage, QsoListQuery, QsoSortOrder, StorageError,
@@ -32,9 +33,12 @@ use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
 use prost_types::Timestamp;
-use qsoripper_core::proto::qsoripper::domain::{Band, ConflictPolicy, ContestCalendarEntry, Mode};
+use qsoripper_core::proto::qsoripper::domain::{
+    Band, ConflictPolicy, ContestCalendarEntry, Mode, StationProfile,
+};
 use qsoripper_core::proto::qsoripper::services::{
     contest_calendar_service_server::{ContestCalendarService, ContestCalendarServiceServer},
+    cw_service_server::{CwService, CwServiceServer},
     developer_control_service_server::{DeveloperControlService, DeveloperControlServiceServer},
     engine_service_server::{EngineService, EngineServiceServer},
     great_circle_service_server::{GreatCircleService, GreatCircleServiceServer},
@@ -44,22 +48,26 @@ use qsoripper_core::proto::qsoripper::services::{
     setup_service_server::SetupServiceServer,
     space_weather_service_server::{SpaceWeatherService, SpaceWeatherServiceServer},
     station_profile_service_server::StationProfileServiceServer,
-    AdifChunk, ApplyRuntimeConfigRequest, ApplyRuntimeConfigResponse, BatchLookupRequest,
-    BatchLookupResponse, ComputeGreatCircleRequest, ComputeGreatCircleResponse, DeleteQsoRequest,
-    DeleteQsoResponse, DeletedRecordsFilter as ProtoDeletedRecordsFilter, EngineInfo,
-    ExportAdifRequest, ExportAdifResponse, GetActiveContestsRequest, GetActiveContestsResponse,
+    AbortCwRequest, AbortCwResponse, AdifChunk, ApplyRuntimeConfigRequest,
+    ApplyRuntimeConfigResponse, BatchLookupRequest, BatchLookupResponse, ComputeGreatCircleRequest,
+    ComputeGreatCircleResponse, CwSendState, DeleteQsoRequest, DeleteQsoResponse,
+    DeletedRecordsFilter as ProtoDeletedRecordsFilter, EngineInfo, ExportAdifRequest,
+    ExportAdifResponse, GetActiveContestsRequest, GetActiveContestsResponse,
     GetCachedCallsignRequest, GetCachedCallsignResponse, GetCurrentSpaceWeatherRequest,
-    GetCurrentSpaceWeatherResponse, GetDxccEntityRequest, GetDxccEntityResponse,
-    GetEngineInfoRequest, GetEngineInfoResponse, GetQsoRequest, GetQsoResponse,
-    GetRigSnapshotRequest, GetRigSnapshotResponse, GetRigStatusRequest, GetRigStatusResponse,
-    GetRuntimeConfigRequest, GetRuntimeConfigResponse, GetSyncStatusRequest, GetSyncStatusResponse,
-    ImportAdifRequest, ImportAdifResponse, ListQsosRequest, ListQsosResponse, LogQsoRequest,
+    GetCurrentSpaceWeatherResponse, GetCwKeyerStatusRequest, GetCwKeyerStatusResponse,
+    GetDxccEntityRequest, GetDxccEntityResponse, GetEngineInfoRequest, GetEngineInfoResponse,
+    GetQsoRequest, GetQsoResponse, GetRigSnapshotRequest, GetRigSnapshotResponse,
+    GetRigStatusRequest, GetRigStatusResponse, GetRuntimeConfigRequest, GetRuntimeConfigResponse,
+    GetSyncStatusRequest, GetSyncStatusResponse, ImportAdifRequest, ImportAdifResponse,
+    ListCwMacrosRequest, ListCwMacrosResponse, ListQsosRequest, ListQsosResponse, LogQsoRequest,
     LogQsoResponse, LookupRequest, LookupResponse, PurgeDeletedQsosRequest,
     PurgeDeletedQsosResponse, QsoSortOrder as ProtoQsoSortOrder, RefreshContestCalendarRequest,
     RefreshContestCalendarResponse, RefreshSpaceWeatherRequest, RefreshSpaceWeatherResponse,
     ResetRuntimeConfigRequest, ResetRuntimeConfigResponse, RestoreQsoRequest, RestoreQsoResponse,
-    StreamLookupRequest, StreamLookupResponse, SyncWithQrzRequest, SyncWithQrzResponse,
-    TestRigConnectionRequest, TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
+    SendCwMacroRequest, SendCwMacroResponse, SendCwTextRequest, SendCwTextResponse,
+    SetCwSpeedRequest, SetCwSpeedResponse, StreamLookupRequest, StreamLookupResponse,
+    SyncWithQrzRequest, SyncWithQrzResponse, TestRigConnectionRequest, TestRigConnectionResponse,
+    UpdateQsoRequest, UpdateQsoResponse,
 };
 use qsoripper_core::rig_control::{
     RigControlProvider, RigctldConfig, RigctldProvider, DEFAULT_RIGCTLD_HOST, DEFAULT_RIGCTLD_PORT,
@@ -88,6 +96,7 @@ where
     let address = options.listen_address;
     let setup_state = Arc::new(SetupState::load(options.config_path.clone())?);
     let config_file_values = setup_state.runtime_config_values().await;
+    let cw_config = CwKeyerConfig::from_config_values(&config_file_values)?;
     let runtime_config = Arc::new(
         RuntimeConfigManager::new_with_config_file_values_and_cli_storage_overrides(
             config_file_values,
@@ -113,6 +122,7 @@ where
     let space_weather_service = SpaceWeatherControlSurface::new(runtime_config.clone());
     let rig_control_service = RigControlControlSurface::new(runtime_config.clone());
     let great_circle_service = GreatCircleControlSurface::new();
+    let cw_service = CwControlSurface::new(runtime_config.clone(), CwController::new(cw_config));
     let active_storage_backend = runtime_config.active_storage_backend().await;
     let setup_status = setup_state.status().await;
     let setup_completion = setup_completion_label(setup_status.setup_complete);
@@ -152,6 +162,7 @@ where
         .add_service(SpaceWeatherServiceServer::new(space_weather_service))
         .add_service(RigControlServiceServer::new(rig_control_service))
         .add_service(GreatCircleServiceServer::new(great_circle_service))
+        .add_service(CwServiceServer::new(cw_service))
         .add_service(DeveloperControlServiceServer::new(
             developer_control_service,
         ))
@@ -940,8 +951,162 @@ const RUST_ENGINE_CAPABILITIES: &[&str] = &[
     "rig-control",
     "contest-calendar",
     "space-weather",
+    "cw-keying",
     "purge",
 ];
+
+#[derive(Clone)]
+struct CwControlSurface {
+    runtime_config: Arc<RuntimeConfigManager>,
+    controller: CwController,
+}
+
+impl CwControlSurface {
+    fn new(runtime_config: Arc<RuntimeConfigManager>, controller: CwController) -> Self {
+        Self {
+            runtime_config,
+            controller,
+        }
+    }
+
+    async fn active_station_profile(&self) -> Option<StationProfile> {
+        self.runtime_config.effective_station_profile().await
+    }
+}
+
+#[tonic::async_trait]
+impl CwService for CwControlSurface {
+    async fn list_cw_macros(
+        &self,
+        _request: Request<ListCwMacrosRequest>,
+    ) -> Result<Response<ListCwMacrosResponse>, Status> {
+        Ok(Response::new(ListCwMacrosResponse {
+            macros: self.controller.built_in_macros(),
+        }))
+    }
+
+    async fn send_cw_macro(
+        &self,
+        request: Request<SendCwMacroRequest>,
+    ) -> Result<Response<SendCwMacroResponse>, Status> {
+        let request = request.into_inner();
+        let station_profile = self.active_station_profile().await;
+        let expanded_text = self
+            .controller
+            .expand_macro(
+                request.name.as_str(),
+                request.context.as_ref(),
+                station_profile.as_ref(),
+            )
+            .map_err(cw_status)?;
+        let speed_wpm = request
+            .context
+            .as_ref()
+            .and_then(|context| context.speed_wpm);
+        let controller = self.controller.clone();
+        let text_to_send = expanded_text.clone();
+        cw_blocking(move || controller.send_text(&text_to_send, speed_wpm)).await?;
+        Ok(Response::new(SendCwMacroResponse {
+            state: CwSendState::Accepted as i32,
+            expanded_text,
+            error_message: None,
+        }))
+    }
+
+    async fn send_cw_text(
+        &self,
+        request: Request<SendCwTextRequest>,
+    ) -> Result<Response<SendCwTextResponse>, Status> {
+        let request = request.into_inner();
+        let station_profile = self.active_station_profile().await;
+        let expanded_text = self
+            .controller
+            .expand_text(
+                request.text.as_str(),
+                request.context.as_ref(),
+                station_profile.as_ref(),
+            )
+            .map_err(cw_status)?;
+        let speed_wpm = request
+            .context
+            .as_ref()
+            .and_then(|context| context.speed_wpm);
+        let controller = self.controller.clone();
+        let text_to_send = expanded_text.clone();
+        cw_blocking(move || controller.send_text(&text_to_send, speed_wpm)).await?;
+        Ok(Response::new(SendCwTextResponse {
+            state: CwSendState::Accepted as i32,
+            expanded_text,
+            error_message: None,
+        }))
+    }
+
+    async fn abort_cw(
+        &self,
+        _request: Request<AbortCwRequest>,
+    ) -> Result<Response<AbortCwResponse>, Status> {
+        let controller = self.controller.clone();
+        cw_blocking(move || controller.abort()).await?;
+        Ok(Response::new(AbortCwResponse {
+            state: CwSendState::AbortRequested as i32,
+            error_message: None,
+        }))
+    }
+
+    async fn set_cw_speed(
+        &self,
+        request: Request<SetCwSpeedRequest>,
+    ) -> Result<Response<SetCwSpeedResponse>, Status> {
+        let speed_wpm = request.into_inner().speed_wpm;
+        let controller = self.controller.clone();
+        cw_blocking(move || controller.set_speed(speed_wpm)).await?;
+        let controller = self.controller.clone();
+        let status = cw_blocking(move || Ok(controller.status())).await?;
+        Ok(Response::new(SetCwSpeedResponse {
+            status: Some(status),
+        }))
+    }
+
+    async fn get_cw_keyer_status(
+        &self,
+        _request: Request<GetCwKeyerStatusRequest>,
+    ) -> Result<Response<GetCwKeyerStatusResponse>, Status> {
+        let controller = self.controller.clone();
+        let status = cw_blocking(move || Ok(controller.status())).await?;
+        Ok(Response::new(GetCwKeyerStatusResponse {
+            status: Some(status),
+        }))
+    }
+}
+
+async fn cw_blocking<T>(
+    operation: impl FnOnce() -> Result<T, CwError> + Send + 'static,
+) -> Result<T, Status>
+where
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| Status::internal(format!("CW backend task failed: {error}")))?
+        .map_err(cw_status)
+}
+
+fn cw_status(error: CwError) -> Status {
+    match error {
+        CwError::UnknownMacro(message) => Status::not_found(message),
+        CwError::MissingTokenValue("MYCALL", _) => Status::failed_precondition(error.to_string()),
+        CwError::UnknownToken(_)
+        | CwError::UnmatchedOpenBrace
+        | CwError::UnmatchedCloseBrace
+        | CwError::MissingTokenValue(_, _)
+        | CwError::InvalidSpeed(_)
+        | CwError::InvalidText(_) => Status::invalid_argument(error.to_string()),
+        CwError::BackendUnavailable(_) | CwError::TransmitDisabled => {
+            Status::failed_precondition(error.to_string())
+        }
+        CwError::Io(_) => Status::unavailable(error.to_string()),
+    }
+}
 
 #[derive(Debug, Default)]
 struct EngineControlSurface;

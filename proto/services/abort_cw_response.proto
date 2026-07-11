@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/cw_send_state.proto";
+
+message AbortCwResponse {
+  CwSendState state = 1;
+  optional string error_message = 2;
+}

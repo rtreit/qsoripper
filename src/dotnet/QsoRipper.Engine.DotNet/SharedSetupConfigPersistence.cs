@@ -236,6 +236,7 @@ internal static class SharedSetupConfigPersistence
         var sync = GetTable(root, "sync");
         var rigControl = GetTable(root, "rig_control");
         var wsjtxIngest = GetTable(root, "wsjtx_ingest");
+        var cwKeying = GetTable(root, "cw_keying");
         var stationProfile = GetTable(root, "station_profile");
         var stationProfiles = GetTable(root, "station_profiles");
 
@@ -250,6 +251,7 @@ internal static class SharedSetupConfigPersistence
         config.SyncConfig = ParseSyncConfig(sync);
         config.RigControl = ParseRigControl(rigControl);
         config.WsjtxIngest = ParseWsjtxIngest(wsjtxIngest);
+        config.CwKeying = ParseCwKeying(cwKeying);
         config.ActiveProfileId = NormalizeOptional(GetString(stationProfiles, "active_profile_id"));
 
         var entries = GetTableArray(stationProfiles, "entries");
@@ -304,6 +306,19 @@ internal static class SharedSetupConfigPersistence
         config.CatHub = TryParseCatHubLenient(root);
 
         return config;
+    }
+
+    private static ManagedCwPersistedSettings ParseCwKeying(TomlTable? table)
+    {
+        return new ManagedCwPersistedSettings
+        {
+            Backend = GetString(table, "backend"),
+            WinkeyerPort = GetString(table, "winkeyer_port"),
+            WinkeyerBaud = GetUInt32(table, "winkeyer_baud") is { } baud ? checked((int)baud) : null,
+            SpeedWpm = GetUInt32(table, "speed_wpm"),
+            TransmitEnabled = GetBoolean(table, "transmit_enabled"),
+            MaxTxMs = GetUInt32(table, "max_tx_ms"),
+        };
     }
 
     // Top-level TOML keys owned by the engine setup config. On save these are replaced
@@ -1594,6 +1609,8 @@ internal sealed class SharedPersistedSetupConfig
 
     public WsjtxIngestSettings? WsjtxIngestWriteOverride { get; set; }
 
+    public ManagedCwPersistedSettings CwKeying { get; set; } = new();
+
     // Leniently-parsed projection of the `[cat_hub]` section for STATUS/wizard display only.
     // Never used to re-serialize the section (that would destroy comments/unknown keys).
     public CatHubSettings? CatHub { get; set; }
@@ -1633,4 +1650,19 @@ internal sealed class SharedPersistedSetupConfig
             ? null
             : new JsonParser(JsonParser.Settings.Default.WithIgnoreUnknownFields(true)).Parse<StationProfile>(profileJson);
     }
+}
+
+internal sealed class ManagedCwPersistedSettings
+{
+    public string? Backend { get; set; }
+
+    public string? WinkeyerPort { get; set; }
+
+    public int? WinkeyerBaud { get; set; }
+
+    public uint? SpeedWpm { get; set; }
+
+    public bool? TransmitEnabled { get; set; }
+
+    public uint? MaxTxMs { get; set; }
 }
