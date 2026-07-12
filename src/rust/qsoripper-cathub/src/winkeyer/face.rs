@@ -604,14 +604,27 @@ mod tests {
         }
         client.write_u8(b'T').await.expect("keyboard T");
 
-        let mut text_job = [0_u8; 4];
-        device
-            .read_exact(&mut text_job)
-            .await
-            .expect("physical keyboard text");
-        // The interactive stream can still be active, so T appends directly; the status
-        // poll and foreground-speed restore follow. Crucially, no pointer command repeats.
-        assert_eq!(text_job, [b'T', 0x15, 0x02, 0x00]);
+        // A foreground-speed restore can race with this new byte at the idle boundary.
+        // The regression contract is that no buffered-pointer command is replayed before
+        // the keyboard text, regardless of which side of that boundary accepts the T.
+        let mut before_text = Vec::new();
+        let mut saw_text = false;
+        for _ in 0..8 {
+            let byte = tokio::time::timeout(Duration::from_secs(1), device.read_u8())
+                .await
+                .expect("physical keyboard text timed out")
+                .expect("physical keyboard text");
+            if byte == b'T' {
+                saw_text = true;
+                break;
+            }
+            before_text.push(byte);
+        }
+        assert!(saw_text, "keyboard text was not forwarded: {before_text:?}");
+        assert!(
+            !before_text.contains(&0x16),
+            "buffer pointer was replayed before keyboard text: {before_text:?}"
+        );
     }
 
     #[tokio::test]
