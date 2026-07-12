@@ -135,6 +135,9 @@ RESULT=OK&LOGID=130877825&COUNT=1
 **Implementation warnings:**
 
 - The `REPLACE` option **will overwrite confirmed QSOs** with the supplied unconfirmed QSO data until QRZ re-verifies the match. Treat this as a high-risk operation requiring explicit user intent.
+- Send the option as exactly `REPLACE`. Do not append a `LOGID` selector to the
+  `OPTION` value. QRZ matches the duplicate from the supplied ADIF record and
+  returns the affected `LOGID`.
 
 ---
 
@@ -308,4 +311,3 @@ Use these environment variables (see `.env.example`):
 | `QSORIPPER_QRZ_USER_AGENT` | User-Agent header value (e.g. `QsoRipper/0.1.0 (YOURCALL)`) |
 | `QSORIPPER_QRZ_HTTP_TIMEOUT_SECONDS` | HTTP request timeout |
 | `QSORIPPER_QRZ_MAX_RETRIES` | Maximum retry count for transient failures |
-
