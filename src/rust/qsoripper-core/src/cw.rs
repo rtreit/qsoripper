@@ -10,7 +10,12 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 use crate::proto::qsoripper::domain::StationProfile;
+use crate::proto::qsoripper::services::winkeyer_broker_service_client::WinkeyerBrokerServiceClient;
 use crate::proto::qsoripper::services::{CwKeyerBackend, CwKeyerStatus, CwMacro, CwSendContext};
+use crate::proto::qsoripper::services::{
+    WinkeyerBrokerServiceAbortClientRequest, WinkeyerBrokerServiceGetStatusRequest,
+    WinkeyerBrokerServiceSendTextRequest, WinkeyerBrokerServiceSetSpeedRequest, WinkeyerSpeedMode,
+};
 
 /// Environment variable that selects the CW keyer backend.
 pub const CW_KEYER_BACKEND_ENV_VAR: &str = "QSORIPPER_CW_KEYER_BACKEND";
@@ -18,6 +23,10 @@ pub const CW_KEYER_BACKEND_ENV_VAR: &str = "QSORIPPER_CW_KEYER_BACKEND";
 pub const CW_WINKEYER_PORT_ENV_VAR: &str = "QSORIPPER_CW_WINKEYER_PORT";
 /// Environment variable that overrides the `WinKeyer` serial baud rate.
 pub const CW_WINKEYER_BAUD_ENV_VAR: &str = "QSORIPPER_CW_WINKEYER_BAUD";
+/// Environment variable that identifies the `CatHub` `WinKeyer` broker endpoint.
+pub const CW_CATHUB_ENDPOINT_ENV_VAR: &str = "QSORIPPER_CW_CATHUB_ENDPOINT";
+/// Environment variable that identifies this engine to the shared broker.
+pub const CW_CATHUB_CLIENT_NAME_ENV_VAR: &str = "QSORIPPER_CW_CATHUB_CLIENT_NAME";
 /// Environment variable that sets the default CW speed in words per minute.
 pub const CW_SPEED_WPM_ENV_VAR: &str = "QSORIPPER_CW_SPEED_WPM";
 /// Environment variable that explicitly permits hardware CW transmission.
@@ -30,6 +39,10 @@ pub const DEFAULT_CW_SPEED_WPM: u32 = 25;
 pub const DEFAULT_WINKEYER_BAUD: u32 = 1200;
 /// Default hardware keying safety ceiling.
 pub const DEFAULT_CW_MAX_TX_MS: u64 = 120_000;
+/// Default loopback endpoint exposed by the `CatHub` `WinKeyer` broker.
+pub const DEFAULT_CATHUB_ENDPOINT: &str = "http://127.0.0.1:50071";
+/// Default stable client identity used by one `QsoRipper` engine.
+pub const DEFAULT_CATHUB_CLIENT_NAME: &str = "qsoripper-engine";
 const MIN_CW_SPEED_WPM: u32 = 5;
 const MAX_CW_SPEED_WPM: u32 = 99;
 const MIN_CW_MAX_TX_MS: u64 = 1_000;
@@ -82,6 +95,8 @@ pub enum CwBackendKind {
     Winkeyer,
     /// Reserved future UDP cwdaemon backend.
     Cwdaemon,
+    /// Multi-client `WinKeyer` broker hosted by `qsoripper-cathub`.
+    Cathub,
 }
 
 /// Runtime configuration for CW macro expansion and keyer hardware.
@@ -93,6 +108,10 @@ pub struct CwKeyerConfig {
     pub winkeyer_port: Option<String>,
     /// `WinKeyer` serial baud rate.
     pub winkeyer_baud: u32,
+    /// Loopback `CatHub` `WinKeyer` broker endpoint.
+    pub cathub_endpoint: String,
+    /// Stable broker client name used for ownership-scoped cancellation.
+    pub cathub_client_name: String,
     /// Default keying speed in words per minute.
     pub default_speed_wpm: u32,
     /// Whether real hardware is permitted to key the transmitter.
@@ -107,10 +126,13 @@ impl CwKeyerConfig {
     /// # Errors
     ///
     /// Returns an error when the backend name is unsupported or numeric configuration cannot be parsed.
+    #[allow(clippy::too_many_arguments)] // Mirrors the independent persisted/environment keys.
     pub fn from_values(
         backend: Option<&str>,
         winkeyer_port: Option<String>,
         winkeyer_baud: Option<&str>,
+        cathub_endpoint: Option<&str>,
+        cathub_client_name: Option<&str>,
         default_speed_wpm: Option<&str>,
         transmit_enabled: Option<&str>,
         max_tx_ms: Option<&str>,
@@ -124,6 +146,7 @@ impl CwKeyerConfig {
             "" | "null" => CwBackendKind::Null,
             "winkeyer" => CwBackendKind::Winkeyer,
             "cwdaemon" => CwBackendKind::Cwdaemon,
+            "cathub" => CwBackendKind::Cathub,
             value => {
                 return Err(CwError::BackendUnavailable(format!(
                     "unsupported backend '{value}'"
@@ -141,10 +164,39 @@ impl CwKeyerConfig {
             )));
         }
 
+        let cathub_endpoint = cathub_endpoint
+            .and_then(non_empty_preserve_case)
+            .unwrap_or_else(|| DEFAULT_CATHUB_ENDPOINT.to_string());
+        let authority = cathub_endpoint.strip_prefix("http://").ok_or_else(|| {
+            CwError::BackendUnavailable(
+                "CatHub CW endpoint must be an http:// loopback socket address".to_string(),
+            )
+        })?;
+        let address: std::net::SocketAddr = authority.parse().map_err(|_| {
+            CwError::BackendUnavailable(
+                "CatHub CW endpoint must be an http:// loopback socket address".to_string(),
+            )
+        })?;
+        if !address.ip().is_loopback() {
+            return Err(CwError::BackendUnavailable(
+                "CatHub CW endpoint must use a loopback address".to_string(),
+            ));
+        }
+        let cathub_client_name = cathub_client_name
+            .and_then(non_empty_preserve_case)
+            .unwrap_or_else(|| DEFAULT_CATHUB_CLIENT_NAME.to_string());
+        if cathub_client_name.len() > 64 {
+            return Err(CwError::BackendUnavailable(
+                "CatHub CW client name must contain 1 through 64 characters".to_string(),
+            ));
+        }
+
         Ok(Self {
             backend,
             winkeyer_port: winkeyer_port.and_then(|value| non_empty(value.as_str())),
             winkeyer_baud,
+            cathub_endpoint,
+            cathub_client_name,
             default_speed_wpm,
             transmit_enabled,
             max_tx_ms,
@@ -177,6 +229,8 @@ impl CwKeyerConfig {
         let backend = effective(CW_KEYER_BACKEND_ENV_VAR);
         let port = effective(CW_WINKEYER_PORT_ENV_VAR);
         let baud = effective(CW_WINKEYER_BAUD_ENV_VAR);
+        let cathub_endpoint = effective(CW_CATHUB_ENDPOINT_ENV_VAR);
+        let cathub_client_name = effective(CW_CATHUB_CLIENT_NAME_ENV_VAR);
         let speed = effective(CW_SPEED_WPM_ENV_VAR);
         let transmit_enabled = effective(CW_TRANSMIT_ENABLED_ENV_VAR);
         let max_tx_ms = effective(CW_MAX_TX_MS_ENV_VAR);
@@ -184,6 +238,8 @@ impl CwKeyerConfig {
             backend.as_deref(),
             port,
             baud.as_deref(),
+            cathub_endpoint.as_deref(),
+            cathub_client_name.as_deref(),
             speed.as_deref(),
             transmit_enabled.as_deref(),
             max_tx_ms.as_deref(),
@@ -201,12 +257,21 @@ impl CwController {
     /// Creates a controller and its dedicated backend worker.
     #[must_use]
     pub fn new(config: CwKeyerConfig) -> Self {
-        Self::with_factory(config, Arc::new(open_winkeyer))
+        Self::with_factories(config, Arc::new(open_winkeyer), Arc::new(open_cathub))
     }
 
+    #[cfg(test)]
     fn with_factory(config: CwKeyerConfig, factory: WinkeyerFactory) -> Self {
+        Self::with_factories(config, factory, Arc::new(open_cathub))
+    }
+
+    fn with_factories(
+        config: CwKeyerConfig,
+        factory: WinkeyerFactory,
+        cathub_factory: CathubFactory,
+    ) -> Self {
         let (commands, receiver) = mpsc::sync_channel(COMMAND_QUEUE_CAPACITY);
-        thread::spawn(move || CwWorker::new(config, factory).run(&receiver));
+        thread::spawn(move || CwWorker::new(config, factory, cathub_factory).run(&receiver));
         Self { commands }
     }
 
@@ -343,10 +408,22 @@ trait WinkeyerDevice: Send {
     fn clear_buffer(&mut self) -> Result<(), CwError>;
     fn is_busy(&mut self) -> Result<bool, CwError>;
     fn close(&mut self) -> Result<(), CwError>;
+    fn broker_status(&mut self) -> Result<Option<BrokerDeviceStatus>, CwError> {
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct BrokerDeviceStatus {
+    busy: bool,
+    pot_wpm: Option<u32>,
+    last_safety_action: Option<String>,
 }
 
 type WinkeyerFactory =
     Arc<dyn Fn(&str, u32) -> Result<Box<dyn WinkeyerDevice>, CwError> + Send + Sync>;
+type CathubFactory =
+    Arc<dyn Fn(&str, &str) -> Result<Box<dyn WinkeyerDevice>, CwError> + Send + Sync>;
 
 struct CwWorker {
     config: CwKeyerConfig,
@@ -356,10 +433,11 @@ struct CwWorker {
     last_error: Option<String>,
     watchdog_deadline: Option<Instant>,
     factory: WinkeyerFactory,
+    cathub_factory: CathubFactory,
 }
 
 impl CwWorker {
-    fn new(config: CwKeyerConfig, factory: WinkeyerFactory) -> Self {
+    fn new(config: CwKeyerConfig, factory: WinkeyerFactory, cathub_factory: CathubFactory) -> Self {
         Self {
             active_speed_wpm: config.default_speed_wpm,
             config,
@@ -368,6 +446,7 @@ impl CwWorker {
             last_error: None,
             watchdog_deadline: None,
             factory,
+            cathub_factory,
         }
     }
 
@@ -420,7 +499,7 @@ impl CwWorker {
                 self.last_error = None;
                 Ok(())
             }
-            CwBackendKind::Winkeyer => {
+            CwBackendKind::Winkeyer | CwBackendKind::Cathub => {
                 if !self.config.transmit_enabled {
                     return Err(CwError::TransmitDisabled);
                 }
@@ -443,7 +522,9 @@ impl CwWorker {
         self.watchdog_deadline = None;
         match self.config.backend {
             CwBackendKind::Null => Ok(()),
-            CwBackendKind::Winkeyer => self.with_keyer(|keyer| keyer.clear_buffer()),
+            CwBackendKind::Winkeyer | CwBackendKind::Cathub => {
+                self.with_keyer(|keyer| keyer.clear_buffer())
+            }
             CwBackendKind::Cwdaemon => Err(CwError::BackendUnavailable(
                 "cwdaemon backend is reserved but not implemented".to_string(),
             )),
@@ -454,7 +535,7 @@ impl CwWorker {
         validate_speed(speed_wpm)?;
         match self.config.backend {
             CwBackendKind::Null => {}
-            CwBackendKind::Winkeyer => {
+            CwBackendKind::Winkeyer | CwBackendKind::Cathub => {
                 self.with_keyer(|keyer| keyer.set_speed(speed_wpm))?;
             }
             CwBackendKind::Cwdaemon => {
@@ -475,11 +556,18 @@ impl CwWorker {
                 self.last_error = Some(format!("{CW_WINKEYER_PORT_ENV_VAR} is required"));
                 false
             }
-            CwBackendKind::Winkeyer => self.ensure_keyer().is_ok(),
+            CwBackendKind::Winkeyer | CwBackendKind::Cathub => self.ensure_keyer().is_ok(),
             CwBackendKind::Cwdaemon => {
                 self.last_error = Some("cwdaemon backend is not implemented".to_string());
                 false
             }
+        };
+        let broker_status = if available && self.config.backend == CwBackendKind::Cathub {
+            self.with_keyer(|keyer| keyer.broker_status())
+                .ok()
+                .flatten()
+        } else {
+            None
         };
         CwKeyerStatus {
             backend: backend_to_proto(self.config.backend) as i32,
@@ -490,6 +578,11 @@ impl CwWorker {
             transmit_enabled: self.config.transmit_enabled,
             max_tx_ms: self.config.max_tx_ms,
             firmware_revision: self.firmware_revision.map(u32::from),
+            broker_endpoint: (self.config.backend == CwBackendKind::Cathub)
+                .then(|| self.config.cathub_endpoint.clone()),
+            pot_wpm: broker_status.as_ref().and_then(|status| status.pot_wpm),
+            busy: broker_status.as_ref().is_some_and(|status| status.busy),
+            last_safety_action: broker_status.and_then(|status| status.last_safety_action),
         }
     }
 
@@ -497,10 +590,22 @@ impl CwWorker {
         if self.keyer.is_some() {
             return Ok(());
         }
-        let port_name = self.config.winkeyer_port.clone().ok_or_else(|| {
-            CwError::BackendUnavailable(format!("{CW_WINKEYER_PORT_ENV_VAR} is required"))
-        })?;
-        let mut keyer = match (self.factory)(&port_name, self.config.winkeyer_baud) {
+        let created = match self.config.backend {
+            CwBackendKind::Winkeyer => {
+                let port_name = self.config.winkeyer_port.clone().ok_or_else(|| {
+                    CwError::BackendUnavailable(format!("{CW_WINKEYER_PORT_ENV_VAR} is required"))
+                })?;
+                (self.factory)(&port_name, self.config.winkeyer_baud)
+            }
+            CwBackendKind::Cathub => (self.cathub_factory)(
+                &self.config.cathub_endpoint,
+                &self.config.cathub_client_name,
+            ),
+            _ => Err(CwError::BackendUnavailable(
+                "selected backend does not create a WinKeyer device".to_string(),
+            )),
+        };
+        let mut keyer = match created {
             Ok(keyer) => keyer,
             Err(error) => {
                 self.last_error = Some(error.to_string());
@@ -685,6 +790,7 @@ fn backend_to_proto(backend: CwBackendKind) -> CwKeyerBackend {
         CwBackendKind::Null => CwKeyerBackend::Null,
         CwBackendKind::Winkeyer => CwKeyerBackend::Winkeyer,
         CwBackendKind::Cwdaemon => CwKeyerBackend::Cwdaemon,
+        CwBackendKind::Cathub => CwKeyerBackend::Cathub,
     }
 }
 
@@ -742,6 +848,11 @@ fn non_empty(value: &str) -> Option<String> {
     } else {
         Some(trimmed.to_ascii_uppercase())
     }
+}
+
+fn non_empty_preserve_case(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 fn validate_speed(speed_wpm: u32) -> Result<(), CwError> {
@@ -896,6 +1007,125 @@ fn open_winkeyer(port_name: &str, baud_rate: u32) -> Result<Box<dyn WinkeyerDevi
     WinkeyerPort::open(port_name, baud_rate).map(|keyer| Box::new(keyer) as Box<dyn WinkeyerDevice>)
 }
 
+struct CathubWinkeyer {
+    runtime: tokio::runtime::Runtime,
+    client: WinkeyerBrokerServiceClient<tonic::transport::Channel>,
+    client_name: String,
+}
+
+impl CathubWinkeyer {
+    fn connect(endpoint: &str, client_name: &str) -> Result<Self, CwError> {
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|error| CwError::Io(format!("create CatHub runtime: {error}")))?;
+        let client = runtime
+            .block_on(WinkeyerBrokerServiceClient::connect(endpoint.to_string()))
+            .map_err(|error| CwError::Io(format!("connect CatHub WinKeyer broker: {error}")))?;
+        Ok(Self {
+            runtime,
+            client,
+            client_name: client_name.to_string(),
+        })
+    }
+
+    fn get_status(
+        &mut self,
+    ) -> Result<crate::proto::qsoripper::services::WinkeyerBrokerStatus, CwError> {
+        let response = self
+            .runtime
+            .block_on(
+                self.client
+                    .get_status(WinkeyerBrokerServiceGetStatusRequest {
+                        client_name: self.client_name.clone(),
+                    }),
+            )
+            .map_err(cathub_rpc_error)?
+            .into_inner();
+        response.status.ok_or_else(|| {
+            CwError::Io("CatHub WinKeyer broker returned no status payload".to_string())
+        })
+    }
+}
+
+impl WinkeyerDevice for CathubWinkeyer {
+    fn initialize(&mut self) -> Result<u8, CwError> {
+        let status = self.get_status()?;
+        if !status.connected {
+            return Err(CwError::BackendUnavailable(
+                status
+                    .last_error
+                    .unwrap_or_else(|| "CatHub WinKeyer is disconnected".to_string()),
+            ));
+        }
+        status
+            .firmware_revision
+            .and_then(|revision| u8::try_from(revision).ok())
+            .ok_or_else(|| CwError::Io("CatHub did not report WinKeyer firmware".to_string()))
+    }
+
+    fn set_speed(&mut self, speed_wpm: u32) -> Result<(), CwError> {
+        self.runtime
+            .block_on(self.client.set_speed(WinkeyerBrokerServiceSetSpeedRequest {
+                client_name: self.client_name.clone(),
+                speed_mode: WinkeyerSpeedMode::Fixed as i32,
+                speed_wpm: Some(speed_wpm),
+            }))
+            .map_err(cathub_rpc_error)?;
+        Ok(())
+    }
+
+    fn send_text(&mut self, text: &str) -> Result<(), CwError> {
+        self.runtime
+            .block_on(self.client.send_text(WinkeyerBrokerServiceSendTextRequest {
+                client_name: self.client_name.clone(),
+                text: text.to_string(),
+                speed_mode: WinkeyerSpeedMode::Unspecified as i32,
+                speed_wpm: None,
+            }))
+            .map_err(cathub_rpc_error)?;
+        Ok(())
+    }
+
+    fn clear_buffer(&mut self) -> Result<(), CwError> {
+        self.runtime
+            .block_on(
+                self.client
+                    .abort_client(WinkeyerBrokerServiceAbortClientRequest {
+                        client_name: self.client_name.clone(),
+                        emergency_station_stop: false,
+                    }),
+            )
+            .map_err(cathub_rpc_error)?;
+        Ok(())
+    }
+
+    fn is_busy(&mut self) -> Result<bool, CwError> {
+        self.get_status().map(|status| status.busy)
+    }
+
+    fn close(&mut self) -> Result<(), CwError> {
+        Ok(())
+    }
+
+    fn broker_status(&mut self) -> Result<Option<BrokerDeviceStatus>, CwError> {
+        let status = self.get_status()?;
+        Ok(Some(BrokerDeviceStatus {
+            busy: status.busy,
+            pot_wpm: status.pot_wpm,
+            last_safety_action: status.last_safety_action,
+        }))
+    }
+}
+
+fn open_cathub(endpoint: &str, client_name: &str) -> Result<Box<dyn WinkeyerDevice>, CwError> {
+    CathubWinkeyer::connect(endpoint, client_name)
+        .map(|keyer| Box::new(keyer) as Box<dyn WinkeyerDevice>)
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn cathub_rpc_error(error: tonic::Status) -> CwError {
+    CwError::Io(format!("CatHub WinKeyer RPC: {error}"))
+}
+
 fn format_bytes_error(bytes: &[u8], err: &std::io::Error) -> String {
     let mut hex = String::new();
     for (index, byte) in bytes.iter().enumerate() {
@@ -952,6 +1182,8 @@ mod tests {
         speeds: Vec<u32>,
         texts: Vec<String>,
         busy: bool,
+        broker_pot_wpm: Option<u32>,
+        broker_safety: Option<String>,
     }
 
     struct FakeWinkeyer {
@@ -991,6 +1223,15 @@ mod tests {
             self.state.lock().unwrap().closes += 1;
             Ok(())
         }
+
+        fn broker_status(&mut self) -> Result<Option<BrokerDeviceStatus>, CwError> {
+            let state = self.state.lock().unwrap();
+            Ok(Some(BrokerDeviceStatus {
+                busy: state.busy,
+                pot_wpm: state.broker_pot_wpm,
+                last_safety_action: state.broker_safety.clone(),
+            }))
+        }
     }
 
     impl WinkeyerDevice for FailingInitWinkeyer {
@@ -1026,6 +1267,8 @@ mod tests {
             backend: CwBackendKind::Null,
             winkeyer_port: None,
             winkeyer_baud: DEFAULT_WINKEYER_BAUD,
+            cathub_endpoint: DEFAULT_CATHUB_ENDPOINT.to_string(),
+            cathub_client_name: DEFAULT_CATHUB_CLIENT_NAME.to_string(),
             default_speed_wpm: DEFAULT_CW_SPEED_WPM,
             transmit_enabled: false,
             max_tx_ms: DEFAULT_CW_MAX_TX_MS,
@@ -1050,6 +1293,8 @@ mod tests {
                 backend: CwBackendKind::Winkeyer,
                 winkeyer_port: Some("FAKE".to_string()),
                 winkeyer_baud: DEFAULT_WINKEYER_BAUD,
+                cathub_endpoint: DEFAULT_CATHUB_ENDPOINT.to_string(),
+                cathub_client_name: DEFAULT_CATHUB_CLIENT_NAME.to_string(),
                 default_speed_wpm: DEFAULT_CW_SPEED_WPM,
                 transmit_enabled,
                 max_tx_ms,
@@ -1185,6 +1430,8 @@ mod tests {
                 backend: CwBackendKind::Winkeyer,
                 winkeyer_port: Some("FAKE".to_string()),
                 winkeyer_baud: DEFAULT_WINKEYER_BAUD,
+                cathub_endpoint: DEFAULT_CATHUB_ENDPOINT.to_string(),
+                cathub_client_name: DEFAULT_CATHUB_CLIENT_NAME.to_string(),
                 default_speed_wpm: DEFAULT_CW_SPEED_WPM,
                 transmit_enabled: true,
                 max_tx_ms: DEFAULT_CW_MAX_TX_MS,
@@ -1215,6 +1462,8 @@ mod tests {
                 backend: CwBackendKind::Winkeyer,
                 winkeyer_port: Some("FAKE".to_string()),
                 winkeyer_baud: DEFAULT_WINKEYER_BAUD,
+                cathub_endpoint: DEFAULT_CATHUB_ENDPOINT.to_string(),
+                cathub_client_name: DEFAULT_CATHUB_CLIENT_NAME.to_string(),
                 default_speed_wpm: DEFAULT_CW_SPEED_WPM,
                 transmit_enabled: true,
                 max_tx_ms: DEFAULT_CW_MAX_TX_MS,
@@ -1231,7 +1480,7 @@ mod tests {
     #[test]
     fn configuration_requires_valid_safety_values() {
         assert!(matches!(
-            CwKeyerConfig::from_values(None, None, None, Some("4"), None, None),
+            CwKeyerConfig::from_values(None, None, None, None, None, Some("4"), None, None),
             Err(CwError::InvalidSpeed(4))
         ));
         assert!(CwKeyerConfig::from_values(
@@ -1239,9 +1488,70 @@ mod tests {
             Some("COM3".to_string()),
             None,
             None,
+            None,
+            None,
             Some("true"),
             Some("120000")
         )
         .is_ok());
+        assert!(CwKeyerConfig::from_values(
+            Some("cathub"),
+            None,
+            None,
+            Some("http://192.168.1.10:50071"),
+            None,
+            None,
+            None,
+            None,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn cathub_backend_uses_typed_factory_and_reports_broker_status() -> Result<(), CwError> {
+        let state = Arc::new(Mutex::new(FakeState {
+            busy: true,
+            broker_pot_wpm: Some(23),
+            broker_safety: Some("recovered".to_string()),
+            ..FakeState::default()
+        }));
+        let factory_state = state.clone();
+        let cathub_factory: CathubFactory = Arc::new(move |endpoint, client_name| {
+            assert_eq!(endpoint, "http://127.0.0.1:50071");
+            assert_eq!(client_name, "rust-test");
+            factory_state.lock().unwrap().opens += 1;
+            Ok(Box::new(FakeWinkeyer {
+                state: factory_state.clone(),
+            }))
+        });
+        let serial_factory: WinkeyerFactory =
+            Arc::new(|_, _| Err(CwError::Io("serial factory must not be used".to_string())));
+        let controller = CwController::with_factories(
+            CwKeyerConfig {
+                backend: CwBackendKind::Cathub,
+                winkeyer_port: None,
+                winkeyer_baud: DEFAULT_WINKEYER_BAUD,
+                cathub_endpoint: "http://127.0.0.1:50071".to_string(),
+                cathub_client_name: "rust-test".to_string(),
+                default_speed_wpm: 24,
+                transmit_enabled: true,
+                max_tx_ms: 30_000,
+            },
+            serial_factory,
+            cathub_factory,
+        );
+
+        controller.send_text("TEST", None)?;
+        let status = controller.status();
+        assert_eq!(status.backend, CwKeyerBackend::Cathub as i32);
+        assert_eq!(
+            status.broker_endpoint.as_deref(),
+            Some("http://127.0.0.1:50071")
+        );
+        assert_eq!(status.pot_wpm, Some(23));
+        assert!(status.busy);
+        assert_eq!(status.last_safety_action.as_deref(), Some("recovered"));
+        assert_eq!(state.lock().unwrap().opens, 1);
+        Ok(())
     }
 }

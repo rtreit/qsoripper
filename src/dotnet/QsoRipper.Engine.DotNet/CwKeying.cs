@@ -2,6 +2,7 @@ using System.Globalization;
 using System.IO.Ports;
 using System.Text;
 using Grpc.Core;
+using Grpc.Net.Client;
 using QsoRipper.Domain;
 using QsoRipper.Services;
 
@@ -12,12 +13,15 @@ internal enum ManagedCwBackendKind
     Null,
     Winkeyer,
     Cwdaemon,
+    Cathub,
 }
 
 internal sealed record ManagedCwKeyerConfig(
     ManagedCwBackendKind Backend,
     string? WinkeyerPort,
     int WinkeyerBaud,
+    string CathubEndpoint,
+    string CathubClientName,
     uint DefaultSpeedWpm,
     bool TransmitEnabled,
     uint MaxTxMs)
@@ -25,6 +29,8 @@ internal sealed record ManagedCwKeyerConfig(
     public const string BackendEnvironmentVariable = "QSORIPPER_CW_KEYER_BACKEND";
     public const string WinkeyerPortEnvironmentVariable = "QSORIPPER_CW_WINKEYER_PORT";
     public const string WinkeyerBaudEnvironmentVariable = "QSORIPPER_CW_WINKEYER_BAUD";
+    public const string CathubEndpointEnvironmentVariable = "QSORIPPER_CW_CATHUB_ENDPOINT";
+    public const string CathubClientNameEnvironmentVariable = "QSORIPPER_CW_CATHUB_CLIENT_NAME";
     public const string SpeedWpmEnvironmentVariable = "QSORIPPER_CW_SPEED_WPM";
     public const string TransmitEnabledEnvironmentVariable = "QSORIPPER_CW_TRANSMIT_ENABLED";
     public const string MaxTxMsEnvironmentVariable = "QSORIPPER_CW_MAX_TX_MS";
@@ -33,6 +39,8 @@ internal sealed record ManagedCwKeyerConfig(
     public const uint DefaultMaxTxMs = 120_000;
     public const uint MinimumMaxTxMs = 1_000;
     public const uint MaximumMaxTxMs = 300_000;
+    public const string DefaultCathubEndpoint = "http://127.0.0.1:50071";
+    public const string DefaultCathubClientName = "qsoripper-engine";
 
     public static ManagedCwKeyerConfig FromEnvironment()
     {
@@ -49,6 +57,8 @@ internal sealed record ManagedCwKeyerConfig(
             Effective(BackendEnvironmentVariable, persisted?.Backend),
             Effective(WinkeyerPortEnvironmentVariable, persisted?.WinkeyerPort),
             Effective(WinkeyerBaudEnvironmentVariable, persisted?.WinkeyerBaud?.ToString(CultureInfo.InvariantCulture)),
+            Effective(CathubEndpointEnvironmentVariable, persisted?.CathubEndpoint),
+            Effective(CathubClientNameEnvironmentVariable, persisted?.CathubClientName),
             Effective(SpeedWpmEnvironmentVariable, persisted?.SpeedWpm?.ToString(CultureInfo.InvariantCulture)),
             Effective(TransmitEnabledEnvironmentVariable, persisted?.TransmitEnabled?.ToString(CultureInfo.InvariantCulture)),
             Effective(MaxTxMsEnvironmentVariable, persisted?.MaxTxMs?.ToString(CultureInfo.InvariantCulture)));
@@ -58,6 +68,8 @@ internal sealed record ManagedCwKeyerConfig(
         string? backend,
         string? port,
         string? baud,
+        string? cathubEndpoint,
+        string? cathubClientName,
         string? speed,
         string? transmitEnabled,
         string? maxTxMs)
@@ -67,6 +79,7 @@ internal sealed record ManagedCwKeyerConfig(
             "" or "NULL" => ManagedCwBackendKind.Null,
             "WINKEYER" => ManagedCwBackendKind.Winkeyer,
             "CWDAEMON" => ManagedCwBackendKind.Cwdaemon,
+            "CATHUB" => ManagedCwBackendKind.Cathub,
             var value => throw new InvalidOperationException($"Unsupported CW keyer backend '{value}'."),
         };
 
@@ -79,10 +92,33 @@ internal sealed record ManagedCwKeyerConfig(
                 $"{MaxTxMsEnvironmentVariable} must be between {MinimumMaxTxMs} and {MaximumMaxTxMs}, got {parsedMaxTxMs}.");
         }
 
+        var parsedCathubEndpoint = string.IsNullOrWhiteSpace(cathubEndpoint)
+            ? DefaultCathubEndpoint : cathubEndpoint.Trim();
+        if (!Uri.TryCreate(parsedCathubEndpoint, UriKind.Absolute, out var endpointUri)
+            || !string.Equals(endpointUri.Scheme, Uri.UriSchemeHttp, StringComparison.Ordinal)
+            || !System.Net.IPAddress.TryParse(endpointUri.Host, out var endpointAddress)
+            || !System.Net.IPAddress.IsLoopback(endpointAddress)
+            || endpointUri.Port <= 0
+            || endpointUri.AbsolutePath != "/")
+        {
+            throw new InvalidOperationException(
+                "CatHub CW endpoint must be an http:// loopback socket address.");
+        }
+
+        var parsedCathubClientName = string.IsNullOrWhiteSpace(cathubClientName)
+            ? DefaultCathubClientName : cathubClientName.Trim();
+        if (parsedCathubClientName.Length > 64)
+        {
+            throw new InvalidOperationException(
+                "CatHub CW client name must contain 1 through 64 characters.");
+        }
+
         return new ManagedCwKeyerConfig(
             backendKind,
             string.IsNullOrWhiteSpace(port) ? null : port.Trim(),
             ParseIntOrDefault(baud, DefaultWinkeyerBaud),
+            parsedCathubEndpoint,
+            parsedCathubClientName,
             parsedSpeed,
             ParseBoolOrDefault(transmitEnabled, false),
             parsedMaxTxMs);
@@ -143,7 +179,13 @@ internal interface IManagedWinkeyerPort : IDisposable
     void ClearBuffer();
     bool IsBusy();
     void CloseHostMode();
+    ManagedBrokerHardwareStatus? GetBrokerStatus() => null;
 }
+
+internal sealed record ManagedBrokerHardwareStatus(
+    bool Busy,
+    uint? PotWpm,
+    string? LastSafetyAction);
 
 internal interface IManagedCwWatchdog : IDisposable
 {
@@ -167,6 +209,7 @@ internal sealed class ManagedCwController : IDisposable
     private readonly object _gate = new();
     private readonly ManagedCwKeyerConfig _config;
     private readonly Func<string, int, IManagedWinkeyerPort> _portFactory;
+    private readonly Func<string, string, IManagedWinkeyerPort> _cathubFactory;
     private readonly Func<Action, IManagedCwWatchdog> _watchdogFactory;
     private IManagedWinkeyerPort? _keyer;
     private IManagedCwWatchdog? _watchdog;
@@ -179,17 +222,21 @@ internal sealed class ManagedCwController : IDisposable
         : this(
             config,
             static (portName, baudRate) => new ManagedWinkeyerPort(portName, baudRate),
-            static callback => new ManagedCwWatchdog(callback))
+            static callback => new ManagedCwWatchdog(callback),
+            static (endpoint, clientName) => new ManagedCathubWinkeyerPort(endpoint, clientName))
     {
     }
 
     internal ManagedCwController(
         ManagedCwKeyerConfig config,
         Func<string, int, IManagedWinkeyerPort> portFactory,
-        Func<Action, IManagedCwWatchdog>? watchdogFactory = null)
+        Func<Action, IManagedCwWatchdog>? watchdogFactory = null,
+        Func<string, string, IManagedWinkeyerPort>? cathubFactory = null)
     {
         _config = config;
         _portFactory = portFactory;
+        _cathubFactory = cathubFactory
+            ?? (static (endpoint, clientName) => new ManagedCathubWinkeyerPort(endpoint, clientName));
         _watchdogFactory = watchdogFactory ?? (static callback => new ManagedCwWatchdog(callback));
         _activeSpeedWpm = config.DefaultSpeedWpm;
     }
@@ -274,6 +321,7 @@ internal sealed class ManagedCwController : IDisposable
                     _lastError = null;
                     return;
                 case ManagedCwBackendKind.Winkeyer:
+                case ManagedCwBackendKind.Cathub:
                     if (!_config.TransmitEnabled)
                     {
                         throw new InvalidOperationException(
@@ -307,6 +355,7 @@ internal sealed class ManagedCwController : IDisposable
                 case ManagedCwBackendKind.Null:
                     return;
                 case ManagedCwBackendKind.Winkeyer:
+                case ManagedCwBackendKind.Cathub:
                     ExecuteKeyer(static keyer => keyer.ClearBuffer());
                     return;
                 case ManagedCwBackendKind.Cwdaemon:
@@ -328,6 +377,7 @@ internal sealed class ManagedCwController : IDisposable
                 case ManagedCwBackendKind.Null:
                     break;
                 case ManagedCwBackendKind.Winkeyer:
+                case ManagedCwBackendKind.Cathub:
                     ExecuteKeyer(keyer => keyer.SetSpeed(speedWpm));
                     break;
                 case ManagedCwBackendKind.Cwdaemon:
@@ -350,6 +400,7 @@ internal sealed class ManagedCwController : IDisposable
             {
                 ManagedCwBackendKind.Null => true,
                 ManagedCwBackendKind.Winkeyer => ProbeWinkeyer(),
+                ManagedCwBackendKind.Cathub => ProbeWinkeyer(),
                 ManagedCwBackendKind.Cwdaemon => RecordUnavailable("cwdaemon backend is not implemented."),
                 _ => RecordUnavailable($"Unsupported CW keyer backend '{_config.Backend}'."),
             };
@@ -359,6 +410,7 @@ internal sealed class ManagedCwController : IDisposable
                 {
                     ManagedCwBackendKind.Null => CwKeyerBackend.Null,
                     ManagedCwBackendKind.Winkeyer => CwKeyerBackend.Winkeyer,
+                    ManagedCwBackendKind.Cathub => CwKeyerBackend.Cathub,
                     ManagedCwBackendKind.Cwdaemon => CwKeyerBackend.Cwdaemon,
                     _ => CwKeyerBackend.Unspecified,
                 },
@@ -370,6 +422,24 @@ internal sealed class ManagedCwController : IDisposable
             if (_config.WinkeyerPort is not null)
             {
                 status.PortName = _config.WinkeyerPort;
+            }
+
+            if (_config.Backend == ManagedCwBackendKind.Cathub)
+            {
+                status.BrokerEndpoint = _config.CathubEndpoint;
+                var brokerStatus = _keyer?.GetBrokerStatus();
+                if (brokerStatus is not null)
+                {
+                    status.Busy = brokerStatus.Busy;
+                    if (brokerStatus.PotWpm.HasValue)
+                    {
+                        status.PotWpm = brokerStatus.PotWpm.Value;
+                    }
+                    if (!string.IsNullOrWhiteSpace(brokerStatus.LastSafetyAction))
+                    {
+                        status.LastSafetyAction = brokerStatus.LastSafetyAction;
+                    }
+                }
             }
 
             if (_lastError is not null)
@@ -448,13 +518,19 @@ internal sealed class ManagedCwController : IDisposable
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_config.WinkeyerPort))
+        if (_config.Backend == ManagedCwBackendKind.Winkeyer
+            && string.IsNullOrWhiteSpace(_config.WinkeyerPort))
         {
             throw new InvalidOperationException(
                 $"{ManagedCwKeyerConfig.WinkeyerPortEnvironmentVariable} is required.");
         }
 
-        var keyer = _portFactory(_config.WinkeyerPort, _config.WinkeyerBaud);
+        var keyer = _config.Backend switch
+        {
+            ManagedCwBackendKind.Winkeyer => _portFactory(_config.WinkeyerPort!, _config.WinkeyerBaud),
+            ManagedCwBackendKind.Cathub => _cathubFactory(_config.CathubEndpoint, _config.CathubClientName),
+            _ => throw new InvalidOperationException($"Backend '{_config.Backend}' has no hardware connection."),
+        };
         try
         {
             _firmwareRevision = keyer.Initialize();
@@ -573,6 +649,107 @@ internal sealed class ManagedCwController : IDisposable
     }
 }
 
+internal sealed class ManagedCathubWinkeyerPort : IManagedWinkeyerPort
+{
+    private readonly GrpcChannel _channel;
+    private readonly WinkeyerBrokerService.WinkeyerBrokerServiceClient _client;
+    private readonly string _clientName;
+
+    public ManagedCathubWinkeyerPort(string endpoint, string clientName)
+    {
+        _channel = GrpcChannel.ForAddress(endpoint);
+        _client = new WinkeyerBrokerService.WinkeyerBrokerServiceClient(_channel);
+        _clientName = clientName;
+    }
+
+    public byte Initialize()
+    {
+        var status = Status();
+        if (!status.Connected)
+        {
+            throw new IOException(status.HasLastError
+                ? status.LastError
+                : "CatHub WinKeyer is disconnected.");
+        }
+
+        if (!status.HasFirmwareRevision || status.FirmwareRevision > byte.MaxValue)
+        {
+            throw new IOException("CatHub did not report a valid WinKeyer firmware revision.");
+        }
+
+        return checked((byte)status.FirmwareRevision);
+    }
+
+    public void SetSpeed(uint speedWpm)
+    {
+        ManagedCwKeyerConfig.ValidateSpeed(speedWpm);
+        Invoke(() => _client.SetSpeed(new WinkeyerBrokerServiceSetSpeedRequest
+        {
+            ClientName = _clientName,
+            SpeedMode = WinkeyerSpeedMode.Fixed,
+            SpeedWpm = speedWpm,
+        }));
+    }
+
+    public void SendText(string text)
+    {
+        Invoke(() => _client.SendText(new WinkeyerBrokerServiceSendTextRequest
+        {
+            ClientName = _clientName,
+            Text = text,
+            SpeedMode = WinkeyerSpeedMode.Unspecified,
+        }));
+    }
+
+    public void ClearBuffer()
+    {
+        Invoke(() => _client.AbortClient(new WinkeyerBrokerServiceAbortClientRequest
+        {
+            ClientName = _clientName,
+            EmergencyStationStop = false,
+        }));
+    }
+
+    public bool IsBusy() => Status().Busy;
+
+    public void CloseHostMode()
+    {
+        // CatHub owns the one physical host session. A typed client disconnect must not
+        // close it or disturb N1MM's virtual session.
+    }
+
+    public ManagedBrokerHardwareStatus? GetBrokerStatus()
+    {
+        var status = Status();
+        return new ManagedBrokerHardwareStatus(
+            status.Busy,
+            status.HasPotWpm ? status.PotWpm : null,
+            status.HasLastSafetyAction ? status.LastSafetyAction : null);
+    }
+
+    public void Dispose() => _channel.Dispose();
+
+    private WinkeyerBrokerStatus Status()
+    {
+        return Invoke(() => _client.GetStatus(new WinkeyerBrokerServiceGetStatusRequest
+        {
+            ClientName = _clientName,
+        })).Status ?? throw new IOException("CatHub WinKeyer broker returned no status payload.");
+    }
+
+    private static T Invoke<T>(Func<T> operation)
+    {
+        try
+        {
+            return operation();
+        }
+        catch (RpcException error)
+        {
+            throw new IOException($"CatHub WinKeyer RPC failed: {error.Status}", error);
+        }
+    }
+}
+
 internal sealed class ManagedWinkeyerPort : IManagedWinkeyerPort
 {
     private readonly SerialPort _port;
@@ -580,7 +757,7 @@ internal sealed class ManagedWinkeyerPort : IManagedWinkeyerPort
 
     public ManagedWinkeyerPort(string portName, int baudRate)
     {
-        _port = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.One)
+        _port = new SerialPort(portName, baudRate, Parity.None, 8, StopBits.Two)
         {
             ReadTimeout = 500,
             WriteTimeout = 500,

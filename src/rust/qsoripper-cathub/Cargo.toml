@@ -18,6 +18,9 @@ path = "src/main.rs"
 [dependencies]
 async-trait = { workspace = true }
 bytes = { workspace = true }
+prost = { workspace = true }
+tonic = { workspace = true }
+tokio-stream = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
@@ -30,6 +33,9 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+
+[build-dependencies]
+tonic-build = "0.12"
 
 [lints]
 workspace = true

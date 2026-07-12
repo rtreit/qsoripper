@@ -1178,9 +1178,9 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
             return true;
         }
 
-        if (!TryParseRstToken(normalized, out var report))
+        if (!SignalReportFormatter.TryParse(normalized, out var report))
         {
-            error = $"Invalid {fieldName}: {value}. Use 59 or 599.";
+            error = $"Invalid {fieldName}: {value}. Use 59, 599, or a signed digital report such as -10.";
             return false;
         }
 
@@ -1299,25 +1299,6 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
                    out timestamp);
     }
 
-    private static bool TryParseRstToken(string value, out RstReport report)
-    {
-        report = new RstReport();
-        var normalized = NormalizeToken(value, uppercase: false);
-        if (normalized.Length is not (2 or 3) || normalized.Any(static c => !char.IsAsciiDigit(c)))
-        {
-            return false;
-        }
-
-        report.Readability = (uint)(normalized[0] - '0');
-        report.Strength = (uint)(normalized[1] - '0');
-        if (normalized.Length == 3)
-        {
-            report.Tone = (uint)(normalized[2] - '0');
-        }
-
-        return true;
-    }
-
     private static string FormatTimestamp(DateTimeOffset value) =>
         value.ToUniversalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
 
@@ -1329,17 +1310,7 @@ internal sealed partial class FullQsoCardViewModel : ObservableObject, IDisposab
             ? string.Empty
             : value.ToDateTimeOffset().ToUniversalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-    private static string FormatRst(RstReport? report)
-    {
-        if (report is null)
-        {
-            return string.Empty;
-        }
-
-        return report.Tone == 0
-            ? $"{report.Readability}{report.Strength}"
-            : $"{report.Readability}{report.Strength}{report.Tone}";
-    }
+    private static string FormatRst(RstReport? report) => SignalReportFormatter.Format(report);
 
     private static string FormatQslStatus(QslStatus value) =>
         value switch

@@ -64,6 +64,22 @@ internal static class CwCommand
             Console.WriteLine($"  Firmware revision: {status.FirmwareRevision}");
         }
 
+        if (status.HasBrokerEndpoint)
+        {
+            Console.WriteLine($"  Broker endpoint: {status.BrokerEndpoint}");
+            Console.WriteLine($"  Broker busy: {status.Busy}");
+        }
+
+        if (status.HasPotWpm)
+        {
+            Console.WriteLine($"  Speed pot: {status.PotWpm} WPM");
+        }
+
+        if (status.HasLastSafetyAction)
+        {
+            Console.WriteLine($"  Last safety action: {status.LastSafetyAction}");
+        }
+
         if (status.HasErrorMessage)
         {
             Console.WriteLine($"  Error: {status.ErrorMessage}");
@@ -245,7 +261,11 @@ internal static class CwCommand
             status.MaxTxMs,
             status.HasFirmwareRevision ? status.FirmwareRevision : null,
             status.HasPortName ? status.PortName : string.Empty,
-            status.HasErrorMessage ? status.ErrorMessage : string.Empty);
+            status.HasErrorMessage ? status.ErrorMessage : string.Empty,
+            status.HasBrokerEndpoint ? status.BrokerEndpoint : string.Empty,
+            status.HasPotWpm ? status.PotWpm : null,
+            status.Busy,
+            status.HasLastSafetyAction ? status.LastSafetyAction : string.Empty);
     }
 
     private static void ValidateSpeed(uint speedWpm)
@@ -266,6 +286,7 @@ internal static class CwCommand
             CwKeyerBackend.Null => "null",
             CwKeyerBackend.Winkeyer => "winkeyer",
             CwKeyerBackend.Cwdaemon => "cwdaemon",
+            CwKeyerBackend.Cathub => "cathub",
             _ => "unspecified",
         };
     }
@@ -279,7 +300,11 @@ internal sealed record CwStatusJson(
     ulong MaxTxMs,
     uint? FirmwareRevision,
     string PortName,
-    string ErrorMessage);
+    string ErrorMessage,
+    string BrokerEndpoint,
+    uint? PotWpm,
+    bool Busy,
+    string LastSafetyAction);
 
 internal sealed record CwMacroJson(string Name, string Label, string Template);
 

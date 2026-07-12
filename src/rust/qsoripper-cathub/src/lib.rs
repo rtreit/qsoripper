@@ -11,6 +11,12 @@
 
 #![allow(clippy::doc_markdown)]
 
+/// Generated protobuf and gRPC bindings for the loopback WinKeyer broker API.
+#[allow(missing_docs, unreachable_pub, clippy::all, clippy::pedantic)]
+pub mod broker_proto {
+    tonic::include_proto!("qsoripper.services");
+}
+
 mod backend;
 mod config;
 mod dialect;
@@ -24,6 +30,7 @@ mod ptt;
 mod radio;
 mod serial_face;
 mod state;
+mod winkeyer;
 
 #[cfg(test)]
 mod integration;
@@ -56,6 +63,11 @@ use crate::radio::{
 };
 use crate::serial_face::{open_serial, run_face};
 use crate::state::StateHandle;
+use crate::winkeyer::{
+    bind_server as bind_winkeyer_server, open_serial_face as open_winkeyer_face,
+    run_serial_face as run_winkeyer_face, spawn_supervised as spawn_winkeyer,
+    BrokerHandle as WinkeyerBrokerHandle, FacePermissions as WinkeyerFacePermissions,
+};
 
 pub use crate::error::CatHubError;
 
@@ -189,6 +201,44 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
     let state = StateHandle::new();
     let ptt = PttManager::new(cfg.ptt_max_tx());
 
+    let winkeyer: Option<WinkeyerBrokerHandle> = if let Some(keyer) = &cfg.winkeyer {
+        let port = open_winkeyer_serial(&keyer.port, keyer.baud)?;
+        let port_name = keyer.port.clone();
+        let baud = keyer.baud;
+        let handle = spawn_winkeyer(
+            port,
+            Duration::from_millis(keyer.max_tx_ms),
+            ptt.clone(),
+            move || {
+                let port_name = port_name.clone();
+                async move { open_winkeyer_serial(&port_name, baud) }
+            },
+        )
+        .await
+        .map_err(|error| CatHubError::Backend(error.to_string()))?;
+        tracing::info!(
+            port = %keyer.port,
+            firmware = ?handle.snapshot().firmware_revision,
+            "WinKeyer broker owns physical keyer"
+        );
+        let bind = keyer.api_bind.parse().map_err(|error| {
+            CatHubError::Backend(format!("invalid WinKeyer API bind address: {error}"))
+        })?;
+        let server = bind_winkeyer_server(bind, handle.clone())
+            .await
+            .map_err(|error| CatHubError::Backend(format!("cannot bind WinKeyer API: {error}")))?;
+        tokio::spawn(async move {
+            match server.await {
+                Ok(Err(error)) => tracing::error!(%error, "WinKeyer broker gRPC server stopped"),
+                Err(error) => tracing::error!(%error, "WinKeyer broker gRPC task failed"),
+                Ok(Ok(())) => {}
+            }
+        });
+        Some(handle)
+    } else {
+        None
+    };
+
     // Wire the transport to the serialized radio link. The loopback backend needs no real
     // transport (it never submits raw bytes), so we just drop the receiver in that case.
     //
@@ -283,6 +333,24 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
 
     let next_id = Arc::new(AtomicU64::new(1));
 
+    if let Some(keyer) = &winkeyer {
+        for face in &cfg.winkeyer_face {
+            let id = next_id.fetch_add(1, Ordering::SeqCst);
+            let port = open_winkeyer_face(&face.transport, face.baud)?;
+            let handle = keyer.clone();
+            let primary = face.primary;
+            let permissions = WinkeyerFacePermissions::from_tokens(&face.perms);
+            tokio::spawn(run_winkeyer_face(port, handle, id, primary, permissions));
+            tracing::info!(
+                face = %face.name,
+                id,
+                hub_port = %face.transport,
+                primary,
+                "virtual WinKeyer face listening; point the application at the paired port"
+            );
+        }
+    }
+
     for face in &cfg.face {
         let dialect = dialect_for(&face.dialect)?;
         let id = next_id.fetch_add(1, Ordering::SeqCst);
@@ -359,6 +427,12 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
     tokio::signal::ctrl_c().await?;
     tracing::info!("shutdown requested");
 
+    if let Some(keyer) = &winkeyer {
+        if let Err(error) = keyer.shutdown().await {
+            tracing::warn!(%error, "WinKeyer broker shutdown failed");
+        }
+    }
+
     // Best-effort orderly stop: never leave the transmitter keyed (design §8.5). A hard
     // crash cannot run this; the ptt_max_tx_ms ceiling and the radio's own TX timeout are
     // the ultimate backstops.
@@ -379,6 +453,19 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
         tracing::info!(face = owner, "released PTT on shutdown");
     }
     Ok(())
+}
+
+/// Open the physical WinKeyer using the protocol-mandated 8-N-2 framing.
+fn open_winkeyer_serial(port_name: &str, baud: u32) -> std::io::Result<serial2_tokio::SerialPort> {
+    serial2_tokio::SerialPort::open(port_name, move |mut settings: serial2_tokio::Settings| {
+        settings.set_raw();
+        settings.set_baud_rate(baud)?;
+        settings.set_char_size(serial2_tokio::CharSize::Bits8);
+        settings.set_parity(serial2_tokio::Parity::None);
+        settings.set_stop_bits(serial2_tokio::StopBits::Two);
+        settings.set_flow_control(serial2_tokio::FlowControl::None);
+        Ok(settings)
+    })
 }
 
 #[cfg(test)]

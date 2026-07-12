@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+message WinkeyerBrokerServiceCancelJobRequest {
+  string client_name = 1;
+  uint64 job_id = 2;
+}

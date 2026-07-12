@@ -174,6 +174,10 @@ Updates an existing QSO record by `local_id`.
 6. If `sync_to_qrz=true`, immediately push the updated record to QRZ Logbook (per-operation sync; see §7.3 below). If the row already has a `qrz_logid`, use REPLACE so the same remote row is updated in place; otherwise INSERT. On success, write back the QRZ-assigned `qrz_logid` and `sync_status=SYNC_STATUS_SYNCED`, and set `UpdateQsoResponse.sync_success=true`. On failure, leave the local row in its current state (`SYNC_STATUS_MODIFIED` or `SYNC_STATUS_NOT_SYNCED`), set `sync_success=false`, and put a human-readable message in `sync_error`. The local persist MUST succeed regardless.
 7. Return the updated `QsoRecord`.
 
+Clients that round-trip a complete `QsoRecord` while editing MUST preserve `RstReport.raw`.
+Signed digital reports such as `+11` and `-10` are not legacy RST digit fields and MUST
+round-trip exactly when an unrelated field, including QRZ enrichment, is changed.
+
 **Error semantics:**
 - `NOT_FOUND` — no QSO with the given `local_id`.
 - `INVALID_ARGUMENT` — invalid field values.
@@ -660,6 +664,10 @@ Persists setup configuration and station profile.
 4. Mark setup as complete.
 
 **CAT hub (`cat_hub`) management:**
+- Serial and WinKeyer faces may include `application_transport`, the paired virtual endpoint
+  opened by the client application. The hub opens only `transport`. Engines preserve and return
+  the application-side value for setup guidance and reject a face whose two transports are the
+  same.
 - The optional `cat_hub` field (`CatHubSettings`) lets a setup UI manage the standalone
   `qsoripper-cathub` daemon's `[cat_hub]` section without hand-editing TOML.
 - The field is **full-replacement**: when present it is the complete desired `[cat_hub]`
@@ -673,7 +681,9 @@ Persists setup configuration and station profile.
   loopback}; radio `transport` ∈ {serial, tcp}; non-loopback serial radios require a `port`;
   face `dialect` ∈ {ts590, ts590-transparent, ts2000}; endpoint names unique across faces and hamlib_net; face
   transports distinct; hamlib_net binds distinct and in `host:port` form; a face transport may
-  not reuse the radio port. Violations return `INVALID_ARGUMENT`.
+  not reuse the radio port. CAT face permission tokens include `read`, `frequency_write`,
+  `write`, `ptt`, and `config_write`; `frequency_write` grants tuning without other modeled
+  mutations, while `write` grants all modeled writes. Violations return `INVALID_ARGUMENT`.
 
 **WSJT-X ingest (`wsjtx_ingest`) management:**
 - The optional `wsjtx_ingest` field (`WsjtxIngestSettings`) lets setup clients manage the
@@ -1268,8 +1278,11 @@ All backends must implement the `EngineStorage` trait, which decomposes into:
 
 **Polling model:**
 - The engine polls rigctld at a configurable interval.
-- Each poll reads frequency and mode, constructs a `RigSnapshot`, and caches it.
-- If the TCP connection fails, the rig status transitions to `Disconnected` or `Error`.
+- The provider keeps one serialized TCP session and reads frequency and mode on that session for
+  each poll. It MUST NOT create a new TCP connection for every snapshot.
+- A timeout, EOF, or transport failure discards the session and permits one bounded reconnect and
+  retry. If that retry fails, the rig status transitions to `Disconnected` or `Error`.
+- Each successful poll constructs a `RigSnapshot` and caches it.
 - If the snapshot is older than `QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS`, it is marked stale.
 
 **Read timeout:** `QSORIPPER_RIGCTLD_READ_TIMEOUT_MS` controls the per-command TCP read timeout.
@@ -1384,13 +1397,15 @@ All configuration is driven by environment variables prefixed with `QSORIPPER_`.
 
 #### CW Keying
 
-The same keys may be persisted under `[cw_keying]` in the shared `config.toml`: `backend`, `winkeyer_port`, `winkeyer_baud`, `speed_wpm`, `transmit_enabled`, and `max_tx_ms`. Environment variables in the table below override their corresponding persisted values.
+The same keys may be persisted under `[cw_keying]` in the shared `config.toml`: `backend`, `winkeyer_port`, `winkeyer_baud`, `cathub_endpoint`, `cathub_client_name`, `speed_wpm`, `transmit_enabled`, and `max_tx_ms`. Environment variables in the table below override their corresponding persisted values.
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `QSORIPPER_CW_KEYER_BACKEND` | Enum | `null` | CW keying backend: `null` or `winkeyer`. `cwdaemon` is reserved for a future backend. |
+| `QSORIPPER_CW_KEYER_BACKEND` | Enum | `null` | CW keying backend: `null`, direct `winkeyer`, or shared `cathub`. `cwdaemon` is reserved for a future backend. |
 | `QSORIPPER_CW_WINKEYER_PORT` | String | | Serial port for WinKeyer, such as `COM3` on Windows or `/dev/ttyUSB0` on Linux. Required when backend is `winkeyer`. |
 | `QSORIPPER_CW_WINKEYER_BAUD` | Integer | `1200` | WinKeyer serial baud rate. Most WinKeyer devices use 1200 baud. |
+| `QSORIPPER_CW_CATHUB_ENDPOINT` | URL | `http://127.0.0.1:50071` | Loopback WinKeyer broker endpoint. Used only by the `cathub` backend. |
+| `QSORIPPER_CW_CATHUB_CLIENT_NAME` | String | `qsoripper-engine` | Stable broker client identity used for scoped queue cancellation and telemetry. |
 | `QSORIPPER_CW_SPEED_WPM` | Integer | `25` | Default CW speed in words per minute. Valid range is 5 through 99. |
 | `QSORIPPER_CW_TRANSMIT_ENABLED` | Bool | `false` | Explicit safety gate for hardware text transmission. The WinKeyer backend will not send text until this is `true`. |
 | `QSORIPPER_CW_MAX_TX_MS` | Integer | `120000` | Maximum duration for one hardware send before a still-busy WinKeyer buffer is cleared. Valid range is 1000 through 300000 ms. |

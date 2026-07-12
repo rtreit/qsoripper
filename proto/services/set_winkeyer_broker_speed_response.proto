@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/winkeyer_speed_mode.proto";
+
+message WinkeyerBrokerServiceSetSpeedResponse {
+  WinkeyerSpeedMode speed_mode = 1;
+  optional uint32 speed_wpm = 2;
+}

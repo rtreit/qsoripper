@@ -20,4 +20,7 @@ message CatHubSerialFace {
   string dialect = 4;
   // Permission tokens granted to clients of this face.
   repeated CatHubPermission perms = 5;
+  // The paired serial port opened by the client application. This is stored
+  // for operator guidance; the hub never opens it.
+  optional string application_transport = 6;
 }

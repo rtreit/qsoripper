@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+import "services/winkeyer_broker_event_kind.proto";
+import "services/winkeyer_broker_status.proto";
+
+message WinkeyerBrokerServiceStreamEventsResponse {
+  WinkeyerBrokerEventKind kind = 1;
+  WinkeyerBrokerStatus status = 2;
+  optional uint32 raw_byte = 3;
+  optional uint32 speed_wpm = 4;
+  optional uint64 job_id = 5;
+  optional uint64 client_id = 6;
+  optional string message = 7;
+}

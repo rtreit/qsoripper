@@ -3,7 +3,9 @@
 use std::time::Duration;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 use crate::proto::qsoripper::domain::{RigConnectionStatus, RigSnapshot};
@@ -87,24 +89,30 @@ impl RigctldConfig {
 /// Connects to a running `rigctld` daemon over TCP, reads frequency and mode,
 /// and normalizes the result into project-owned proto types.
 ///
-/// Each [`get_snapshot`] call opens a fresh TCP connection, issues both
-/// commands on the same socket, and closes it. This avoids stale-connection
-/// bugs while keeping the protocol exchange atomic.
+/// Snapshot reads share one serialized TCP session. A timeout, EOF, or transport
+/// failure discards the session and retries once on a fresh connection.
 pub struct RigctldProvider {
     config: RigctldConfig,
+    connection: Mutex<Option<RigctldConnection>>,
+}
+
+struct RigctldConnection {
+    reader: BufReader<OwnedReadHalf>,
+    writer: OwnedWriteHalf,
 }
 
 impl RigctldProvider {
     /// Create a provider with the given configuration.
     #[must_use]
     pub fn new(config: RigctldConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            connection: Mutex::new(None),
+        }
     }
 
-    /// Read frequency and mode from rigctld on a single TCP connection.
-    async fn read_rig_state(&self) -> Result<(u64, String), RigControlProviderError> {
+    async fn connect(&self) -> Result<RigctldConnection, RigControlProviderError> {
         let address = format!("{}:{}", self.config.host, self.config.port);
-
         let stream = timeout(self.config.read_timeout, TcpStream::connect(&address))
             .await
             .map_err(|_| {
@@ -120,24 +128,72 @@ impl RigctldProvider {
             })?;
 
         let (reader, mut writer) = stream.into_split();
-        let mut reader = BufReader::new(reader);
+        writer.flush().await.map_err(|error| {
+            RigControlProviderError::transport(format!(
+                "Failed to initialize connection to {address}: {error}"
+            ))
+        })?;
+        Ok(RigctldConnection {
+            reader: BufReader::new(reader),
+            writer,
+        })
+    }
 
+    /// Read frequency and mode from a serialized persistent rigctld session.
+    async fn read_rig_state(&self) -> Result<(u64, String), RigControlProviderError> {
+        let mut connection = self.connection.lock().await;
+
+        for attempt in 0..=1 {
+            if connection.is_none() {
+                *connection = Some(self.connect().await?);
+            }
+
+            let Some(active_connection) = connection.as_mut() else {
+                return Err(RigControlProviderError::transport(
+                    "rigctld connection was not initialized",
+                ));
+            };
+            let result =
+                Self::read_rig_state_on_connection(active_connection, self.config.read_timeout)
+                    .await;
+
+            match result {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(error) if attempt == 0 && error.is_retryable() => {
+                    connection.take();
+                }
+                Err(error) => {
+                    if error.is_retryable() {
+                        connection.take();
+                    }
+                    return Err(error);
+                }
+            }
+        }
+
+        unreachable!("bounded rigctld retry loop always returns")
+    }
+
+    async fn read_rig_state_on_connection(
+        connection: &mut RigctldConnection,
+        read_timeout: Duration,
+    ) -> Result<(u64, String), RigControlProviderError> {
         // Read frequency: send "f\n", expect one line with Hz value
-        writer.write_all(b"f\n").await.map_err(|error| {
+        connection.writer.write_all(b"f\n").await.map_err(|error| {
             RigControlProviderError::transport(format!("Failed to send frequency command: {error}"))
         })?;
 
-        let freq_line = read_line_with_timeout(&mut reader, self.config.read_timeout).await?;
+        let freq_line = read_line_with_timeout(&mut connection.reader, read_timeout).await?;
         let frequency_hz = parse_frequency(&freq_line)?;
 
         // Read mode: send "m\n", expect two lines (mode string, passband)
-        writer.write_all(b"m\n").await.map_err(|error| {
+        connection.writer.write_all(b"m\n").await.map_err(|error| {
             RigControlProviderError::transport(format!("Failed to send mode command: {error}"))
         })?;
 
-        let mode_line = read_line_with_timeout(&mut reader, self.config.read_timeout).await?;
+        let mode_line = read_line_with_timeout(&mut connection.reader, read_timeout).await?;
         // Read and discard passband line
-        let _passband = read_line_with_timeout(&mut reader, self.config.read_timeout).await;
+        let _passband = read_line_with_timeout(&mut connection.reader, read_timeout).await?;
 
         Ok((frequency_hz, mode_line))
     }
@@ -175,12 +231,18 @@ async fn read_line_with_timeout<R: tokio::io::AsyncBufRead + Unpin>(
     read_timeout: Duration,
 ) -> Result<String, RigControlProviderError> {
     let mut line = String::new();
-    timeout(read_timeout, reader.read_line(&mut line))
+    let bytes_read = timeout(read_timeout, reader.read_line(&mut line))
         .await
         .map_err(|_| RigControlProviderError::timeout("Timed out reading from rigctld"))?
         .map_err(|error| {
             RigControlProviderError::transport(format!("Failed to read from rigctld: {error}"))
         })?;
+
+    if bytes_read == 0 {
+        return Err(RigControlProviderError::transport(
+            "rigctld closed the connection",
+        ));
+    }
 
     let trimmed = line.trim().to_string();
 
@@ -201,10 +263,12 @@ fn parse_frequency(line: &str) -> Result<u64, RigControlProviderError> {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::rig_control::provider::RigControlProviderErrorKind;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
 
@@ -271,6 +335,91 @@ mod tests {
         assert_eq!(Some("USB".to_string()), snapshot.submode);
         assert_eq!(Some("USB".to_string()), snapshot.raw_mode);
         assert_eq!(RigConnectionStatus::Connected as i32, snapshot.status);
+    }
+
+    #[tokio::test]
+    async fn reuses_one_connection_across_snapshots() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accepts = Arc::new(AtomicUsize::new(0));
+        let accepts_for_server = accepts.clone();
+
+        let server = tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                accepts_for_server.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let (reader, mut writer) = stream.into_split();
+                    let mut reader = BufReader::new(reader);
+                    let mut command = String::new();
+                    loop {
+                        command.clear();
+                        if reader.read_line(&mut command).await.unwrap() == 0 {
+                            break;
+                        }
+                        match command.as_str() {
+                            "f\n" => writer.write_all(b"14074000\n").await.unwrap(),
+                            "m\n" => writer.write_all(b"USB\n2400\n").await.unwrap(),
+                            other => panic!("unexpected command: {other:?}"),
+                        }
+                    }
+                });
+            }
+        });
+
+        let provider = RigctldProvider::new(RigctldConfig {
+            host: addr.ip().to_string(),
+            port: addr.port(),
+            read_timeout: Duration::from_secs(2),
+        });
+
+        provider.get_snapshot().await.expect("first snapshot");
+        provider.get_snapshot().await.expect("second snapshot");
+
+        assert_eq!(1, accepts.load(Ordering::SeqCst));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn reconnects_once_when_persistent_peer_closes() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accepts = Arc::new(AtomicUsize::new(0));
+        let accepts_for_server = accepts.clone();
+
+        let server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                accepts_for_server.fetch_add(1, Ordering::SeqCst);
+                let (reader, mut writer) = stream.into_split();
+                let mut reader = BufReader::new(reader);
+                let mut command = String::new();
+
+                reader.read_line(&mut command).await.unwrap();
+                assert_eq!("f\n", command);
+                writer.write_all(b"7074000\n").await.unwrap();
+
+                command.clear();
+                reader.read_line(&mut command).await.unwrap();
+                assert_eq!("m\n", command);
+                writer.write_all(b"USB\n2400\n").await.unwrap();
+            }
+        });
+
+        let provider = RigctldProvider::new(RigctldConfig {
+            host: addr.ip().to_string(),
+            port: addr.port(),
+            read_timeout: Duration::from_secs(2),
+        });
+
+        provider.get_snapshot().await.expect("first snapshot");
+        provider
+            .get_snapshot()
+            .await
+            .expect("snapshot after reconnect");
+
+        assert_eq!(2, accepts.load(Ordering::SeqCst));
+        server.await.unwrap();
     }
 
     #[tokio::test]

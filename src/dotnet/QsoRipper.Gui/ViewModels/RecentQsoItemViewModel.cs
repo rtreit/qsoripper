@@ -669,14 +669,14 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
             return false;
         }
 
-        if (!TryParseRstToken(parts[0], out var sent))
+        if (!SignalReportFormatter.TryParse(parts[0], out var sent))
         {
             error = $"Invalid RST: {Rst}.";
             return false;
         }
 
         var received = sent.Clone();
-        if (parts.Length == 2 && !TryParseRstToken(parts[1], out received))
+        if (parts.Length == 2 && !SignalReportFormatter.TryParse(parts[1], out received))
         {
             error = $"Invalid RST: {Rst}.";
             return false;
@@ -912,28 +912,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         return $"{rstSent}/{rstReceived}";
     }
 
-    private static string FormatRst(RstReport? report)
-    {
-        if (report is null)
-        {
-            return "-";
-        }
-
-        var raw = NoteOrNull(report.Raw);
-        if (raw is not null)
-        {
-            return raw;
-        }
-
-        if (report.Readability == 0 || report.Strength == 0)
-        {
-            return "-";
-        }
-
-        return report.Tone == 0
-            ? $"{report.Readability}{report.Strength}"
-            : $"{report.Readability}{report.Strength}{report.Tone}";
-    }
+    private static string FormatRst(RstReport? report) => SignalReportFormatter.Format(report, "-");
 
     private static (string Sent, string Received) SplitCombinedReport(string value)
     {
@@ -1042,26 +1021,6 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
             NumberStyles.None,
             CultureInfo.InvariantCulture,
             out parsed);
-    }
-
-    private static bool TryParseRstToken(string value, out RstReport report)
-    {
-        report = new RstReport();
-
-        if (value.Length is not (2 or 3) || value.Any(static c => !char.IsAsciiDigit(c)))
-        {
-            return false;
-        }
-
-        report.Readability = (uint)(value[0] - '0');
-        report.Strength = (uint)(value[1] - '0');
-
-        if (value.Length == 3)
-        {
-            report.Tone = (uint)(value[2] - '0');
-        }
-
-        return true;
     }
 
     private static void ApplyOptionalString(

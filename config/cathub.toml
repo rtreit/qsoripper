@@ -27,6 +27,34 @@ max_tx_ms = 300000       # 5-minute hard transmit ceiling (backstop for a crashe
 [events]
 native_push = true       # daemon enables and owns the TS-590 AI2; stream
 
+# --- WinKeyer broker ------------------------------------------------------------------
+#
+# CatHub owns the physical keyer. QsoRipper uses the typed loopback API; N1MM uses the
+# application side of a separate com0com pair. Change COM40/COM41 if that pair is not
+# installed on this station.
+
+[winkeyer]
+port = "COM3"
+baud = 1200
+max_tx_ms = 30000
+api_bind = "127.0.0.1:50071"
+
+[[winkeyer_face]]
+name = "n1mm-cw"
+transport = "COM40"    # N1MM WinKeyer port is the paired COM41
+application_transport = "COM41"
+baud = 1200
+primary = true
+perms = ["status", "send", "control", "ptt"]
+
+[[winkeyer_face]]
+name = "wktools-maintenance"
+transport = "COM42"    # WKTools maintenance port is the paired COM43
+application_transport = "COM43"
+baud = 1200
+primary = false
+perms = ["status", "control", "config_write"]
+
 # --- Hamlib NET (rigctld-compatible) TCP endpoints -------------------------------------
 
 # Read-only endpoint for the QsoRipper engine's RigctldProvider.
@@ -43,6 +71,15 @@ perms = ["read"]
 [[hamlib_net]]
 name = "wsjtx"
 bind = "127.0.0.1:4533"
+single_vfo = true
+perms = ["read", "write", "ptt"]
+
+# Write + PTT endpoint dedicated to JS8Call. Do not share the WSJT-X endpoint: both clients
+# control mode and PTT, and JS8Call's plain-USB setting can clear the TS-590 DATA flag while
+# WSJT-X is operating. Configure JS8Call as Hamlib NET rigctl at 127.0.0.1:4535 with Fake It.
+[[hamlib_net]]
+name = "js8call"
+bind = "127.0.0.1:4535"
 single_vfo = true
 perms = ["read", "write", "ptt"]
 
@@ -66,16 +103,18 @@ perms = ["read", "write"]
 #   COM20 <-> COM21      COM20                      COM21  (N1MM)
 #   COM30 <-> COM31      COM30                      COM31  (ARCP-590)
 
-# HDSDR via OmniRig as a TS-2000-style controller. Read + write: the panadapter follows the
-# radio, and click-to-tune on the waterfall sets the radio frequency/mode (FA/FB/MD writes).
+# HDSDR via OmniRig as a TS-2000-style controller. The panadapter follows the radio, and
+# click-to-tune on the waterfall may set frequency. Mode writes are denied so OmniRig cannot
+# overwrite WSJT-X's USB+Data mode after following a digital-band frequency change.
 # The ts2000 dialect still rejects VFO-target writes (FR/FT) by design, so HDSDR can tune but
 # can never oscillate the TS-590's A/B VFO selection.
 [[face]]
 name = "hdsdr-omnirig"
 transport = "COM10"      # OmniRig binds COM11
+application_transport = "COM11"
 baud = 115200
 dialect = "ts2000"
-perms = ["read", "write"]
+perms = ["read", "frequency_write"]
 
 # N1MM Logger+ as a native TS-590.
 # N1MM in SO1V mode rejects VFO B ("You should not use VFO B when configured for SO1V"),
@@ -84,6 +123,7 @@ perms = ["read", "write"]
 [[face]]
 name = "n1mm"
 transport = "COM20"      # N1MM binds COM21
+application_transport = "COM21"
 baud = 115200
 dialect = "ts590"
 single_vfo = true
@@ -95,6 +135,7 @@ perms = ["read", "write", "ptt"]
 [[face]]
 name = "arcp590"
 transport = "COM30"      # ARCP-590 binds COM31
+application_transport = "COM31"
 baud = 115200
 dialect = "ts590"
 perms = ["read", "write", "ptt", "config_write"]

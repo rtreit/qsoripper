@@ -40,6 +40,15 @@ fn default_max_tx_ms() -> u64 {
 fn default_native_push() -> bool {
     true
 }
+fn default_winkeyer_baud() -> u32 {
+    1_200
+}
+fn default_winkeyer_max_tx_ms() -> u64 {
+    30_000
+}
+fn default_winkeyer_api_bind() -> String {
+    "127.0.0.1:50071".to_string()
+}
 
 /// The `[radio]` section.
 #[derive(Debug, Clone, Deserialize)]
@@ -131,12 +140,15 @@ pub(crate) struct FaceConfig {
     pub(crate) name: String,
     /// The serial port this face listens on (a com0com / tty path).
     pub(crate) transport: String,
+    /// The paired endpoint opened by the client application. The hub never opens it.
+    #[serde(default)]
+    pub(crate) application_transport: Option<String>,
     /// Baud rate for the face port.
     #[serde(default = "default_baud")]
     pub(crate) baud: u32,
     /// Dialect: `ts590` or `ts2000`.
     pub(crate) dialect: String,
-    /// Permission tokens (`read`, `write`, `ptt`, `config_write`).
+    /// Permission tokens (`read`, `frequency_write`, `write`, `ptt`, `config_write`).
     #[serde(default)]
     pub(crate) perms: Vec<String>,
     /// Present the *operating* VFO as VFO A to this face (operating-VFO virtualization).
@@ -165,7 +177,7 @@ pub(crate) struct HamlibNetConfig {
     pub(crate) name: String,
     /// The bind address (e.g. `127.0.0.1:4532`).
     pub(crate) bind: String,
-    /// Permission tokens (`read`, `write`, `ptt`, `config_write`).
+    /// Permission tokens (`read`, `frequency_write`, `write`, `ptt`, `config_write`).
     #[serde(default)]
     pub(crate) perms: Vec<String>,
     /// Present the *operating* VFO as VFO A to this endpoint (operating-VFO virtualization).
@@ -190,6 +202,43 @@ impl HamlibNetConfig {
     }
 }
 
+/// The optional `[winkeyer]` physical-keyer broker section.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct WinkeyerConfig {
+    /// Physical WinKeyer serial port exclusively owned by CatHub.
+    pub(crate) port: String,
+    /// Physical baud rate. WinKeyer always starts at 1200 baud.
+    #[serde(default = "default_winkeyer_baud")]
+    pub(crate) baud: u32,
+    /// Broker-wide transmit safety ceiling.
+    #[serde(default = "default_winkeyer_max_tx_ms")]
+    pub(crate) max_tx_ms: u64,
+    /// Loopback gRPC endpoint used by QsoRipper engines.
+    #[serde(default = "default_winkeyer_api_bind")]
+    pub(crate) api_bind: String,
+}
+
+/// One virtual WinKeyer serial face backed by a com0com/PTY pair.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct WinkeyerFaceConfig {
+    /// Stable face name used in logs and ownership status.
+    pub(crate) name: String,
+    /// Hub side of the virtual serial pair.
+    pub(crate) transport: String,
+    /// Paired endpoint opened by the client application. The hub never opens it.
+    #[serde(default)]
+    pub(crate) application_transport: Option<String>,
+    /// Virtual face baud rate.
+    #[serde(default = "default_winkeyer_baud")]
+    pub(crate) baud: u32,
+    /// Whether this client controls the idle paddle/foreground settings.
+    #[serde(default)]
+    pub(crate) primary: bool,
+    /// Permission tokens: `status`, `send`, `control`, `ptt`, `config_write`.
+    #[serde(default)]
+    pub(crate) perms: Vec<String>,
+}
+
 /// The full daemon configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct Config {
@@ -210,6 +259,12 @@ pub(crate) struct Config {
     /// Hamlib net endpoints.
     #[serde(default)]
     pub(crate) hamlib_net: Vec<HamlibNetConfig>,
+    /// Optional physical WinKeyer broker.
+    #[serde(default)]
+    pub(crate) winkeyer: Option<WinkeyerConfig>,
+    /// Virtual WinKeyer client faces.
+    #[serde(default)]
+    pub(crate) winkeyer_face: Vec<WinkeyerFaceConfig>,
 }
 
 /// The table key the daemon's settings live under inside the shared unified `config.toml`.
@@ -282,6 +337,20 @@ impl Config {
             }
         }
         for face in &self.face {
+            if face
+                .application_transport
+                .as_deref()
+                .is_some_and(|application| {
+                    application
+                        .trim()
+                        .eq_ignore_ascii_case(face.transport.trim())
+                })
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "face '{}' application_transport must differ from transport",
+                    face.name
+                )));
+            }
             if !matches!(
                 face.dialect.as_str(),
                 "ts590" | "ts590-transparent" | "ts2000"
@@ -304,6 +373,68 @@ impl Config {
             return Err(ConfigError::Invalid(
                 "at least one [[face]] or [[hamlib_net]] endpoint is required".to_string(),
             ));
+        }
+        self.validate_winkeyer()?;
+        Ok(())
+    }
+
+    fn validate_winkeyer(&self) -> Result<(), ConfigError> {
+        let Some(winkeyer) = &self.winkeyer else {
+            if !self.winkeyer_face.is_empty() {
+                return Err(ConfigError::Invalid(
+                    "[[winkeyer_face]] requires a [winkeyer] physical device section".to_string(),
+                ));
+            }
+            return Ok(());
+        };
+        if winkeyer.port.trim().is_empty() {
+            return Err(ConfigError::Invalid(
+                "winkeyer.port must not be empty".to_string(),
+            ));
+        }
+        if winkeyer.baud != 1_200 {
+            return Err(ConfigError::Invalid(
+                "winkeyer.baud must be 1200; high-baud session switching is not broker-safe"
+                    .to_string(),
+            ));
+        }
+        if !(1_000..=300_000).contains(&winkeyer.max_tx_ms) {
+            return Err(ConfigError::Invalid(
+                "winkeyer.max_tx_ms must be between 1000 and 300000".to_string(),
+            ));
+        }
+        let bind: std::net::SocketAddr = winkeyer.api_bind.parse().map_err(|_| {
+            ConfigError::Invalid("winkeyer.api_bind must be a host:port socket address".to_string())
+        })?;
+        if !bind.ip().is_loopback() {
+            return Err(ConfigError::Invalid(
+                "winkeyer.api_bind must use a loopback address".to_string(),
+            ));
+        }
+        if winkeyer.port.eq_ignore_ascii_case(&self.radio.port) {
+            return Err(ConfigError::Invalid(
+                "winkeyer.port must be distinct from radio.port".to_string(),
+            ));
+        }
+        let primary_count = self
+            .winkeyer_face
+            .iter()
+            .filter(|face| face.primary)
+            .count();
+        if primary_count > 1 {
+            return Err(ConfigError::Invalid(
+                "at most one [[winkeyer_face]] may set primary = true".to_string(),
+            ));
+        }
+        let mut transports = std::collections::BTreeSet::new();
+        for face in &self.winkeyer_face {
+            validate_winkeyer_face(face)?;
+            let normalized = face.transport.to_ascii_uppercase();
+            if !transports.insert(normalized) {
+                return Err(ConfigError::Invalid(
+                    "winkeyer face transports must be distinct".to_string(),
+                ));
+            }
         }
         Ok(())
     }
@@ -362,6 +493,25 @@ impl Config {
                 ep.name, ep.bind, ep.perms, ep.single_vfo
             );
         }
+        if let Some(winkeyer) = &self.winkeyer {
+            let _ = writeln!(
+                out,
+                "winkeyer: port={} baud={} max_tx_ms={} api_bind={}",
+                winkeyer.port, winkeyer.baud, winkeyer.max_tx_ms, winkeyer.api_bind
+            );
+            for face in &self.winkeyer_face {
+                let _ = writeln!(
+                    out,
+                    "winkeyer_face: name={} hub_transport={} application_transport={} baud={} primary={} perms={:?}",
+                    face.name,
+                    face.transport,
+                    face.application_transport.as_deref().unwrap_or("(not recorded)"),
+                    face.baud,
+                    face.primary,
+                    face.perms
+                );
+            }
+        }
         if !self.face.is_empty() || !self.hamlib_net.is_empty() {
             out.push('\n');
             let _ = writeln!(
@@ -371,16 +521,26 @@ impl Config {
                 self.radio.port
             );
             for face in &self.face {
-                let _ = writeln!(
-                    out,
-                    "  - {name}: the hub OWNS serial port {port}. Point {name} at the OTHER port \
-                     of that com0com pair (e.g. com0com COMa<->COMb: hub={port}, app=the paired \
-                     port), {dialect} dialect, {baud} baud.",
-                    name = face.name,
-                    port = face.transport,
-                    dialect = face.dialect,
-                    baud = face.baud,
-                );
+                if let Some(application_transport) = face.application_transport.as_deref() {
+                    let _ = writeln!(
+                        out,
+                        "  - {name}: hub={hub}, application={application}, {dialect} dialect, {baud} baud.",
+                        name = face.name,
+                        hub = face.transport,
+                        application = application_transport,
+                        dialect = face.dialect,
+                        baud = face.baud,
+                    );
+                } else {
+                    let _ = writeln!(
+                        out,
+                        "  - {name}: the hub owns {hub}; application port is not recorded, {dialect} dialect, {baud} baud.",
+                        name = face.name,
+                        hub = face.transport,
+                        dialect = face.dialect,
+                        baud = face.baud,
+                    );
+                }
             }
             for ep in &self.hamlib_net {
                 let _ = writeln!(
@@ -430,6 +590,66 @@ impl Config {
     }
 }
 
+fn validate_winkeyer_face(face: &WinkeyerFaceConfig) -> Result<(), ConfigError> {
+    if face.transport.trim().is_empty() {
+        return Err(ConfigError::Invalid(format!(
+            "winkeyer face '{}' requires transport",
+            face.name
+        )));
+    }
+    if face.baud != 1_200 {
+        return Err(ConfigError::Invalid(format!(
+            "winkeyer face '{}' baud must be 1200",
+            face.name
+        )));
+    }
+    if face
+        .application_transport
+        .as_deref()
+        .is_some_and(|application| {
+            application
+                .trim()
+                .eq_ignore_ascii_case(face.transport.trim())
+        })
+    {
+        return Err(ConfigError::Invalid(format!(
+            "winkeyer face '{}' application_transport must differ from transport",
+            face.name
+        )));
+    }
+    for permission in &face.perms {
+        if !matches!(
+            permission.as_str(),
+            "status" | "send" | "control" | "ptt" | "config_write"
+        ) {
+            return Err(ConfigError::Invalid(format!(
+                "winkeyer face '{}' has unknown permission '{}'",
+                face.name, permission
+            )));
+        }
+    }
+    let has = |permission: &str| face.perms.iter().any(|value| value == permission);
+    if has("send") && !has("status") {
+        return Err(ConfigError::Invalid(format!(
+            "winkeyer face '{}' permission 'send' requires 'status'",
+            face.name
+        )));
+    }
+    if has("ptt") && (!has("send") || !has("control")) {
+        return Err(ConfigError::Invalid(format!(
+            "winkeyer face '{}' permission 'ptt' requires 'send' and 'control'",
+            face.name
+        )));
+    }
+    if has("config_write") && (!has("status") || !has("control")) {
+        return Err(ConfigError::Invalid(format!(
+            "winkeyer face '{}' permission 'config_write' requires 'status' and 'control'",
+            face.name
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -455,7 +675,8 @@ native_push = true
 
 [[face]]
 name = "n1mm"
-transport = "COM11"
+transport = "COM20"
+application_transport = "COM21"
 baud = 4800
 dialect = "ts590"
 perms = ["read", "write", "ptt"]
@@ -568,9 +789,7 @@ backend = "loopback"
         assert!(text.contains("face: name=n1mm"));
         assert!(text.contains("hamlib_net: name=engine"));
         assert!(text.contains("Client connection guide"));
-        assert!(
-            text.contains("point the application at the paired") || text.contains("OTHER port")
-        );
+        assert!(text.contains("hub=COM20, application=COM21"));
     }
 
     #[test]
@@ -612,7 +831,8 @@ baud = 4800
 
 [[cat_hub.face]]
 name = "n1mm"
-transport = "COM11"
+transport = "COM20"
+application_transport = "COM21"
 dialect = "ts590"
 perms = ["read", "write", "ptt"]
 
@@ -625,6 +845,10 @@ perms = ["read"]
         assert_eq!(config.radio.backend, "ts590");
         assert_eq!(config.radio.port, "COM4");
         assert_eq!(config.face.len(), 1);
+        assert_eq!(
+            config.face[0].application_transport.as_deref(),
+            Some("COM21")
+        );
         assert_eq!(config.hamlib_net.len(), 1);
         assert!(config.face[0].permissions().ptt);
     }
@@ -646,5 +870,146 @@ perms = ["read"]
 backend = "loopback"
 "#;
         assert!(Config::parse_document(text).is_err());
+    }
+
+    #[test]
+    fn parses_and_describes_winkeyer_broker() {
+        let text = r#"
+[radio]
+backend = "loopback"
+
+[[hamlib_net]]
+name = "engine"
+bind = "127.0.0.1:4532"
+
+[winkeyer]
+port = "COM3"
+max_tx_ms = 30000
+api_bind = "127.0.0.1:50071"
+
+[[winkeyer_face]]
+name = "n1mm"
+transport = "COM40"
+application_transport = "COM41"
+primary = true
+perms = ["status", "send", "control", "ptt"]
+"#;
+        let config = Config::parse(text).expect("parse keyer");
+        let winkeyer = config.winkeyer.as_ref().expect("winkeyer");
+        assert_eq!(winkeyer.port, "COM3");
+        assert_eq!(winkeyer.baud, 1_200);
+        assert_eq!(config.winkeyer_face.len(), 1);
+        assert!(config.winkeyer_face[0].primary);
+        assert_eq!(
+            config.winkeyer_face[0].application_transport.as_deref(),
+            Some("COM41")
+        );
+        let description = config.describe();
+        assert!(description.contains("winkeyer: port=COM3"));
+        assert!(description.contains("winkeyer_face: name=n1mm"));
+        assert!(description.contains("application_transport=COM41"));
+    }
+
+    #[test]
+    fn rejects_matching_hub_and_application_transports() {
+        let serial = SAMPLE.replace(
+            "application_transport = \"COM21\"",
+            "application_transport = \"com20\"",
+        );
+        assert!(Config::parse(&serial)
+            .expect_err("matching serial pair")
+            .to_string()
+            .contains("application_transport must differ"));
+
+        let winkeyer = r#"
+[radio]
+backend = "loopback"
+[[hamlib_net]]
+name = "engine"
+bind = "127.0.0.1:4532"
+[winkeyer]
+port = "COM3"
+[[winkeyer_face]]
+name = "wktools"
+transport = "COM42"
+application_transport = "com42"
+"#;
+        assert!(Config::parse(winkeyer)
+            .expect_err("matching WinKeyer pair")
+            .to_string()
+            .contains("application_transport must differ"));
+    }
+
+    #[test]
+    fn rejects_non_loopback_winkeyer_api_and_duplicate_primary_faces() {
+        let non_loopback = r#"
+[radio]
+backend = "loopback"
+[[hamlib_net]]
+name = "engine"
+bind = "127.0.0.1:4532"
+[winkeyer]
+port = "COM3"
+api_bind = "0.0.0.0:50071"
+"#;
+        assert!(Config::parse(non_loopback)
+            .expect_err("non-loopback")
+            .to_string()
+            .contains("loopback"));
+
+        let duplicate_primary = r#"
+[radio]
+backend = "loopback"
+[[hamlib_net]]
+name = "engine"
+bind = "127.0.0.1:4532"
+[winkeyer]
+port = "COM3"
+[[winkeyer_face]]
+name = "one"
+transport = "COM40"
+primary = true
+[[winkeyer_face]]
+name = "two"
+transport = "COM42"
+primary = true
+"#;
+        assert!(Config::parse(duplicate_primary)
+            .expect_err("primary")
+            .to_string()
+            .contains("at most one"));
+    }
+
+    #[test]
+    fn rejects_keyer_port_collision_and_faces_without_device() {
+        let collision = r#"
+[radio]
+backend = "ts590"
+port = "COM3"
+[[hamlib_net]]
+name = "engine"
+bind = "127.0.0.1:4532"
+[winkeyer]
+port = "com3"
+"#;
+        assert!(Config::parse(collision)
+            .expect_err("collision")
+            .to_string()
+            .contains("distinct"));
+
+        let orphan = r#"
+[radio]
+backend = "loopback"
+[[hamlib_net]]
+name = "engine"
+bind = "127.0.0.1:4532"
+[[winkeyer_face]]
+name = "n1mm"
+transport = "COM40"
+"#;
+        assert!(Config::parse(orphan)
+            .expect_err("orphan")
+            .to_string()
+            .contains("requires a [winkeyer]"));
     }
 }
