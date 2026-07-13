@@ -169,10 +169,10 @@ public class SettingsViewModelTests
                 CatHubTransport = "serial",
                 CatHubPort = "COM3",
                 CatHubBaud = 115200,
-                CatHubFaceName = "omnirig",
-                CatHubFaceDialect = "ts2000",
-                CatHubEndpointName = "wsjtx",
-                CatHubEndpointBind = "127.0.0.1:4532"
+                CatHubSerialEndpointName = "omnirig",
+                CatHubSerialEndpointDialect = "ts2000",
+                CatHubHamlibNetEndpointName = "wsjtx",
+                CatHubHamlibNetEndpointBind = "127.0.0.1:4532"
             });
         var viewModel = new SettingsViewModel(client);
 
@@ -183,19 +183,19 @@ public class SettingsViewModelTests
         Assert.Equal("COM3", viewModel.CatHubPort);
         Assert.Equal("115200", viewModel.CatHubBaud);
 
-        var face = Assert.Single(viewModel.CatHubFaces);
-        Assert.Equal("omnirig", face.Name);
-        Assert.Equal("COM10", face.Transport);
-        Assert.Equal("COM11", face.ApplicationTransport);
-        Assert.Equal("ts2000", face.Dialect);
-        Assert.True(face.PermRead);
-        Assert.True(face.PermWrite);
-        Assert.False(face.PermPtt);
+        var serialEndpoint = Assert.Single(viewModel.CatHubSerialEndpoints);
+        Assert.Equal("omnirig", serialEndpoint.Name);
+        Assert.Equal("COM10", serialEndpoint.Transport);
+        Assert.Equal("COM11", serialEndpoint.ApplicationTransport);
+        Assert.Equal("ts2000", serialEndpoint.Dialect);
+        Assert.True(serialEndpoint.PermRead);
+        Assert.True(serialEndpoint.PermWrite);
+        Assert.False(serialEndpoint.PermPtt);
 
-        var endpoint = Assert.Single(viewModel.CatHubEndpoints);
-        Assert.Equal("wsjtx", endpoint.Name);
-        Assert.Equal("127.0.0.1:4532", endpoint.Bind);
-        Assert.True(endpoint.PermRead);
+        var hamlibNetEndpoint = Assert.Single(viewModel.CatHubHamlibNetEndpoints);
+        Assert.Equal("wsjtx", hamlibNetEndpoint.Name);
+        Assert.Equal("127.0.0.1:4532", hamlibNetEndpoint.Bind);
+        Assert.True(hamlibNetEndpoint.PermRead);
 
         // Loading must not look like an operator edit.
         Assert.False(viewModel.IsCatHubDirty);
@@ -212,8 +212,8 @@ public class SettingsViewModelTests
                 CatHubTransport = "serial",
                 CatHubPort = "COM3",
                 CatHubBaud = 115200,
-                CatHubEndpointName = "wsjtx",
-                CatHubEndpointBind = "127.0.0.1:4532"
+                CatHubHamlibNetEndpointName = "wsjtx",
+                CatHubHamlibNetEndpointBind = "127.0.0.1:4532"
             });
         var viewModel = new SettingsViewModel(client);
 
@@ -239,8 +239,8 @@ public class SettingsViewModelTests
                 CatHubTransport = "serial",
                 CatHubPort = "COM3",
                 CatHubBaud = 115200,
-                CatHubEndpointName = "wsjtx",
-                CatHubEndpointBind = "127.0.0.1:4532"
+                CatHubHamlibNetEndpointName = "wsjtx",
+                CatHubHamlibNetEndpointBind = "127.0.0.1:4532"
             });
         var viewModel = new SettingsViewModel(client);
 
@@ -398,21 +398,21 @@ public class SettingsViewModelTests
 
         Assert.False(viewModel.DidSave);
         Assert.Equal(
-            "A managed CAT hub radio needs at least one face or network endpoint.",
+            "A managed CAT hub radio needs at least one endpoint or network endpoint.",
             viewModel.ErrorMessage);
         Assert.Null(client.LastSaveSetupRequest);
     }
 
     [Fact]
-    public async Task SaveRejectsCatHubEndpointWithoutHostPortBind()
+    public async Task SaveRejectsCatHubHamlibNetEndpointWithoutHostPortBind()
     {
         var client = new UxFixtureEngineClient(new UxCaptureFixture());
         var viewModel = new SettingsViewModel(client);
 
         await viewModel.LoadAsync();
         viewModel.CatHubBackend = "ts590";
-        viewModel.AddCatHubEndpointCommand.Execute(null);
-        var endpoint = Assert.Single(viewModel.CatHubEndpoints);
+        viewModel.AddCatHubHamlibNetEndpointCommand.Execute(null);
+        var endpoint = Assert.Single(viewModel.CatHubHamlibNetEndpoints);
         endpoint.Name = "wsjtx";
         endpoint.Bind = "localhost-no-port";
 
@@ -423,7 +423,7 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public async Task SaveRejectsCatHubFaceWithMatchingHubAndApplicationPorts()
+    public async Task SaveRejectsCatHubSerialEndpointWithMatchingHubAndApplicationPorts()
     {
         var client = new UxFixtureEngineClient(new UxCaptureFixture());
         var viewModel = new SettingsViewModel(client);
@@ -431,17 +431,17 @@ public class SettingsViewModelTests
         await viewModel.LoadAsync();
         viewModel.CatHubBackend = "ts590";
         viewModel.CatHubPort = "COM4";
-        viewModel.AddCatHubFaceCommand.Execute(null);
-        var face = Assert.Single(viewModel.CatHubFaces);
-        face.Name = "n1mm";
-        face.Transport = "COM20";
-        face.ApplicationTransport = "com20";
+        viewModel.AddCatHubSerialEndpointCommand.Execute(null);
+        var endpoint = Assert.Single(viewModel.CatHubSerialEndpoints);
+        endpoint.Name = "n1mm";
+        endpoint.Transport = "COM20";
+        endpoint.ApplicationTransport = "com20";
 
         await viewModel.SaveCommand.ExecuteAsync(null);
 
         Assert.False(viewModel.DidSave);
         Assert.Equal(
-            "CAT hub face 'n1mm' application port must differ from its hub port.",
+            "CAT hub endpoint 'n1mm' application port must differ from its hub port.",
             viewModel.ErrorMessage);
     }
 
@@ -452,8 +452,8 @@ public class SettingsViewModelTests
             new UxCaptureFixture
             {
                 CatHubBackend = "ts590",
-                CatHubEndpointName = "wsjtx",
-                CatHubEndpointBind = "127.0.0.1:4532"
+                CatHubHamlibNetEndpointName = "wsjtx",
+                CatHubHamlibNetEndpointBind = "127.0.0.1:4532"
             });
         var viewModel = new SettingsViewModel(client);
 

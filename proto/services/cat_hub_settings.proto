@@ -9,8 +9,8 @@ import "services/cat_hub_hamlib_net_endpoint.proto";
 import "services/cat_hub_poll_settings.proto";
 import "services/cat_hub_ptt_settings.proto";
 import "services/cat_hub_radio_settings.proto";
-import "services/cat_hub_serial_face.proto";
-import "services/cat_hub_winkeyer_face.proto";
+import "services/cat_hub_serial_endpoint.proto";
+import "services/cat_hub_winkeyer_endpoint.proto";
 import "services/cat_hub_winkeyer_settings.proto";
 
 // The complete `[cat_hub]` configuration the QsoRipper engine reads and writes
@@ -21,7 +21,7 @@ import "services/cat_hub_winkeyer_settings.proto";
 // FULL-REPLACEMENT semantics: when this message is present it is the COMPLETE
 // desired `[cat_hub]` section and the engine rewrites the section to match it.
 // `radio` is required and must name a backend, and at least one endpoint (a
-// `faces` or `hamlib_net` entry) is required. Omitted scalar fields fall back to
+// `serial_endpoints` or `hamlib_net` entry) is required. Omitted scalar fields fall back to
 // the cathub daemon defaults. Omit the whole CatHubSettings message to leave the
 // existing `[cat_hub]` section (including comments and unknown keys) untouched.
 message CatHubSettings {
@@ -33,12 +33,12 @@ message CatHubSettings {
   optional CatHubPttSettings ptt = 3;
   // Native push policy.
   optional CatHubEventSettings events = 4;
-  // Serial faces (com0com pairs) for applications that speak CAT over serial.
-  repeated CatHubSerialFace faces = 5;
+  // Serial endpoints (com0com pairs) for applications that speak CAT over serial.
+  repeated CatHubSerialEndpoint serial_endpoints = 5;
   // rigctld-compatible TCP endpoints for network-CAT applications.
   repeated CatHubHamlibNetEndpoint hamlib_net = 6;
   // Optional physical WinKeyer broker owned by CatHub.
   optional CatHubWinkeyerSettings winkeyer = 7;
-  // Virtual WinKeyer serial faces for legacy applications such as N1MM.
-  repeated CatHubWinkeyerFace winkeyer_faces = 8;
+  // Virtual WinKeyer serial endpoints for legacy applications such as N1MM.
+  repeated CatHubWinkeyerEndpoint winkeyer_endpoints = 8;
 }

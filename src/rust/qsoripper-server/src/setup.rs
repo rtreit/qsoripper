@@ -18,21 +18,21 @@ use qsoripper_core::proto::qsoripper::domain::{ConflictPolicy, StationProfile, S
 use qsoripper_core::proto::qsoripper::services::{
     setup_service_server::SetupService, station_profile_service_server::StationProfileService,
     ActiveStationContext, CatHubEventSettings, CatHubHamlibNetEndpoint, CatHubPermission,
-    CatHubPollSettings, CatHubPttSettings, CatHubRadioSettings, CatHubSerialFace, CatHubSettings,
-    CatHubWinkeyerFace, CatHubWinkeyerSettings, ClearSessionStationProfileOverrideRequest,
-    ClearSessionStationProfileOverrideResponse, DeleteStationProfileRequest,
-    DeleteStationProfileResponse, GetActiveStationContextRequest, GetActiveStationContextResponse,
-    GetSetupStatusRequest, GetSetupStatusResponse, GetSetupWizardStateRequest,
-    GetSetupWizardStateResponse, GetStationProfileRequest, GetStationProfileResponse,
-    ListStationProfilesRequest, ListStationProfilesResponse, RigControlSettings,
-    RuntimeConfigDefinition, RuntimeConfigValue, SaveSetupRequest, SaveSetupResponse,
-    SaveStationProfileRequest, SaveStationProfileResponse, SetActiveStationProfileRequest,
-    SetActiveStationProfileResponse, SetSessionStationProfileOverrideRequest,
-    SetSessionStationProfileOverrideResponse, SetupFieldValidation, SetupStatus, SetupWizardStep,
-    SetupWizardStepStatus, StationProfileRecord, StorageBackend, TestQrzCredentialsRequest,
-    TestQrzCredentialsResponse, TestQrzLogbookCredentialsRequest,
-    TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest, ValidateSetupStepResponse,
-    WinkeyerFacePermission, WsjtxIngestSettings, WsjtxIngestStatus,
+    CatHubPollSettings, CatHubPttSettings, CatHubRadioSettings, CatHubSerialEndpoint,
+    CatHubSettings, CatHubWinkeyerEndpoint, CatHubWinkeyerSettings,
+    ClearSessionStationProfileOverrideRequest, ClearSessionStationProfileOverrideResponse,
+    DeleteStationProfileRequest, DeleteStationProfileResponse, GetActiveStationContextRequest,
+    GetActiveStationContextResponse, GetSetupStatusRequest, GetSetupStatusResponse,
+    GetSetupWizardStateRequest, GetSetupWizardStateResponse, GetStationProfileRequest,
+    GetStationProfileResponse, ListStationProfilesRequest, ListStationProfilesResponse,
+    RigControlSettings, RuntimeConfigDefinition, RuntimeConfigValue, SaveSetupRequest,
+    SaveSetupResponse, SaveStationProfileRequest, SaveStationProfileResponse,
+    SetActiveStationProfileRequest, SetActiveStationProfileResponse,
+    SetSessionStationProfileOverrideRequest, SetSessionStationProfileOverrideResponse,
+    SetupFieldValidation, SetupStatus, SetupWizardStep, SetupWizardStepStatus,
+    StationProfileRecord, StorageBackend, TestQrzCredentialsRequest, TestQrzCredentialsResponse,
+    TestQrzLogbookCredentialsRequest, TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest,
+    ValidateSetupStepResponse, WinkeyerEndpointPermission, WsjtxIngestSettings, WsjtxIngestStatus,
 };
 use qsoripper_core::qrz_logbook::{QrzLogbookClient, QrzLogbookConfig};
 use qsoripper_core::rig_control::{
@@ -1490,9 +1490,9 @@ struct PersistedCatHubEvents {
     native_push: Option<bool>,
 }
 
-/// Mirror of a cathub daemon `[[cat_hub.face]]` serial endpoint.
+/// Mirror of a cathub daemon `[[cat_hub.serial_endpoint]]` serial endpoint.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct PersistedCatHubFace {
+struct PersistedCatHubSerialEndpoint {
     name: String,
     transport: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1525,9 +1525,9 @@ struct PersistedCatHubWinkeyer {
     api_bind: Option<String>,
 }
 
-/// Mirror of a cathub daemon `[[cat_hub.winkeyer_face]]` endpoint.
+/// Mirror of a cathub daemon `[[cat_hub.winkeyer_endpoint]]` endpoint.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct PersistedCatHubWinkeyerFace {
+struct PersistedCatHubWinkeyerEndpoint {
     name: String,
     transport: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1556,20 +1556,20 @@ struct PersistedCatHubConfig {
     ptt: Option<PersistedCatHubPtt>,
     #[serde(skip_serializing_if = "Option::is_none")]
     events: Option<PersistedCatHubEvents>,
-    // The cathub daemon keys the serial-face array as singular `[[cat_hub.face]]`.
-    #[serde(rename = "face", default, skip_serializing_if = "Vec::is_empty")]
-    faces: Vec<PersistedCatHubFace>,
+    // The cathub daemon keys the serial-endpoint array as singular `[[cat_hub.serial_endpoint]]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    serial_endpoint: Vec<PersistedCatHubSerialEndpoint>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     hamlib_net: Vec<PersistedCatHubHamlibNet>,
     #[serde(skip_serializing_if = "Option::is_none")]
     winkeyer: Option<PersistedCatHubWinkeyer>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    winkeyer_face: Vec<PersistedCatHubWinkeyerFace>,
+    winkeyer_endpoint: Vec<PersistedCatHubWinkeyerEndpoint>,
 }
 
 const CAT_HUB_RADIO_BACKENDS: [&str; 3] = ["ts590", "rigctld", "loopback"];
 const CAT_HUB_RADIO_TRANSPORTS: [&str; 2] = ["serial", "tcp"];
-const CAT_HUB_FACE_DIALECTS: [&str; 2] = ["ts590", "ts2000"];
+const CAT_HUB_SERIAL_ENDPOINT_DIALECTS: [&str; 2] = ["ts590", "ts2000"];
 
 /// Map a `CatHubPermission` enum value to the lowercase TOML token the cathub
 /// daemon expects. Unknown/unspecified values are dropped.
@@ -1610,23 +1610,23 @@ fn cat_hub_perms_to_proto(perms: &[String]) -> Vec<i32> {
 }
 
 fn winkeyer_perm_token(value: i32) -> Option<&'static str> {
-    match WinkeyerFacePermission::try_from(value) {
-        Ok(WinkeyerFacePermission::Status) => Some("status"),
-        Ok(WinkeyerFacePermission::Send) => Some("send"),
-        Ok(WinkeyerFacePermission::Control) => Some("control"),
-        Ok(WinkeyerFacePermission::Ptt) => Some("ptt"),
-        Ok(WinkeyerFacePermission::ConfigWrite) => Some("config_write"),
+    match WinkeyerEndpointPermission::try_from(value) {
+        Ok(WinkeyerEndpointPermission::Status) => Some("status"),
+        Ok(WinkeyerEndpointPermission::Send) => Some("send"),
+        Ok(WinkeyerEndpointPermission::Control) => Some("control"),
+        Ok(WinkeyerEndpointPermission::Ptt) => Some("ptt"),
+        Ok(WinkeyerEndpointPermission::ConfigWrite) => Some("config_write"),
         _ => None,
     }
 }
 
 fn winkeyer_perm_from_token(token: &str) -> Option<i32> {
     let permission = match token {
-        "status" => WinkeyerFacePermission::Status,
-        "send" => WinkeyerFacePermission::Send,
-        "control" => WinkeyerFacePermission::Control,
-        "ptt" => WinkeyerFacePermission::Ptt,
-        "config_write" => WinkeyerFacePermission::ConfigWrite,
+        "status" => WinkeyerEndpointPermission::Status,
+        "send" => WinkeyerEndpointPermission::Send,
+        "control" => WinkeyerEndpointPermission::Control,
+        "ptt" => WinkeyerEndpointPermission::Ptt,
+        "config_write" => WinkeyerEndpointPermission::ConfigWrite,
         _ => return None,
     };
     Some(permission as i32)
@@ -1638,10 +1638,10 @@ impl PersistedCatHubConfig {
             && self.poll.is_none()
             && self.ptt.is_none()
             && self.events.is_none()
-            && self.faces.is_empty()
+            && self.serial_endpoint.is_empty()
             && self.hamlib_net.is_empty()
             && self.winkeyer.is_none()
-            && self.winkeyer_face.is_empty()
+            && self.winkeyer_endpoint.is_empty()
     }
 
     /// Project the persisted `[cat_hub]` section onto the proto envelope for status
@@ -1672,16 +1672,16 @@ impl PersistedCatHubConfig {
             events: self.events.as_ref().map(|events| CatHubEventSettings {
                 native_push: events.native_push,
             }),
-            faces: self
-                .faces
+            serial_endpoints: self
+                .serial_endpoint
                 .iter()
-                .map(|face| CatHubSerialFace {
-                    name: face.name.clone(),
-                    transport: face.transport.clone(),
-                    application_transport: face.application_transport.clone(),
-                    baud: face.baud.unwrap_or_default(),
-                    dialect: face.dialect.clone(),
-                    perms: cat_hub_perms_to_proto(&face.perms),
+                .map(|endpoint| CatHubSerialEndpoint {
+                    name: endpoint.name.clone(),
+                    transport: endpoint.transport.clone(),
+                    application_transport: endpoint.application_transport.clone(),
+                    baud: endpoint.baud.unwrap_or_default(),
+                    dialect: endpoint.dialect.clone(),
+                    perms: cat_hub_perms_to_proto(&endpoint.perms),
                 })
                 .collect(),
             hamlib_net: self
@@ -1702,16 +1702,16 @@ impl PersistedCatHubConfig {
                     max_tx_ms: winkeyer.max_tx_ms,
                     api_bind: winkeyer.api_bind.clone(),
                 }),
-            winkeyer_faces: self
-                .winkeyer_face
+            winkeyer_endpoints: self
+                .winkeyer_endpoint
                 .iter()
-                .map(|face| CatHubWinkeyerFace {
-                    name: face.name.clone(),
-                    transport: face.transport.clone(),
-                    application_transport: face.application_transport.clone(),
-                    baud: face.baud,
-                    primary: face.primary,
-                    perms: face
+                .map(|endpoint| CatHubWinkeyerEndpoint {
+                    name: endpoint.name.clone(),
+                    transport: endpoint.transport.clone(),
+                    application_transport: endpoint.application_transport.clone(),
+                    baud: endpoint.baud,
+                    primary: endpoint.primary,
+                    perms: endpoint
                         .perms
                         .iter()
                         .filter_map(|token| winkeyer_perm_from_token(token))
@@ -1733,19 +1733,20 @@ impl PersistedCatHubConfig {
                 .as_ref()
                 .ok_or_else(|| "CAT hub radio settings are required.".to_string())?,
         )?;
-        let faces = cat_hub_faces_from_proto(&settings.faces, radio.port.as_deref())?;
-        let hamlib_net = cat_hub_endpoints_from_proto(&settings.hamlib_net)?;
+        let serial_endpoint =
+            cat_hub_serial_endpoints_from_proto(&settings.serial_endpoints, radio.port.as_deref())?;
+        let hamlib_net = cat_hub_hamlib_net_endpoints_from_proto(&settings.hamlib_net)?;
 
-        if faces.is_empty() && hamlib_net.is_empty() {
+        if serial_endpoint.is_empty() && hamlib_net.is_empty() {
             return Err(
-                "CAT hub configuration requires at least one serial face or hamlib_net endpoint."
+                "CAT hub configuration requires at least one serial endpoint or hamlib_net endpoint."
                     .to_string(),
             );
         }
 
         let mut names: Vec<&str> = Vec::new();
-        for face in &faces {
-            names.push(face.name.as_str());
+        for endpoint in &serial_endpoint {
+            names.push(endpoint.name.as_str());
         }
         for endpoint in &hamlib_net {
             names.push(endpoint.name.as_str());
@@ -1785,8 +1786,8 @@ impl PersistedCatHubConfig {
         }) {
             return Err("CAT hub WinKeyer port must be distinct from the radio port.".to_string());
         }
-        let winkeyer_face = cat_hub_winkeyer_faces_from_proto(
-            &settings.winkeyer_faces,
+        let winkeyer_endpoint = cat_hub_winkeyer_endpoints_from_proto(
+            &settings.winkeyer_endpoints,
             winkeyer.as_ref(),
             radio.port.as_deref(),
         )?;
@@ -1796,10 +1797,10 @@ impl PersistedCatHubConfig {
             poll,
             ptt,
             events,
-            faces,
+            serial_endpoint,
             hamlib_net,
             winkeyer,
-            winkeyer_face,
+            winkeyer_endpoint,
         })
     }
 }
@@ -1836,78 +1837,81 @@ fn cat_hub_winkeyer_from_proto(
     })
 }
 
-fn cat_hub_winkeyer_faces_from_proto(
-    faces: &[CatHubWinkeyerFace],
+fn cat_hub_winkeyer_endpoints_from_proto(
+    endpoints: &[CatHubWinkeyerEndpoint],
     winkeyer: Option<&PersistedCatHubWinkeyer>,
     radio_port: Option<&str>,
-) -> Result<Vec<PersistedCatHubWinkeyerFace>, String> {
-    if winkeyer.is_none() && !faces.is_empty() {
-        return Err("CAT hub WinKeyer faces require WinKeyer settings.".to_string());
+) -> Result<Vec<PersistedCatHubWinkeyerEndpoint>, String> {
+    if winkeyer.is_none() && !endpoints.is_empty() {
+        return Err("CAT hub WinKeyer endpoints require WinKeyer settings.".to_string());
     }
-    let mut result = Vec::with_capacity(faces.len());
-    let mut transports = Vec::with_capacity(faces.len());
+    let mut result = Vec::with_capacity(endpoints.len());
+    let mut transports = Vec::with_capacity(endpoints.len());
     let mut primary_count = 0;
-    for face in faces {
-        let name = normalize_optional_string(Some(&face.name))
-            .ok_or_else(|| "CAT hub WinKeyer face name is required.".to_string())?;
-        let transport = normalize_optional_string(Some(&face.transport))
-            .ok_or_else(|| format!("CAT hub WinKeyer face '{name}' requires a transport."))?;
+    for endpoint in endpoints {
+        let name = normalize_optional_string(Some(&endpoint.name))
+            .ok_or_else(|| "CAT hub WinKeyer endpoint name is required.".to_string())?;
+        let transport = normalize_optional_string(Some(&endpoint.transport))
+            .ok_or_else(|| format!("CAT hub WinKeyer endpoint '{name}' requires a transport."))?;
         let application_transport =
-            normalize_optional_string(face.application_transport.as_deref());
+            normalize_optional_string(endpoint.application_transport.as_deref());
         if application_transport
             .as_deref()
             .is_some_and(|value| value.eq_ignore_ascii_case(&transport))
         {
             return Err(format!(
-                "CAT hub WinKeyer face '{name}' application transport must differ from its hub transport."
+                "CAT hub WinKeyer endpoint '{name}' application transport must differ from its hub transport."
             ));
         }
         if radio_port.is_some_and(|port| transport.eq_ignore_ascii_case(port)) {
             return Err(format!(
-                "CAT hub WinKeyer face '{name}' cannot reuse the radio port."
+                "CAT hub WinKeyer endpoint '{name}' cannot reuse the radio port."
             ));
         }
         if winkeyer.is_some_and(|settings| transport.eq_ignore_ascii_case(&settings.port)) {
             return Err(format!(
-                "CAT hub WinKeyer face '{name}' cannot reuse the physical WinKeyer port."
+                "CAT hub WinKeyer endpoint '{name}' cannot reuse the physical WinKeyer port."
             ));
         }
-        if let Some(baud) = face.baud {
+        if let Some(baud) = endpoint.baud {
             if baud != 1_200 {
-                return Err(format!("CAT hub WinKeyer face '{name}' baud must be 1200."));
+                return Err(format!(
+                    "CAT hub WinKeyer endpoint '{name}' baud must be 1200."
+                ));
             }
         }
-        if face.primary == Some(true) {
+        if endpoint.primary == Some(true) {
             primary_count += 1;
         }
-        let has = |permission| face.perms.contains(&(permission as i32));
-        if has(WinkeyerFacePermission::Send) && !has(WinkeyerFacePermission::Status) {
+        let has = |permission| endpoint.perms.contains(&(permission as i32));
+        if has(WinkeyerEndpointPermission::Send) && !has(WinkeyerEndpointPermission::Status) {
             return Err(format!(
-                "CAT hub WinKeyer face '{name}' permission 'send' requires 'status'."
+                "CAT hub WinKeyer endpoint '{name}' permission 'send' requires 'status'."
             ));
         }
-        if has(WinkeyerFacePermission::Ptt)
-            && (!has(WinkeyerFacePermission::Send) || !has(WinkeyerFacePermission::Control))
+        if has(WinkeyerEndpointPermission::Ptt)
+            && (!has(WinkeyerEndpointPermission::Send) || !has(WinkeyerEndpointPermission::Control))
         {
             return Err(format!(
-                "CAT hub WinKeyer face '{name}' permission 'ptt' requires 'send' and 'control'."
+                "CAT hub WinKeyer endpoint '{name}' permission 'ptt' requires 'send' and 'control'."
             ));
         }
-        if has(WinkeyerFacePermission::ConfigWrite)
-            && (!has(WinkeyerFacePermission::Status) || !has(WinkeyerFacePermission::Control))
+        if has(WinkeyerEndpointPermission::ConfigWrite)
+            && (!has(WinkeyerEndpointPermission::Status)
+                || !has(WinkeyerEndpointPermission::Control))
         {
             return Err(format!(
-                "CAT hub WinKeyer face '{name}' permission 'config_write' requires 'status' and 'control'."
+                "CAT hub WinKeyer endpoint '{name}' permission 'config_write' requires 'status' and 'control'."
             ));
         }
         transports.push(transport.clone());
-        result.push(PersistedCatHubWinkeyerFace {
+        result.push(PersistedCatHubWinkeyerEndpoint {
             name,
             transport,
             application_transport,
-            baud: face.baud,
-            primary: face.primary,
-            perms: face
+            baud: endpoint.baud,
+            primary: endpoint.primary,
+            perms: endpoint
                 .perms
                 .iter()
                 .filter_map(|value| winkeyer_perm_token(*value).map(str::to_string))
@@ -1915,12 +1919,12 @@ fn cat_hub_winkeyer_faces_from_proto(
         });
     }
     if primary_count > 1 {
-        return Err("At most one CAT hub WinKeyer face may be primary.".to_string());
+        return Err("At most one CAT hub WinKeyer endpoint may be primary.".to_string());
     }
     let transport_refs: Vec<&str> = transports.iter().map(String::as_str).collect();
     if let Some(duplicate) = first_duplicate(&transport_refs) {
         return Err(format!(
-            "CAT hub WinKeyer faces must use distinct transports: '{duplicate}'."
+            "CAT hub WinKeyer endpoints must use distinct transports: '{duplicate}'."
         ));
     }
     Ok(result)
@@ -2007,67 +2011,67 @@ fn cat_hub_ptt_from_proto(ptt: &CatHubPttSettings) -> Result<PersistedCatHubPtt,
     })
 }
 
-fn cat_hub_faces_from_proto(
-    faces: &[CatHubSerialFace],
+fn cat_hub_serial_endpoints_from_proto(
+    endpoints: &[CatHubSerialEndpoint],
     radio_port: Option<&str>,
-) -> Result<Vec<PersistedCatHubFace>, String> {
-    let mut result = Vec::with_capacity(faces.len());
+) -> Result<Vec<PersistedCatHubSerialEndpoint>, String> {
+    let mut result = Vec::with_capacity(endpoints.len());
     let mut transports: Vec<String> = Vec::new();
-    for face in faces {
-        let name = normalize_optional_string(Some(&face.name))
-            .ok_or_else(|| "CAT hub serial face name is required.".to_string())?;
-        let transport = normalize_optional_string(Some(&face.transport))
-            .ok_or_else(|| format!("CAT hub serial face '{name}' requires a transport."))?;
+    for endpoint in endpoints {
+        let name = normalize_optional_string(Some(&endpoint.name))
+            .ok_or_else(|| "CAT hub serial endpoint name is required.".to_string())?;
+        let transport = normalize_optional_string(Some(&endpoint.transport))
+            .ok_or_else(|| format!("CAT hub serial endpoint '{name}' requires a transport."))?;
         let application_transport =
-            normalize_optional_string(face.application_transport.as_deref());
+            normalize_optional_string(endpoint.application_transport.as_deref());
         if application_transport
             .as_deref()
             .is_some_and(|value| value.eq_ignore_ascii_case(&transport))
         {
             return Err(format!(
-                "CAT hub serial face '{name}' application transport must differ from its hub transport."
+                "CAT hub serial endpoint '{name}' application transport must differ from its hub transport."
             ));
         }
         if let Some(port) = radio_port {
             if transport.eq_ignore_ascii_case(port) {
                 return Err(format!(
-                    "CAT hub serial face '{name}' cannot reuse the radio port '{port}'."
+                    "CAT hub serial endpoint '{name}' cannot reuse the radio port '{port}'."
                 ));
             }
         }
-        let dialect = normalize_optional_string(Some(&face.dialect))
-            .ok_or_else(|| format!("CAT hub serial face '{name}' requires a dialect."))?
+        let dialect = normalize_optional_string(Some(&endpoint.dialect))
+            .ok_or_else(|| format!("CAT hub serial endpoint '{name}' requires a dialect."))?
             .to_ascii_lowercase();
-        if !CAT_HUB_FACE_DIALECTS.contains(&dialect.as_str()) {
+        if !CAT_HUB_SERIAL_ENDPOINT_DIALECTS.contains(&dialect.as_str()) {
             return Err(format!(
-                "CAT hub serial face '{name}' dialect '{dialect}' is not supported (expected one of: {}).",
-                CAT_HUB_FACE_DIALECTS.join(", ")
+                "CAT hub serial endpoint '{name}' dialect '{dialect}' is not supported (expected one of: {}).",
+                CAT_HUB_SERIAL_ENDPOINT_DIALECTS.join(", ")
             ));
         }
-        let baud = match face.baud {
+        let baud = match endpoint.baud {
             0 => None,
             value => Some(value),
         };
         transports.push(transport.clone());
-        result.push(PersistedCatHubFace {
+        result.push(PersistedCatHubSerialEndpoint {
             name,
             transport,
             application_transport,
             baud,
             dialect,
-            perms: cat_hub_perms_to_tokens(&face.perms),
+            perms: cat_hub_perms_to_tokens(&endpoint.perms),
         });
     }
     let transport_refs: Vec<&str> = transports.iter().map(String::as_str).collect();
     if let Some(duplicate) = first_duplicate(&transport_refs) {
         return Err(format!(
-            "CAT hub serial faces must use distinct transports: '{duplicate}'."
+            "CAT hub serial endpoints must use distinct transports: '{duplicate}'."
         ));
     }
     Ok(result)
 }
 
-fn cat_hub_endpoints_from_proto(
+fn cat_hub_hamlib_net_endpoints_from_proto(
     endpoints: &[CatHubHamlibNetEndpoint],
 ) -> Result<Vec<PersistedCatHubHamlibNet>, String> {
     let mut result = Vec::with_capacity(endpoints.len());
@@ -2934,12 +2938,12 @@ mod tests {
     use qsoripper_core::proto::qsoripper::services::{
         setup_service_server::SetupService, station_profile_service_server::StationProfileService,
         CatHubEventSettings, CatHubHamlibNetEndpoint, CatHubPermission, CatHubPollSettings,
-        CatHubPttSettings, CatHubRadioSettings, CatHubSerialFace, CatHubSettings,
-        CatHubWinkeyerFace, CatHubWinkeyerSettings, GetActiveStationContextRequest,
+        CatHubPttSettings, CatHubRadioSettings, CatHubSerialEndpoint, CatHubSettings,
+        CatHubWinkeyerEndpoint, CatHubWinkeyerSettings, GetActiveStationContextRequest,
         GetSetupStatusRequest, GetSetupWizardStateRequest, ListStationProfilesRequest,
         RigControlSettings, SaveSetupRequest, SaveStationProfileRequest,
         SetActiveStationProfileRequest, SetSessionStationProfileOverrideRequest, SetupWizardStep,
-        StorageBackend, ValidateSetupStepRequest, WinkeyerFacePermission, WsjtxIngestSettings,
+        StorageBackend, ValidateSetupStepRequest, WinkeyerEndpointPermission, WsjtxIngestSettings,
     };
 
     fn unique_config_path() -> std::path::PathBuf {
@@ -4584,7 +4588,7 @@ password = "legacy_secret"
 backend = "ts590"
 port = "COM4"
 
-[[cat_hub.face]]
+[[cat_hub.serial_endpoint]]
 name = "n1mm"
 transport = "COM11"
 dialect = "ts590"
@@ -4605,7 +4609,10 @@ engines = [1]
         let saved = fs::read_to_string(&config_path).expect("read");
         assert!(saved.contains("[cat_hub.radio]"), "cat_hub.radio: {saved}");
         assert!(saved.contains("port = \"COM4\""), "radio port: {saved}");
-        assert!(saved.contains("[[cat_hub.face]]"), "cat_hub.face: {saved}");
+        assert!(
+            saved.contains("[[cat_hub.serial_endpoint]]"),
+            "cat_hub.serial_endpoint: {saved}"
+        );
         assert!(
             saved.contains("[[cat_hub.hamlib_net]]"),
             "cat_hub.hamlib_net: {saved}"
@@ -4681,7 +4688,7 @@ backend = "ts590"
             events: Some(CatHubEventSettings {
                 native_push: Some(true),
             }),
-            faces: vec![CatHubSerialFace {
+            serial_endpoints: vec![CatHubSerialEndpoint {
                 name: "n1mm".to_string(),
                 transport: "COM20".to_string(),
                 application_transport: Some("COM21".to_string()),
@@ -4703,16 +4710,16 @@ backend = "ts590"
                 max_tx_ms: Some(30_000),
                 api_bind: Some("127.0.0.1:50071".to_string()),
             }),
-            winkeyer_faces: vec![CatHubWinkeyerFace {
+            winkeyer_endpoints: vec![CatHubWinkeyerEndpoint {
                 name: "n1mm-cw".to_string(),
                 transport: "COM40".to_string(),
                 application_transport: Some("COM41".to_string()),
                 baud: Some(1200),
                 primary: Some(true),
                 perms: vec![
-                    WinkeyerFacePermission::Status as i32,
-                    WinkeyerFacePermission::Send as i32,
-                    WinkeyerFacePermission::Control as i32,
+                    WinkeyerEndpointPermission::Status as i32,
+                    WinkeyerEndpointPermission::Send as i32,
+                    WinkeyerEndpointPermission::Control as i32,
                 ],
             }],
         }
@@ -4728,15 +4735,17 @@ backend = "ts590"
         assert_eq!(radio.backend.as_deref(), Some("ts590"));
         assert_eq!(radio.port.as_deref(), Some("COM3"));
         assert_eq!(radio.tcp_port, Some(4532));
-        assert_eq!(projected.faces.len(), 1);
-        assert_eq!(projected.faces[0].name, "n1mm");
+        assert_eq!(projected.serial_endpoints.len(), 1);
+        assert_eq!(projected.serial_endpoints[0].name, "n1mm");
         assert_eq!(
-            projected.faces[0].application_transport.as_deref(),
+            projected.serial_endpoints[0]
+                .application_transport
+                .as_deref(),
             Some("COM21")
         );
-        assert_eq!(projected.faces[0].dialect, "ts590");
+        assert_eq!(projected.serial_endpoints[0].dialect, "ts590");
         assert_eq!(
-            projected.faces[0].perms,
+            projected.serial_endpoints[0].perms,
             vec![
                 CatHubPermission::Read as i32,
                 CatHubPermission::Write as i32
@@ -4747,12 +4756,14 @@ backend = "ts590"
         let winkeyer = projected.winkeyer.expect("winkeyer");
         assert_eq!(winkeyer.port, "COM3-WK");
         assert_eq!(winkeyer.api_bind.as_deref(), Some("127.0.0.1:50071"));
-        assert_eq!(projected.winkeyer_faces.len(), 1);
+        assert_eq!(projected.winkeyer_endpoints.len(), 1);
         assert_eq!(
-            projected.winkeyer_faces[0].application_transport.as_deref(),
+            projected.winkeyer_endpoints[0]
+                .application_transport
+                .as_deref(),
             Some("COM41")
         );
-        assert!(projected.winkeyer_faces[0].primary.unwrap_or_default());
+        assert!(projected.winkeyer_endpoints[0].primary.unwrap_or_default());
     }
 
     #[test]
@@ -4766,10 +4777,10 @@ backend = "ts590"
     #[test]
     fn cat_hub_from_proto_requires_at_least_one_endpoint() {
         let mut settings = valid_cat_hub_settings();
-        settings.faces.clear();
+        settings.serial_endpoints.clear();
         settings.hamlib_net.clear();
         let error = PersistedCatHubConfig::from_proto(&settings).expect_err("endpoint required");
-        assert!(error.contains("at least one serial face"), "{error}");
+        assert!(error.contains("at least one serial endpoint"), "{error}");
     }
 
     #[test]
@@ -4781,9 +4792,9 @@ backend = "ts590"
     }
 
     #[test]
-    fn cat_hub_from_proto_rejects_face_reusing_radio_port() {
+    fn cat_hub_from_proto_rejects_endpoint_reusing_radio_port() {
         let mut settings = valid_cat_hub_settings();
-        settings.faces[0].transport = "COM3".to_string();
+        settings.serial_endpoints[0].transport = "COM3".to_string();
         let error = PersistedCatHubConfig::from_proto(&settings).expect_err("port reuse");
         assert!(error.contains("cannot reuse the radio port"), "{error}");
     }
@@ -4791,7 +4802,7 @@ backend = "ts590"
     #[test]
     fn cat_hub_from_proto_rejects_matching_hub_and_application_transports() {
         let mut settings = valid_cat_hub_settings();
-        settings.faces[0].application_transport = Some("com20".to_string());
+        settings.serial_endpoints[0].application_transport = Some("com20".to_string());
         let error = PersistedCatHubConfig::from_proto(&settings).expect_err("matching pair");
         assert!(
             error.contains("must differ from its hub transport"),
@@ -4799,7 +4810,7 @@ backend = "ts590"
         );
 
         let mut settings = valid_cat_hub_settings();
-        settings.winkeyer_faces[0].application_transport = Some("com40".to_string());
+        settings.winkeyer_endpoints[0].application_transport = Some("com40".to_string());
         let error = PersistedCatHubConfig::from_proto(&settings).expect_err("matching keyer pair");
         assert!(
             error.contains("must differ from its hub transport"),
@@ -4818,7 +4829,7 @@ backend = "ts590"
     #[test]
     fn cat_hub_from_proto_rejects_unknown_dialect() {
         let mut settings = valid_cat_hub_settings();
-        settings.faces[0].dialect = "icom".to_string();
+        settings.serial_endpoints[0].dialect = "icom".to_string();
         let error = PersistedCatHubConfig::from_proto(&settings).expect_err("bad dialect");
         assert!(error.contains("dialect 'icom'"), "{error}");
     }
@@ -4858,7 +4869,7 @@ backend = "ts590"
 backend = "ts590"
 port = "COM3"
 
-[[cat_hub.face]]
+[[cat_hub.serial_endpoint]]
 name = "n1mm"
 transport = "COM11"
 dialect = "ts590"
@@ -4877,7 +4888,7 @@ bind = "127.0.0.1:4532"
             projected.radio.expect("radio").port.as_deref(),
             Some("COM3")
         );
-        assert_eq!(projected.faces.len(), 1);
+        assert_eq!(projected.serial_endpoints.len(), 1);
         assert_eq!(projected.hamlib_net.len(), 1);
 
         fs::remove_dir_all(config_directory).expect("remove temp config directory");
@@ -4985,7 +4996,10 @@ tcp_port = 99999
 
         let saved = fs::read_to_string(&config_path).expect("read");
         assert!(saved.contains("[cat_hub.radio]"), "radio: {saved}");
-        assert!(saved.contains("[[cat_hub.face]]"), "face: {saved}");
+        assert!(
+            saved.contains("[[cat_hub.serial_endpoint]]"),
+            "endpoint: {saved}"
+        );
         // The written section must satisfy the real cathub daemon validator.
         qsoripper_cathub::validate_cat_hub_toml(&saved).expect("daemon-valid cat_hub");
 
@@ -4998,7 +5012,7 @@ tcp_port = 99999
         );
         assert!(
             preserved.contains("name = \"n1mm\""),
-            "face preserved: {preserved}"
+            "endpoint preserved: {preserved}"
         );
         let reloaded = load_cat_hub_config(&config_path).expect("cat_hub still present");
         assert!(reloaded.to_proto().is_some());

@@ -3,11 +3,11 @@ using CommunityToolkit.Mvvm.ComponentModel;
 namespace QsoRipper.Gui.ViewModels;
 
 /// <summary>
-/// One editable serial-face row (<c>[[cat_hub.face]]</c>) in the CAT Hub
-/// settings tab. A serial face is a com0com virtual pair the hub binds; the
+/// One editable serial-endpoint row (<c>[[cat_hub.serial_endpoint]]</c>) in the CAT Hub
+/// settings tab. A serial endpoint is a com0com virtual pair the hub binds; the
 /// client application connects to the other port of the same pair.
 /// </summary>
-internal sealed partial class CatHubFaceRowViewModel : ObservableObject
+internal sealed partial class CatHubSerialEndpointRowViewModel : ObservableObject
 {
     [ObservableProperty]
     private string _name = string.Empty;

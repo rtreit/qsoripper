@@ -335,7 +335,7 @@ impl AppState {
     /// then every selected UI with its per-UI engine binding env vars.
     fn launch_selected(&mut self) {
         // Daemons first: the CAT hub must own the radio and expose its rigctld
-        // face before any engine connects. Abort the launch if one fails.
+        // endpoint before any engine connects. Abort the launch if one fails.
         if !self.launch_daemons() {
             return;
         }

@@ -48,7 +48,7 @@ pub(crate) fn mode_from_digit(digit: u8) -> Mode {
 ///
 /// `AI;` is a *read* on Kenwood radios: a native client (ARCP-590, N1MM) queries the
 /// current auto-information mode during connection and waits for a valid `AI<n>;` answer
-/// before it proceeds. The reply must report the face's current virtualized state without
+/// before it proceeds. The reply must report the endpoint's current virtualized state without
 /// changing it; only an `AI<n>;` *write* toggles auto-information.
 pub(crate) fn ai_frame(on: bool) -> Vec<u8> {
     vec![b'A', b'I', if on { b'2' } else { b'0' }, b';']

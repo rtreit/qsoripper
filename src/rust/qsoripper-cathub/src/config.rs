@@ -1,7 +1,7 @@
 //! Daemon configuration (TOML).
 //!
 //! One `[radio]` section selects and parameterizes the backend; `[poll]`, `[ptt]`, and
-//! `[events]` tune cadence and safety; `[[face]]` and `[[hamlib_net]]` declare the client
+//! `[events]` tune cadence and safety; `[[serial_endpoint]]` and `[[hamlib_net]]` declare the client
 //! endpoints. Everything but `[radio].backend` has a sane default so a minimal config is
 //! short.
 
@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::error::ConfigError;
-use crate::permissions::FacePermissions;
+use crate::permissions::EndpointPermissions;
 
 fn default_transport() -> String {
     "serial".to_string()
@@ -133,17 +133,17 @@ impl Default for EventsConfig {
     }
 }
 
-/// A `[[face]]` (serial client) endpoint.
+/// A `[[serial_endpoint]]` (serial client) endpoint.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct FaceConfig {
+pub(crate) struct SerialEndpointConfig {
     /// A label for logging.
     pub(crate) name: String,
-    /// The serial port this face listens on (a com0com / tty path).
+    /// The serial port this endpoint listens on (a com0com / tty path).
     pub(crate) transport: String,
     /// The paired endpoint opened by the client application. The hub never opens it.
     #[serde(default)]
     pub(crate) application_transport: Option<String>,
-    /// Baud rate for the face port.
+    /// Baud rate for the endpoint port.
     #[serde(default = "default_baud")]
     pub(crate) baud: u32,
     /// Dialect: `ts590` or `ts2000`.
@@ -151,22 +151,22 @@ pub(crate) struct FaceConfig {
     /// Permission tokens (`read`, `frequency_write`, `write`, `ptt`, `config_write`).
     #[serde(default)]
     pub(crate) perms: Vec<String>,
-    /// Present the *operating* VFO as VFO A to this face (operating-VFO virtualization).
+    /// Present the *operating* VFO as VFO A to this endpoint (operating-VFO virtualization).
     ///
     /// Single-VFO loggers (notably N1MM Logger+ in SO1V) read the active VFO from the
     /// Kenwood `IF;` answer and refuse to track VFO B ("You should not use VFO B when
     /// configured for SO1V"). With `single_vfo = true` the hub always presents whichever
     /// VFO the operator is actually using as VFO A, so the logger follows A/B switches
-    /// seamlessly with no warning. Leave this `false` for true dual-VFO control faces such
+    /// seamlessly with no warning. Leave this `false` for true dual-VFO control endpoints such
     /// as ARCP-590, which must see and address real VFO A and B independently.
     #[serde(default)]
     pub(crate) single_vfo: bool,
 }
 
-impl FaceConfig {
+impl SerialEndpointConfig {
     /// The parsed permission set.
-    pub(crate) fn permissions(&self) -> FacePermissions {
-        FacePermissions::from_tokens(&self.perms)
+    pub(crate) fn permissions(&self) -> EndpointPermissions {
+        EndpointPermissions::from_tokens(&self.perms)
     }
 }
 
@@ -197,8 +197,8 @@ pub(crate) struct HamlibNetConfig {
 
 impl HamlibNetConfig {
     /// The parsed permission set.
-    pub(crate) fn permissions(&self) -> FacePermissions {
-        FacePermissions::from_tokens(&self.perms)
+    pub(crate) fn permissions(&self) -> EndpointPermissions {
+        EndpointPermissions::from_tokens(&self.perms)
     }
 }
 
@@ -218,17 +218,17 @@ pub(crate) struct WinkeyerConfig {
     pub(crate) api_bind: String,
 }
 
-/// One virtual WinKeyer serial face backed by a com0com/PTY pair.
+/// One virtual WinKeyer serial endpoint backed by a com0com/PTY pair.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct WinkeyerFaceConfig {
-    /// Stable face name used in logs and ownership status.
+pub(crate) struct WinkeyerEndpointConfig {
+    /// Stable endpoint name used in logs and ownership status.
     pub(crate) name: String,
     /// Hub side of the virtual serial pair.
     pub(crate) transport: String,
     /// Paired endpoint opened by the client application. The hub never opens it.
     #[serde(default)]
     pub(crate) application_transport: Option<String>,
-    /// Virtual face baud rate.
+    /// Virtual endpoint baud rate.
     #[serde(default = "default_winkeyer_baud")]
     pub(crate) baud: u32,
     /// Whether this client controls the idle paddle/foreground settings.
@@ -255,16 +255,16 @@ pub(crate) struct Config {
     pub(crate) events: EventsConfig,
     /// Serial client endpoints.
     #[serde(default)]
-    pub(crate) face: Vec<FaceConfig>,
+    pub(crate) serial_endpoint: Vec<SerialEndpointConfig>,
     /// Hamlib net endpoints.
     #[serde(default)]
     pub(crate) hamlib_net: Vec<HamlibNetConfig>,
     /// Optional physical WinKeyer broker.
     #[serde(default)]
     pub(crate) winkeyer: Option<WinkeyerConfig>,
-    /// Virtual WinKeyer client faces.
+    /// Virtual WinKeyer client endpoints.
     #[serde(default)]
-    pub(crate) winkeyer_face: Vec<WinkeyerFaceConfig>,
+    pub(crate) winkeyer_endpoint: Vec<WinkeyerEndpointConfig>,
 }
 
 /// The table key the daemon's settings live under inside the shared unified `config.toml`.
@@ -336,42 +336,43 @@ impl Config {
                 }
             }
         }
-        for face in &self.face {
-            if face
+        for endpoint in &self.serial_endpoint {
+            if endpoint
                 .application_transport
                 .as_deref()
                 .is_some_and(|application| {
                     application
                         .trim()
-                        .eq_ignore_ascii_case(face.transport.trim())
+                        .eq_ignore_ascii_case(endpoint.transport.trim())
                 })
             {
                 return Err(ConfigError::Invalid(format!(
-                    "face '{}' application_transport must differ from transport",
-                    face.name
+                    "endpoint '{}' application_transport must differ from transport",
+                    endpoint.name
                 )));
             }
             if !matches!(
-                face.dialect.as_str(),
+                endpoint.dialect.as_str(),
                 "ts590" | "ts590-transparent" | "ts2000"
             ) {
                 return Err(ConfigError::Invalid(format!(
-                    "face '{}' has unknown dialect '{}' (expected ts590, ts590-transparent, or ts2000)",
-                    face.name, face.dialect
+                    "endpoint '{}' has unknown dialect '{}' (expected ts590, ts590-transparent, or ts2000)",
+                    endpoint.name, endpoint.dialect
                 )));
             }
-            if face.dialect == "ts590-transparent" && face.single_vfo {
+            if endpoint.dialect == "ts590-transparent" && endpoint.single_vfo {
                 return Err(ConfigError::Invalid(format!(
-                    "face '{}' combines dialect 'ts590-transparent' with single_vfo = true; a \
-                     transparent mirror face relays the radio's real dual-VFO stream verbatim and \
+                    "endpoint '{}' combines dialect 'ts590-transparent' with single_vfo = true; a \
+                     transparent mirror endpoint relays the radio's real dual-VFO stream verbatim and \
                      cannot virtualize the operating VFO",
-                    face.name
+                    endpoint.name
                 )));
             }
         }
-        if self.face.is_empty() && self.hamlib_net.is_empty() {
+        if self.serial_endpoint.is_empty() && self.hamlib_net.is_empty() {
             return Err(ConfigError::Invalid(
-                "at least one [[face]] or [[hamlib_net]] endpoint is required".to_string(),
+                "at least one [[serial_endpoint]] or [[hamlib_net]] endpoint is required"
+                    .to_string(),
             ));
         }
         self.validate_winkeyer()?;
@@ -380,9 +381,10 @@ impl Config {
 
     fn validate_winkeyer(&self) -> Result<(), ConfigError> {
         let Some(winkeyer) = &self.winkeyer else {
-            if !self.winkeyer_face.is_empty() {
+            if !self.winkeyer_endpoint.is_empty() {
                 return Err(ConfigError::Invalid(
-                    "[[winkeyer_face]] requires a [winkeyer] physical device section".to_string(),
+                    "[[winkeyer_endpoint]] requires a [winkeyer] physical device section"
+                        .to_string(),
                 ));
             }
             return Ok(());
@@ -417,22 +419,22 @@ impl Config {
             ));
         }
         let primary_count = self
-            .winkeyer_face
+            .winkeyer_endpoint
             .iter()
-            .filter(|face| face.primary)
+            .filter(|endpoint| endpoint.primary)
             .count();
         if primary_count > 1 {
             return Err(ConfigError::Invalid(
-                "at most one [[winkeyer_face]] may set primary = true".to_string(),
+                "at most one [[winkeyer_endpoint]] may set primary = true".to_string(),
             ));
         }
         let mut transports = std::collections::BTreeSet::new();
-        for face in &self.winkeyer_face {
-            validate_winkeyer_face(face)?;
-            let normalized = face.transport.to_ascii_uppercase();
+        for endpoint in &self.winkeyer_endpoint {
+            validate_winkeyer_endpoint(endpoint)?;
+            let normalized = endpoint.transport.to_ascii_uppercase();
             if !transports.insert(normalized) {
                 return Err(ConfigError::Invalid(
-                    "winkeyer face transports must be distinct".to_string(),
+                    "winkeyer endpoint transports must be distinct".to_string(),
                 ));
             }
         }
@@ -479,11 +481,16 @@ impl Config {
         );
         let _ = writeln!(out, "ptt: max_tx_ms={}", self.ptt.max_tx_ms);
         let _ = writeln!(out, "events: native_push={}", self.events.native_push);
-        for face in &self.face {
+        for endpoint in &self.serial_endpoint {
             let _ = writeln!(
                 out,
-                "face: name={} transport={} baud={} dialect={} perms={:?} single_vfo={}",
-                face.name, face.transport, face.baud, face.dialect, face.perms, face.single_vfo
+                "serial_endpoint: name={} transport={} baud={} dialect={} perms={:?} single_vfo={}",
+                endpoint.name,
+                endpoint.transport,
+                endpoint.baud,
+                endpoint.dialect,
+                endpoint.perms,
+                endpoint.single_vfo
             );
         }
         for ep in &self.hamlib_net {
@@ -493,26 +500,8 @@ impl Config {
                 ep.name, ep.bind, ep.perms, ep.single_vfo
             );
         }
-        if let Some(winkeyer) = &self.winkeyer {
-            let _ = writeln!(
-                out,
-                "winkeyer: port={} baud={} max_tx_ms={} api_bind={}",
-                winkeyer.port, winkeyer.baud, winkeyer.max_tx_ms, winkeyer.api_bind
-            );
-            for face in &self.winkeyer_face {
-                let _ = writeln!(
-                    out,
-                    "winkeyer_face: name={} hub_transport={} application_transport={} baud={} primary={} perms={:?}",
-                    face.name,
-                    face.transport,
-                    face.application_transport.as_deref().unwrap_or("(not recorded)"),
-                    face.baud,
-                    face.primary,
-                    face.perms
-                );
-            }
-        }
-        if !self.face.is_empty() || !self.hamlib_net.is_empty() {
+        self.append_winkeyer_description(&mut out);
+        if !self.serial_endpoint.is_empty() || !self.hamlib_net.is_empty() {
             out.push('\n');
             let _ = writeln!(
                 out,
@@ -520,25 +509,25 @@ impl Config {
                  port ({}):",
                 self.radio.port
             );
-            for face in &self.face {
-                if let Some(application_transport) = face.application_transport.as_deref() {
+            for endpoint in &self.serial_endpoint {
+                if let Some(application_transport) = endpoint.application_transport.as_deref() {
                     let _ = writeln!(
                         out,
                         "  - {name}: hub={hub}, application={application}, {dialect} dialect, {baud} baud.",
-                        name = face.name,
-                        hub = face.transport,
+                        name = endpoint.name,
+                        hub = endpoint.transport,
                         application = application_transport,
-                        dialect = face.dialect,
-                        baud = face.baud,
+                        dialect = endpoint.dialect,
+                        baud = endpoint.baud,
                     );
                 } else {
                     let _ = writeln!(
                         out,
                         "  - {name}: the hub owns {hub}; application port is not recorded, {dialect} dialect, {baud} baud.",
-                        name = face.name,
-                        hub = face.transport,
-                        dialect = face.dialect,
-                        baud = face.baud,
+                        name = endpoint.name,
+                        hub = endpoint.transport,
+                        dialect = endpoint.dialect,
+                        baud = endpoint.baud,
                     );
                 }
             }
@@ -552,6 +541,30 @@ impl Config {
             }
         }
         out
+    }
+
+    fn append_winkeyer_description(&self, out: &mut String) {
+        use std::fmt::Write as _;
+        let Some(winkeyer) = &self.winkeyer else {
+            return;
+        };
+        let _ = writeln!(
+            out,
+            "winkeyer: port={} baud={} max_tx_ms={} api_bind={}",
+            winkeyer.port, winkeyer.baud, winkeyer.max_tx_ms, winkeyer.api_bind
+        );
+        for endpoint in &self.winkeyer_endpoint {
+            let _ = writeln!(
+                out,
+                "winkeyer_endpoint: name={} hub_transport={} application_transport={} baud={} primary={} perms={:?}",
+                endpoint.name,
+                endpoint.transport,
+                endpoint.application_transport.as_deref().unwrap_or("(not recorded)"),
+                endpoint.baud,
+                endpoint.primary,
+                endpoint.perms
+            );
+        }
     }
 
     /// The default config path: the per-user unified `config.toml` shared with the engine and
@@ -590,61 +603,61 @@ impl Config {
     }
 }
 
-fn validate_winkeyer_face(face: &WinkeyerFaceConfig) -> Result<(), ConfigError> {
-    if face.transport.trim().is_empty() {
+fn validate_winkeyer_endpoint(endpoint: &WinkeyerEndpointConfig) -> Result<(), ConfigError> {
+    if endpoint.transport.trim().is_empty() {
         return Err(ConfigError::Invalid(format!(
-            "winkeyer face '{}' requires transport",
-            face.name
+            "winkeyer endpoint '{}' requires transport",
+            endpoint.name
         )));
     }
-    if face.baud != 1_200 {
+    if endpoint.baud != 1_200 {
         return Err(ConfigError::Invalid(format!(
-            "winkeyer face '{}' baud must be 1200",
-            face.name
+            "winkeyer endpoint '{}' baud must be 1200",
+            endpoint.name
         )));
     }
-    if face
+    if endpoint
         .application_transport
         .as_deref()
         .is_some_and(|application| {
             application
                 .trim()
-                .eq_ignore_ascii_case(face.transport.trim())
+                .eq_ignore_ascii_case(endpoint.transport.trim())
         })
     {
         return Err(ConfigError::Invalid(format!(
-            "winkeyer face '{}' application_transport must differ from transport",
-            face.name
+            "winkeyer endpoint '{}' application_transport must differ from transport",
+            endpoint.name
         )));
     }
-    for permission in &face.perms {
+    for permission in &endpoint.perms {
         if !matches!(
             permission.as_str(),
             "status" | "send" | "control" | "ptt" | "config_write"
         ) {
             return Err(ConfigError::Invalid(format!(
-                "winkeyer face '{}' has unknown permission '{}'",
-                face.name, permission
+                "winkeyer endpoint '{}' has unknown permission '{}'",
+                endpoint.name, permission
             )));
         }
     }
-    let has = |permission: &str| face.perms.iter().any(|value| value == permission);
+    let has = |permission: &str| endpoint.perms.iter().any(|value| value == permission);
     if has("send") && !has("status") {
         return Err(ConfigError::Invalid(format!(
-            "winkeyer face '{}' permission 'send' requires 'status'",
-            face.name
+            "winkeyer endpoint '{}' permission 'send' requires 'status'",
+            endpoint.name
         )));
     }
     if has("ptt") && (!has("send") || !has("control")) {
         return Err(ConfigError::Invalid(format!(
-            "winkeyer face '{}' permission 'ptt' requires 'send' and 'control'",
-            face.name
+            "winkeyer endpoint '{}' permission 'ptt' requires 'send' and 'control'",
+            endpoint.name
         )));
     }
     if has("config_write") && (!has("status") || !has("control")) {
         return Err(ConfigError::Invalid(format!(
-            "winkeyer face '{}' permission 'config_write' requires 'status' and 'control'",
-            face.name
+            "winkeyer endpoint '{}' permission 'config_write' requires 'status' and 'control'",
+            endpoint.name
         )));
     }
     Ok(())
@@ -673,7 +686,7 @@ max_tx_ms = 120000
 [events]
 native_push = true
 
-[[face]]
+[[serial_endpoint]]
 name = "n1mm"
 transport = "COM20"
 application_transport = "COM21"
@@ -693,10 +706,13 @@ perms = ["read"]
         let config = Config::parse(SAMPLE).expect("parse");
         assert_eq!(config.radio.backend, "ts590");
         assert_eq!(config.radio.port, "COM3");
-        assert_eq!(config.face.len(), 1);
+        assert_eq!(config.serial_endpoint.len(), 1);
         assert_eq!(config.hamlib_net.len(), 1);
-        assert!(config.face[0].permissions().ptt);
-        assert!(config.face[0].single_vfo, "single_vfo parses as true");
+        assert!(config.serial_endpoint[0].permissions().ptt);
+        assert!(
+            config.serial_endpoint[0].single_vfo,
+            "single_vfo parses as true"
+        );
         assert!(config.hamlib_net[0].permissions().read);
         assert!(!config.hamlib_net[0].permissions().write);
         assert_eq!(config.baseline_interval(), Duration::from_millis(200));
@@ -710,7 +726,7 @@ perms = ["read"]
 [radio]
 backend = "loopback"
 
-[[face]]
+[[serial_endpoint]]
 name = "x"
 transport = "COM5"
 dialect = "ts590"
@@ -720,9 +736,9 @@ dialect = "ts590"
         assert_eq!(config.poll.baseline_ms, 250);
         assert_eq!(config.ptt.max_tx_ms, 300_000);
         assert!(config.events.native_push);
-        assert_eq!(config.face[0].baud, 4_800);
+        assert_eq!(config.serial_endpoint[0].baud, 4_800);
         assert!(
-            !config.face[0].single_vfo,
+            !config.serial_endpoint[0].single_vfo,
             "single_vfo defaults to false (native dual-VFO presentation)"
         );
     }
@@ -732,7 +748,7 @@ dialect = "ts590"
         let text = r#"
 [radio]
 backend = "icom"
-[[face]]
+[[serial_endpoint]]
 name = "x"
 transport = "COM5"
 dialect = "ts590"
@@ -746,7 +762,7 @@ dialect = "ts590"
 [radio]
 backend = "ts590"
 transport = "serial"
-[[face]]
+[[serial_endpoint]]
 name = "x"
 transport = "COM5"
 dialect = "ts590"
@@ -760,7 +776,7 @@ dialect = "ts590"
         let text = r#"
 [radio]
 backend = "loopback"
-[[face]]
+[[serial_endpoint]]
 name = "x"
 transport = "COM5"
 dialect = "yaesu"
@@ -786,7 +802,7 @@ backend = "loopback"
         assert!(text.contains("poll: baseline_ms=200"));
         assert!(text.contains("ptt: max_tx_ms=120000"));
         assert!(text.contains("events: native_push=true"));
-        assert!(text.contains("face: name=n1mm"));
+        assert!(text.contains("endpoint: name=n1mm"));
         assert!(text.contains("hamlib_net: name=engine"));
         assert!(text.contains("Client connection guide"));
         assert!(text.contains("hub=COM20, application=COM21"));
@@ -829,7 +845,7 @@ transport = "serial"
 port = "COM4"
 baud = 4800
 
-[[cat_hub.face]]
+[[cat_hub.serial_endpoint]]
 name = "n1mm"
 transport = "COM20"
 application_transport = "COM21"
@@ -844,13 +860,13 @@ perms = ["read"]
         let config = Config::parse_document(text).expect("parse unified");
         assert_eq!(config.radio.backend, "ts590");
         assert_eq!(config.radio.port, "COM4");
-        assert_eq!(config.face.len(), 1);
+        assert_eq!(config.serial_endpoint.len(), 1);
         assert_eq!(
-            config.face[0].application_transport.as_deref(),
+            config.serial_endpoint[0].application_transport.as_deref(),
             Some("COM21")
         );
         assert_eq!(config.hamlib_net.len(), 1);
-        assert!(config.face[0].permissions().ptt);
+        assert!(config.serial_endpoint[0].permissions().ptt);
     }
 
     #[test]
@@ -859,7 +875,7 @@ perms = ["read"]
         let config = Config::parse_document(SAMPLE).expect("parse standalone");
         assert_eq!(config.radio.backend, "ts590");
         assert_eq!(config.radio.port, "COM3");
-        assert_eq!(config.face.len(), 1);
+        assert_eq!(config.serial_endpoint.len(), 1);
     }
 
     #[test]
@@ -887,7 +903,7 @@ port = "COM3"
 max_tx_ms = 30000
 api_bind = "127.0.0.1:50071"
 
-[[winkeyer_face]]
+[[winkeyer_endpoint]]
 name = "n1mm"
 transport = "COM40"
 application_transport = "COM41"
@@ -898,15 +914,15 @@ perms = ["status", "send", "control", "ptt"]
         let winkeyer = config.winkeyer.as_ref().expect("winkeyer");
         assert_eq!(winkeyer.port, "COM3");
         assert_eq!(winkeyer.baud, 1_200);
-        assert_eq!(config.winkeyer_face.len(), 1);
-        assert!(config.winkeyer_face[0].primary);
+        assert_eq!(config.winkeyer_endpoint.len(), 1);
+        assert!(config.winkeyer_endpoint[0].primary);
         assert_eq!(
-            config.winkeyer_face[0].application_transport.as_deref(),
+            config.winkeyer_endpoint[0].application_transport.as_deref(),
             Some("COM41")
         );
         let description = config.describe();
         assert!(description.contains("winkeyer: port=COM3"));
-        assert!(description.contains("winkeyer_face: name=n1mm"));
+        assert!(description.contains("winkeyer_endpoint: name=n1mm"));
         assert!(description.contains("application_transport=COM41"));
     }
 
@@ -929,7 +945,7 @@ name = "engine"
 bind = "127.0.0.1:4532"
 [winkeyer]
 port = "COM3"
-[[winkeyer_face]]
+[[winkeyer_endpoint]]
 name = "wktools"
 transport = "COM42"
 application_transport = "com42"
@@ -941,7 +957,7 @@ application_transport = "com42"
     }
 
     #[test]
-    fn rejects_non_loopback_winkeyer_api_and_duplicate_primary_faces() {
+    fn rejects_non_loopback_winkeyer_api_and_duplicate_primary_endpoints() {
         let non_loopback = r#"
 [radio]
 backend = "loopback"
@@ -965,11 +981,11 @@ name = "engine"
 bind = "127.0.0.1:4532"
 [winkeyer]
 port = "COM3"
-[[winkeyer_face]]
+[[winkeyer_endpoint]]
 name = "one"
 transport = "COM40"
 primary = true
-[[winkeyer_face]]
+[[winkeyer_endpoint]]
 name = "two"
 transport = "COM42"
 primary = true
@@ -981,7 +997,7 @@ primary = true
     }
 
     #[test]
-    fn rejects_keyer_port_collision_and_faces_without_device() {
+    fn rejects_keyer_port_collision_and_endpoints_without_device() {
         let collision = r#"
 [radio]
 backend = "ts590"
@@ -1003,7 +1019,7 @@ backend = "loopback"
 [[hamlib_net]]
 name = "engine"
 bind = "127.0.0.1:4532"
-[[winkeyer_face]]
+[[winkeyer_endpoint]]
 name = "n1mm"
 transport = "COM40"
 "#;

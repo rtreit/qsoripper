@@ -43,7 +43,7 @@ pub enum CatHubError {
     /// A configuration problem.
     #[error(transparent)]
     Config(#[from] ConfigError),
-    /// An I/O problem binding a face, opening a port, or similar.
+    /// An I/O problem binding an endpoint, opening a port, or similar.
     #[error("i/o: {0}")]
     Io(#[from] std::io::Error),
     /// The configured backend could not be built or initialized.
@@ -72,8 +72,8 @@ mod tests {
 
     #[test]
     fn config_error_wraps_invalid() {
-        let err = ConfigError::Invalid("no faces".into());
-        assert_eq!(err.to_string(), "invalid config: no faces");
+        let err = ConfigError::Invalid("no endpoints".into());
+        assert_eq!(err.to_string(), "invalid config: no endpoints");
     }
 
     #[test]

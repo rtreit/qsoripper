@@ -1,4 +1,4 @@
-//! Virtual WinKeyer serial faces for unmodified applications such as N1MM Logger+.
+//! Virtual WinKeyer serial endpoints for unmodified applications such as N1MM Logger+.
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::broadcast::error::RecvError;
@@ -10,10 +10,10 @@ use super::protocol::{command_policy, ClientItem, ClientParser, CommandPolicy};
 const MAX_READ_CHUNK: usize = 512;
 const PARTIAL_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// Permissions assigned to one virtual WinKeyer face.
+/// Permissions assigned to one virtual WinKeyer endpoint.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
-pub(crate) struct FacePermissions {
+pub(crate) struct EndpointPermissions {
     pub(crate) status: bool,
     pub(crate) send: bool,
     pub(crate) control: bool,
@@ -21,7 +21,7 @@ pub(crate) struct FacePermissions {
     pub(crate) config_write: bool,
 }
 
-impl FacePermissions {
+impl EndpointPermissions {
     pub(crate) fn from_tokens(tokens: &[String]) -> Self {
         let mut result = Self::default();
         for token in tokens {
@@ -41,44 +41,44 @@ impl FacePermissions {
 /// Serve one virtual WinKeyer client until it disconnects or attempts a forbidden
 /// maintenance operation.
 #[cfg(test)]
-pub(crate) async fn run_face<T>(
+pub(crate) async fn run_endpoint_session<T>(
     transport: T,
     broker: BrokerHandle,
     client_id: ClientId,
     primary: bool,
-    permissions: FacePermissions,
+    permissions: EndpointPermissions,
 ) where
     T: AsyncRead + AsyncWrite + Send + 'static,
 {
-    run_face_inner(transport, broker, client_id, primary, permissions, false).await;
+    run_endpoint_session_inner(transport, broker, client_id, primary, permissions, false).await;
 }
 
-/// Serve a real serial face, where a zero-byte read means idle rather than EOF.
-pub(crate) async fn run_serial_face<T>(
+/// Serve a real serial endpoint, where a zero-byte read means idle rather than EOF.
+pub(crate) async fn run_serial_endpoint<T>(
     transport: T,
     broker: BrokerHandle,
     client_id: ClientId,
     primary: bool,
-    permissions: FacePermissions,
+    permissions: EndpointPermissions,
 ) where
     T: AsyncRead + AsyncWrite + Send + 'static,
 {
-    run_face_inner(transport, broker, client_id, primary, permissions, true).await;
+    run_endpoint_session_inner(transport, broker, client_id, primary, permissions, true).await;
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-async fn run_face_inner<T>(
+async fn run_endpoint_session_inner<T>(
     transport: T,
     broker: BrokerHandle,
     client_id: ClientId,
     primary: bool,
-    permissions: FacePermissions,
+    permissions: EndpointPermissions,
     zero_is_idle: bool,
 ) where
     T: AsyncRead + AsyncWrite + Send + 'static,
 {
     if let Err(error) = broker.register(client_id, primary).await {
-        tracing::error!(client_id, %error, "cannot register virtual WinKeyer face");
+        tracing::error!(client_id, %error, "cannot register virtual WinKeyer endpoint");
         return;
     }
 
@@ -101,11 +101,11 @@ async fn run_face_inner<T>(
                         continue 'session;
                     }
                     Ok(0) => {
-                        tracing::debug!(client_id, "virtual WinKeyer face reached EOF");
+                        tracing::debug!(client_id, "virtual WinKeyer endpoint reached EOF");
                         break 'session;
                     }
                     Err(error) => {
-                        tracing::warn!(client_id, %error, "virtual WinKeyer face read failed");
+                        tracing::warn!(client_id, %error, "virtual WinKeyer endpoint read failed");
                         break 'session;
                     }
                     Ok(count) => count,
@@ -280,7 +280,7 @@ async fn handle_command<W>(
     command: &[u8],
     broker: &BrokerHandle,
     client_id: ClientId,
-    permissions: FacePermissions,
+    permissions: EndpointPermissions,
     opened: &mut bool,
     maintenance_active: &mut bool,
     session_mode: &mut SessionMode,
@@ -363,7 +363,7 @@ async fn handle_admin<W>(
     command: &[u8],
     broker: &BrokerHandle,
     client_id: ClientId,
-    permissions: FacePermissions,
+    permissions: EndpointPermissions,
     opened: &mut bool,
     maintenance_active: &mut bool,
     session_mode: &mut SessionMode,
@@ -423,7 +423,7 @@ where
                     .await
                     .is_err()
             {
-                tracing::warn!(command = ?command, "virtual face attempted exclusive WinKeyer admin operation");
+                tracing::warn!(command = ?command, "virtual endpoint attempted exclusive WinKeyer admin operation");
                 return CommandResult::Close;
             }
             *maintenance_active = true;
@@ -447,7 +447,7 @@ fn is_buffered(command: &[u8]) -> bool {
         .is_some_and(|opcode| (0x18..=0x1f).contains(opcode))
 }
 
-fn buffered_allowed(command: &[u8], permissions: FacePermissions) -> bool {
+fn buffered_allowed(command: &[u8], permissions: EndpointPermissions) -> bool {
     !matches!(command.first(), Some(0x18 | 0x19)) || permissions.ptt
 }
 
@@ -484,7 +484,7 @@ fn event_byte(
 }
 
 /// Open the hub side of a virtual WinKeyer pair as 8-N-2.
-pub(crate) fn open_serial_face(
+pub(crate) fn open_serial_endpoint(
     port_name: &str,
     baud: u32,
 ) -> std::io::Result<serial2_tokio::SerialPort> {
@@ -507,7 +507,7 @@ mod tests {
     use tokio::io::DuplexStream;
 
     async fn setup() -> (BrokerHandle, DuplexStream, DuplexStream) {
-        setup_with_permissions(FacePermissions {
+        setup_with_permissions(EndpointPermissions {
             status: true,
             send: true,
             control: true,
@@ -518,7 +518,7 @@ mod tests {
     }
 
     async fn setup_with_permissions(
-        permissions: FacePermissions,
+        permissions: EndpointPermissions,
     ) -> (BrokerHandle, DuplexStream, DuplexStream) {
         let (mut device, physical) = tokio::io::duplex(4096);
         let broker_task = tokio::spawn(async move {
@@ -531,8 +531,14 @@ mod tests {
         let mut initialization = [0_u8; 7];
         device.read_exact(&mut initialization).await.expect("init");
 
-        let (client, face) = tokio::io::duplex(4096);
-        tokio::spawn(run_face(face, broker.clone(), 42, true, permissions));
+        let (client, server) = tokio::io::duplex(4096);
+        tokio::spawn(run_endpoint_session(
+            server,
+            broker.clone(),
+            42,
+            true,
+            permissions,
+        ));
         (broker, client, device)
     }
 
@@ -724,7 +730,7 @@ mod tests {
         let mut ignored = Vec::new();
         tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut ignored))
             .await
-            .expect("face closes")
+            .expect("session closes")
             .expect("read");
         let mut byte = [0_u8; 1];
         assert!(
@@ -736,7 +742,7 @@ mod tests {
 
     #[tokio::test]
     async fn permitted_maintenance_is_exclusive_and_private_until_virtual_close() {
-        let (_broker, mut client, mut device) = setup_with_permissions(FacePermissions {
+        let (_broker, mut client, mut device) = setup_with_permissions(EndpointPermissions {
             status: true,
             send: true,
             control: true,

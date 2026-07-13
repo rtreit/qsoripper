@@ -259,9 +259,9 @@
           <table>
             <thead><tr><th>Approach</th><th>What works</th><th>Compatibility boundary</th><th>Place in a CatHub station</th></tr></thead>
             <tbody>
-              <tr><td>OmniRig</td><td>Several programs that use the OmniRig automation API can share one configured radio.</td><td>Programs that only know Hamlib NET or native serial CAT cannot use the OmniRig API without an adapter.</td><td>OmniRig remains the coordinator for its clients. Its configured "radio" is a private CatHub serial face.</td></tr>
+              <tr><td>OmniRig</td><td>Several programs that use the OmniRig automation API can share one configured radio.</td><td>Programs that only know Hamlib NET or native serial CAT cannot use the OmniRig API without an adapter.</td><td>OmniRig remains the coordinator for its clients. Its configured "radio" is a private CatHub serial endpoint.</td></tr>
               <tr><td>Hamlib <code>rigctld</code></td><td>Several Hamlib NET clients can use a common TCP radio-control protocol.</td><td>Programs that require a COM port or a vendor CAT dialect cannot connect to a rigctld socket.</td><td>Hamlib-aware programs connect to separate rigctld-compatible CatHub endpoints.</td></tr>
-              <tr><td>Direct serial CAT</td><td>A program can control a radio through a COM port using a supported vendor command set.</td><td>Windows serial ports are normally exclusive, and independent command streams cannot be merged safely.</td><td>Each serial program receives a private virtual COM pair backed by a CatHub CAT face.</td></tr>
+              <tr><td>Direct serial CAT</td><td>A program can control a radio through a COM port using a supported vendor command set.</td><td>Windows serial ports are normally exclusive, and independent command streams cannot be merged safely.</td><td>Each serial program receives a private virtual COM pair backed by a CatHub CAT endpoint.</td></tr>
             </tbody>
           </table>
         </div>
@@ -295,7 +295,7 @@
 
             <div class="box client program-col radio-three"><strong>N1MM, ARCP-590, native CAT clients</strong><small>Open a COM port as though a radio were attached.</small></div>
             <div class="arrow-cell program-arrow radio-three" aria-hidden="true">→</div>
-            <div class="box interface interface-col radio-three"><strong>Dedicated serial CAT face</strong><small>A virtual COM pair carries an implemented CAT dialect.</small><span class="port">COM21 ⇄ COM20</span></div>
+            <div class="box interface interface-col radio-three"><strong>Dedicated serial CAT endpoint</strong><small>A virtual COM pair carries an implemented CAT dialect.</small><span class="port">COM21 ⇄ COM20</span></div>
             <div class="arrow-cell interface-arrow radio-three" aria-hidden="true">→</div>
 
             <div class="box hub hub-core radio-hub"><span class="hub-domain">Radio control</span><strong>CatHub radio broker</strong><small>Owns the physical CAT connection.</small><ul><li>parses each client dialect</li><li>maintains shared radio state</li><li>serializes reads and writes</li><li>applies endpoint permissions</li><li>leases PTT ownership</li></ul></div>
@@ -304,7 +304,7 @@
 
             <div class="box client program-col keyer-one"><strong>N1MM Logger+</strong><small>Uses a WinKeyer-compatible serial port.</small></div>
             <div class="arrow-cell program-arrow keyer-one" aria-hidden="true">→</div>
-            <div class="box interface interface-col keyer-one"><strong>Virtual WinKeyer serial face</strong><small>Unmodified WinKeyer byte protocol over a private COM pair.</small><span class="port">COM41 ⇄ COM40</span></div>
+            <div class="box interface interface-col keyer-one"><strong>Virtual WinKeyer serial endpoint</strong><small>Unmodified WinKeyer byte protocol over a private COM pair.</small><span class="port">COM41 ⇄ COM40</span></div>
             <div class="arrow-cell interface-arrow keyer-one" aria-hidden="true">→</div>
 
             <div class="box client program-col keyer-two"><strong>QsoRipper CW clients</strong><small>Submit named or expanded CW work.</small></div>
@@ -314,7 +314,7 @@
 
             <div class="box client program-col keyer-three"><strong>WKTools</strong><small>Performs keyer configuration and diagnostics.</small></div>
             <div class="arrow-cell program-arrow keyer-three" aria-hidden="true">→</div>
-            <div class="box interface interface-col keyer-three"><strong>Maintenance serial face</strong><small>Exclusive, permission-gated access on a separate virtual pair.</small><span class="port">COM43 ⇄ COM42</span></div>
+            <div class="box interface interface-col keyer-three"><strong>Maintenance serial endpoint</strong><small>Exclusive, permission-gated access on a separate virtual pair.</small><span class="port">COM43 ⇄ COM42</span></div>
             <div class="arrow-cell interface-arrow keyer-three" aria-hidden="true">→</div>
 
             <div class="box hub hub-core keyer-hub"><span class="hub-domain">CW keying</span><strong>CatHub WinKeyer broker</strong><small>Owns the physical keyer session.</small><ul><li>keeps client profiles separate</li><li>queues complete CW jobs</li><li>prevents byte interleaving</li><li>fans out device status</li><li>grants exclusive maintenance</li></ul></div>
@@ -336,9 +336,9 @@
           <table>
             <thead><tr><th>Connection</th><th>What identifies it</th><th>Policy selected by the endpoint</th><th>What CatHub does not infer</th></tr></thead>
             <tbody>
-              <tr><td>Serial CAT face</td><td>The hub side of a dedicated virtual COM pair.</td><td>A fixed client dialect, such as TS-590 or TS-2000, plus permissions and optional single-VFO presentation.</td><td>Whether the process on the paired port is N1MM, ARCP-590, OmniRig, or another compatible client.</td></tr>
-              <tr><td>Hamlib NET face</td><td>The TCP listener that accepts the connection, such as <code>127.0.0.1:4532</code> or <code>:4533</code>.</td><td>The rigctld-compatible command parser, endpoint permissions, and optional single-VFO presentation.</td><td>Whether the connecting process is QsoRipper, WSJT-X, JS8Call, Log4OM, or another Hamlib NET client.</td></tr>
-              <tr><td>Virtual WinKeyer face</td><td>The hub side of its dedicated virtual COM pair.</td><td>The WinKeyer host protocol, primary-client role, and status, send, control, PTT, or maintenance permissions.</td><td>The application name. The configured face and its internal client ID define the session.</td></tr>
+              <tr><td>Serial CAT endpoint</td><td>The hub side of a dedicated virtual COM pair.</td><td>A fixed client dialect, such as TS-590 or TS-2000, plus permissions and optional single-VFO presentation.</td><td>Whether the process on the paired port is N1MM, ARCP-590, OmniRig, or another compatible client.</td></tr>
+              <tr><td>Hamlib NET endpoint</td><td>The TCP listener that accepts the connection, such as <code>127.0.0.1:4532</code> or <code>:4533</code>.</td><td>The rigctld-compatible command parser, endpoint permissions, and optional single-VFO presentation.</td><td>Whether the connecting process is QsoRipper, WSJT-X, JS8Call, Log4OM, or another Hamlib NET client.</td></tr>
+              <tr><td>Virtual WinKeyer endpoint</td><td>The hub side of its dedicated virtual COM pair.</td><td>The WinKeyer host protocol, primary-client role, and status, send, control, PTT, or maintenance permissions.</td><td>The application name. The configured endpoint establishes policy; the live connection is a client session.</td></tr>
               <tr><td>Typed WinKeyer service</td><td>A <code>client_name</code> supplied in the loopback gRPC request.</td><td>Named job ownership, cancellation, speed, and event routing through the typed WinKeyer API.</td><td>That the supplied name proves the operating-system identity of the caller.</td></tr>
             </tbody>
           </table>
@@ -346,10 +346,10 @@
         <div class="subsection-head">
           <p class="label">Runtime ownership</p>
           <h2>Internal IDs track work, not software brands</h2>
-          <p>Each serial face receives an internal face ID when CatHub starts. Each accepted Hamlib NET connection receives a fresh ID. CatHub uses these IDs to preserve command order, own and release PTT, attribute queued work, and clean up after a disconnect. The configured face name remains a label for logs and status; it is not application authentication.</p>
+          <p>CatHub creates a client session for each opened serial endpoint and each accepted Hamlib NET connection. Every session receives a fresh internal session ID. CatHub uses session IDs to preserve command order, own and release PTT, attribute queued work, and clean up after a disconnect. The configured endpoint name remains a label for logs and status; it is not application authentication.</p>
         </div>
         <div class="two-column">
-          <article class="plain-card"><h3>Client side</h3><p>The face selects how CatHub parses requests and formats replies. A TS-2000 face can therefore present TS-2000 behavior to OmniRig even when the physical radio is a TS-590.</p></article>
+          <article class="plain-card"><h3>Client side</h3><p>The endpoint selects how CatHub parses requests and formats replies. A TS-2000 endpoint can therefore present TS-2000 behavior to OmniRig even when the physical radio is a TS-590.</p></article>
           <article class="plain-card"><h3>Radio side</h3><p>The separately configured radio backend controls the physical device. Supported client requests become shared state operations that the active backend applies to the radio.</p></article>
         </div>
         <div class="caution"><p><strong>Operational consequence:</strong> connecting a program to the wrong endpoint does not trigger automatic dialect detection. CatHub applies that endpoint's configured protocol and permissions. Unsupported commands fail, and any local process that can open a writable endpoint receives that endpoint's authority.</p></div>
@@ -363,9 +363,9 @@
           <p>OmniRig, Hamlib NET, and serial CAT are client-side choices. After CatHub parses a request, every allowed operation enters the same radio scheduler and shared state model.</p>
         </div>
         <div class="routes">
-          <article class="route"><span class="route-number">01 / OmniRig route</span><h3>Application → OmniRig → CatHub</h3><ol><li>The application calls OmniRig.</li><li>OmniRig emits the CAT dialect configured for its virtual radio.</li><li>A virtual COM pair delivers those bytes to CatHub's TS-2000 face.</li><li>CatHub maps the request to shared radio state and the physical radio.</li></ol></article>
+          <article class="route"><span class="route-number">01 / OmniRig route</span><h3>Application → OmniRig → CatHub</h3><ol><li>The application calls OmniRig.</li><li>OmniRig emits the CAT dialect configured for its virtual radio.</li><li>A virtual COM pair delivers those bytes to CatHub's TS-2000 endpoint.</li><li>CatHub maps the request to shared radio state and the physical radio.</li></ol></article>
           <article class="route"><span class="route-number">02 / Hamlib route</span><h3>Application → CatHub TCP endpoint</h3><ol><li>The application selects Hamlib's NET rigctl model.</li><li>It sends rigctld protocol commands to a CatHub listener.</li><li>CatHub returns state in the form the client expects.</li><li>Allowed writes go through the same radio actor as every other route.</li></ol></article>
-          <article class="route"><span class="route-number">03 / Serial route</span><h3>Application → virtual COM → CatHub</h3><ol><li>The application selects a supported radio model and its assigned COM port.</li><li>The paired port delivers its CAT frames to CatHub.</li><li>CatHub parses or transparently mirrors supported commands according to the face configuration.</li><li>The physical radio still has only one owner.</li></ol></article>
+          <article class="route"><span class="route-number">03 / Serial route</span><h3>Application → virtual COM → CatHub</h3><ol><li>The application selects a supported radio model and its assigned COM port.</li><li>The paired port delivers its CAT frames to CatHub.</li><li>CatHub parses or transparently mirrors supported commands according to the endpoint configuration.</li><li>The physical radio still has only one owner.</li></ol></article>
         </div>
         <div class="subsection-head">
           <p class="label">WinKeyer request paths</p>
@@ -373,9 +373,9 @@
           <p>WinKeyer is a stateful byte protocol, not a CAT dialect. CatHub gives it a separate broker and physical-device actor.</p>
         </div>
         <div class="routes">
-          <article class="route"><span class="route-number">01 / Legacy serial</span><h3>N1MM → virtual WinKeyer face</h3><ol><li>N1MM opens its assigned virtual COM port.</li><li>CatHub tracks that client's Host Open state, speed, mode, and permissions.</li><li>Complete sends enter the broker queue without interleaving another client's bytes.</li><li>Physical busy, idle, speed-pot, and error status return through the virtual face.</li></ol></article>
+          <article class="route"><span class="route-number">01 / Legacy serial</span><h3>N1MM → virtual WinKeyer endpoint</h3><ol><li>N1MM opens its assigned virtual COM port.</li><li>CatHub tracks that client's Host Open state, speed, mode, and permissions.</li><li>Complete sends enter the broker queue without interleaving another client's bytes.</li><li>Physical busy, idle, speed-pot, and error status return through the virtual endpoint.</li></ol></article>
           <article class="route"><span class="route-number">02 / Typed service</span><h3>QsoRipper → WinKeyer gRPC</h3><ol><li>A named QsoRipper client submits text, speed, or cancellation through the loopback service.</li><li>The broker records the work as an atomic job.</li><li>The selected client profile is applied before transmission.</li><li>Completion, cancellation, and error events return as typed messages.</li></ol></article>
-          <article class="route"><span class="route-number">03 / Maintenance</span><h3>WKTools → exclusive serial face</h3><ol><li>WKTools opens its dedicated virtual COM port.</li><li>Permission-gated maintenance commands acquire exclusive access.</li><li>Private device replies return only to the maintenance client.</li><li>Normal transmission remains blocked until maintenance releases the keyer.</li></ol></article>
+          <article class="route"><span class="route-number">03 / Maintenance</span><h3>WKTools → exclusive serial endpoint</h3><ol><li>WKTools opens its dedicated virtual COM port.</li><li>Permission-gated maintenance commands acquire exclusive access.</li><li>Private device replies return only to the maintenance client.</li><li>Normal transmission remains blocked until maintenance releases the keyer.</li></ol></article>
         </div>
       </div>
     </section>
@@ -406,17 +406,17 @@
           <span class="flow-arrow" aria-hidden="true">⇄</span>
           <div class="node"><strong>com0com pair</strong><small>Bytes written at one end appear at the other.</small></div>
           <span class="flow-arrow" aria-hidden="true">⇄</span>
-          <div class="node hub"><strong>CatHub serial face</strong><small>Opens hub side</small><span class="mono">COM10</span></div>
+          <div class="node hub"><strong>CatHub serial endpoint</strong><small>Opens hub side</small><span class="mono">COM10</span></div>
           <span class="flow-arrow" aria-hidden="true">⇄</span>
           <div class="node hardware"><strong>Physical radio</strong><small>Opened only by CatHub</small><span class="mono">COM4</span></div>
         </div>
         <p class="flow-heading">N1MM WinKeyer path</p>
-        <div class="connection-flow" aria-label="N1MM COM41 connects through a virtual pair to the CatHub WinKeyer face on COM40, which controls the physical WinKeyer on COM3">
+        <div class="connection-flow" aria-label="N1MM COM41 connects through a virtual pair to the CatHub WinKeyer endpoint on COM40, which controls the physical WinKeyer on COM3">
           <div class="node app"><strong>N1MM Logger+</strong><small>Opens application side</small><span class="mono">COM41</span></div>
           <span class="flow-arrow" aria-hidden="true">⇄</span>
           <div class="node"><strong>com0com pair</strong><small>Carries WinKeyer's 1200 baud, 8-N-2 byte protocol.</small></div>
           <span class="flow-arrow" aria-hidden="true">⇄</span>
-          <div class="node hub"><strong>CatHub WinKeyer face</strong><small>Opens hub side</small><span class="mono">COM40</span></div>
+          <div class="node hub"><strong>CatHub WinKeyer endpoint</strong><small>Opens hub side</small><span class="mono">COM40</span></div>
           <span class="flow-arrow" aria-hidden="true">⇄</span>
           <div class="node hardware"><strong>Physical WinKeyer</strong><small>Opened only by CatHub</small><span class="mono">COM3</span></div>
         </div>
@@ -432,14 +432,14 @@
         </div>
         <ul class="implementation-list">
           <li><strong>Radio backends:</strong> the current configuration accepts native TS-590 control, an upstream rigctld backend, or a loopback test backend.</li>
-          <li><strong>Serial faces:</strong> the current implementation exposes TS-590, transparent TS-590, and TS-2000 client dialects.</li>
-          <li><strong>Network faces:</strong> CatHub exposes rigctld-compatible Hamlib NET endpoints, including per-endpoint permissions and compatibility policy.</li>
-          <li><strong>OmniRig:</strong> CatHub does not replace OmniRig for programs that use its automation API. OmniRig becomes one CatHub client through a virtual serial face.</li>
+          <li><strong>Serial endpoints:</strong> the current implementation exposes TS-590, transparent TS-590, and TS-2000 client dialects.</li>
+          <li><strong>Network endpoints:</strong> CatHub exposes rigctld-compatible Hamlib NET endpoints, including per-endpoint permissions and compatibility policy.</li>
+          <li><strong>OmniRig:</strong> CatHub does not replace OmniRig for programs that use its automation API. OmniRig becomes one CatHub client through a virtual serial endpoint.</li>
           <li><strong>Direct serial:</strong> this means a program sends a supported CAT dialect over its own virtual pair. It does not mean every arbitrary serial protocol is accepted.</li>
           <li><strong>Physical WinKeyer:</strong> CatHub maintains the single hardware session at 1200 baud and enforces a separate transmit-time ceiling.</li>
-          <li><strong>Virtual WinKeyer faces:</strong> unmodified serial clients receive private 8-N-2 COM pairs with explicit status, send, control, PTT, and configuration permissions.</li>
+          <li><strong>Virtual WinKeyer endpoints:</strong> unmodified serial clients receive private 8-N-2 COM pairs with explicit status, send, control, PTT, and configuration permissions.</li>
           <li><strong>Typed WinKeyer service:</strong> QsoRipper clients use a loopback gRPC API for status, text jobs, speed, cancellation, abort, and event streaming.</li>
-          <li><strong>Maintenance:</strong> configuration tools use an exclusive face whose private replies are not broadcast to ordinary clients.</li>
+          <li><strong>Maintenance:</strong> configuration tools use an exclusive endpoint whose private replies are not broadcast to ordinary clients.</li>
         </ul>
       </div>
     </section>
@@ -457,7 +457,7 @@
           <li><a href="https://hamlib.sourceforge.net/html/rigctld.1.html">Hamlib rigctld manual</a>, which defines the TCP daemon and notes its multiple-program sharing behavior and compatibility qualifications.</li>
           <li><a href="https://learn.microsoft.com/en-us/windows/win32/devio/communications-resource-handles">Microsoft: Communications Resource Handles</a>, which documents exclusive opening of Windows communications resources.</li>
           <li><a href="https://com0com.sourceforge.net/">com0com project documentation</a>, which defines a virtual COM pair and its bidirectional byte flow.</li>
-          <li>Implementation files: <a href="https://github.com/treitforge/qsoripper/blob/main/src/rust/qsoripper-cathub/src/serial_face.rs"><code>serial_face.rs</code></a>, <a href="https://github.com/treitforge/qsoripper/blob/main/src/rust/qsoripper-cathub/src/hamlib_net.rs"><code>hamlib_net.rs</code></a>, the radio <a href="https://github.com/treitforge/qsoripper/tree/main/src/rust/qsoripper-cathub/src/dialect"><code>dialect</code> modules</a>, and the <a href="https://github.com/treitforge/qsoripper/tree/main/src/rust/qsoripper-cathub/src/winkeyer"><code>winkeyer</code> broker modules</a>.</li>
+          <li>Implementation files: <a href="https://github.com/treitforge/qsoripper/blob/main/src/rust/qsoripper-cathub/src/serial_endpoint.rs"><code>serial_endpoint.rs</code></a>, <a href="https://github.com/treitforge/qsoripper/blob/main/src/rust/qsoripper-cathub/src/hamlib_net.rs"><code>hamlib_net.rs</code></a>, the radio <a href="https://github.com/treitforge/qsoripper/tree/main/src/rust/qsoripper-cathub/src/dialect"><code>dialect</code> modules</a>, and the <a href="https://github.com/treitforge/qsoripper/tree/main/src/rust/qsoripper-cathub/src/winkeyer"><code>winkeyer</code> broker modules</a>.</li>
         </ol>
       </div>
     </section>
