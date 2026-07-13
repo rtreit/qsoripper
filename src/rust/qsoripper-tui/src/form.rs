@@ -369,6 +369,10 @@ pub(crate) struct LogForm {
     pub(crate) mode_idx: usize,
     /// Frequency in MHz as a display string.
     pub(crate) frequency_mhz: String,
+    /// Rig-derived receive frequency in Hz for split logging.
+    pub(crate) rig_frequency_rx_hz: Option<u64>,
+    /// Rig-derived receive band in ADIF form for split logging.
+    pub(crate) rig_band_rx: Option<String>,
     /// Date in `YYYY-MM-DD` format.
     pub(crate) date: String,
     /// Time on (start) in `HH:MM` format.
@@ -519,6 +523,8 @@ impl LogForm {
             band_idx: DEFAULT_BAND_IDX,
             mode_idx: 0,
             frequency_mhz: String::new(),
+            rig_frequency_rx_hz: None,
+            rig_band_rx: None,
             date: now.format("%Y-%m-%d").to_string(),
             time: now.format("%H:%M").to_string(),
             time_off: String::new(),

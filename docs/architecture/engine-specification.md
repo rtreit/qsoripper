@@ -35,7 +35,7 @@ The engine is a long-running server process responsible for:
 | QSO storage | Persistent CRUD for QSO records via a pluggable storage backend |
 | Callsign lookup | QRZ XML lookups with caching, deduplication, and DXCC enrichment |
 | QRZ logbook sync | Bidirectional synchronization with the QRZ logbook API |
-| Rig control | Polling a rigctld daemon for frequency and mode |
+| Rig control | Polling a rigctld daemon for logging-relevant frequency, mode, split, and power state |
 | Space weather | Fetching and caching NOAA space weather indices |
 | Contest calendar | Fetching and caching active contest metadata |
 | Station profiles | Managing station identity and per-session overrides |
@@ -462,10 +462,13 @@ Returns the current rig connection status.
 
 #### GetRigSnapshot
 
-Returns the most recent frequency/mode snapshot from the rig.
+Returns the most recent normalized logging snapshot from the rig.
 
 **Behavior:**
-- Return a `RigSnapshot` containing `frequency_hz`, `band`, `mode`, `submode`, `raw_mode`, `status`, and `sampled_at`.
+- Return a `RigSnapshot` containing required transmit-side `frequency_hz`, `band`, `mode`, optional `submode`, provider diagnostic `raw_mode`, optional split receive-side `frequency_rx_hz` and `band_rx`, optional `tx_power_watts`, `status`, and `sampled_at`.
+- In simplex operation, `frequency_hz` and `band` contain the current operating frequency and band. In split operation, they contain the transmit frequency and band when rigctld exposes it; `frequency_rx_hz` and `band_rx` contain the receive side.
+- `tx_power_watts` is normalized from Hamlib's relative `RFPOWER` level through `power2mW`. Relative power values never cross the engine boundary.
+- Split and power reads are capability tolerant. `RPRT` errors or unparseable values from optional commands leave the corresponding fields absent without failing the required frequency/mode snapshot.
 - If the rig is disconnected or disabled, return a snapshot with appropriate status and no frequency/mode data.
 - If the last snapshot is older than `QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS`, mark it as stale.
 
@@ -501,6 +504,13 @@ commands), serializes all writes, owns the radio's native push stream, and arbit
 a single-owner lease and a hard transmit-time ceiling. The engine's behavior contracts above
 are unchanged: it remains a read-mostly NET rigctl client and is agnostic to whether the
 endpoint is the cathub daemon or a bare `rigctld`.
+
+The hub's read-only Hamlib NET face implements the engine's optional logging probes:
+`i`/`\get_split_freq`, `x`/`\get_split_mode`, `l RFPOWER`, and `2`/`\power2mW`. CatHub serves
+these from its universal radio snapshot. The native TS-590 backend populates configured power
+from `PC;`; the rigctld bridge forwards the optional probes to its private downstream rigctld.
+When a backend cannot expose a value, CatHub returns `RPRT -11`, preserving the provider's
+capability-tolerant behavior.
 
 - Design: `docs/design/cathub-multi-client-cat-hub.md`.
 - Operator setup: `docs/integrations/cathub-setup.md`.
@@ -1275,14 +1285,20 @@ All backends must implement the `EngineStorage` trait, which decomposes into:
 |---|---|---|
 | `f\n` | Frequency in Hz (e.g., `14074000`) | Get current frequency |
 | `m\n` | Mode and passband (e.g., `USB\n2400`) | Get current mode |
+| `s\n` | Split enabled and TX VFO | Detect split operation |
+| `i\n` | Split TX frequency in Hz | Get transmit frequency when split |
+| `x\n` | Split TX mode and passband | Get transmit mode when split |
+| `l RFPOWER\n` | Relative power from 0 through 1 | Get configured transmitter output level |
+| `2 <level> <frequency> <mode>\n` | Power in milliwatts | Convert relative power to an absolute value |
 
 **Polling model:**
 - The engine polls rigctld at a configurable interval.
-- The provider keeps one serialized TCP session and reads frequency and mode on that session for
+- The provider keeps one serialized TCP session and reads required frequency/mode plus supported optional split/power state on that session for
   each poll. It MUST NOT create a new TCP connection for every snapshot.
 - A timeout, EOF, or transport failure discards the session and permits one bounded reconnect and
   retry. If that retry fails, the rig status transitions to `Disconnected` or `Error`.
 - Each successful poll constructs a `RigSnapshot` and caches it.
+- Optional command failures do not change the connection status and do not discard required fields.
 - If the snapshot is older than `QSORIPPER_RIGCTLD_STALE_THRESHOLD_MS`, it is marked stale.
 
 **Read timeout:** `QSORIPPER_RIGCTLD_READ_TIMEOUT_MS` controls the per-command TCP read timeout.
@@ -1970,7 +1986,7 @@ A conformant engine must pass all of the following scenarios:
 | `proto/domain/qso_history_entry.proto` | `QsoHistoryEntry` | Compact prior-QSO summary returned with lookup results |
 | `proto/domain/station_profile.proto` | `StationProfile` | Durable station defaults |
 | `proto/domain/station_snapshot.proto` | `StationSnapshot` | Immutable per-QSO station capture |
-| `proto/domain/rig_snapshot.proto` | `RigSnapshot` | Rig frequency/mode snapshot |
+| `proto/domain/rig_snapshot.proto` | `RigSnapshot` | Normalized rig frequency, mode, split, and transmitter-power snapshot |
 | `proto/domain/space_weather_snapshot.proto` | `SpaceWeatherSnapshot` | Space weather indices |
 | `proto/domain/contest_calendar_entry.proto` | `ContestCalendarEntry` | Normalized contest calendar entry |
 | `proto/domain/sync_config.proto` | `SyncConfig` | Sync policy configuration |

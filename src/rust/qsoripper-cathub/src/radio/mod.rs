@@ -305,7 +305,11 @@ where
                         Some((Matcher::Lines { remaining, mut acc }, reply, deadline)) => {
                             acc.extend_from_slice(&frame);
                             let left = remaining.saturating_sub(1);
-                            if left == 0 {
+                            // A rigctld error is a complete one-line response even when the
+                            // successful command shape has multiple lines (`m`, `s`, `x`).
+                            // Complete immediately so optional capability probes do not wait
+                            // for a line that will never arrive.
+                            if left == 0 || frame.starts_with(b"RPRT ") {
                                 let _ = reply.send(Ok(acc));
                                 None
                             } else {
@@ -554,6 +558,7 @@ async fn execute(
 mod tests {
     use super::*;
     use crate::backend::kenwood::ts590::Ts590Backend;
+    use crate::backend::rigctld::RigctldBackend;
     use crate::model::{Mode, Vfo};
     use crate::state::RadioEvent;
 
@@ -699,6 +704,35 @@ mod tests {
 
         assert!(matches!(result, Err(BackendError::Timeout)));
         radio_task.abort();
+        transport_task.abort();
+    }
+
+    #[tokio::test]
+    async fn line_matcher_completes_multi_line_request_on_rprt_error() {
+        let backend: Arc<dyn RadioBackend> = Arc::new(RigctldBackend::new("test", false));
+        let state = StateHandle::new();
+        let (link, raw_rx) = link_channel();
+        let (radio, server) = tokio::io::duplex(128);
+        let transport_task = tokio::spawn(run_transport(server, backend, state, raw_rx));
+
+        let radio_task = tokio::spawn(async move {
+            let (mut rd, mut wr) = tokio::io::split(radio);
+            let mut command = [0u8; 2];
+            rd.read_exact(&mut command).await.expect("read command");
+            assert_eq!(&command, b"x\n");
+            wr.write_all(b"RPRT -11\n").await.expect("write error");
+        });
+
+        let reply = tokio::time::timeout(
+            Duration::from_millis(200),
+            link.submit(b"x\n".to_vec(), Expect::Lines(2)),
+        )
+        .await
+        .expect("RPRT should complete before the normal reply timeout")
+        .expect("transport reply");
+        assert_eq!(reply, b"RPRT -11\n");
+
+        radio_task.await.expect("fake radio");
         transport_task.abort();
     }
 

@@ -36,6 +36,9 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     private bool _rstManuallySet;
     private bool _bandManuallySet;
     private bool _modeManuallySet;
+    private ulong? _rigFrequencyRxHz;
+    private Band _rigBandRx;
+    private double? _rigTxPowerWatts;
     private CallsignRecord? _lastLookupRecord;
 
     // ── Observable properties ────────────────────────────────────────────
@@ -349,6 +352,24 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
 #pragma warning restore CS0612
         }
 
+        if (_rigFrequencyRxHz is { } frequencyRxHz)
+        {
+            qso.FrequencyRxHz = frequencyRxHz;
+#pragma warning disable CS0612
+            qso.FrequencyRxKhz = (frequencyRxHz + 500) / 1000;
+#pragma warning restore CS0612
+        }
+
+        if (_rigBandRx != Band.Unspecified)
+        {
+            qso.BandRx = _rigBandRx;
+        }
+
+        if (_rigTxPowerWatts is { } txPowerWatts)
+        {
+            qso.TxPower = txPowerWatts.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
         if (!string.IsNullOrWhiteSpace(Comment))
         {
             qso.Comment = Comment.Trim();
@@ -629,8 +650,8 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
     // ── Rig integration ──────────────────────────────────────────────────
 
     /// <summary>
-    /// Apply a rig snapshot to untouched fields. Only fills band, mode and
-    /// frequency when the callsign is empty (fresh/cleared form) and the
+    /// Apply a rig snapshot to untouched fields. Fills logging-relevant fields
+    /// when the callsign is empty (fresh/cleared form) and the
     /// field has not been manually overridden by the operator.
     /// </summary>
     public void ApplyRigSnapshot(RigSnapshot snapshot)
@@ -660,6 +681,14 @@ internal sealed partial class QsoLoggerViewModel : ObservableObject
         {
             FrequencyMhz = FrequencyFormatter.FormatMhz(snapshot.FrequencyHz);
         }
+
+        _rigFrequencyRxHz = snapshot.HasFrequencyRxHz ? snapshot.FrequencyRxHz : null;
+        _rigBandRx = snapshot.BandRx;
+        _rigTxPowerWatts = snapshot.HasTxPowerWatts
+            && double.IsFinite(snapshot.TxPowerWatts)
+            && snapshot.TxPowerWatts >= 0
+                ? snapshot.TxPowerWatts
+                : null;
     }
 
     /// <summary>Request the view to focus the callsign entry field.</summary>

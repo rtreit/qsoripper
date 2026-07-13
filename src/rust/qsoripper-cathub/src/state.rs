@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use tokio::sync::broadcast;
 
-use crate::model::{Field, Mode, RadioEventSource, StateChange, StateMutation, Vfo};
+use crate::model::{Field, Mode, RadioEventSource, StateChange, StateMutation, TxPower, Vfo};
 
 /// A cached mode fact that may have been invalidated by a frequency change. The TS-590
 /// recalls mode and DATA independently from its per-band memory, so both facts must be
@@ -34,6 +34,8 @@ pub(crate) struct VfoSnapshot {
     pub(crate) freq_hz: u64,
     /// Operating mode.
     pub(crate) mode: Mode,
+    /// Whether the backend has observed this VFO's base mode.
+    pub(crate) mode_known: bool,
     /// Whether the DATA sub-mode flag (TS-590 `DA`) is on for this VFO.
     pub(crate) data: bool,
     /// IF passband in Hz.
@@ -45,6 +47,7 @@ impl Default for VfoSnapshot {
         VfoSnapshot {
             freq_hz: 0,
             mode: Mode::Usb,
+            mode_known: false,
             data: false,
             passband_hz: DEFAULT_PASSBAND_HZ,
         }
@@ -67,6 +70,8 @@ pub(crate) struct Snapshot {
     pub(crate) ptt: bool,
     /// Whether the radio reports power on.
     pub(crate) power_on: bool,
+    /// Configured transmitter output power, when the backend can expose it.
+    pub(crate) tx_power: Option<TxPower>,
     /// Whether RIT is enabled.
     pub(crate) rit_enabled: bool,
     /// RIT offset in Hz.
@@ -88,6 +93,7 @@ impl Default for Snapshot {
             ptt: false,
             // A TS-590 answers `\get_powerstat` with "1" at rest.
             power_on: true,
+            tx_power: None,
             rit_enabled: false,
             rit_offset_hz: 0,
             xit_enabled: false,
@@ -194,6 +200,9 @@ impl Snapshot {
                 offset_hz: self.xit_offset_hz,
             },
             StateChange::Ptt { keyed: self.ptt },
+            StateChange::TxPower {
+                power: self.tx_power,
+            },
             StateChange::RxVfo { vfo: self.rx_vfo },
         ]
     }
@@ -384,12 +393,10 @@ fn apply_change(snap: &mut Snapshot, change: StateChange) -> bool {
         }
         StateChange::Mode { vfo, mode } => {
             let target = vfo_mut(snap, vfo);
-            if target.mode == mode {
-                false
-            } else {
-                target.mode = mode;
-                true
-            }
+            let changed = target.mode != mode;
+            target.mode = mode;
+            target.mode_known = true;
+            changed
         }
         StateChange::DataMode { vfo, on } => {
             let target = vfo_mut(snap, vfo);
@@ -433,6 +440,14 @@ fn apply_change(snap: &mut Snapshot, change: StateChange) -> bool {
             } else {
                 snap.xit_enabled = enabled;
                 snap.xit_offset_hz = offset_hz;
+                true
+            }
+        }
+        StateChange::TxPower { power } => {
+            if snap.tx_power == power {
+                false
+            } else {
+                snap.tx_power = power;
                 true
             }
         }

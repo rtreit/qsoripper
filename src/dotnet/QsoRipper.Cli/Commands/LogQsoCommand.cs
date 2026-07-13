@@ -1,3 +1,4 @@
+using System.Globalization;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Net.Client;
 using QsoRipper.Domain;
@@ -28,7 +29,7 @@ internal static class LogQsoCommand
 
         if (fromRig)
         {
-            if (!await ApplyRigSnapshot(channel, requestQso))
+            if (!await ApplyRigSnapshotFromEngine(channel, requestQso))
             {
                 return 1;
             }
@@ -427,7 +428,7 @@ internal static class LogQsoCommand
         return true;
     }
 
-    private static async Task<bool> ApplyRigSnapshot(GrpcChannel channel, QsoRecord qso)
+    private static async Task<bool> ApplyRigSnapshotFromEngine(GrpcChannel channel, QsoRecord qso)
     {
         try
         {
@@ -442,29 +443,7 @@ internal static class LogQsoCommand
                 return false;
             }
 
-            // Fill band, mode, frequency, submode from rig if not explicitly set
-            if (qso.Band == Band.Unspecified && snapshot.Band != Band.Unspecified)
-            {
-                qso.Band = snapshot.Band;
-            }
-
-            if (qso.Mode == Mode.Unspecified && snapshot.Mode != Mode.Unspecified)
-            {
-                qso.Mode = snapshot.Mode;
-            }
-
-            if (!qso.HasFrequencyHz && snapshot.FrequencyHz > 0)
-            {
-                qso.FrequencyHz = snapshot.FrequencyHz;
-#pragma warning disable CS0612
-                qso.FrequencyKhz = (snapshot.FrequencyHz + 500) / 1000;
-#pragma warning restore CS0612
-            }
-
-            if (!qso.HasSubmode && snapshot.HasSubmode)
-            {
-                qso.Submode = snapshot.Submode;
-            }
+            ApplyRigSnapshot(qso, snapshot);
 
             var freq = snapshot.FrequencyHz > 0 ? FrequencyFormatter.FormatMhzWithUnit(snapshot.FrequencyHz) : "unknown";
             var rawMode = snapshot.HasRawMode ? snapshot.RawMode : "unknown";
@@ -478,6 +457,53 @@ internal static class LogQsoCommand
             var message = string.IsNullOrEmpty(detail) ? ex.StatusCode.ToString() : detail;
             Console.Error.WriteLine($"  \u26a0 Rig control unavailable: {message}");
             return false;
+        }
+    }
+
+    internal static void ApplyRigSnapshot(QsoRecord qso, RigSnapshot snapshot)
+    {
+        if (qso.Band == Band.Unspecified && snapshot.Band != Band.Unspecified)
+        {
+            qso.Band = snapshot.Band;
+        }
+
+        if (qso.Mode == Mode.Unspecified && snapshot.Mode != Mode.Unspecified)
+        {
+            qso.Mode = snapshot.Mode;
+        }
+
+        if (!qso.HasFrequencyHz && snapshot.FrequencyHz > 0)
+        {
+            qso.FrequencyHz = snapshot.FrequencyHz;
+#pragma warning disable CS0612
+            qso.FrequencyKhz = (snapshot.FrequencyHz + 500) / 1000;
+#pragma warning restore CS0612
+        }
+
+        if (!qso.HasSubmode && snapshot.HasSubmode)
+        {
+            qso.Submode = snapshot.Submode;
+        }
+
+        if (!qso.HasFrequencyRxHz && snapshot.HasFrequencyRxHz)
+        {
+            qso.FrequencyRxHz = snapshot.FrequencyRxHz;
+#pragma warning disable CS0612
+            qso.FrequencyRxKhz = (snapshot.FrequencyRxHz + 500) / 1000;
+#pragma warning restore CS0612
+        }
+
+        if (qso.BandRx == Band.Unspecified && snapshot.BandRx != Band.Unspecified)
+        {
+            qso.BandRx = snapshot.BandRx;
+        }
+
+        if (!qso.HasTxPower
+            && snapshot.HasTxPowerWatts
+            && double.IsFinite(snapshot.TxPowerWatts)
+            && snapshot.TxPowerWatts >= 0)
+        {
+            qso.TxPower = snapshot.TxPowerWatts.ToString("0.###", CultureInfo.InvariantCulture);
         }
     }
 

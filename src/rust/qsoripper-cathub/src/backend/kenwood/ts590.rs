@@ -13,12 +13,12 @@ use crate::backend::{
     BackendCapabilities, BackendError, Framing, NativeCommandFamily, RadioBackend, SplitStyle,
     TrustTier,
 };
-use crate::model::{Mode, PttSource, RadioEventSource, StateChange, StateMutation, Vfo};
+use crate::model::{Mode, PttSource, RadioEventSource, StateChange, StateMutation, TxPower, Vfo};
 use crate::radio::{Expect, RadioLink};
 use crate::state::StateHandle;
 
 /// The baseline poll command set. Read-only queries only: **never** `FR`/`FT` (§8.8).
-const POLL_COMMANDS: &[&[u8]] = &[b"FA;", b"FB;", b"IF;", b"MD;", b"DA;"];
+const POLL_COMMANDS: &[&[u8]] = &[b"FA;", b"FB;", b"IF;", b"MD;", b"DA;", b"PC;"];
 
 /// `IF;` payload byte offsets from the Kenwood TS-590 status frame.
 const IF_FREQ_RANGE: std::ops::Range<usize> = 0..11;
@@ -74,6 +74,16 @@ fn parse_rx_vfo_digit(bytes: &[u8]) -> Option<Vfo> {
         b'0' => Some(Vfo::A),
         b'1' => Some(Vfo::B),
         _ => None,
+    }
+}
+
+/// The TS-590 limits configured carrier power to 25 W in AM and 100 W in other modes.
+/// This is the same mode-sensitive maximum Hamlib uses to normalize `PC` into `RFPOWER`.
+fn max_power_watts(mode: Mode) -> u32 {
+    if mode == Mode::Am {
+        25
+    } else {
+        100
     }
 }
 
@@ -357,6 +367,24 @@ impl RadioBackend for Ts590Backend {
                 );
                 true
             }),
+            b"PC" => parse_u64(payload)
+                .and_then(|watts| u32::try_from(watts).ok())
+                .is_some_and(|watts| {
+                    let snapshot = state.snapshot();
+                    let tx_vfo = if snapshot.split {
+                        snapshot.tx_vfo
+                    } else {
+                        snapshot.rx_vfo
+                    };
+                    let max_watts = max_power_watts(snapshot.vfo(tx_vfo).mode);
+                    state.record(
+                        StateChange::TxPower {
+                            power: Some(TxPower::from_watts(watts, max_watts)),
+                        },
+                        source,
+                    );
+                    true
+                }),
             _ => false,
         }
     }
@@ -411,7 +439,10 @@ mod tests {
                 "poll set must not contain a VFO-select command"
             );
         }
-        assert_eq!(POLL_COMMANDS, &[b"FA;", b"FB;", b"IF;", b"MD;", b"DA;"]);
+        assert_eq!(
+            POLL_COMMANDS,
+            &[b"FA;", b"FB;", b"IF;", b"MD;", b"DA;", b"PC;"]
+        );
     }
 
     #[test]
@@ -532,6 +563,22 @@ mod tests {
         let snap = state.snapshot();
         assert!(!snap.split, "FR=B / FT=B must clear split");
         assert_eq!(snap.tx_vfo, Vfo::B);
+    }
+
+    #[test]
+    fn pc_power_uses_the_transmit_vfo_mode_maximum() {
+        let backend = Ts590Backend::new();
+        let state = StateHandle::new();
+        state.record(
+            StateChange::Mode {
+                vfo: Vfo::A,
+                mode: Mode::Am,
+            },
+            RadioEventSource::PollDiff,
+        );
+
+        assert!(backend.record_event(b"PC025;", &state, RadioEventSource::PollDiff,));
+        assert_eq!(state.snapshot().tx_power, Some(TxPower::from_watts(25, 25)));
     }
 
     #[test]
@@ -732,6 +779,7 @@ mod tests {
                         b"IF;" => b"IF000070300000000+0000000000030000000;",
                         b"MD;" => b"MD3;",
                         b"DA;" => b"DA1;",
+                        b"PC;" => b"PC050;",
                         _ => b"",
                     };
                     let _ = wr.write_all(answer).await;
@@ -746,6 +794,7 @@ mod tests {
         assert_eq!(snap.vfo(Vfo::B).freq_hz, 14_250_000);
         assert_eq!(snap.vfo(Vfo::A).mode, Mode::Cw);
         assert!(snap.vfo(Vfo::A).data, "DA; reply should set the DATA flag");
+        assert_eq!(snap.tx_power, Some(TxPower::from_watts(50, 100)));
     }
 
     #[tokio::test]
@@ -773,6 +822,7 @@ mod tests {
                         b"IF;" => b"IF000140343201234-0000012345021009999;",
                         b"MD;" => b"MD3;",
                         b"DA;" => b"DA0;",
+                        b"PC;" => b"PC100;",
                         _ => b"",
                     };
                     let _ = wr.write_all(answer).await;
@@ -813,6 +863,7 @@ mod tests {
                         b"IF;" => b"IF000140343201234-0000012345021009999;",
                         b"MD;" => b"MD3;",
                         b"DA;" => b"DA1;",
+                        b"PC;" => b"PC100;",
                         _ => b"",
                     };
                     let _ = wr.write_all(answer).await;

@@ -219,6 +219,7 @@ fn handle_event_with_channel(
             let mode_idx = app.form.mode_idx;
             app.form = LogForm::new();
             app.last_auto_rig_frequency_mhz = None;
+            app.last_auto_rig_tx_power = None;
             app.form.band_idx = band_idx;
             app.form.mode_idx = mode_idx;
             app.form.on_band_change();
@@ -235,6 +236,7 @@ fn handle_event_with_channel(
             let mode_idx = app.form.mode_idx;
             app.form = LogForm::new();
             app.last_auto_rig_frequency_mhz = None;
+            app.last_auto_rig_tx_power = None;
             app.form.band_idx = band_idx;
             app.form.mode_idx = mode_idx;
             app.form.on_band_change();
@@ -508,6 +510,7 @@ fn handle_key_with_channel(
             app::View::LogEntry => {
                 app.form = LogForm::new();
                 app.last_auto_rig_frequency_mhz = None;
+                app.last_auto_rig_tx_power = None;
                 app.lookup_result = None;
                 app.editing_local_id = None;
                 app.reset_timer();
@@ -982,6 +985,7 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
     let advanced_tab = app.form.advanced_tab;
     app.form = LogForm::new();
     app.last_auto_rig_frequency_mhz = None;
+    app.last_auto_rig_tx_power = None;
     app.form.advanced_tab = advanced_tab;
 
     app.form.callsign = qso.callsign.clone();
@@ -1027,6 +1031,11 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
     } {
         app.form.frequency_mhz = grpc::format_frequency_mhz(khz * 1_000);
     }
+    app.form.rig_frequency_rx_hz = src.frequency_rx_hz;
+    app.form.rig_band_rx = qsoripper_core::proto::qsoripper::domain::Band::try_from(src.band_rx)
+        .ok()
+        .and_then(qsoripper_core::domain::band::band_to_adif)
+        .map(str::to_string);
     if let Some(ref ts) = src.utc_timestamp {
         if let Some(dt) = chrono::DateTime::from_timestamp(ts.seconds, 0) {
             app.form.date = dt.format("%Y-%m-%d").to_string();
@@ -1320,10 +1329,37 @@ fn apply_rig_snapshot(app: &mut App, rig: Option<app::RigInfo>) {
         // Update RST defaults based on mode when callsign is empty.
         if app.form.callsign.is_empty() {
             app.form.on_mode_change();
+            app.form.rig_frequency_rx_hz = info.frequency_rx_hz;
+            app.form.rig_band_rx.clone_from(&info.band_rx);
+            let power_still_auto = app
+                .last_auto_rig_tx_power
+                .as_deref()
+                .is_some_and(|last| last == app.form.tx_power);
+            if let Some(power_watts) = info
+                .tx_power_watts
+                .filter(|power| power.is_finite() && *power >= 0.0)
+            {
+                if app.form.tx_power.is_empty() || power_still_auto {
+                    let formatted = format_power_watts(power_watts);
+                    app.form.tx_power.clone_from(&formatted);
+                    app.last_auto_rig_tx_power = Some(formatted);
+                }
+            } else if power_still_auto {
+                app.form.tx_power.clear();
+                app.last_auto_rig_tx_power = None;
+            }
         }
     }
 
     app.rig_info = rig;
+}
+
+fn format_power_watts(power_watts: f64) -> String {
+    let formatted = format!("{power_watts:.3}");
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
 }
 
 #[cfg(test)]
@@ -3075,6 +3111,9 @@ mod tests {
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),
             submode: None,
+            frequency_rx_hz: Some(14_074_000),
+            band_rx: Some("20M".to_string()),
+            tx_power_watts: Some(50.125),
             status: RigStatus::Connected,
             error_message: None,
         });
@@ -3087,6 +3126,9 @@ mod tests {
         );
         assert_eq!(BANDS[app.form.band_idx], "20M");
         assert_eq!(MODES[app.form.mode_idx], "SSB");
+        assert_eq!(app.form.rig_frequency_rx_hz, Some(14_074_000));
+        assert_eq!(app.form.rig_band_rx.as_deref(), Some("20M"));
+        assert_eq!(app.form.tx_power, "50.125");
     }
 
     #[test]
@@ -3101,6 +3143,9 @@ mod tests {
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),
             submode: None,
+            frequency_rx_hz: None,
+            band_rx: None,
+            tx_power_watts: None,
             status: RigStatus::Connected,
             error_message: None,
         });
@@ -3121,6 +3166,9 @@ mod tests {
             band: Some("40M".to_string()),
             mode: Some("CW".to_string()),
             submode: None,
+            frequency_rx_hz: None,
+            band_rx: None,
+            tx_power_watts: None,
             status: RigStatus::Connected,
             error_message: None,
         });
@@ -3143,6 +3191,9 @@ mod tests {
                 band: Some("20M".to_string()),
                 mode: Some("SSB".to_string()),
                 submode: None,
+                frequency_rx_hz: None,
+                band_rx: None,
+                tx_power_watts: None,
                 status: RigStatus::Connected,
                 error_message: None,
             }),
@@ -3157,6 +3208,9 @@ mod tests {
                 band: Some("20M".to_string()),
                 mode: Some("SSB".to_string()),
                 submode: None,
+                frequency_rx_hz: None,
+                band_rx: None,
+                tx_power_watts: None,
                 status: RigStatus::Connected,
                 error_message: None,
             }),
@@ -3182,6 +3236,9 @@ mod tests {
                 band: Some("20M".to_string()),
                 mode: Some("SSB".to_string()),
                 submode: None,
+                frequency_rx_hz: None,
+                band_rx: None,
+                tx_power_watts: None,
                 status: RigStatus::Connected,
                 error_message: None,
             }),
@@ -3197,6 +3254,9 @@ mod tests {
                 band: Some("20M".to_string()),
                 mode: Some("SSB".to_string()),
                 submode: None,
+                frequency_rx_hz: None,
+                band_rx: None,
+                tx_power_watts: None,
                 status: RigStatus::Connected,
                 error_message: None,
             }),
@@ -3220,6 +3280,9 @@ mod tests {
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),
             submode: None,
+            frequency_rx_hz: None,
+            band_rx: None,
+            tx_power_watts: None,
             status: RigStatus::Error,
             error_message: Some("connection refused".to_string()),
         });
@@ -3240,6 +3303,9 @@ mod tests {
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),
             submode: None,
+            frequency_rx_hz: None,
+            band_rx: None,
+            tx_power_watts: None,
             status: RigStatus::Connected,
             error_message: None,
         });

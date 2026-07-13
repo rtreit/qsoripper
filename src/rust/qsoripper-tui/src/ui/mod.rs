@@ -352,6 +352,9 @@ mod tests {
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),
             submode: None,
+            frequency_rx_hz: None,
+            band_rx: None,
+            tx_power_watts: None,
             status: RigStatus::Connected,
             error_message: None,
         });
@@ -368,6 +371,9 @@ mod tests {
             band: None,
             mode: None,
             submode: None,
+            frequency_rx_hz: None,
+            band_rx: None,
+            tx_power_watts: None,
             status: RigStatus::Disconnected,
             error_message: None,
         });
@@ -384,6 +390,9 @@ mod tests {
             band: None,
             mode: None,
             submode: None,
+            frequency_rx_hz: None,
+            band_rx: None,
+            tx_power_watts: None,
             status: RigStatus::Error,
             error_message: Some("connection refused".to_string()),
         });

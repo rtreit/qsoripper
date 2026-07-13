@@ -1,7 +1,8 @@
 //! Out-of-process `rigctld` bridge backend (breadth path, uncertified by default).
 //!
 //! The daemon is the *sole client* of a daemon-private `rigctld` and speaks the rigctld
-//! net protocol as a client. It provides modeled control (frequency, mode, PTT, split)
+//! net protocol as a client. It provides modeled control (frequency, mode, PTT, split,
+//! and configured transmitter power)
 //! across every rig Hamlib supports, using each rig's correct native model. It carries
 //! **no** native passthrough (rigctld normalizes the CAT away) and reports
 //! `native_command_family: None`, so an `EX`-menu passthrough fails closed (§7.1, §8.8).
@@ -11,7 +12,7 @@ use async_trait::async_trait;
 use crate::backend::{
     BackendCapabilities, BackendError, Framing, RadioBackend, SplitStyle, TrustTier,
 };
-use crate::model::{Mode, PttSource, RadioEventSource, StateChange, StateMutation, Vfo};
+use crate::model::{Mode, PttSource, RadioEventSource, StateChange, StateMutation, TxPower, Vfo};
 use crate::radio::{Expect, RadioLink};
 use crate::state::StateHandle;
 
@@ -21,6 +22,9 @@ use crate::state::StateHandle;
 const POLL_GET_FREQ: &[u8] = b"f\n";
 const POLL_GET_MODE: &[u8] = b"m\n";
 const POLL_GET_SPLIT: &[u8] = b"s\n";
+const POLL_GET_SPLIT_FREQ: &[u8] = b"i\n";
+const POLL_GET_SPLIT_MODE: &[u8] = b"x\n";
+const POLL_GET_RFPOWER: &[u8] = b"l RFPOWER\n";
 
 /// Out-of-process `rigctld` bridge.
 #[derive(Clone)]
@@ -68,6 +72,104 @@ fn check_rprt(bytes: &[u8]) -> Result<(), BackendError> {
     }
 }
 
+fn is_rprt_error(bytes: &[u8]) -> bool {
+    std::str::from_utf8(first_line(bytes))
+        .unwrap_or("")
+        .trim()
+        .starts_with("RPRT ")
+}
+
+async fn poll_split_details(
+    link: &RadioLink,
+    state: &StateHandle,
+    tx_vfo: Vfo,
+) -> Result<(), BackendError> {
+    let split_frequency = link
+        .submit(POLL_GET_SPLIT_FREQ.to_vec(), Expect::Lines(1))
+        .await?;
+    if !is_rprt_error(&split_frequency) {
+        if let Ok(hz) = std::str::from_utf8(first_line(&split_frequency))
+            .unwrap_or("")
+            .trim()
+            .parse::<u64>()
+        {
+            state.record(
+                StateChange::Freq { vfo: tx_vfo, hz },
+                RadioEventSource::PollDiff,
+            );
+        }
+    }
+
+    let split_mode = link
+        .submit(POLL_GET_SPLIT_MODE.to_vec(), Expect::Lines(2))
+        .await?;
+    if !is_rprt_error(&split_mode) {
+        let (mode, data) = Mode::decompose_hamlib_token(
+            std::str::from_utf8(first_line(&split_mode)).unwrap_or(""),
+        );
+        if mode != Mode::Unknown {
+            state.record(
+                StateChange::Mode { vfo: tx_vfo, mode },
+                RadioEventSource::PollDiff,
+            );
+            state.record(
+                StateChange::DataMode {
+                    vfo: tx_vfo,
+                    on: data,
+                },
+                RadioEventSource::PollDiff,
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn poll_tx_power(link: &RadioLink, state: &StateHandle) -> Result<(), BackendError> {
+    let relative_reply = link
+        .submit(POLL_GET_RFPOWER.to_vec(), Expect::Lines(1))
+        .await?;
+    let relative_text = std::str::from_utf8(first_line(&relative_reply))
+        .unwrap_or("")
+        .trim();
+    let Some(relative_millionths) = TxPower::parse_relative_millionths(relative_text) else {
+        state.record(
+            StateChange::TxPower { power: None },
+            RadioEventSource::PollDiff,
+        );
+        return Ok(());
+    };
+
+    let snapshot = state.snapshot();
+    let effective_tx_vfo = if snapshot.split {
+        snapshot.tx_vfo
+    } else {
+        snapshot.rx_vfo
+    };
+    let tx = snapshot.vfo(effective_tx_vfo);
+    let conversion = format!(
+        "2 {relative_text} {} {}\n",
+        tx.freq_hz,
+        tx.mode.hamlib_token_with_data(tx.data)
+    );
+    let milliwatts_reply = link
+        .submit(conversion.into_bytes(), Expect::Lines(1))
+        .await?;
+    let power = if is_rprt_error(&milliwatts_reply) {
+        None
+    } else {
+        std::str::from_utf8(first_line(&milliwatts_reply))
+            .unwrap_or("")
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .and_then(|milliwatts| {
+                TxPower::from_relative_millionths(relative_millionths, milliwatts)
+            })
+    };
+    state.record(StateChange::TxPower { power }, RadioEventSource::PollDiff);
+    Ok(())
+}
+
 #[async_trait]
 impl RadioBackend for RigctldBackend {
     async fn poll(&self, link: &RadioLink, state: &StateHandle) -> Result<(), BackendError> {
@@ -112,6 +214,10 @@ impl RadioBackend for RigctldBackend {
             },
             RadioEventSource::PollDiff,
         );
+        if enabled {
+            poll_split_details(link, state, tx_vfo).await?;
+        }
+        poll_tx_power(link, state).await?;
         Ok(())
     }
 
@@ -222,6 +328,9 @@ impl RadioBackend for RigctldBackend {
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use crate::radio::{link_channel, run_transport};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn bridge_is_uncertified_by_default() {
@@ -250,5 +359,89 @@ mod tests {
     fn parses_lines() {
         assert_eq!(first_line(b"USB\n2400\n"), b"USB");
         assert_eq!(nth_line(b"1\nVFOB\n", 1), b"VFOB");
+    }
+
+    #[tokio::test]
+    async fn poll_records_split_transmit_state_and_power() {
+        let (link, raw_rx) = link_channel();
+        let backend = Arc::new(RigctldBackend::new("test", false));
+        let arc: Arc<dyn RadioBackend> = backend.clone();
+        let state = StateHandle::new();
+        let (radio_side, server) = tokio::io::duplex(1024);
+        tokio::spawn(run_transport(server, arc, state.clone(), raw_rx));
+
+        tokio::spawn(async move {
+            let (mut rd, mut wr) = tokio::io::split(radio_side);
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            loop {
+                if rd.read(&mut byte).await.unwrap_or(0) == 0 {
+                    break;
+                }
+                request.push(byte[0]);
+                if byte[0] == b'\n' {
+                    let answer: &[u8] = match request.as_slice() {
+                        b"f\n" => b"14074000\n",
+                        b"m\n" => b"USB\n2400\n",
+                        b"s\n" => b"1\nVFOB\n",
+                        b"i\n" => b"14076000\n",
+                        b"x\n" => b"CW\n500\n",
+                        b"l RFPOWER\n" => b"0.5\n",
+                        b"2 0.5 14076000 CW\n" => b"50000\n",
+                        _ => b"RPRT -11\n",
+                    };
+                    wr.write_all(answer).await.expect("write fake reply");
+                    request.clear();
+                }
+            }
+        });
+
+        backend.poll(&link, &state).await.expect("poll");
+
+        let snapshot = state.snapshot();
+        assert!(snapshot.split);
+        assert_eq!(snapshot.tx_vfo, Vfo::B);
+        assert_eq!(snapshot.vfo(Vfo::A).freq_hz, 14_074_000);
+        assert_eq!(snapshot.vfo(Vfo::B).freq_hz, 14_076_000);
+        assert_eq!(snapshot.vfo(Vfo::B).mode, Mode::Cw);
+        assert_eq!(snapshot.tx_power, Some(TxPower::from_watts(50, 100)));
+    }
+
+    #[tokio::test]
+    async fn poll_tolerates_unsupported_optional_power() {
+        let (link, raw_rx) = link_channel();
+        let backend = Arc::new(RigctldBackend::new("test", false));
+        let arc: Arc<dyn RadioBackend> = backend.clone();
+        let state = StateHandle::new();
+        let (radio_side, server) = tokio::io::duplex(1024);
+        tokio::spawn(run_transport(server, arc, state.clone(), raw_rx));
+
+        tokio::spawn(async move {
+            let (mut rd, mut wr) = tokio::io::split(radio_side);
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            loop {
+                if rd.read(&mut byte).await.unwrap_or(0) == 0 {
+                    break;
+                }
+                request.push(byte[0]);
+                if byte[0] == b'\n' {
+                    let answer: &[u8] = match request.as_slice() {
+                        b"f\n" => b"14074000\n",
+                        b"m\n" => b"USB\n2400\n",
+                        b"s\n" => b"0\nVFOA\n",
+                        _ => {
+                            assert_eq!(request, b"l RFPOWER\n");
+                            b"RPRT -11\n"
+                        }
+                    };
+                    wr.write_all(answer).await.expect("write fake reply");
+                    request.clear();
+                }
+            }
+        });
+
+        backend.poll(&link, &state).await.expect("poll");
+        assert_eq!(state.snapshot().tx_power, None);
     }
 }

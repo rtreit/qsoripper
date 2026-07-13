@@ -14,7 +14,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
 use crate::dialect::{ApplyOutcome, FaceContext};
-use crate::model::{Mode, PttSource, StateMutation, Vfo};
+use crate::model::{Mode, PttSource, StateMutation, TxPower, Vfo};
 use crate::permissions::CommandClass;
 use crate::state::Snapshot;
 
@@ -117,6 +117,10 @@ fn long_name(cmd: &str) -> Option<&'static str> {
         "v" | "\\get_vfo" => "get_vfo",
         "t" | "\\get_ptt" => "get_ptt",
         "s" | "\\get_split_vfo" => "get_split_vfo",
+        "i" | "\\get_split_freq" => "get_split_freq",
+        "x" | "\\get_split_mode" => "get_split_mode",
+        "l" | "\\get_level" => "get_level",
+        "2" | "\\power2mW" => "power2mW",
         "j" | "\\get_rit" => "get_rit",
         "z" | "\\get_xit" => "get_xit",
         "\\get_vfo_info" => "get_vfo_info",
@@ -331,6 +335,62 @@ async fn dispatch_plain(cmd: &str, args: &[&str], ctx: &FaceContext) -> LineResu
                 snapshot.rx_vfo
             };
             format!("{}\n{}\n", u8::from(split), presented_vfo_name(ctx, tx)).into_bytes()
+        }),
+        "i" | "\\get_split_freq" => guard_read(ctx, || {
+            if ctx.single_vfo() {
+                RPRT_ENAVAIL.to_vec()
+            } else {
+                let hz = snapshot.vfo(snapshot.tx_vfo).freq_hz;
+                if hz == 0 {
+                    RPRT_ENAVAIL.to_vec()
+                } else {
+                    format!("{hz}\n").into_bytes()
+                }
+            }
+        }),
+        "x" | "\\get_split_mode" => guard_read(ctx, || {
+            if ctx.single_vfo() {
+                RPRT_ENAVAIL.to_vec()
+            } else {
+                let v = snapshot.vfo(snapshot.tx_vfo);
+                if v.mode_known {
+                    format!(
+                        "{}\n{}\n",
+                        v.mode.hamlib_token_with_data(v.data),
+                        v.passband_hz
+                    )
+                    .into_bytes()
+                } else {
+                    RPRT_ENAVAIL.to_vec()
+                }
+            }
+        }),
+        "l" | "\\get_level" => guard_read(ctx, || {
+            if args
+                .first()
+                .is_some_and(|level| level.eq_ignore_ascii_case("RFPOWER"))
+            {
+                snapshot.tx_power.map_or_else(
+                    || RPRT_ENAVAIL.to_vec(),
+                    |power| format!("{}\n", power.relative_decimal()).into_bytes(),
+                )
+            } else {
+                RPRT_ENAVAIL.to_vec()
+            }
+        }),
+        "2" | "\\power2mW" => guard_read(ctx, || {
+            let relative = args
+                .first()
+                .and_then(|value| TxPower::parse_relative_millionths(value));
+            match (snapshot.tx_power, relative, args.get(1), args.get(2)) {
+                (Some(power), Some(relative), Some(_frequency), Some(_mode)) => {
+                    power.milliwatts_for_relative(relative).map_or_else(
+                        || RPRT_ENAVAIL.to_vec(),
+                        |milliwatts| format!("{milliwatts}\n").into_bytes(),
+                    )
+                }
+                _ => RPRT_ENAVAIL.to_vec(),
+            }
         }),
         "t" | "\\get_ptt" => {
             guard_read(ctx, || format!("{}\n", u8::from(snapshot.ptt)).into_bytes())
@@ -624,7 +684,7 @@ mod tests {
     use super::*;
     use crate::backend::loopback::LoopbackBackend;
     use crate::backend::RadioBackend;
-    use crate::model::{RadioEventSource, StateChange};
+    use crate::model::{RadioEventSource, StateChange, TxPower};
     use crate::permissions::FacePermissions;
     use crate::ptt::PttManager;
     use crate::radio::{detached_link, spawn_scheduler};
@@ -752,6 +812,65 @@ mod tests {
         assert_eq!(reply_of("f", &ctx).await, b"14034320\n".to_vec());
         assert_eq!(reply_of("m", &ctx).await, b"CW\n2400\n".to_vec());
         assert_eq!(reply_of("v", &ctx).await, b"VFOB\n".to_vec());
+    }
+
+    #[tokio::test]
+    async fn get_split_freq_and_mode_read_the_transmit_vfo() {
+        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        operating_on_b(&state);
+
+        assert_eq!(reply_of("i", &ctx).await, b"14035000\n".to_vec());
+        assert_eq!(reply_of("x", &ctx).await, b"CW\n2400\n".to_vec());
+    }
+
+    #[tokio::test]
+    async fn get_rfpower_and_power2mw_use_cached_transmit_power() {
+        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        state.record(
+            StateChange::TxPower {
+                power: Some(TxPower::from_watts(50, 100)),
+            },
+            RadioEventSource::PollDiff,
+        );
+
+        assert_eq!(reply_of("l RFPOWER", &ctx).await, b"0.5\n".to_vec());
+        assert_eq!(
+            reply_of("2 0.5 14074000 USB", &ctx).await,
+            b"50000\n".to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn rfpower_reads_report_unavailable_without_cached_power() {
+        let (ctx, _b, _state) = ctx_with(FacePermissions::read_only());
+
+        assert_eq!(reply_of("l RFPOWER", &ctx).await, RPRT_ENAVAIL.to_vec());
+        assert_eq!(
+            reply_of("2 0.5 14074000 USB", &ctx).await,
+            RPRT_ENAVAIL.to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn split_mode_is_unavailable_until_the_transmit_mode_is_observed() {
+        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        state.record(
+            StateChange::Freq {
+                vfo: Vfo::B,
+                hz: 14_076_000,
+            },
+            RadioEventSource::PollDiff,
+        );
+        state.record(
+            StateChange::Split {
+                enabled: true,
+                tx_vfo: Some(Vfo::B),
+            },
+            RadioEventSource::PollDiff,
+        );
+
+        assert_eq!(reply_of("i", &ctx).await, b"14076000\n".to_vec());
+        assert_eq!(reply_of("x", &ctx).await, RPRT_ENAVAIL.to_vec());
     }
 
     #[tokio::test]
@@ -1330,6 +1449,15 @@ mod tests {
         operating_on_b(&state);
         // Radio is split, but a single-VFO face reports no split and TX on VFOA.
         assert_eq!(reply_of("s", &ctx).await, b"0\nVFOA\n".to_vec());
+    }
+
+    #[tokio::test]
+    async fn single_vfo_split_freq_and_mode_are_unavailable() {
+        let (ctx, _b, state) = ctx_single_vfo(FacePermissions::read_only());
+        operating_on_b(&state);
+
+        assert_eq!(reply_of("i", &ctx).await, RPRT_ENAVAIL.to_vec());
+        assert_eq!(reply_of("x", &ctx).await, RPRT_ENAVAIL.to_vec());
     }
 
     #[tokio::test]
