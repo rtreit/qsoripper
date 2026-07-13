@@ -70,6 +70,13 @@ pub(crate) async fn log_qso(
         utc_timestamp,
         utc_end_timestamp,
         frequency_hz,
+        frequency_rx_hz: form.rig_frequency_rx_hz,
+        band_rx: form
+            .rig_band_rx
+            .as_deref()
+            .and_then(band_from_adif)
+            .map(i32::from)
+            .unwrap_or_default(),
         submode: if form.submode_override.is_empty() {
             submode.map(str::to_string)
         } else {
@@ -311,6 +318,11 @@ pub(crate) async fn get_rig_snapshot(channel: Channel) -> anyhow::Result<Option<
         .and_then(mode_to_adif)
         .map(str::to_string);
 
+    let band_rx = Band::try_from(snapshot.band_rx)
+        .ok()
+        .and_then(band_to_adif)
+        .map(str::to_string);
+
     let frequency_display = if snapshot.frequency_hz > 0 {
         format!("{} MHz", format_frequency_mhz(snapshot.frequency_hz))
     } else {
@@ -320,9 +332,12 @@ pub(crate) async fn get_rig_snapshot(channel: Channel) -> anyhow::Result<Option<
     Ok(Some(RigInfo {
         frequency_display,
         frequency_hz: snapshot.frequency_hz,
+        frequency_rx_hz: snapshot.frequency_rx_hz,
         band,
+        band_rx,
         mode,
         submode: snapshot.submode,
+        tx_power_watts: snapshot.tx_power_watts,
         status,
         error_message: snapshot.error_message,
     }))
@@ -372,6 +387,13 @@ pub(crate) async fn update_qso(
     qso.utc_timestamp = utc_timestamp;
     qso.utc_end_timestamp = utc_end_timestamp;
     qso.frequency_hz = frequency_hz;
+    qso.frequency_rx_hz = form.rig_frequency_rx_hz;
+    qso.band_rx = form
+        .rig_band_rx
+        .as_deref()
+        .and_then(band_from_adif)
+        .map(i32::from)
+        .unwrap_or_default();
     qso.submode = if form.submode_override.is_empty() {
         submode.map(str::to_string)
     } else {

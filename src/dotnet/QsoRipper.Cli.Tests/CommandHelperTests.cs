@@ -212,6 +212,60 @@ public sealed class CommandHelperTests
     }
 
     [Fact]
+    public void ApplyRigSnapshot_populates_split_frequency_and_tx_power()
+    {
+        var qso = new QsoRecord();
+        var snapshot = new RigSnapshot
+        {
+            FrequencyHz = 14_250_000,
+            Band = Band._20M,
+            Mode = Mode.Cw,
+            FrequencyRxHz = 14_074_000,
+            BandRx = Band._20M,
+            TxPowerWatts = 50.125,
+        };
+
+        LogQsoCommand.ApplyRigSnapshot(qso, snapshot);
+
+        Assert.Equal(14_250_000ul, qso.FrequencyHz);
+        Assert.Equal(14_074_000ul, qso.FrequencyRxHz);
+        Assert.Equal(Band._20M, qso.BandRx);
+        Assert.Equal("50.125", qso.TxPower);
+    }
+
+    [Fact]
+    public void ApplyRigSnapshot_preserves_explicit_values()
+    {
+        var qso = new QsoRecord
+        {
+            FrequencyHz = 7_100_000,
+            Band = Band._40M,
+            Mode = Mode.Ssb,
+            FrequencyRxHz = 7_200_000,
+            BandRx = Band._40M,
+            TxPower = "25",
+        };
+        var snapshot = new RigSnapshot
+        {
+            FrequencyHz = 14_250_000,
+            Band = Band._20M,
+            Mode = Mode.Cw,
+            FrequencyRxHz = 14_074_000,
+            BandRx = Band._20M,
+            TxPowerWatts = 50,
+        };
+
+        LogQsoCommand.ApplyRigSnapshot(qso, snapshot);
+
+        Assert.Equal(7_100_000ul, qso.FrequencyHz);
+        Assert.Equal(Band._40M, qso.Band);
+        Assert.Equal(Mode.Ssb, qso.Mode);
+        Assert.Equal(7_200_000ul, qso.FrequencyRxHz);
+        Assert.Equal(Band._40M, qso.BandRx);
+        Assert.Equal("25", qso.TxPower);
+    }
+
+    [Fact]
     public void TryBuildQso_without_from_rig_requires_band_mode()
     {
         var success = LogQsoCommand.TryBuildQso(

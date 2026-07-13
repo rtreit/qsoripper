@@ -35,12 +35,18 @@ pub(crate) struct RigInfo {
     pub(crate) frequency_display: String,
     /// Frequency in Hz (for form auto-population).
     pub(crate) frequency_hz: u64,
+    /// Receive frequency in Hz when split operation is active.
+    pub(crate) frequency_rx_hz: Option<u64>,
     /// Band name string (ADIF, e.g., `"20M"`).
     pub(crate) band: Option<String>,
+    /// Receive band name when split operation is active.
+    pub(crate) band_rx: Option<String>,
     /// Mode name string (ADIF, e.g., `"SSB"`).
     pub(crate) mode: Option<String>,
     /// Optional submode from the rig.
     pub(crate) submode: Option<String>,
+    /// Transmitter power in watts when reported by the rig.
+    pub(crate) tx_power_watts: Option<f64>,
     /// Connection status.
     pub(crate) status: RigStatus,
     /// Error message from the rig provider, if any.
@@ -190,6 +196,8 @@ pub(crate) struct App {
     /// If the form still contains this value, later rig snapshots may keep it in sync even
     /// after the operator starts typing a callsign. A manual frequency edit breaks that match.
     pub(crate) last_auto_rig_frequency_mhz: Option<String>,
+    /// Last transmitter power value written into the form from rig control.
+    pub(crate) last_auto_rig_tx_power: Option<String>,
     /// Whether rig control polling is enabled (default: `true`).
     pub(crate) rig_control_enabled: bool,
     /// Transient status bar message.
@@ -236,6 +244,7 @@ impl App {
             space_weather: None,
             rig_info: None,
             last_auto_rig_frequency_mhz: None,
+            last_auto_rig_tx_power: None,
             rig_control_enabled: true,
             status_message: None,
             qso_list_focused: false,
@@ -598,6 +607,9 @@ mod tests {
             band: Some("20M".to_string()),
             mode: Some("SSB".to_string()),
             submode: None,
+            frequency_rx_hz: None,
+            band_rx: None,
+            tx_power_watts: None,
             status: RigStatus::Connected,
             error_message: None,
         });

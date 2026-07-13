@@ -101,6 +101,13 @@ struct RigctldConnection {
     writer: OwnedWriteHalf,
 }
 
+struct RigState {
+    frequency_hz: u64,
+    raw_mode: String,
+    frequency_rx_hz: Option<u64>,
+    tx_power_watts: Option<f64>,
+}
+
 impl RigctldProvider {
     /// Create a provider with the given configuration.
     #[must_use]
@@ -139,8 +146,8 @@ impl RigctldProvider {
         })
     }
 
-    /// Read frequency and mode from a serialized persistent rigctld session.
-    async fn read_rig_state(&self) -> Result<(u64, String), RigControlProviderError> {
+    /// Read normalized logging state from a serialized persistent rigctld session.
+    async fn read_rig_state(&self) -> Result<RigState, RigControlProviderError> {
         let mut connection = self.connection.lock().await;
 
         for attempt in 0..=1 {
@@ -177,7 +184,7 @@ impl RigctldProvider {
     async fn read_rig_state_on_connection(
         connection: &mut RigctldConnection,
         read_timeout: Duration,
-    ) -> Result<(u64, String), RigControlProviderError> {
+    ) -> Result<RigState, RigControlProviderError> {
         // Read frequency: send "f\n", expect one line with Hz value
         connection.writer.write_all(b"f\n").await.map_err(|error| {
             RigControlProviderError::transport(format!("Failed to send frequency command: {error}"))
@@ -195,34 +202,163 @@ impl RigctldProvider {
         // Read and discard passband line
         let _passband = read_line_with_timeout(&mut connection.reader, read_timeout).await?;
 
-        Ok((frequency_hz, mode_line))
+        let mut tx_frequency_hz = frequency_hz;
+        let mut tx_mode = mode_line;
+        let mut frequency_rx_hz = None;
+
+        if let Some((split_frequency_hz, split_mode)) =
+            read_optional_split_state(connection, read_timeout).await?
+        {
+            frequency_rx_hz = Some(frequency_hz);
+            tx_frequency_hz = split_frequency_hz;
+            if let Some(split_mode) = split_mode {
+                tx_mode = split_mode;
+            }
+        }
+
+        let tx_power_watts =
+            read_optional_tx_power(connection, read_timeout, tx_frequency_hz, &tx_mode).await?;
+
+        Ok(RigState {
+            frequency_hz: tx_frequency_hz,
+            raw_mode: tx_mode,
+            frequency_rx_hz,
+            tx_power_watts,
+        })
     }
 }
 
 #[tonic::async_trait]
 impl RigControlProvider for RigctldProvider {
     async fn get_snapshot(&self) -> Result<RigSnapshot, RigControlProviderError> {
-        let (frequency_hz, raw_mode) = self.read_rig_state().await?;
-        let band = frequency_hz_to_band(frequency_hz);
-        let mode_mapping = hamlib_mode_to_proto(&raw_mode);
+        let state = self.read_rig_state().await?;
+        let band = frequency_hz_to_band(state.frequency_hz);
+        let band_rx = state
+            .frequency_rx_hz
+            .map(frequency_hz_to_band)
+            .unwrap_or_default();
+        let mode_mapping = hamlib_mode_to_proto(&state.raw_mode);
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
 
         Ok(RigSnapshot {
-            frequency_hz,
+            frequency_hz: state.frequency_hz,
             band: band as i32,
             mode: mode_mapping.mode as i32,
             submode: mode_mapping.submode,
-            raw_mode: Some(raw_mode),
+            raw_mode: Some(state.raw_mode),
             status: RigConnectionStatus::Connected as i32,
             error_message: None,
             sampled_at: Some(prost_types::Timestamp {
                 seconds: i64::try_from(now.as_secs()).unwrap_or(i64::MAX),
                 nanos: i32::try_from(now.subsec_nanos()).unwrap_or(i32::MAX),
             }),
+            frequency_rx_hz: state.frequency_rx_hz,
+            band_rx: band_rx as i32,
+            tx_power_watts: state.tx_power_watts,
         })
+    }
+}
+
+async fn read_optional_split_state(
+    connection: &mut RigctldConnection,
+    read_timeout: Duration,
+) -> Result<Option<(u64, Option<String>)>, RigControlProviderError> {
+    connection.writer.write_all(b"s\n").await.map_err(|error| {
+        RigControlProviderError::transport(format!("Failed to send split command: {error}"))
+    })?;
+
+    let Some(split_line) = read_optional_line(&mut connection.reader, read_timeout).await? else {
+        return Ok(None);
+    };
+    let Some(_tx_vfo) = read_optional_line(&mut connection.reader, read_timeout).await? else {
+        return Ok(None);
+    };
+    if split_line != "1" {
+        return Ok(None);
+    }
+
+    connection.writer.write_all(b"i\n").await.map_err(|error| {
+        RigControlProviderError::transport(format!(
+            "Failed to send split frequency command: {error}"
+        ))
+    })?;
+    let Some(frequency_line) = read_optional_line(&mut connection.reader, read_timeout).await?
+    else {
+        return Ok(None);
+    };
+    let Ok(frequency_hz) = frequency_line.parse::<u64>() else {
+        return Ok(None);
+    };
+
+    connection.writer.write_all(b"x\n").await.map_err(|error| {
+        RigControlProviderError::transport(format!("Failed to send split mode command: {error}"))
+    })?;
+    let split_mode = read_optional_line(&mut connection.reader, read_timeout).await?;
+    if split_mode.is_some() {
+        let _passband = read_line_with_timeout(&mut connection.reader, read_timeout).await?;
+    }
+
+    Ok(Some((frequency_hz, split_mode)))
+}
+
+async fn read_optional_tx_power(
+    connection: &mut RigctldConnection,
+    read_timeout: Duration,
+    frequency_hz: u64,
+    raw_mode: &str,
+) -> Result<Option<f64>, RigControlProviderError> {
+    connection
+        .writer
+        .write_all(b"l RFPOWER\n")
+        .await
+        .map_err(|error| {
+            RigControlProviderError::transport(format!("Failed to send RF power command: {error}"))
+        })?;
+    let Some(relative_line) = read_optional_line(&mut connection.reader, read_timeout).await?
+    else {
+        return Ok(None);
+    };
+    let Ok(relative_power) = relative_line.parse::<f64>() else {
+        return Ok(None);
+    };
+    if !relative_power.is_finite() || !(0.0..=1.0).contains(&relative_power) {
+        return Ok(None);
+    }
+
+    let command = format!("2 {relative_power} {frequency_hz} {raw_mode}\n");
+    connection
+        .writer
+        .write_all(command.as_bytes())
+        .await
+        .map_err(|error| {
+            RigControlProviderError::transport(format!(
+                "Failed to send power conversion command: {error}"
+            ))
+        })?;
+    let Some(milliwatts_line) = read_optional_line(&mut connection.reader, read_timeout).await?
+    else {
+        return Ok(None);
+    };
+    let Ok(milliwatts) = milliwatts_line.parse::<u32>() else {
+        return Ok(None);
+    };
+
+    Ok(Some(f64::from(milliwatts) / 1_000.0))
+}
+
+async fn read_optional_line<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    read_timeout: Duration,
+) -> Result<Option<String>, RigControlProviderError> {
+    match read_line_with_timeout(reader, read_timeout).await {
+        Ok(line) => Ok(Some(line)),
+        Err(error) if error.kind() == super::provider::RigControlProviderErrorKind::Parse => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -306,6 +442,14 @@ mod tests {
                 .write_all(format!("{mode}\n{passband}\n").as_bytes())
                 .await
                 .unwrap();
+
+            // Optional split and power queries are unsupported by this fake.
+            for expected in ["s\n", "l RFPOWER\n"] {
+                cmd.clear();
+                reader.read_line(&mut cmd).await.unwrap();
+                assert_eq!(expected, cmd);
+                writer.write_all(b"RPRT -11\n").await.unwrap();
+            }
         });
 
         addr
@@ -360,6 +504,9 @@ mod tests {
                         match command.as_str() {
                             "f\n" => writer.write_all(b"14074000\n").await.unwrap(),
                             "m\n" => writer.write_all(b"USB\n2400\n").await.unwrap(),
+                            "s\n" | "l RFPOWER\n" => {
+                                writer.write_all(b"RPRT -11\n").await.unwrap();
+                            }
                             other => panic!("unexpected command: {other:?}"),
                         }
                     }
@@ -403,6 +550,16 @@ mod tests {
                 reader.read_line(&mut command).await.unwrap();
                 assert_eq!("m\n", command);
                 writer.write_all(b"USB\n2400\n").await.unwrap();
+
+                command.clear();
+                reader.read_line(&mut command).await.unwrap();
+                assert_eq!("s\n", command);
+                writer.write_all(b"RPRT -11\n").await.unwrap();
+
+                command.clear();
+                reader.read_line(&mut command).await.unwrap();
+                assert_eq!("l RFPOWER\n", command);
+                writer.write_all(b"RPRT -11\n").await.unwrap();
             }
         });
 
@@ -444,6 +601,54 @@ mod tests {
             snapshot.mode
         );
         assert_eq!(None, snapshot.submode);
+    }
+
+    #[tokio::test]
+    async fn reads_split_tx_state_and_power_when_supported() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            let mut command = String::new();
+
+            for (expected, response) in [
+                ("f\n", "14074000\n"),
+                ("m\n", "USB\n2400\n"),
+                ("s\n", "1\nVFOB\n"),
+                ("i\n", "14250000\n"),
+                ("x\n", "CW\n500\n"),
+                ("l RFPOWER\n", "0.5\n"),
+                ("2 0.5 14250000 CW\n", "50000\n"),
+            ] {
+                command.clear();
+                reader.read_line(&mut command).await.unwrap();
+                assert_eq!(expected, command);
+                writer.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let provider = RigctldProvider::new(RigctldConfig {
+            host: addr.ip().to_string(),
+            port: addr.port(),
+            read_timeout: Duration::from_secs(2),
+        });
+
+        let snapshot = provider.get_snapshot().await.expect("snapshot");
+
+        assert_eq!(14_250_000, snapshot.frequency_hz);
+        assert_eq!(Some(14_074_000), snapshot.frequency_rx_hz);
+        assert_eq!(
+            crate::proto::qsoripper::domain::Band::Band20m as i32,
+            snapshot.band_rx
+        );
+        assert_eq!(
+            crate::proto::qsoripper::domain::Mode::Cw as i32,
+            snapshot.mode
+        );
+        assert_eq!(Some(50.0), snapshot.tx_power_watts);
     }
 
     #[tokio::test]

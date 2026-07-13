@@ -351,6 +351,32 @@ public sealed class QsoLoggerEnrichmentTests
     }
 
     [Fact]
+    public async Task LogQsoAsyncIncludesRigDerivedSplitFrequencyAndPower()
+    {
+        var engine = new CapturingEngineClient();
+        var logger = new QsoLoggerViewModel(engine);
+        logger.ApplyRigSnapshot(new RigSnapshot
+        {
+            Status = RigConnectionStatus.Connected,
+            FrequencyHz = 14_250_000,
+            Band = Band._20M,
+            Mode = Mode.Cw,
+            FrequencyRxHz = 14_074_000,
+            BandRx = Band._20M,
+            TxPowerWatts = 50.125,
+        });
+        logger.Callsign = "W1AW";
+
+        await logger.LogQsoCommand.ExecuteAsync(null);
+
+        Assert.NotNull(engine.LastLoggedQso);
+        Assert.Equal(14_250_000ul, engine.LastLoggedQso!.FrequencyHz);
+        Assert.Equal(14_074_000ul, engine.LastLoggedQso.FrequencyRxHz);
+        Assert.Equal(Band._20M, engine.LastLoggedQso.BandRx);
+        Assert.Equal("50.125", engine.LastLoggedQso.TxPower);
+    }
+
+    [Fact]
     public void CallsignSetterNormalizesTypedInputToUppercase()
     {
         var engine = new FakeEngineClient();

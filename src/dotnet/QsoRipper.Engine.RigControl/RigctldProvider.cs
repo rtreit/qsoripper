@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Net.Sockets;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
@@ -9,10 +10,10 @@ namespace QsoRipper.Engine.RigControl;
 /// rigctld-backed rig control provider.
 /// </summary>
 /// <remarks>
-/// Connects to a running <c>rigctld</c> daemon over TCP, reads frequency and mode,
-/// and normalizes the result into project-owned proto types.
-/// Each <see cref="GetSnapshot"/> call opens a fresh TCP connection, issues both
-/// commands on the same socket, and closes it — matching the Rust implementation.
+/// Connects to a running <c>rigctld</c> daemon over TCP, reads logging-relevant
+/// rig state, and normalizes the result into project-owned proto types.
+/// Each <see cref="GetSnapshot"/> call opens a TCP connection, issues the required
+/// and supported optional commands on that socket, and closes it.
 /// </remarks>
 public sealed class RigctldProvider : IRigControlProvider
 {
@@ -43,16 +44,16 @@ public sealed class RigctldProvider : IRigControlProvider
 
     public RigSnapshot GetSnapshot()
     {
-        var (frequencyHz, rawMode) = ReadRigState();
-        var band = BandMapping.FrequencyHzToBand(frequencyHz);
-        var modeMapping = ModeMapping.HamlibModeToProto(rawMode);
+        var state = ReadRigState();
+        var band = BandMapping.FrequencyHzToBand(state.FrequencyHz);
+        var modeMapping = ModeMapping.HamlibModeToProto(state.RawMode);
 
         var snapshot = new RigSnapshot
         {
-            FrequencyHz = frequencyHz,
+            FrequencyHz = state.FrequencyHz,
             Band = band,
             Mode = modeMapping.Mode,
-            RawMode = rawMode,
+            RawMode = state.RawMode,
             Status = RigConnectionStatus.Connected,
             SampledAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
@@ -62,11 +63,22 @@ public sealed class RigctldProvider : IRigControlProvider
             snapshot.Submode = modeMapping.Submode;
         }
 
+        if (state.FrequencyRxHz is { } frequencyRxHz)
+        {
+            snapshot.FrequencyRxHz = frequencyRxHz;
+            snapshot.BandRx = BandMapping.FrequencyHzToBand(frequencyRxHz);
+        }
+
+        if (state.TxPowerWatts is { } txPowerWatts)
+        {
+            snapshot.TxPowerWatts = txPowerWatts;
+        }
+
         return snapshot;
     }
 
     [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope", Justification = "TcpClient and StreamReader are disposed via using.")]
-    private (ulong FrequencyHz, string RawMode) ReadRigState()
+    private RigState ReadRigState()
     {
         TcpClient client;
         try
@@ -120,7 +132,43 @@ public sealed class RigctldProvider : IRigControlProvider
                 // Read and discard passband line
                 _ = reader.ReadLine();
 
-                return (frequencyHz, modeLine);
+                ulong txFrequencyHz = frequencyHz;
+                string txMode = modeLine;
+                ulong? frequencyRxHz = null;
+
+                writer.Write("s\n");
+                var splitLine = TryReadOptionalLine(reader, "split state");
+                if (splitLine is not null)
+                {
+                    var txVfo = TryReadOptionalLine(reader, "split TX VFO");
+                    if (txVfo is not null && splitLine == "1")
+                    {
+                        writer.Write("i\n");
+                        var splitFrequencyLine = TryReadOptionalLine(reader, "split frequency");
+                        if (splitFrequencyLine is not null
+                            && ulong.TryParse(splitFrequencyLine, NumberStyles.None, CultureInfo.InvariantCulture, out var splitFrequencyHz))
+                        {
+                            frequencyRxHz = frequencyHz;
+                            txFrequencyHz = splitFrequencyHz;
+
+                            writer.Write("x\n");
+                            var splitMode = TryReadOptionalLine(reader, "split mode");
+                            if (splitMode is not null)
+                            {
+                                _ = ReadLineOrThrow(reader, "split passband");
+                                txMode = splitMode;
+                            }
+                        }
+                    }
+                }
+
+                var txPowerWatts = ReadOptionalTxPower(
+                    reader,
+                    writer,
+                    txFrequencyHz,
+                    txMode);
+
+                return new RigState(txFrequencyHz, txMode, frequencyRxHz, txPowerWatts);
             }
         }
         catch (RigControlException)
@@ -171,6 +219,47 @@ public sealed class RigctldProvider : IRigControlProvider
         return trimmed;
     }
 
+    private static string? TryReadOptionalLine(StreamReader reader, string commandDescription)
+    {
+        try
+        {
+            return ReadLineOrThrow(reader, commandDescription);
+        }
+        catch (RigControlException ex) when (ex.Kind == RigControlErrorKind.Parse)
+        {
+            return null;
+        }
+    }
+
+    private static double? ReadOptionalTxPower(
+        StreamReader reader,
+        StreamWriter writer,
+        ulong frequencyHz,
+        string rawMode)
+    {
+        writer.Write("l RFPOWER\n");
+        var relativeLine = TryReadOptionalLine(reader, "RF power");
+        if (relativeLine is null
+            || !double.TryParse(relativeLine, NumberStyles.Float, CultureInfo.InvariantCulture, out var relativePower)
+            || !double.IsFinite(relativePower)
+            || relativePower is < 0 or > 1)
+        {
+            return null;
+        }
+
+        writer.Write(string.Create(
+            CultureInfo.InvariantCulture,
+            $"2 {relativePower:R} {frequencyHz} {rawMode}\n"));
+        var milliwattsLine = TryReadOptionalLine(reader, "power conversion");
+        if (milliwattsLine is null
+            || !uint.TryParse(milliwattsLine, NumberStyles.None, CultureInfo.InvariantCulture, out var milliwatts))
+        {
+            return null;
+        }
+
+        return milliwatts / 1_000.0;
+    }
+
     private static ulong ParseFrequency(string line)
     {
         if (ulong.TryParse(line.Trim(), out var hz))
@@ -182,4 +271,10 @@ public sealed class RigctldProvider : IRigControlProvider
             $"Invalid frequency value '{line}'.",
             RigControlErrorKind.Parse);
     }
+
+    private sealed record RigState(
+        ulong FrequencyHz,
+        string RawMode,
+        ulong? FrequencyRxHz,
+        double? TxPowerWatts);
 }

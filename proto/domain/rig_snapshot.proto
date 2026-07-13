@@ -11,12 +11,25 @@ import "google/protobuf/timestamp.proto";
 
 // Normalized snapshot of the current rig state, derived from a rigctld read.
 message RigSnapshot {
+  // Effective transmit frequency. In simplex operation this is the current
+  // frequency; in split operation this is the split TX frequency when the rig
+  // exposes it.
   uint64 frequency_hz = 1;
   Band band = 2;
+  // Effective transmit mode and optional ADIF submode.
   Mode mode = 3;
   optional string submode = 4;
   optional string raw_mode = 5;
   RigConnectionStatus status = 6;
   optional string error_message = 7;
   google.protobuf.Timestamp sampled_at = 8;
+
+  // Receive-side values are present only when split operation is active and
+  // the rig exposes a distinct receive frequency.
+  optional uint64 frequency_rx_hz = 9;
+  Band band_rx = 10;
+
+  // Transmitter output power in watts. Absent when the rig does not expose
+  // RFPOWER or Hamlib cannot convert the relative level to milliwatts.
+  optional double tx_power_watts = 11;
 }

@@ -236,6 +236,10 @@ No radio-menu change is needed. Leave **Beep Volume** at your normal setting.
 - The TUI and GUI both consume the engine over gRPC; neither talks to the radio directly, so
   both get a consistent view fed by the same hub. TCP allows the engine and any other NET
   client to share an endpoint simultaneously.
+- The read-only endpoint exposes split TX frequency/mode and configured transmitter power when
+  the radio backend supplies them. During split operation the engine logs the transmit side as
+  `FREQ`/`BAND`, the receive side as `FREQ_RX`/`BAND_RX`, and configured power as `TX_PWR`.
+  Unsupported optional values remain blank and do not make rig control appear disconnected.
 - Keep `[rig_control].stale_threshold_ms` low (e.g. **100**) when reading through cathub. The hub
   serves reads from its in-memory state cache (kept current by the radio's native AI2 push), so a
   short freshness window is cheap and makes the GUI/TUI frequency display follow knob turns almost

@@ -38,6 +38,119 @@ impl Vfo {
     }
 }
 
+/// Configured transmitter output power, normalized for Hamlib clients without using
+/// floating-point values in the universal state.
+///
+/// Hamlib exposes `RFPOWER` as a relative value from 0 through 1, then converts that value
+/// to milliwatts with `power2mW`. Keeping both observations preserves the exact milliwatt
+/// value reported by a downstream rigctld while still allowing CatHub to serve both calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TxPower {
+    relative_millionths: u32,
+    milliwatts: u32,
+    max_milliwatts: Option<u32>,
+}
+
+impl TxPower {
+    /// The fixed-point denominator used for Hamlib's relative 0 through 1 power value.
+    pub(crate) const RELATIVE_SCALE: u32 = 1_000_000;
+
+    /// Parse Hamlib's relative 0 through 1 decimal into fixed-point millionths.
+    pub(crate) fn parse_relative_millionths(value: &str) -> Option<u32> {
+        let trimmed = value.trim();
+        let (whole, fraction) = trimmed.split_once('.').unwrap_or((trimmed, ""));
+        match whole {
+            "0" => {
+                if fraction.len() > 6 || !fraction.bytes().all(|b| b.is_ascii_digit()) {
+                    return None;
+                }
+                let mut padded = fraction.to_string();
+                padded.extend(std::iter::repeat_n('0', 6 - fraction.len()));
+                padded.parse::<u32>().ok()
+            }
+            "1" if fraction.bytes().all(|b| b == b'0') => Some(Self::RELATIVE_SCALE),
+            _ => None,
+        }
+    }
+
+    /// Build a power observation for a radio with a known current and maximum wattage.
+    pub(crate) fn from_watts(watts: u32, max_watts: u32) -> Self {
+        Self::from_milliwatts(watts.saturating_mul(1_000), max_watts.saturating_mul(1_000))
+    }
+
+    /// Build a power observation for a radio with a known current and maximum milliwatt
+    /// value.
+    pub(crate) fn from_milliwatts(milliwatts: u32, max_milliwatts: u32) -> Self {
+        let relative_millionths = if max_milliwatts == 0 {
+            0
+        } else {
+            let scaled = u64::from(milliwatts).saturating_mul(u64::from(Self::RELATIVE_SCALE))
+                / u64::from(max_milliwatts);
+            u32::try_from(scaled.min(u64::from(Self::RELATIVE_SCALE)))
+                .unwrap_or(Self::RELATIVE_SCALE)
+        };
+        TxPower {
+            relative_millionths,
+            milliwatts,
+            max_milliwatts: Some(max_milliwatts),
+        }
+    }
+
+    /// Build an observation returned by a downstream rigctld. The maximum is inferred so
+    /// CatHub can service later `power2mW` requests at other relative levels.
+    pub(crate) fn from_relative_millionths(
+        relative_millionths: u32,
+        milliwatts: u32,
+    ) -> Option<Self> {
+        if relative_millionths > Self::RELATIVE_SCALE {
+            return None;
+        }
+        let max_milliwatts = if relative_millionths == 0 {
+            None
+        } else {
+            let numerator = u64::from(milliwatts)
+                .saturating_mul(u64::from(Self::RELATIVE_SCALE))
+                .saturating_add(u64::from(relative_millionths / 2));
+            u32::try_from(numerator / u64::from(relative_millionths)).ok()
+        };
+        Some(TxPower {
+            relative_millionths,
+            milliwatts,
+            max_milliwatts,
+        })
+    }
+
+    /// Render the cached relative value as a compact decimal accepted by Hamlib clients.
+    pub(crate) fn relative_decimal(self) -> String {
+        if self.relative_millionths == Self::RELATIVE_SCALE {
+            return "1".to_string();
+        }
+        if self.relative_millionths == 0 {
+            return "0".to_string();
+        }
+        let fraction = format!("{:06}", self.relative_millionths);
+        format!("0.{}", fraction.trim_end_matches('0'))
+    }
+
+    /// Convert a fixed-point relative Hamlib power level to milliwatts.
+    pub(crate) fn milliwatts_for_relative(self, relative_millionths: u32) -> Option<u32> {
+        if relative_millionths > Self::RELATIVE_SCALE {
+            return None;
+        }
+        if relative_millionths == self.relative_millionths {
+            return Some(self.milliwatts);
+        }
+        if relative_millionths == 0 {
+            return Some(0);
+        }
+        let max_milliwatts = self.max_milliwatts?;
+        let numerator = u64::from(max_milliwatts)
+            .saturating_mul(u64::from(relative_millionths))
+            .saturating_add(u64::from(Self::RELATIVE_SCALE / 2));
+        u32::try_from(numerator / u64::from(Self::RELATIVE_SCALE)).ok()
+    }
+}
+
 /// Operating mode, normalized across radio families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Mode {
@@ -305,6 +418,11 @@ pub(crate) enum StateChange {
         /// Offset in Hz.
         offset_hz: i32,
     },
+    /// The configured transmitter output power changed or became unavailable.
+    TxPower {
+        /// The latest normalized observation, or `None` when the backend cannot expose it.
+        power: Option<TxPower>,
+    },
 }
 
 impl StateChange {
@@ -319,6 +437,7 @@ impl StateChange {
             StateChange::Ptt { .. } => Field::Ptt,
             StateChange::Rit { .. } => Field::Rit,
             StateChange::Xit { .. } => Field::Xit,
+            StateChange::TxPower { .. } => Field::Power,
         }
     }
 }
@@ -344,8 +463,7 @@ pub(crate) enum Field {
     /// S-meter reading. Reserved for backends that surface signal strength.
     #[allow(dead_code)]
     SMeter,
-    /// Output power. Reserved for backends that surface power.
-    #[allow(dead_code)]
+    /// Configured transmitter output power.
     Power,
 }
 
@@ -431,6 +549,38 @@ mod tests {
             let token = mode.hamlib_token_with_data(true);
             assert_eq!(Mode::decompose_hamlib_token(token), (mode, true));
         }
+    }
+
+    #[test]
+    fn tx_power_parses_and_formats_hamlib_relative_values() {
+        assert_eq!(TxPower::parse_relative_millionths("0"), Some(0));
+        assert_eq!(TxPower::parse_relative_millionths("0.5"), Some(500_000));
+        assert_eq!(
+            TxPower::parse_relative_millionths("0.501250"),
+            Some(501_250)
+        );
+        assert_eq!(
+            TxPower::parse_relative_millionths("1.000000"),
+            Some(TxPower::RELATIVE_SCALE)
+        );
+        assert_eq!(TxPower::parse_relative_millionths("1.1"), None);
+        assert_eq!(TxPower::parse_relative_millionths("-0.5"), None);
+
+        assert_eq!(TxPower::from_watts(50, 100).relative_decimal(), "0.5");
+        assert_eq!(TxPower::from_watts(25, 25).relative_decimal(), "1");
+    }
+
+    #[test]
+    fn tx_power_converts_relative_values_to_milliwatts() {
+        let native = TxPower::from_watts(50, 100);
+        assert_eq!(native.milliwatts_for_relative(500_000), Some(50_000));
+        assert_eq!(native.milliwatts_for_relative(250_000), Some(25_000));
+
+        let bridged = TxPower::from_relative_millionths(500_000, 50_000)
+            .expect("valid downstream power observation");
+        assert_eq!(bridged.milliwatts_for_relative(500_000), Some(50_000));
+        assert_eq!(bridged.milliwatts_for_relative(1_000_000), Some(100_000));
+        assert_eq!(bridged.milliwatts_for_relative(1_000_001), None);
     }
 
     #[test]
