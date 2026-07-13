@@ -202,6 +202,7 @@
       <nav class="nav" aria-label="Page sections">
         <a href="#model">Model</a>
         <a href="#architecture">Architecture</a>
+        <a href="#identity">Client identity</a>
         <a href="#routes">Routes</a>
         <a href="#boundaries">Boundaries</a>
         <a href="#sources">Sources</a>
@@ -322,6 +323,36 @@
           </div>
           <p class="diagram-note">The port numbers show one station configuration. Every serial client receives a separate virtual pair. CatHub opens the hub side; the application or OmniRig opens the other side. Only CatHub opens COM4 and COM3.</p>
         </div>
+      </div>
+    </section>
+
+    <section id="identity" aria-labelledby="identity-heading">
+      <div class="shell">
+        <div class="section-head">
+          <div><p class="label">Client identity</p><h2 id="identity-heading">CatHub identifies the endpoint, not the application</h2></div>
+          <p>CatHub does not inspect commands to guess which program sent them. The operator assigns each program a virtual COM pair or loopback TCP address. That configured endpoint establishes the protocol, permissions, and compatibility policy before any bytes arrive.</p>
+        </div>
+        <div class="comparison">
+          <table>
+            <thead><tr><th>Connection</th><th>What identifies it</th><th>Policy selected by the endpoint</th><th>What CatHub does not infer</th></tr></thead>
+            <tbody>
+              <tr><td>Serial CAT face</td><td>The hub side of a dedicated virtual COM pair.</td><td>A fixed client dialect, such as TS-590 or TS-2000, plus permissions and optional single-VFO presentation.</td><td>Whether the process on the paired port is N1MM, ARCP-590, OmniRig, or another compatible client.</td></tr>
+              <tr><td>Hamlib NET face</td><td>The TCP listener that accepts the connection, such as <code>127.0.0.1:4532</code> or <code>:4533</code>.</td><td>The rigctld-compatible command parser, endpoint permissions, and optional single-VFO presentation.</td><td>Whether the connecting process is QsoRipper, WSJT-X, JS8Call, Log4OM, or another Hamlib NET client.</td></tr>
+              <tr><td>Virtual WinKeyer face</td><td>The hub side of its dedicated virtual COM pair.</td><td>The WinKeyer host protocol, primary-client role, and status, send, control, PTT, or maintenance permissions.</td><td>The application name. The configured face and its internal client ID define the session.</td></tr>
+              <tr><td>Typed WinKeyer service</td><td>A <code>client_name</code> supplied in the loopback gRPC request.</td><td>Named job ownership, cancellation, speed, and event routing through the typed WinKeyer API.</td><td>That the supplied name proves the operating-system identity of the caller.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="subsection-head">
+          <p class="label">Runtime ownership</p>
+          <h2>Internal IDs track work, not software brands</h2>
+          <p>Each serial face receives an internal face ID when CatHub starts. Each accepted Hamlib NET connection receives a fresh ID. CatHub uses these IDs to preserve command order, own and release PTT, attribute queued work, and clean up after a disconnect. The configured face name remains a label for logs and status; it is not application authentication.</p>
+        </div>
+        <div class="two-column">
+          <article class="plain-card"><h3>Client side</h3><p>The face selects how CatHub parses requests and formats replies. A TS-2000 face can therefore present TS-2000 behavior to OmniRig even when the physical radio is a TS-590.</p></article>
+          <article class="plain-card"><h3>Radio side</h3><p>The separately configured radio backend controls the physical device. Supported client requests become shared state operations that the active backend applies to the radio.</p></article>
+        </div>
+        <div class="caution"><p><strong>Operational consequence:</strong> connecting a program to the wrong endpoint does not trigger automatic dialect detection. CatHub applies that endpoint's configured protocol and permissions. Unsupported commands fail, and any local process that can open a writable endpoint receives that endpoint's authority.</p></div>
       </div>
     </section>
 
