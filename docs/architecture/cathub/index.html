@@ -3,108 +3,197 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="An engineering explanation of how QsoRipper CatHub brokers shared access to a radio and WinKeyer hardware across existing software interfaces.">
-  <title>CatHub: shared radio control | QsoRipper</title>
+  <meta name="description" content="A software architecture note explaining how QsoRipper CatHub coordinates shared access to a radio and physical WinKeyer.">
+  <title>CatHub Architecture: Shared Control of a Radio and WinKeyer</title>
   <style>
     :root {
       color-scheme: light;
-      --page: #f7f7f5;
+      --page: #f5f6f5;
       --paper: #ffffff;
-      --ink: #17201d;
+      --ink: #18211e;
       --muted: #52605b;
-      --faint: #6c7873;
-      --line: #ccd3cf;
-      --line-strong: #9eaaa4;
+      --faint: #69756f;
+      --line: #d2d8d4;
+      --line-strong: #a6b1ab;
       --hub: #195f49;
-      --hub-soft: #e8f2ed;
+      --hub-soft: #e7f1ec;
       --client: #215d83;
       --client-soft: #eaf2f7;
       --hardware: #815718;
       --hardware-soft: #f7f0e4;
-      --caution: #765300;
-      --caution-soft: #fff7dc;
-      --code: #f2f4f3;
-      --max: 1120px;
+      --note: #eaf2f7;
+      --warning: #fff6d8;
+      --code: #1f2925;
+      --code-ink: #edf3ef;
+      --article: 900px;
+      --layout: 1240px;
     }
 
     * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; }
+    html { scroll-behavior: smooth; scroll-padding-top: 24px; }
     body {
       margin: 0;
       color: var(--ink);
       background: var(--page);
       font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
       font-size: 16px;
-      line-height: 1.62;
+      line-height: 1.65;
     }
     a { color: #145a80; text-underline-offset: 0.16em; }
     a:hover { text-decoration-thickness: 2px; }
-    code, .mono {
+    code, pre, .mono {
       font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
-      font-size: 0.91em;
+      font-size: 0.92em;
     }
-    code { padding: 0.1em 0.3em; background: var(--code); border-radius: 3px; }
-    h1, h2, h3, p { margin-top: 0; }
-    h1, h2, h3 { line-height: 1.2; letter-spacing: -0.015em; }
-    h1 { max-width: 820px; margin-bottom: 20px; font-size: clamp(2.3rem, 5vw, 4.35rem); font-weight: 680; }
-    h2 { margin-bottom: 16px; font-size: clamp(1.7rem, 3vw, 2.45rem); font-weight: 650; }
-    h3 { margin-bottom: 8px; font-size: 1.08rem; }
+    :not(pre) > code { padding: 0.08em 0.3em; background: #eef1ef; border-radius: 3px; }
+    h1, h2, h3, h4, p { margin-top: 0; }
+    h1, h2, h3, h4 { line-height: 1.25; letter-spacing: -0.012em; }
+    h1 { margin-bottom: 16px; font-size: clamp(2rem, 4vw, 3rem); font-weight: 680; }
+    h2 { margin: 0 0 20px; font-size: clamp(1.55rem, 2.5vw, 2rem); font-weight: 660; }
+    h3 { margin: 30px 0 12px; font-size: 1.22rem; font-weight: 650; }
+    h4 { margin: 24px 0 8px; font-size: 1rem; font-weight: 650; }
     p { max-width: 76ch; }
+    ul, ol { padding-left: 1.35rem; }
+    li + li { margin-top: 0.42rem; }
 
-    .shell { width: min(calc(100% - 40px), var(--max)); margin-inline: auto; }
-    .skip-link { position: fixed; top: -60px; left: 12px; z-index: 20; padding: 9px 12px; color: #fff; background: var(--hub); }
-    .skip-link:focus { top: 12px; }
-    .site-header { border-bottom: 1px solid var(--line); background: rgba(255, 255, 255, 0.95); }
-    .header-inner { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
-    .brand { color: var(--ink); font-weight: 650; text-decoration: none; }
-    .brand span { color: var(--faint); font-weight: 450; }
-    .nav { display: flex; flex-wrap: wrap; gap: 20px; font-size: 0.86rem; }
-    .nav a { color: var(--muted); text-decoration: none; }
-    .nav a:hover, .nav a:focus-visible { color: var(--ink); text-decoration: underline; }
-
-    .hero { padding-block: 82px 68px; border-bottom: 1px solid var(--line); background: var(--paper); }
-    .label { margin-bottom: 15px; color: var(--hub); font: 650 0.75rem "Cascadia Mono", Consolas, monospace; letter-spacing: 0.08em; text-transform: uppercase; }
-    .lede { max-width: 800px; margin-bottom: 27px; color: var(--muted); font-size: clamp(1.08rem, 2vw, 1.3rem); }
-    .answer {
-      max-width: 900px;
-      padding: 19px 22px;
-      border-left: 4px solid var(--hub);
-      background: var(--hub-soft);
+    .skip-link {
+      position: fixed;
+      top: -60px;
+      left: 12px;
+      z-index: 30;
+      padding: 9px 12px;
+      color: #fff;
+      background: var(--hub);
     }
-    .answer strong { color: var(--hub); }
-    .answer p:last-child { margin-bottom: 0; }
+    .skip-link:focus { top: 12px; }
+    .document-bar {
+      border-bottom: 1px solid var(--line);
+      background: var(--paper);
+    }
+    .bar-inner {
+      width: min(calc(100% - 40px), var(--layout));
+      min-height: 54px;
+      margin-inline: auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+    .document-name { color: var(--ink); font-weight: 650; text-decoration: none; }
+    .document-name span { color: var(--faint); font-weight: 450; }
+    .document-kind { color: var(--faint); font-size: 0.82rem; }
 
-    main section { padding-block: 68px; border-bottom: 1px solid var(--line); }
-    .section-head { display: grid; grid-template-columns: minmax(0, 0.75fr) minmax(320px, 1.25fr); gap: 56px; margin-bottom: 30px; align-items: start; }
-    .section-head p { margin: 5px 0 0; color: var(--muted); }
+    .document-layout {
+      width: min(calc(100% - 40px), var(--layout));
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 220px minmax(0, var(--article));
+      gap: 56px;
+      align-items: start;
+    }
+    .toc {
+      position: sticky;
+      top: 24px;
+      max-height: calc(100vh - 48px);
+      overflow-y: auto;
+      padding: 38px 0;
+      font-size: 0.83rem;
+    }
+    .toc-title {
+      margin-bottom: 10px;
+      color: var(--faint);
+      font-size: 0.74rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .toc ol { margin: 0; padding-left: 1.4rem; }
+    .toc li { margin: 0; padding: 3px 0; color: var(--faint); }
+    .toc a { color: var(--muted); text-decoration: none; }
+    .toc a:hover, .toc a:focus-visible { color: var(--ink); text-decoration: underline; }
 
-    .terms { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); background: var(--paper); }
-    .term { padding: 22px; }
-    .term + .term { border-left: 1px solid var(--line); }
-    .term p { margin: 0; color: var(--muted); font-size: 0.93rem; }
-    .term-tag { display: inline-block; margin-bottom: 12px; color: var(--faint); font: 650 0.72rem "Cascadia Mono", Consolas, monospace; text-transform: uppercase; }
+    article { min-width: 0; padding-bottom: 70px; }
+    .document-header { padding: 62px 0 34px; border-bottom: 1px solid var(--line-strong); }
+    .kicker { margin-bottom: 10px; color: var(--hub); font-size: 0.82rem; font-weight: 700; }
+    .subtitle { max-width: 74ch; margin-bottom: 24px; color: var(--muted); font-size: 1.14rem; }
+    .doc-meta {
+      display: grid;
+      grid-template-columns: max-content 1fr;
+      gap: 4px 18px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+    .doc-meta dt { font-weight: 650; color: var(--ink); }
+    .doc-meta dd { margin: 0; }
 
-    .comparison { overflow-x: auto; border: 1px solid var(--line); background: var(--paper); }
-    table { width: 100%; min-width: 760px; border-collapse: collapse; }
-    th, td { padding: 14px 16px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-    tr:last-child td { border-bottom: 0; }
-    th { color: var(--faint); background: #f2f4f3; font-size: 0.76rem; letter-spacing: 0.05em; text-transform: uppercase; }
-    td { font-size: 0.91rem; }
-    td:first-child { font-weight: 620; }
+    section { padding: 48px 0 6px; }
+    section + section { border-top: 1px solid var(--line); }
+    .section-number { color: var(--hub); font-variant-numeric: tabular-nums; }
+    .lead { color: var(--muted); font-size: 1.05rem; }
+    .two-column {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 34px;
+    }
+    .two-column h3 { margin-top: 0; }
+    .takeaway { margin: 20px 0 0; color: var(--ink); font-weight: 620; }
 
-    .diagram { overflow-x: auto; padding: 26px; border: 1px solid var(--line-strong); background: var(--paper); }
-    .diagram-grid { min-width: 1040px; display: grid; grid-template-columns: 1.1fr 38px 1.05fr 38px 1.2fr 38px 0.95fr; gap: 8px; align-items: stretch; }
-    .diagram-heading { grid-row: 1; padding: 0 12px 10px; color: var(--faint); font: 650 0.72rem "Cascadia Mono", Consolas, monospace; letter-spacing: 0.05em; text-transform: uppercase; }
-    .diagram-heading.center { text-align: center; }
-    .lane { display: contents; }
-    .box { min-height: 108px; padding: 16px; border: 1px solid var(--line); background: var(--paper); }
+    .wide {
+      width: calc(100% + 110px);
+      max-width: 1010px;
+    }
+    figure { margin: 28px 0 34px; }
+    figcaption { margin-top: 12px; max-width: 90ch; color: var(--muted); font-size: 0.88rem; }
+    .figure-title { display: block; margin-bottom: 3px; color: var(--ink); font-weight: 650; }
+    .figure-number { color: var(--hub); }
+    .diagram-surface { overflow-x: auto; padding: 24px; border: 1px solid var(--line-strong); background: var(--paper); }
+    .legend { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 14px; color: var(--muted); font-size: 0.8rem; }
+    .legend span { display: inline-flex; align-items: center; gap: 7px; }
+    .legend i { width: 12px; height: 12px; border: 1px solid var(--line); }
+    .legend .client-key i { background: var(--client-soft); border-color: #aec4d2; }
+    .legend .hub-key i { background: var(--hub-soft); border-color: #96b8aa; }
+    .legend .hardware-key i { background: var(--hardware-soft); border-color: #cdbb9d; }
+
+    .context-grid {
+      min-width: 720px;
+      display: grid;
+      grid-template-columns: 1.15fr 54px 1fr 54px 0.95fr;
+      gap: 10px;
+      align-items: stretch;
+    }
+    .context-apps { display: grid; gap: 9px; }
+    .context-hardware { display: grid; gap: 12px; }
+    .context-arrow { display: grid; place-items: center; color: var(--line-strong); font-size: 1.55rem; }
+
+    .box { padding: 16px; border: 1px solid var(--line); background: var(--paper); }
     .box.client { border-color: #aec4d2; background: var(--client-soft); }
     .box.interface { border-color: #aec4d2; }
     .box.hub { border-color: #96b8aa; background: var(--hub-soft); }
     .box.hardware { border-color: #cdbb9d; background: var(--hardware-soft); }
     .box strong { display: block; margin-bottom: 5px; }
     .box small { display: block; color: var(--muted); line-height: 1.45; }
-    .box .port { margin-top: 8px; color: var(--faint); font: 0.76rem "Cascadia Mono", Consolas, monospace; }
+    .box .port { display: block; margin-top: 8px; color: var(--faint); font: 0.76rem "Cascadia Mono", Consolas, monospace; }
+    .context-hub { display: flex; flex-direction: column; justify-content: center; border: 2px solid var(--hub); }
+    .context-hub strong { color: var(--hub); font-size: 1.16rem; }
+
+    .topology-grid {
+      min-width: 940px;
+      display: grid;
+      grid-template-columns: 1.1fr 38px 1.05fr 38px 1.2fr 38px 0.95fr;
+      gap: 8px;
+      align-items: stretch;
+    }
+    .diagram-heading {
+      grid-row: 1;
+      padding: 0 12px 10px;
+      color: var(--faint);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .diagram-heading.center { text-align: center; }
     .arrow-cell { display: grid; place-items: center; color: var(--line-strong); font-size: 1.45rem; }
     .program-col { grid-column: 1; }
     .program-arrow { grid-column: 2; }
@@ -116,10 +205,17 @@
     .keyer-one { grid-row: 5; margin-top: 22px; }
     .keyer-two { grid-row: 6; }
     .keyer-three { grid-row: 7; }
-    .hub-core { grid-column: 5; min-height: 348px; display: flex; flex-direction: column; justify-content: center; border: 2px solid var(--hub); background: var(--hub-soft); }
-    .hub-core strong { color: var(--hub); font-size: 1.24rem; }
-    .hub-core ul { margin: 12px 0 0; padding-left: 19px; color: var(--muted); font-size: 0.88rem; }
-    .hub-domain { display: inline-block; margin-bottom: 10px; color: var(--faint); font: 650 0.7rem "Cascadia Mono", Consolas, monospace; letter-spacing: 0.05em; text-transform: uppercase; }
+    .hub-core {
+      grid-column: 5;
+      min-height: 348px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      border: 2px solid var(--hub);
+    }
+    .hub-core strong { color: var(--hub); font-size: 1.18rem; }
+    .hub-core ul { margin: 10px 0 0; padding-left: 19px; color: var(--muted); font-size: 0.86rem; }
+    .hub-domain { margin-bottom: 9px; color: var(--faint); font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
     .radio-hub { grid-row: 2 / span 3; }
     .keyer-hub { grid-row: 5 / span 3; margin-top: 22px; }
     .hardware-core { grid-column: 7; min-height: 348px; display: flex; flex-direction: column; justify-content: center; }
@@ -128,341 +224,666 @@
     .core-arrow { grid-column: 6; }
     .radio-core-arrow { grid-row: 2 / span 3; }
     .keyer-core-arrow { grid-row: 5 / span 3; margin-top: 22px; }
-    .diagram-note { margin: 18px 0 0; color: var(--muted); font-size: 0.88rem; }
-    .legend { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 14px; color: var(--muted); font-size: 0.8rem; }
-    .legend span { display: inline-flex; align-items: center; gap: 7px; }
-    .legend i { width: 12px; height: 12px; border: 1px solid var(--line); }
-    .legend .client-key i { background: var(--client-soft); border-color: #aec4d2; }
-    .legend .hub-key i { background: var(--hub-soft); border-color: #96b8aa; }
-    .legend .hardware-key i { background: var(--hardware-soft); border-color: #cdbb9d; }
 
-    .routes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-    .subsection-head { margin: 38px 0 16px; padding-top: 30px; border-top: 1px solid var(--line); }
-    .subsection-head p { margin-bottom: 0; color: var(--muted); }
-    .flow-heading { margin: 28px 0 10px; color: var(--muted); font-size: 0.92rem; font-weight: 650; }
-    .route { padding: 21px; border: 1px solid var(--line); background: var(--paper); }
-    .route-number { color: var(--hub); font: 650 0.76rem "Cascadia Mono", Consolas, monospace; }
-    .route ol { margin: 15px 0 0; padding-left: 20px; }
-    .route li { margin-bottom: 9px; color: var(--muted); font-size: 0.9rem; }
-    .route li:last-child { margin-bottom: 0; }
+    .table-scroll { overflow-x: auto; border: 1px solid var(--line); background: var(--paper); }
+    table { width: 100%; min-width: 760px; border-collapse: collapse; }
+    caption { padding: 12px 14px; color: var(--muted); font-size: 0.85rem; text-align: left; caption-side: bottom; }
+    th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    tr:last-child td { border-bottom: 0; }
+    th { color: var(--ink); background: #eef1ef; font-size: 0.79rem; font-weight: 700; }
+    td { font-size: 0.88rem; }
+    .responsibility-table td:first-child, .connection-table td:first-child { font-weight: 650; }
 
-    .two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-    .plain-card { padding: 23px; border: 1px solid var(--line); background: var(--paper); }
-    .plain-card ul { margin: 15px 0 0; padding-left: 20px; }
-    .plain-card li { margin-bottom: 10px; color: var(--muted); }
-    .plain-card li:last-child { margin-bottom: 0; }
-    .caution { margin-top: 18px; padding: 17px 19px; border-left: 4px solid #b08018; color: #543c06; background: var(--caution-soft); }
-    .caution p:last-child { margin-bottom: 0; }
-
-    .connection-flow { display: flex; align-items: center; gap: 10px; overflow-x: auto; padding: 24px; border: 1px solid var(--line); background: var(--paper); }
-    .connection-flow .node { flex: 1 0 150px; min-height: 96px; padding: 15px; border: 1px solid var(--line); }
+    .connection-pair { display: grid; gap: 16px; }
+    .connection-flow {
+      min-width: 760px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .connection-flow .node { flex: 1 0 150px; min-height: 96px; padding: 14px; border: 1px solid var(--line); }
     .connection-flow .node.app { background: var(--client-soft); border-color: #aec4d2; }
     .connection-flow .node.hub { background: var(--hub-soft); border-color: #96b8aa; }
     .connection-flow .node.hardware { background: var(--hardware-soft); border-color: #cdbb9d; }
     .connection-flow strong, .connection-flow small { display: block; }
     .connection-flow small { margin-top: 5px; color: var(--muted); line-height: 1.4; }
-    .connection-flow .flow-arrow { flex: 0 0 auto; color: var(--line-strong); font-size: 1.35rem; }
+    .flow-arrow { flex: 0 0 auto; color: var(--line-strong); font-size: 1.3rem; }
 
-    .implementation-list { display: grid; grid-template-columns: 1fr 1fr; gap: 0 34px; margin: 0; padding-left: 21px; }
-    .implementation-list li { margin-bottom: 12px; padding-left: 4px; color: var(--muted); }
-    .implementation-list strong { color: var(--ink); }
-
-    .sources { margin: 0; padding-left: 21px; }
-    .sources li { margin-bottom: 11px; color: var(--muted); }
-    .sources li:last-child { margin-bottom: 0; }
-    footer { padding-block: 28px; color: var(--faint); font-size: 0.82rem; }
-
-    @media (max-width: 820px) {
-      .header-inner { align-items: flex-start; flex-direction: column; padding-block: 15px; }
-      .section-head, .two-column { grid-template-columns: 1fr; gap: 13px; }
-      .terms, .routes { grid-template-columns: 1fr; }
-      .term + .term { border-left: 0; border-top: 1px solid var(--line); }
-      .implementation-list { grid-template-columns: 1fr; }
+    .sequence { min-width: 820px; }
+    .sequence-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(170px, 1fr));
+      grid-auto-rows: minmax(58px, auto);
+      gap: 0 8px;
+      padding: 0 8px 18px;
+      background:
+        linear-gradient(90deg, transparent calc(12.5% - .5px), var(--line) 0 calc(12.5% + .5px), transparent 0),
+        linear-gradient(90deg, transparent calc(37.5% - .5px), var(--line) 0 calc(37.5% + .5px), transparent 0),
+        linear-gradient(90deg, transparent calc(62.5% - .5px), var(--line) 0 calc(62.5% + .5px), transparent 0),
+        linear-gradient(90deg, transparent calc(87.5% - .5px), var(--line) 0 calc(87.5% + .5px), transparent 0);
     }
-    @media (max-width: 560px) {
-      .shell { width: min(calc(100% - 28px), var(--max)); }
-      .hero { padding-block: 54px 48px; }
-      main section { padding-block: 50px; }
-      .nav { gap: 12px; }
+    .participant {
+      z-index: 1;
+      align-self: start;
+      padding: 10px 8px;
+      border: 1px solid #aec4d2;
+      background: var(--client-soft);
+      text-align: center;
+      font-size: 0.82rem;
+      font-weight: 650;
+    }
+    .participant.hub { border-color: #96b8aa; background: var(--hub-soft); }
+    .participant.hardware { border-color: #cdbb9d; background: var(--hardware-soft); }
+    .message {
+      position: relative;
+      align-self: center;
+      margin: 20px 18px 4px;
+      padding-top: 7px;
+      border-top: 2px solid #66736d;
+      color: var(--muted);
+      background: var(--paper);
+      text-align: center;
+      font-size: 0.78rem;
+      line-height: 1.35;
+    }
+    .message::after {
+      content: "";
+      position: absolute;
+      top: -5px;
+      right: -1px;
+      border-width: 4px 0 4px 7px;
+      border-style: solid;
+      border-color: transparent transparent transparent #66736d;
+    }
+    .message.reverse::after {
+      right: auto;
+      left: -1px;
+      border-width: 4px 7px 4px 0;
+      border-color: transparent #66736d transparent transparent;
+    }
+
+    .state-flow {
+      min-width: 780px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 10px;
+      align-items: stretch;
+    }
+    .state-step { position: relative; padding: 16px; border: 1px solid var(--line); background: var(--paper); }
+    .state-step + .state-step::before {
+      content: "→";
+      position: absolute;
+      left: -19px;
+      top: 50%;
+      color: var(--line-strong);
+      transform: translateY(-50%);
+    }
+    .state-step strong { display: block; margin-bottom: 5px; }
+    .state-step small { color: var(--muted); }
+
+    .callout { margin: 22px 0; padding: 16px 18px; border-left: 4px solid var(--client); background: var(--note); }
+    .callout.warning { border-left-color: #a87600; background: var(--warning); }
+    .callout strong { display: block; margin-bottom: 4px; }
+    .callout p:last-child { margin-bottom: 0; }
+
+    .code-block { margin: 22px 0 30px; overflow: hidden; border: 1px solid #33423b; background: var(--code); }
+    .code-label { padding: 8px 14px; border-bottom: 1px solid #3e4d46; color: #bdc9c2; font-size: 0.75rem; }
+    pre { margin: 0; overflow-x: auto; padding: 18px; color: var(--code-ink); line-height: 1.55; tab-size: 2; }
+    pre code { font-size: 0.82rem; }
+    .toml-comment { color: #9fb0a6; }
+    .toml-section { color: #8ed3b6; font-weight: 650; }
+    .toml-key { color: #b7d7ec; }
+    .toml-string { color: #f2d197; }
+    .toml-number, .toml-bool { color: #d7b5ee; }
+
+    .decision-list { margin: 0; }
+    .decision-list > div { padding: 18px 0; border-bottom: 1px solid var(--line); }
+    .decision-list > div:last-child { border-bottom: 0; }
+    .decision-list dt { margin-bottom: 5px; font-weight: 680; }
+    .decision-list dd { margin: 0; color: var(--muted); }
+    .glossary { display: grid; grid-template-columns: max-content 1fr; gap: 10px 24px; }
+    .glossary dt { font-weight: 680; }
+    .glossary dd { margin: 0; color: var(--muted); }
+    .references li { margin-bottom: 9px; color: var(--muted); }
+    footer { padding: 22px 0 34px; border-top: 1px solid var(--line); color: var(--faint); font-size: 0.82rem; }
+    .footer-inner { width: min(calc(100% - 40px), var(--layout)); margin-inline: auto; }
+
+    @media (max-width: 1340px) {
+      .document-layout { grid-template-columns: 1fr; }
+      .toc { display: none; }
+      article { width: min(100%, var(--article)); margin-inline: auto; }
+      .wide { width: 100%; max-width: none; }
+    }
+    @media (max-width: 720px) {
+      .bar-inner, .document-layout, .footer-inner { width: min(calc(100% - 28px), var(--layout)); }
+      .document-kind { display: none; }
+      .document-header { padding-top: 42px; }
+      section { padding-top: 40px; }
+      .two-column { grid-template-columns: 1fr; gap: 18px; }
+      .doc-meta { grid-template-columns: 1fr; gap: 1px; }
+      .doc-meta dd + dt { margin-top: 7px; }
+      .glossary { grid-template-columns: 1fr; gap: 2px; }
+      .glossary dd + dt { margin-top: 8px; }
     }
     @media print {
-      :root { --page: #fff; }
-      .site-header { position: static; }
-      .nav { display: none; }
-      main section { break-inside: avoid; }
+      @page { margin: 16mm; }
+      :root { --page: #fff; --paper: #fff; }
+      body { font-size: 10.5pt; line-height: 1.5; background: #fff; }
+      .document-bar, .toc, .skip-link { display: none; }
+      .document-layout { display: block; width: 100%; }
+      article { width: 100%; max-width: none; padding: 0; }
+      .document-header { padding: 0 0 18pt; }
+      section { padding: 24pt 0 0; }
+      section + section { border-top: 0; }
+      section:not(#summary) { break-before: page; }
+      h2, h3, h4 { break-after: avoid; }
+      figure, .table-scroll, .callout, .code-block { break-inside: avoid; }
+      .wide { width: 100%; max-width: none; }
+      .diagram-surface, .table-scroll { overflow: visible; }
+      .topology-grid { min-width: 0; font-size: 7pt; }
+      #overview figure { zoom: 0.8; }
+      #overview .takeaway { margin-top: 8pt; }
+      .context-grid, .connection-flow, .sequence, .state-flow, table { min-width: 0; }
+      .box { padding: 7pt; }
+      .hub-core, .hardware-core { min-height: 230px; }
+      .connection-flow .node { min-width: 0; min-height: 70px; padding: 8pt; }
+      .sequence-grid { grid-template-columns: repeat(4, 1fr); font-size: 7pt; }
+      pre { white-space: pre-wrap; }
       a { color: inherit; }
+      footer { display: none; }
     }
   </style>
 </head>
 <body>
   <a class="skip-link" href="#content">Skip to content</a>
-  <header class="site-header">
-    <div class="shell header-inner">
-      <a class="brand" href="#top">QsoRipper <span>/ CatHub architecture note</span></a>
-      <nav class="nav" aria-label="Page sections">
-        <a href="#model">Model</a>
-        <a href="#architecture">Architecture</a>
-        <a href="#identity">Client identity</a>
-        <a href="#routes">Routes</a>
-        <a href="#boundaries">Boundaries</a>
-        <a href="#sources">Sources</a>
-      </nav>
+  <header class="document-bar">
+    <div class="bar-inner">
+      <a class="document-name" href="#top">QsoRipper <span>/ CatHub architecture</span></a>
+      <span class="document-kind">Software architecture note</span>
     </div>
   </header>
 
-  <div class="hero" id="top">
-    <div class="shell">
-      <p class="label">Engineering note</p>
-      <h1>Shared control of a radio and WinKeyer</h1>
-      <p class="lede">CatHub brokers access to two stateful station devices: a transceiver controlled through computer-aided transceiver (CAT) interfaces, and a hardware WinKeyer used for CW transmission.</p>
-      <div class="answer">
-        <p><strong>The interoperability problem:</strong> established tools such as OmniRig and Hamlib's <code>rigctld</code> can each let compatible programs share a radio. Other programs require a native CAT serial port. CW applications may also expect direct access to the station's WinKeyer. These interfaces do not coordinate with one another.</p>
-        <p>CatHub becomes the sole owner of both physical devices. It presents separate, familiar interfaces to existing applications and coordinates the resulting radio operations, CW jobs, maintenance sessions, and transmit requests.</p>
-      </div>
-    </div>
+  <div class="document-layout" id="top">
+    <nav class="toc" aria-label="Table of contents">
+      <div class="toc-title">Contents</div>
+      <ol>
+        <li><a href="#summary">Executive summary</a></li>
+        <li><a href="#problem">Problem and scope</a></li>
+        <li><a href="#goals">Goals and non-goals</a></li>
+        <li><a href="#context">System context</a></li>
+        <li><a href="#overview">Architecture overview</a></li>
+        <li><a href="#components">Components and responsibilities</a></li>
+        <li><a href="#interfaces">Interfaces and topology</a></li>
+        <li><a href="#runtime">Runtime behavior</a></li>
+        <li><a href="#safety">Safety and failure behavior</a></li>
+        <li><a href="#configuration">Configuration and deployment</a></li>
+        <li><a href="#implementation">Implementation and limitations</a></li>
+        <li><a href="#decisions">Design decisions and tradeoffs</a></li>
+        <li><a href="#glossary">Glossary and references</a></li>
+      </ol>
+    </nav>
+
+    <article id="content">
+      <header class="document-header">
+        <p class="kicker">QsoRipper engineering documentation</p>
+        <h1>CatHub Architecture: Shared Control of a Radio and WinKeyer</h1>
+        <p class="subtitle">CatHub allows applications using OmniRig, Hamlib NET, native CAT serial interfaces, virtual WinKeyer interfaces, and typed APIs to safely share one physical station.</p>
+        <dl class="doc-meta">
+          <dt>Document type</dt><dd>Software architecture note</dd>
+          <dt>Scope</dt><dd>CatHub radio control, CW keying, client endpoints, and station-wide transmit safety</dd>
+          <dt>Examples</dt><dd>Illustrative Windows station using a Kenwood TS-590, a WinKeyer, and com0com virtual pairs</dd>
+        </dl>
+      </header>
+
+      <section id="summary" aria-labelledby="summary-heading">
+        <h2 id="summary-heading"><span class="section-number">1.</span> Executive summary</h2>
+        <p class="lead">A station may run several programs that expect exclusive access to the same radio or keyer. Those programs also speak different protocols and have different authority. CatHub places one coordination boundary between the software and the physical devices.</p>
+        <p>CatHub is the sole owner of the radio control link and physical WinKeyer. Client applications connect to private serial or loopback network endpoints that match the protocol they already understand. Inside the daemon, separate radio and WinKeyer brokers serialize work, maintain shared state, apply endpoint permissions, and use one station-wide push-to-talk (PTT) lease.</p>
+        <p>The design lets existing applications continue to use OmniRig, Hamlib NET, vendor CAT commands, or the WinKeyer host protocol. It does not make the physical serial ports shareable. It replaces direct hardware access with explicit, managed endpoints.</p>
+      </section>
+
+      <section id="problem" aria-labelledby="problem-heading">
+        <h2 id="problem-heading"><span class="section-number">2.</span> Problem and scope</h2>
+        <p>A modern amateur radio station often combines a panadapter, logger, digital-mode program, manufacturer control application, and logging engine. The transceiver and WinKeyer each expose one stateful hardware connection, while every application behaves as though it owns that connection.</p>
+        <p>OmniRig coordinates programs that use its automation API. Hamlib's <code>rigctld</code> coordinates programs that use Hamlib NET. A native CAT program still requires a serial port, and legacy CW software may require a physical-looking WinKeyer port. These coordinators do not share station-wide state or transmit ownership with one another.</p>
+
+        <div class="table-scroll wide">
+          <table>
+            <thead><tr><th>Existing approach</th><th>What it coordinates</th><th>Boundary</th><th>Role with CatHub</th></tr></thead>
+            <tbody>
+              <tr><td>OmniRig</td><td>Programs using the OmniRig automation API.</td><td>Native serial CAT and Hamlib NET clients cannot use that API directly.</td><td>Remains a coordinator for its clients and connects to a private CatHub serial endpoint.</td></tr>
+              <tr><td>Hamlib <code>rigctld</code></td><td>Programs using the rigctld-compatible TCP protocol.</td><td>Programs requiring a COM port or vendor CAT dialect cannot connect to its socket.</td><td>Hamlib-aware programs connect to dedicated CatHub network endpoints.</td></tr>
+              <tr><td>Direct serial CAT</td><td>One program speaking a supported vendor command set.</td><td>Serial ports are normally exclusive, and independent command streams cannot be safely combined.</td><td>Each program receives a private virtual COM pair backed by a CatHub serial endpoint.</td></tr>
+              <tr><td>Direct WinKeyer access</td><td>One host session using the stateful WinKeyer byte protocol.</td><td>Client state, buffered Morse, status bytes, and maintenance replies cannot be interleaved safely.</td><td>Legacy programs use private virtual endpoints; QsoRipper uses a typed loopback API.</td></tr>
+            </tbody>
+            <caption>Table 1. Existing coordinators solve compatibility within a client group, not across the complete station.</caption>
+          </table>
+        </div>
+        <p class="takeaway">CatHub's scope begins where separate interface-specific coordinators stop: shared hardware ownership, state, scheduling, permissions, and transmit safety.</p>
+      </section>
+
+      <section id="goals" aria-labelledby="goals-heading">
+        <h2 id="goals-heading"><span class="section-number">3.</span> Goals and non-goals</h2>
+        <div class="two-column">
+          <div>
+            <h3>Goals</h3>
+            <ul>
+              <li>Keep one authoritative owner for each physical hardware connection.</li>
+              <li>Support simultaneous serial CAT, Hamlib NET, OmniRig, WinKeyer serial, and typed API clients.</li>
+              <li>Normalize modeled radio operations into shared state and propagate changes from any client or the radio front panel.</li>
+              <li>Preserve per-session command order while prioritizing PTT and interactive writes over background reads.</li>
+              <li>Apply explicit read, write, PTT, control, and configuration permissions at each endpoint.</li>
+              <li>Return the station to receive when a client disconnects or a transmit safety limit expires.</li>
+              <li>Keep radio-specific behavior behind backend capabilities and client-specific behavior behind endpoint dialects.</li>
+            </ul>
+          </div>
+          <div>
+            <h3>Non-goals</h3>
+            <ul>
+              <li>Replacing OmniRig, Hamlib, loggers, digital-mode applications, or manufacturer control software.</li>
+              <li>Implementing every Hamlib operation or every vendor CAT command in the universal state model.</li>
+              <li>Automatically detecting a client program or dialect from arbitrary command traffic.</li>
+              <li>Allowing several applications to open one physical or virtual serial endpoint.</li>
+              <li>Supporting simultaneous transmit owners.</li>
+              <li>Providing remote, cross-host station access in the current deployment model.</li>
+              <li>Claiming support for radio families or WinKeyer behaviors that have not been implemented and tested.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section id="context" aria-labelledby="context-heading">
+        <h2 id="context-heading"><span class="section-number">4.</span> System context</h2>
+        <p>From an operator's perspective, CatHub is a local station service. Applications connect to CatHub instead of opening the physical device ports. CatHub then coordinates all radio-control and CW-keying traffic.</p>
+
+        <figure class="wide">
+          <div class="diagram-surface" role="img" aria-label="System context diagram. Logging, digital-mode, SDR, control, and CW applications connect to CatHub. CatHub alone connects to the physical radio and physical WinKeyer.">
+            <div class="context-grid">
+              <div class="context-apps">
+                <div class="box client"><strong>Radio applications</strong><small>Loggers, digital modes, SDR software, manufacturer control, and QsoRipper.</small></div>
+                <div class="box client"><strong>CW applications</strong><small>Legacy WinKeyer clients, maintenance tools, and QsoRipper CW clients.</small></div>
+              </div>
+              <div class="context-arrow" aria-hidden="true">→</div>
+              <div class="box hub context-hub"><strong>CatHub</strong><small>Endpoint adapters, shared state, radio broker, WinKeyer broker, permissions, scheduling, and station PTT ownership.</small></div>
+              <div class="context-arrow" aria-hidden="true">⇄</div>
+              <div class="context-hardware">
+                <div class="box hardware"><strong>Physical radio</strong><small>One CAT connection.</small></div>
+                <div class="box hardware"><strong>Physical WinKeyer</strong><small>One 1200 baud host connection.</small></div>
+              </div>
+            </div>
+          </div>
+          <figcaption><span class="figure-title"><span class="figure-number">Figure 1.</span> CatHub system context.</span>All software interfaces terminate at CatHub. Only CatHub opens the physical station devices.</figcaption>
+        </figure>
+      </section>
+
+      <section id="overview" aria-labelledby="overview-heading">
+        <h2 id="overview-heading"><span class="section-number">5.</span> Architecture overview</h2>
+        <p>The detailed topology separates the protocol expected by each application from the backend used to control the hardware. Radio-control clients converge on one radio broker. CW clients converge on a separate WinKeyer broker. Both brokers use the same station transmit boundary.</p>
+
+        <figure class="wide">
+          <div class="legend" aria-label="Diagram legend">
+            <span class="client-key"><i></i> Application or existing interface</span>
+            <span class="hub-key"><i></i> CatHub component</span>
+            <span class="hardware-key"><i></i> Physical hardware</span>
+          </div>
+          <div class="diagram-surface" role="img" aria-label="Detailed topology diagram. Radio applications converge through OmniRig, Hamlib NET, and serial CAT endpoints on the CatHub radio broker. CW applications converge through virtual WinKeyer serial and typed gRPC endpoints on the CatHub WinKeyer broker. The brokers connect separately to the physical radio and WinKeyer.">
+            <div class="topology-grid">
+              <div class="diagram-heading program-col">Programs</div><div class="diagram-heading interface-col center">Interface used</div><div class="diagram-heading" style="grid-column:5;text-align:center">CatHub broker</div><div class="diagram-heading" style="grid-column:7;text-align:center">Hardware</div>
+
+              <div class="box client program-col radio-one"><strong>HDSDR and other OmniRig clients</strong><small>Use the OmniRig automation API.</small></div>
+              <div class="arrow-cell program-arrow radio-one" aria-hidden="true">→</div>
+              <div class="box interface interface-col radio-one"><strong>OmniRig</strong><small>Configured as a TS-2000 on its own virtual COM port.</small><span class="port">Example: COM11</span></div>
+              <div class="arrow-cell interface-arrow radio-one" aria-hidden="true">→</div>
+
+              <div class="box client program-col radio-two"><strong>WSJT-X, JS8Call, Log4OM, QsoRipper</strong><small>Use Hamlib's NET rigctl model.</small></div>
+              <div class="arrow-cell program-arrow radio-two" aria-hidden="true">→</div>
+              <div class="box interface interface-col radio-two"><strong>Hamlib NET endpoints</strong><small>Each policy group connects to a separate TCP listener.</small><span class="port">Example: 127.0.0.1:4532-4535</span></div>
+              <div class="arrow-cell interface-arrow radio-two" aria-hidden="true">→</div>
+
+              <div class="box client program-col radio-three"><strong>N1MM, ARCP-590, native CAT clients</strong><small>Open a COM port as though a radio were attached.</small></div>
+              <div class="arrow-cell program-arrow radio-three" aria-hidden="true">→</div>
+              <div class="box interface interface-col radio-three"><strong>Dedicated serial CAT endpoint</strong><small>A private virtual pair carries one implemented CAT dialect.</small><span class="port">Example: COM21 ⇄ COM20</span></div>
+              <div class="arrow-cell interface-arrow radio-three" aria-hidden="true">→</div>
+
+              <div class="box hub hub-core radio-hub"><span class="hub-domain">Radio control</span><strong>Radio broker</strong><small>Owns the physical CAT connection.</small><ul><li>parses client dialects</li><li>maintains shared radio state</li><li>serializes reads and writes</li><li>applies endpoint permissions</li><li>leases PTT ownership</li></ul></div>
+              <div class="arrow-cell core-arrow radio-core-arrow" aria-hidden="true">⇄</div>
+              <div class="box hardware hardware-core radio-core"><strong>Transceiver</strong><small>One physical serial or network CAT connection.</small><span class="port">Example: TS-590 on COM4</span></div>
+
+              <div class="box client program-col keyer-one"><strong>N1MM Logger+</strong><small>Uses a WinKeyer-compatible serial port.</small></div>
+              <div class="arrow-cell program-arrow keyer-one" aria-hidden="true">→</div>
+              <div class="box interface interface-col keyer-one"><strong>Virtual WinKeyer endpoint</strong><small>Unmodified WinKeyer byte protocol over a private pair.</small><span class="port">Example: COM41 ⇄ COM40</span></div>
+              <div class="arrow-cell interface-arrow keyer-one" aria-hidden="true">→</div>
+
+              <div class="box client program-col keyer-two"><strong>QsoRipper CW clients</strong><small>Submit named or expanded CW work.</small></div>
+              <div class="arrow-cell program-arrow keyer-two" aria-hidden="true">→</div>
+              <div class="box interface interface-col keyer-two"><strong>Typed WinKeyer gRPC service</strong><small>Named clients submit atomic jobs and receive status.</small><span class="port">Example: 127.0.0.1:50071</span></div>
+              <div class="arrow-cell interface-arrow keyer-two" aria-hidden="true">→</div>
+
+              <div class="box client program-col keyer-three"><strong>WKTools</strong><small>Performs keyer configuration and diagnostics.</small></div>
+              <div class="arrow-cell program-arrow keyer-three" aria-hidden="true">→</div>
+              <div class="box interface interface-col keyer-three"><strong>Maintenance endpoint</strong><small>Exclusive, permission-gated access on a separate pair.</small><span class="port">Example: COM43 ⇄ COM42</span></div>
+              <div class="arrow-cell interface-arrow keyer-three" aria-hidden="true">→</div>
+
+              <div class="box hub hub-core keyer-hub"><span class="hub-domain">CW keying</span><strong>WinKeyer broker</strong><small>Owns the physical keyer session.</small><ul><li>keeps client profiles separate</li><li>queues complete CW jobs</li><li>prevents byte interleaving</li><li>fans out device status</li><li>grants exclusive maintenance</li></ul></div>
+              <div class="arrow-cell core-arrow keyer-core-arrow" aria-hidden="true">⇄</div>
+              <div class="box hardware hardware-core keyer-core"><strong>WinKeyer</strong><small>One physical 1200 baud, 8-N-2 serial connection.</small><span class="port">Example: WinKeyer on COM3</span></div>
+            </div>
+          </div>
+          <figcaption><span class="figure-title"><span class="figure-number">Figure 2.</span> Detailed CatHub topology.</span>Client-specific adapters remain at the edge. Shared state and scheduling sit inside the brokers, while the physical devices remain single-owner resources.</figcaption>
+        </figure>
+        <p class="takeaway">The major architectural boundary is hardware ownership: applications may differ in transport and protocol, but none bypasses the broker that owns the corresponding device.</p>
+      </section>
+
+      <section id="components" aria-labelledby="components-heading">
+        <h2 id="components-heading"><span class="section-number">6.</span> Components and responsibilities</h2>
+        <p>CatHub separates volatile hardware and client protocols from the shared station model. This keeps new radio backends and client dialects at the edges rather than spreading device-specific rules through the scheduler.</p>
+        <div class="table-scroll wide">
+          <table class="responsibility-table">
+            <thead><tr><th>Component</th><th>Primary responsibility</th><th>Important boundary</th></tr></thead>
+            <tbody>
+              <tr><td>Endpoint adapters</td><td>Accept serial, Hamlib NET, virtual WinKeyer, or typed gRPC clients; create client sessions; frame and parse requests.</td><td>An endpoint fixes the protocol, permissions, and compatibility policy before a client connects.</td></tr>
+              <tr><td>Client dialects</td><td>Translate supported CAT commands into shared operations and format protocol-specific replies or events.</td><td>Dialects use shared state and capabilities, not a concrete radio backend.</td></tr>
+              <tr><td>Radio broker</td><td>Serialize radio operations, preserve per-session FIFO order, prioritize interactive work, and reconnect the hardware transport.</td><td>Only this actor submits work to the active radio backend.</td></tr>
+              <tr><td>Radio backend</td><td>Implement modeled operations and native passthrough for a physical radio or an upstream rigctld process.</td><td>Radio-specific behavior is isolated behind backend capabilities.</td></tr>
+              <tr><td>Shared radio state</td><td>Store modeled VFO, frequency, mode, split, RIT/XIT, meter, power, and PTT state with freshness metadata.</td><td>All modeled mutations and downstream change notifications pass through this state.</td></tr>
+              <tr><td>Poller and event fan-out</td><td>Coalesce baseline polling, consume native push events, update shared state, and notify interested endpoints.</td><td>Native push reduces polling per covered field; it does not disable polling for uncovered fields.</td></tr>
+              <tr><td>WinKeyer broker</td><td>Virtualize client sessions, preserve client profiles, schedule atomic CW jobs, route status, and isolate maintenance.</td><td>Client bytes and commands are never interleaved inside another client's active job.</td></tr>
+              <tr><td>Hardware actors</td><td>Own the physical radio or WinKeyer transport and recover it with bounded backoff after failure.</td><td>Client endpoints remain available while a physical device reconnects.</td></tr>
+              <tr><td>PTT lease</td><td>Grant one station-wide transmit owner across CAT PTT and WinKeyer activity.</td><td>A conflicting owner is rejected rather than allowed to contend.</td></tr>
+              <tr><td>Transmit watchdogs</td><td>Enforce radio PTT and WinKeyer maximum-transmit durations and force a safe return to receive.</td><td>The timeout is a hard transmit ceiling, not a generic client-idle timeout.</td></tr>
+              <tr><td>Configuration</td><td>Define hardware, endpoints, transports, dialects, permissions, compatibility views, polling, and safety limits.</td><td>Invalid or unsafe combinations fail validation before hardware is opened.</td></tr>
+            </tbody>
+            <caption>Table 2. CatHub component responsibilities and architectural boundaries.</caption>
+          </table>
+        </div>
+      </section>
+
+      <section id="interfaces" aria-labelledby="interfaces-heading">
+        <h2 id="interfaces-heading"><span class="section-number">7.</span> Interfaces and connection topology</h2>
+        <p>The following map uses one illustrative Windows station. Port numbers are examples, not required defaults. A serial application opens the application side of its own virtual pair. CatHub opens the other side and the physical hardware ports.</p>
+
+        <div class="table-scroll wide">
+          <table class="connection-table">
+            <thead><tr><th>Client</th><th>Application endpoint</th><th>CatHub endpoint</th><th>Protocol or dialect</th><th>Example authority</th></tr></thead>
+            <tbody>
+              <tr><td>HDSDR through OmniRig</td><td><code>COM11</code></td><td><code>COM10</code></td><td>TS-2000 CAT</td><td>Read, frequency write</td></tr>
+              <tr><td>N1MM radio control</td><td><code>COM21</code></td><td><code>COM20</code></td><td>TS-590 CAT, single-VFO view</td><td>Read, write, PTT</td></tr>
+              <tr><td>ARCP-590</td><td><code>COM31</code></td><td><code>COM30</code></td><td>TS-590 CAT with passthrough</td><td>Read, write, PTT, configuration write</td></tr>
+              <tr><td>QsoRipper engine</td><td><code>127.0.0.1:4532</code></td><td>TCP listener <code>:4532</code></td><td>Hamlib NET</td><td>Read</td></tr>
+              <tr><td>WSJT-X</td><td><code>127.0.0.1:4533</code></td><td>TCP listener <code>:4533</code></td><td>Hamlib NET, single-VFO view</td><td>Read, write, PTT</td></tr>
+              <tr><td>Log4OM</td><td><code>127.0.0.1:4534</code></td><td>TCP listener <code>:4534</code></td><td>Hamlib NET, single-VFO view</td><td>Read, write</td></tr>
+              <tr><td>JS8Call</td><td><code>127.0.0.1:4535</code></td><td>TCP listener <code>:4535</code></td><td>Hamlib NET, single-VFO view</td><td>Read, write, PTT</td></tr>
+              <tr><td>N1MM CW</td><td><code>COM41</code></td><td><code>COM40</code></td><td>WinKeyer host protocol, 1200 baud 8-N-2</td><td>Status, send, control, PTT</td></tr>
+              <tr><td>WKTools</td><td><code>COM43</code></td><td><code>COM42</code></td><td>WinKeyer maintenance</td><td>Status, control, configuration write</td></tr>
+              <tr><td>QsoRipper CW client</td><td><code>127.0.0.1:50071</code></td><td>Loopback gRPC service</td><td>Typed WinKeyer API</td><td>Named jobs, speed, status, cancel, abort</td></tr>
+            </tbody>
+            <caption>Table 3. Example client-to-CatHub connection map. Every serial client has a private virtual pair.</caption>
+          </table>
+        </div>
+
+        <h3>Virtual serial pairs</h3>
+        <p>A com0com pair on Windows, or a PTY pair on Linux, behaves like a null-modem cable between two processes. Bytes written at one endpoint appear at the other. The pair does not make either endpoint shareable; CatHub and the application must open opposite sides.</p>
+        <p>In a serial endpoint configuration, <code>transport</code> is the port CatHub opens. <code>application_transport</code> records the paired port the operator assigns to the application. The latter is operator guidance and setup metadata; CatHub does not open it.</p>
+
+        <figure class="wide">
+          <div class="diagram-surface connection-pair" role="img" aria-label="Two example connection paths. OmniRig opens COM11, paired with CatHub COM10, and CatHub controls the radio on COM4. N1MM opens COM41, paired with CatHub COM40, and CatHub controls the physical WinKeyer on COM3.">
+            <div class="connection-flow">
+              <div class="node app"><strong>OmniRig</strong><small>Application side</small><span class="mono">COM11</span></div>
+              <span class="flow-arrow" aria-hidden="true">⇄</span>
+              <div class="node"><strong>com0com pair</strong><small>Bidirectional byte path</small></div>
+              <span class="flow-arrow" aria-hidden="true">⇄</span>
+              <div class="node hub"><strong>CatHub CAT endpoint</strong><small>Hub side</small><span class="mono">COM10</span></div>
+              <span class="flow-arrow" aria-hidden="true">⇄</span>
+              <div class="node hardware"><strong>Physical radio</strong><small>CatHub only</small><span class="mono">COM4</span></div>
+            </div>
+            <div class="connection-flow">
+              <div class="node app"><strong>N1MM Logger+</strong><small>Application side</small><span class="mono">COM41</span></div>
+              <span class="flow-arrow" aria-hidden="true">⇄</span>
+              <div class="node"><strong>com0com pair</strong><small>1200 baud, 8-N-2</small></div>
+              <span class="flow-arrow" aria-hidden="true">⇄</span>
+              <div class="node hub"><strong>CatHub WinKeyer endpoint</strong><small>Hub side</small><span class="mono">COM40</span></div>
+              <span class="flow-arrow" aria-hidden="true">⇄</span>
+              <div class="node hardware"><strong>Physical WinKeyer</strong><small>CatHub only</small><span class="mono">COM3</span></div>
+            </div>
+          </div>
+          <figcaption><span class="figure-title"><span class="figure-number">Figure 3.</span> Example serial connection paths.</span>The application-side, CatHub-side, and physical hardware ports are distinct. Reversing the two sides of a virtual pair causes an exclusive-open conflict.</figcaption>
+        </figure>
+
+        <div class="callout warning">
+          <strong>Operator warning</strong>
+          <p>Never configure an application to open CatHub's <code>transport</code> port or a physical hardware port. The application must open its assigned <code>application_transport</code> port.</p>
+        </div>
+      </section>
+
+      <section id="runtime" aria-labelledby="runtime-heading">
+        <h2 id="runtime-heading"><span class="section-number">8.</span> Runtime behavior</h2>
+        <p>CatHub handles radio commands and CW jobs through separate schedulers because the protocols have different state and ordering rules. The following scenarios show the important runtime paths.</p>
+
+        <h3>8.1 CAT command and state propagation</h3>
+        <p>A client command is parsed under the policy of its configured endpoint. Modeled operations update the shared state through the serialized radio path. Replies and spontaneous changes are then formatted for each client dialect.</p>
+        <figure class="wide">
+          <div class="diagram-surface" role="img" aria-label="CAT sequence. A client sends a request to its endpoint. The endpoint validates and normalizes it. The radio broker serializes the operation to the physical radio. The reply or native event updates shared state, and protocol-specific results are returned or fanned out to clients.">
+            <div class="sequence">
+              <div class="sequence-grid">
+                <div class="participant" style="grid-column:1;grid-row:1">Client application</div>
+                <div class="participant hub" style="grid-column:2;grid-row:1">Endpoint adapter</div>
+                <div class="participant hub" style="grid-column:3;grid-row:1">Radio broker and state</div>
+                <div class="participant hardware" style="grid-column:4;grid-row:1">Physical radio</div>
+                <div class="message" style="grid-column:1/3;grid-row:2">1. CAT or Hamlib request</div>
+                <div class="message" style="grid-column:2/4;grid-row:3">2. Authorize, parse, and normalize</div>
+                <div class="message" style="grid-column:3/5;grid-row:4">3. Serialized backend operation</div>
+                <div class="message reverse" style="grid-column:3/5;grid-row:5">4. Reply or native push event</div>
+                <div class="message reverse" style="grid-column:2/4;grid-row:6">5. Update snapshot and publish change</div>
+                <div class="message reverse" style="grid-column:1/3;grid-row:7">6. Protocol reply or spontaneous update</div>
+              </div>
+            </div>
+          </div>
+          <figcaption><span class="figure-title"><span class="figure-number">Figure 4.</span> CAT request and state-update sequence.</span>Per-session FIFO ordering is preserved. Across ready session heads, PTT and interactive writes take priority over routine reads and baseline polling.</figcaption>
+        </figure>
+        <p>The result is one coherent station view. A front-panel change, an N1MM band change, or a WSJT-X frequency write updates the same model and can be reported to every compatible client without multiplying physical-radio polls.</p>
+
+        <h3>8.2 Atomic CW scheduling</h3>
+        <p>The WinKeyer protocol mixes client configuration, status, buffered commands, and Morse data. CatHub therefore schedules complete typed jobs and leased raw streams rather than forwarding bytes from several clients at once.</p>
+        <figure class="wide">
+          <div class="diagram-surface" role="img" aria-label="CW sequence. A legacy or typed client submits Morse work. The WinKeyer endpoint validates permissions. The broker acquires station PTT, selects the client profile, and sends an uninterrupted job to the physical WinKeyer. Status and completion return to the owner, then PTT is released and the primary profile is restored.">
+            <div class="sequence">
+              <div class="sequence-grid">
+                <div class="participant" style="grid-column:1;grid-row:1">Legacy or typed client</div>
+                <div class="participant hub" style="grid-column:2;grid-row:1">Endpoint or gRPC API</div>
+                <div class="participant hub" style="grid-column:3;grid-row:1">WinKeyer scheduler</div>
+                <div class="participant hardware" style="grid-column:4;grid-row:1">Physical WinKeyer</div>
+                <div class="message" style="grid-column:1/3;grid-row:2">1. Text job or raw-stream data</div>
+                <div class="message" style="grid-column:2/4;grid-row:3">2. Authorize and enqueue in arrival order</div>
+                <div class="message" style="grid-column:3/5;grid-row:4">3. Acquire PTT and apply client profile</div>
+                <div class="message" style="grid-column:3/5;grid-row:5">4. Send uninterrupted commands and Morse</div>
+                <div class="message reverse" style="grid-column:3/5;grid-row:6">5. Status, echo, and completion</div>
+                <div class="message reverse" style="grid-column:1/4;grid-row:7">6. Route result to owner; restore primary profile and release PTT</div>
+              </div>
+            </div>
+          </div>
+          <figcaption><span class="figure-title"><span class="figure-number">Figure 5.</span> Atomic CW scheduling sequence.</span>No other client's bytes or profile commands are inserted inside an active job. Physical paddle break-in retains the keyer's native priority.</figcaption>
+        </figure>
+        <p>The result is deterministic CW. Typed jobs remain atomic, a virtual serial client keeps its own protocol state, and maintenance replies remain private to the maintenance owner.</p>
+
+        <h3>8.3 PTT arbitration and recovery</h3>
+        <p>Radio CAT PTT and WinKeyer transmission compete for one station resource. The first authorized client to transmit acquires a lease. Other clients receive a busy or failed-precondition response until the owner releases it.</p>
+        <figure class="wide">
+          <div class="diagram-surface" role="img" aria-label="PTT lifecycle. An authorized request acquires the station lease, keys the selected hardware path, remains bounded by a transmit watchdog, and returns to receive on normal release, owner disconnect, cancellation, timeout, or hardware failure.">
+            <div class="state-flow">
+              <div class="state-step"><strong>Request</strong><small>Endpoint verifies PTT authority and current lease state.</small></div>
+              <div class="state-step"><strong>Acquire</strong><small>Client session becomes the station-wide transmit owner.</small></div>
+              <div class="state-step"><strong>Transmit</strong><small>CAT or WinKeyer path is active under a hard duration ceiling.</small></div>
+              <div class="state-step"><strong>Release safely</strong><small>Normal RX, cancellation, disconnect, timeout, or failure forces key-up and frees the lease.</small></div>
+            </div>
+          </div>
+          <figcaption><span class="figure-title"><span class="figure-number">Figure 6.</span> Station-wide PTT lease lifecycle.</span>The lease prevents simultaneous transmit owners and provides a single place to enforce fail-safe return to receive.</figcaption>
+        </figure>
+      </section>
+
+      <section id="safety" aria-labelledby="safety-heading">
+        <h2 id="safety-heading"><span class="section-number">9.</span> Safety and failure behavior</h2>
+        <p>Failure handling is part of the architecture rather than an application convention. CatHub keeps safety decisions in the brokers that own the physical devices.</p>
+        <div class="table-scroll wide">
+          <table>
+            <thead><tr><th>Condition</th><th>CatHub behavior</th><th>Operational result</th></tr></thead>
+            <tbody>
+              <tr><td>Permission denied</td><td>Reject the request using the client protocol's error form and log the endpoint and operation.</td><td>Read-only or restricted clients cannot tune, key, or change persistent settings.</td></tr>
+              <tr><td>PTT already leased</td><td>Reject the conflicting PTT or CW request as busy.</td><td>Only one client controls station transmit at a time.</td></tr>
+              <tr><td>Transmit ceiling reached</td><td>Force receive or key-up, release the lease, and record the safety action.</td><td>A crashed or wedged client cannot hold continuous transmit indefinitely.</td></tr>
+              <tr><td>PTT owner disconnects</td><td>Unkey immediately during session teardown and release only that owner's lease.</td><td>The transmitter returns to receive without waiting for the maximum-duration ceiling.</td></tr>
+              <tr><td>CW job cancelled</td><td>Remove the requesting client's queued jobs. An authorized active abort clears the physical buffer and forces key-up.</td><td>Cancellation is scoped and does not remove another client's queued work.</td></tr>
+              <tr><td>Radio transport fails</td><td>Keep client endpoints open, mark shared state stale, reject mutations, and retry the backend with backoff.</td><td>Clients can distinguish cached status from live control; service resumes after reconnect.</td></tr>
+              <tr><td>WinKeyer transport fails</td><td>Cancel queued work, release station PTT, mark status disconnected, and reopen the port with bounded backoff.</td><td>No queued Morse resumes unexpectedly after a hardware interruption.</td></tr>
+              <tr><td>WinKeyer maintenance begins</td><td>Require no active or queued transmission, clear and dekey, close the normal host session, and grant exclusive access.</td><td>Disruptive administrative commands cannot interleave with normal sending.</td></tr>
+              <tr><td>Graceful shutdown</td><td>Attempt radio RX, clear the keyer buffer, force key-up, close the physical keyer host session, and release PTT.</td><td>An orderly service stop leaves hardware in a safe receive state.</td></tr>
+              <tr><td>Malformed or oversized input</td><td>Reject invalid values, bound in-progress frames, and close or resynchronize the offending session as appropriate.</td><td>Bad client input cannot grow buffers without limit or silently coerce unsafe commands.</td></tr>
+            </tbody>
+            <caption>Table 4. Safety and failure contracts.</caption>
+          </table>
+        </div>
+        <div class="callout">
+          <strong>Implementation detail</strong>
+          <p>The transmit watchdog is a maximum continuous-transmit duration, not an inactivity timer. Digital-mode applications may key PTT and send no further CAT traffic until the over completes.</p>
+        </div>
+      </section>
+
+      <section id="configuration" aria-labelledby="configuration-heading">
+        <h2 id="configuration-heading"><span class="section-number">10.</span> Configuration and deployment</h2>
+        <p>Operators configure physical devices first, then create one endpoint for each application or authority group. The examples below use standalone CatHub section names. In the unified QsoRipper configuration, the same sections are nested under <code>cat_hub</code>.</p>
+
+        <h3>10.1 Physical hardware and safety limits</h3>
+        <div class="code-block">
+          <div class="code-label">TOML - example physical device configuration</div>
+          <pre><code class="language-toml"><span class="toml-comment"># Physical ports are opened only by CatHub.</span>
+<span class="toml-section">[radio]</span>
+<span class="toml-key">backend</span> = <span class="toml-string">"ts590"</span>
+<span class="toml-key">model</span> = <span class="toml-string">"TS-590SG"</span>
+<span class="toml-key">transport</span> = <span class="toml-string">"serial"</span>
+<span class="toml-key">port</span> = <span class="toml-string">"COM4"</span>
+<span class="toml-key">baud</span> = <span class="toml-number">57600</span>
+
+<span class="toml-section">[poll]</span>
+<span class="toml-key">baseline_ms</span> = <span class="toml-number">200</span>
+<span class="toml-key">heartbeat_ms</span> = <span class="toml-number">2000</span>
+
+<span class="toml-section">[ptt]</span>
+<span class="toml-key">max_tx_ms</span> = <span class="toml-number">300000</span>
+
+<span class="toml-section">[events]</span>
+<span class="toml-key">native_push</span> = <span class="toml-bool">true</span>
+
+<span class="toml-section">[winkeyer]</span>
+<span class="toml-key">port</span> = <span class="toml-string">"COM3"</span>
+<span class="toml-key">baud</span> = <span class="toml-number">1200</span>
+<span class="toml-key">max_tx_ms</span> = <span class="toml-number">30000</span>
+<span class="toml-key">api_bind</span> = <span class="toml-string">"127.0.0.1:50071"</span></code></pre>
+        </div>
+
+        <h3>10.2 Application endpoints</h3>
+        <div class="code-block">
+          <div class="code-label">TOML - example serial, network, and WinKeyer endpoints</div>
+          <pre><code class="language-toml"><span class="toml-comment"># CatHub opens COM10. OmniRig opens the paired COM11.</span>
+<span class="toml-section">[[serial_endpoint]]</span>
+<span class="toml-key">name</span> = <span class="toml-string">"hdsdr-omnirig"</span>
+<span class="toml-key">transport</span> = <span class="toml-string">"COM10"</span>
+<span class="toml-key">application_transport</span> = <span class="toml-string">"COM11"</span>
+<span class="toml-key">baud</span> = <span class="toml-number">115200</span>
+<span class="toml-key">dialect</span> = <span class="toml-string">"ts2000"</span>
+<span class="toml-key">perms</span> = [<span class="toml-string">"read"</span>, <span class="toml-string">"frequency_write"</span>]
+
+<span class="toml-comment"># A separate loopback listener expresses WSJT-X authority.</span>
+<span class="toml-section">[[hamlib_net]]</span>
+<span class="toml-key">name</span> = <span class="toml-string">"wsjtx"</span>
+<span class="toml-key">bind</span> = <span class="toml-string">"127.0.0.1:4533"</span>
+<span class="toml-key">single_vfo</span> = <span class="toml-bool">true</span>
+<span class="toml-key">perms</span> = [<span class="toml-string">"read"</span>, <span class="toml-string">"write"</span>, <span class="toml-string">"ptt"</span>]
+
+<span class="toml-comment"># CatHub opens COM40. N1MM opens the paired COM41.</span>
+<span class="toml-section">[[winkeyer_endpoint]]</span>
+<span class="toml-key">name</span> = <span class="toml-string">"n1mm-cw"</span>
+<span class="toml-key">transport</span> = <span class="toml-string">"COM40"</span>
+<span class="toml-key">application_transport</span> = <span class="toml-string">"COM41"</span>
+<span class="toml-key">baud</span> = <span class="toml-number">1200</span>
+<span class="toml-key">primary</span> = <span class="toml-bool">true</span>
+<span class="toml-key">perms</span> = [<span class="toml-string">"status"</span>, <span class="toml-string">"send"</span>, <span class="toml-string">"control"</span>, <span class="toml-string">"ptt"</span>]</code></pre>
+        </div>
+
+        <h3>10.3 Operator deployment sequence</h3>
+        <ol>
+          <li>Create one virtual serial pair for each serial CAT or legacy WinKeyer application.</li>
+          <li>Configure the physical radio and WinKeyer ports. No client application should reference these ports.</li>
+          <li>Configure CatHub's side of every virtual pair as <code>transport</code> and record the application side as <code>application_transport</code>.</li>
+          <li>Create separate loopback listeners when network clients require different permissions or compatibility views.</li>
+          <li>Validate the configuration with CatHub's dry-run mode before opening hardware.</li>
+          <li>Start CatHub, then point each application at its assigned application-side COM port or loopback TCP endpoint.</li>
+          <li>Bench-test read, tune, mode, PTT, CW, cancellation, disconnect, and watchdog behavior before on-air use.</li>
+        </ol>
+      </section>
+
+      <section id="implementation" aria-labelledby="implementation-heading">
+        <h2 id="implementation-heading"><span class="section-number">11.</span> Current implementation and limitations</h2>
+        <p>The preceding sections describe the architecture. This section identifies what the current QsoRipper implementation supports and where the general design remains intentionally bounded.</p>
+        <div class="table-scroll wide">
+          <table>
+            <thead><tr><th>Area</th><th>Current implementation</th><th>Limitation or qualification</th></tr></thead>
+            <tbody>
+              <tr><td>Radio backends</td><td>Native Kenwood TS-590, upstream rigctld, and loopback test backends.</td><td>The native TS-590 backend is the first certified reference. Other radio families require additional backends or a validated rigctld pairing.</td></tr>
+              <tr><td>Serial CAT dialects</td><td>TS-590, transparent TS-590, and TS-2000 client dialects.</td><td>Direct serial means a supported dialect over a private pair, not arbitrary serial protocol acceptance.</td></tr>
+              <tr><td>Hamlib NET</td><td>Modeled read/write operations, PTT, split and VFO queries, power queries, capability handshake, and raw CAT escape operations used by tested clients.</td><td>CatHub does not reimplement every Hamlib feature. Compatibility is defined by tested client transcripts.</td></tr>
+              <tr><td>Compatibility views</td><td>Optional single-VFO presentation for serial and Hamlib NET endpoints.</td><td>A single-VFO endpoint rejects real split enablement; WSJT-X must use Fake It rather than Rig split.</td></tr>
+              <tr><td>Native passthrough</td><td>Same-family rich TS-590 commands can pass through under command classification and permissions.</td><td>An upstream rigctld backend provides modeled control, not transparent vendor-command fidelity.</td></tr>
+              <tr><td>WinKeyer</td><td>Physical 1200 baud host session, virtual serial endpoints, typed gRPC jobs and events, profiles, status fan-out, cancellation, abort, and exclusive maintenance.</td><td>Only implemented and validated WinKeyer protocol behavior should be assumed; maintenance authority is deliberately restricted.</td></tr>
+              <tr><td>Network exposure</td><td>Hamlib NET and typed APIs bind to loopback in the supported deployment model.</td><td>Cross-host remote operation, authentication, and network security are outside the current scope.</td></tr>
+              <tr><td>Station scale</td><td>One configured radio and one optional physical WinKeyer per CatHub instance.</td><td>Multi-radio orchestration is not part of the current runtime.</td></tr>
+            </tbody>
+            <caption>Table 5. Current implementation status and architectural limits.</caption>
+          </table>
+        </div>
+      </section>
+
+      <section id="decisions" aria-labelledby="decisions-heading">
+        <h2 id="decisions-heading"><span class="section-number">12.</span> Design decisions and tradeoffs</h2>
+        <dl class="decision-list">
+          <div><dt>CatHub is the sole hardware owner.</dt><dd>Exclusive ownership makes ordering, recovery, and safety enforceable in one process. The tradeoff is that every application must be redirected to a CatHub endpoint and CatHub becomes required station infrastructure.</dd></div>
+          <div><dt>Each serial client receives a private virtual pair.</dt><dd>A private pair provides unambiguous protocol, permissions, client-session cleanup, and outbound event routing. It consumes more virtual port names than attempting to share one pair, but avoids an unsafe and generally unsupported multi-open arrangement.</dd></div>
+          <div><dt>Radio and WinKeyer use separate brokers.</dt><dd>CAT is request/state oriented, while WinKeyer is a stateful byte protocol with buffered Morse, profiles, and private maintenance replies. Separate schedulers keep those ordering rules explicit. They still share the station PTT lease because both can cause transmission.</dd></div>
+          <div><dt>CatHub maintains shared radio state instead of only forwarding bytes.</dt><dd>Shared state coalesces polling, fans out front-panel and client changes, translates between dialects, and supports consistent reads. The cost is a modeled state surface with freshness and invalidation rules, plus passthrough for rich commands outside that model.</dd></div>
+          <div><dt>Endpoints are configured explicitly.</dt><dd>Explicit dialects and permissions make behavior predictable and fail closed. The tradeoff is operational configuration: connecting an application to the wrong endpoint does not trigger automatic dialect detection, and the client receives only that endpoint's authority.</dd></div>
+          <div><dt>Compatibility views are endpoint policy.</dt><dd>A single-VFO view lets applications with simplified assumptions operate against either physical VFO without changing radio state. The view intentionally hides capabilities, such as real split, that it cannot represent honestly.</dd></div>
+        </dl>
+      </section>
+
+      <section id="glossary" aria-labelledby="glossary-heading">
+        <h2 id="glossary-heading"><span class="section-number">13.</span> Glossary and references</h2>
+        <h3>Glossary</h3>
+        <dl class="glossary">
+          <dt>CAT</dt><dd>Computer-aided transceiver control: commands and responses used to read or change radio state.</dd>
+          <dt>Dialect</dt><dd>A specific command vocabulary and reply format presented to a client, such as Kenwood TS-590 or TS-2000 CAT.</dd>
+          <dt>Transport</dt><dd>The mechanism that carries bytes, such as a physical serial port, virtual COM endpoint, PTY, or TCP socket.</dd>
+          <dt>Endpoint</dt><dd>A configured CatHub listener or serial path with a fixed protocol, permissions, and compatibility policy.</dd>
+          <dt>Virtual COM pair</dt><dd>Two linked virtual serial endpoints. Each is opened by one process; bytes written to either side arrive at the other.</dd>
+          <dt>Client session</dt><dd>One live connection to an endpoint, with its own internal ID, ordering, PTT ownership, queues, and disconnect cleanup.</dd>
+          <dt>Hamlib NET</dt><dd>The rigctld-compatible TCP protocol used by Hamlib-aware applications to control a radio.</dd>
+          <dt>OmniRig</dt><dd>A Windows automation component that allows compatible applications to share configured radio instances.</dd>
+          <dt>WinKeyer</dt><dd>A hardware CW keyer with a stateful host serial protocol, buffered Morse sending, status, speed, and configuration commands.</dd>
+          <dt>PTT lease</dt><dd>CatHub's single-owner grant allowing one client session to place the station in transmit.</dd>
+        </dl>
+
+        <h3>References</h3>
+        <ol class="references">
+          <li><a href="https://github.com/treitforge/qsoripper/blob/main/docs/architecture/engine-specification.md">QsoRipper engine specification</a>, especially the CAT hub endpoint, dialect, state, WinKeyer, and PTT contracts.</li>
+          <li><a href="https://github.com/treitforge/qsoripper/blob/main/docs/design/cathub-multi-client-cat-hub.md">Multi-client CAT hub design</a> and <a href="https://github.com/treitforge/qsoripper/blob/main/docs/design/cathub-winkeyer-broker.md">multi-client WinKeyer broker design</a>.</li>
+          <li><a href="https://github.com/treitforge/qsoripper/blob/main/docs/integrations/cathub-setup.md">CatHub operator setup</a> and <a href="https://github.com/treitforge/qsoripper/blob/main/docs/integrations/cw-keying.md">CW keying setup</a>.</li>
+          <li><a href="https://www.dxatlas.com/OmniRig/">OmniRig product documentation</a>.</li>
+          <li><a href="https://hamlib.sourceforge.net/html/rigctld.1.html">Hamlib rigctld manual</a>.</li>
+          <li><a href="https://learn.microsoft.com/en-us/windows/win32/devio/communications-resource-handles">Microsoft documentation for communications resource handles</a>.</li>
+          <li><a href="https://com0com.sourceforge.net/">com0com project documentation</a>.</li>
+          <li>Implementation: <a href="https://github.com/treitforge/qsoripper/blob/main/src/rust/qsoripper-cathub/src/serial_endpoint.rs"><code>serial_endpoint.rs</code></a>, <a href="https://github.com/treitforge/qsoripper/blob/main/src/rust/qsoripper-cathub/src/hamlib_net.rs"><code>hamlib_net.rs</code></a>, the radio <a href="https://github.com/treitforge/qsoripper/tree/main/src/rust/qsoripper-cathub/src/dialect"><code>dialect</code> modules</a>, and the <a href="https://github.com/treitforge/qsoripper/tree/main/src/rust/qsoripper-cathub/src/winkeyer"><code>winkeyer</code> modules</a>.</li>
+        </ol>
+      </section>
+    </article>
   </div>
 
-  <main id="content">
-    <section id="model" aria-labelledby="model-heading">
-      <div class="shell">
-        <div class="section-head">
-          <div><p class="label">Terms</p><h2 id="model-heading">Transport, protocol, and coordinator are different things</h2></div>
-          <p>These layers are often grouped together as a radio-control "language." Keeping them separate makes each connection path easier to trace.</p>
-        </div>
-        <div class="terms">
-          <article class="term">
-            <span class="term-tag">Transport</span>
-            <h3>How bytes move</h3>
-            <p>A physical COM port, a virtual COM pair, or a TCP socket. "Direct serial" describes this layer. It does not say which CAT commands are in the byte stream.</p>
-          </article>
-          <article class="term">
-            <span class="term-tag">Protocol</span>
-            <h3>What the bytes mean</h3>
-            <p>Examples include Kenwood TS-590 CAT, Kenwood TS-2000 CAT, Hamlib NET, and WinKeyer's stateful host protocol.</p>
-          </article>
-          <article class="term">
-            <span class="term-tag">Coordinator</span>
-            <h3>Who owns shared state</h3>
-            <p>OmniRig and rigctld coordinate compatible radio clients. CatHub coordinates mixed radio interfaces and a separate set of WinKeyer clients.</p>
-          </article>
-        </div>
-      </div>
-    </section>
-
-    <section aria-labelledby="comparison-heading">
-      <div class="shell">
-        <div class="section-head">
-          <div><p class="label">Established solutions</p><h2 id="comparison-heading">Each interface works within its own client group</h2></div>
-          <p>OmniRig and rigctld already solve multi-client radio access. Their boundary is client compatibility. Neither can directly absorb a program that only supports another interface.</p>
-        </div>
-        <div class="comparison">
-          <table>
-            <thead><tr><th>Approach</th><th>What works</th><th>Compatibility boundary</th><th>Place in a CatHub station</th></tr></thead>
-            <tbody>
-              <tr><td>OmniRig</td><td>Several programs that use the OmniRig automation API can share one configured radio.</td><td>Programs that only know Hamlib NET or native serial CAT cannot use the OmniRig API without an adapter.</td><td>OmniRig remains the coordinator for its clients. Its configured "radio" is a private CatHub serial endpoint.</td></tr>
-              <tr><td>Hamlib <code>rigctld</code></td><td>Several Hamlib NET clients can use a common TCP radio-control protocol.</td><td>Programs that require a COM port or a vendor CAT dialect cannot connect to a rigctld socket.</td><td>Hamlib-aware programs connect to separate rigctld-compatible CatHub endpoints.</td></tr>
-              <tr><td>Direct serial CAT</td><td>A program can control a radio through a COM port using a supported vendor command set.</td><td>Windows serial ports are normally exclusive, and independent command streams cannot be merged safely.</td><td>Each serial program receives a private virtual COM pair backed by a CatHub CAT endpoint.</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
-    <section id="architecture" aria-labelledby="architecture-heading">
-      <div class="shell">
-        <div class="section-head">
-          <div><p class="label">Broker architecture</p><h2 id="architecture-heading">Two hardware brokers, one station boundary</h2></div>
-          <p>The radio and WinKeyer paths remain separate inside CatHub because they use different protocols and scheduling rules. They share station-wide transmit arbitration.</p>
-        </div>
-        <div class="legend" aria-label="Diagram legend">
-          <span class="client-key"><i></i> Application or existing interface</span>
-          <span class="hub-key"><i></i> CatHub</span>
-          <span class="hardware-key"><i></i> Physical hardware</span>
-        </div>
-        <div class="diagram" role="img" aria-label="Radio applications converge through OmniRig, Hamlib NET, and serial CAT on the CatHub radio broker, while CW applications converge through virtual WinKeyer serial and gRPC interfaces on the CatHub WinKeyer broker">
-          <div class="diagram-grid">
-            <div class="diagram-heading program-col">Programs</div><div class="diagram-heading interface-col center">Interface they use</div><div class="diagram-heading" style="grid-column:5;text-align:center">CatHub broker</div><div class="diagram-heading" style="grid-column:7;text-align:center">Hardware</div>
-
-            <div class="box client program-col radio-one"><strong>HDSDR and other OmniRig clients</strong><small>Use the OmniRig automation API.</small></div>
-            <div class="arrow-cell program-arrow radio-one" aria-hidden="true">→</div>
-            <div class="box interface interface-col radio-one"><strong>OmniRig</strong><small>Configured as a TS-2000 on its own virtual COM port.</small><span class="port">COM11</span></div>
-            <div class="arrow-cell interface-arrow radio-one" aria-hidden="true">→</div>
-
-            <div class="box client program-col radio-two"><strong>WSJT-X, JS8Call, Log4OM, QsoRipper</strong><small>Use Hamlib's NET rigctl model.</small></div>
-            <div class="arrow-cell program-arrow radio-two" aria-hidden="true">→</div>
-            <div class="box interface interface-col radio-two"><strong>Hamlib NET / rigctld protocol</strong><small>Each client connects to a CatHub TCP endpoint.</small><span class="port">127.0.0.1:4532-4535</span></div>
-            <div class="arrow-cell interface-arrow radio-two" aria-hidden="true">→</div>
-
-            <div class="box client program-col radio-three"><strong>N1MM, ARCP-590, native CAT clients</strong><small>Open a COM port as though a radio were attached.</small></div>
-            <div class="arrow-cell program-arrow radio-three" aria-hidden="true">→</div>
-            <div class="box interface interface-col radio-three"><strong>Dedicated serial CAT endpoint</strong><small>A virtual COM pair carries an implemented CAT dialect.</small><span class="port">COM21 ⇄ COM20</span></div>
-            <div class="arrow-cell interface-arrow radio-three" aria-hidden="true">→</div>
-
-            <div class="box hub hub-core radio-hub"><span class="hub-domain">Radio control</span><strong>CatHub radio broker</strong><small>Owns the physical CAT connection.</small><ul><li>parses each client dialect</li><li>maintains shared radio state</li><li>serializes reads and writes</li><li>applies endpoint permissions</li><li>leases PTT ownership</li></ul></div>
-            <div class="arrow-cell core-arrow radio-core-arrow" aria-hidden="true">⇄</div>
-            <div class="box hardware hardware-core radio-core"><strong>Transceiver</strong><small>One physical serial or network CAT connection.</small><span class="port">TS-590 on COM4</span></div>
-
-            <div class="box client program-col keyer-one"><strong>N1MM Logger+</strong><small>Uses a WinKeyer-compatible serial port.</small></div>
-            <div class="arrow-cell program-arrow keyer-one" aria-hidden="true">→</div>
-            <div class="box interface interface-col keyer-one"><strong>Virtual WinKeyer serial endpoint</strong><small>Unmodified WinKeyer byte protocol over a private COM pair.</small><span class="port">COM41 ⇄ COM40</span></div>
-            <div class="arrow-cell interface-arrow keyer-one" aria-hidden="true">→</div>
-
-            <div class="box client program-col keyer-two"><strong>QsoRipper CW clients</strong><small>Submit named or expanded CW work.</small></div>
-            <div class="arrow-cell program-arrow keyer-two" aria-hidden="true">→</div>
-            <div class="box interface interface-col keyer-two"><strong>Typed WinKeyer gRPC service</strong><small>Named clients submit atomic text jobs and receive status.</small><span class="port">127.0.0.1:50071</span></div>
-            <div class="arrow-cell interface-arrow keyer-two" aria-hidden="true">→</div>
-
-            <div class="box client program-col keyer-three"><strong>WKTools</strong><small>Performs keyer configuration and diagnostics.</small></div>
-            <div class="arrow-cell program-arrow keyer-three" aria-hidden="true">→</div>
-            <div class="box interface interface-col keyer-three"><strong>Maintenance serial endpoint</strong><small>Exclusive, permission-gated access on a separate virtual pair.</small><span class="port">COM43 ⇄ COM42</span></div>
-            <div class="arrow-cell interface-arrow keyer-three" aria-hidden="true">→</div>
-
-            <div class="box hub hub-core keyer-hub"><span class="hub-domain">CW keying</span><strong>CatHub WinKeyer broker</strong><small>Owns the physical keyer session.</small><ul><li>keeps client profiles separate</li><li>queues complete CW jobs</li><li>prevents byte interleaving</li><li>fans out device status</li><li>grants exclusive maintenance</li></ul></div>
-            <div class="arrow-cell core-arrow keyer-core-arrow" aria-hidden="true">⇄</div>
-            <div class="box hardware hardware-core keyer-core"><strong>WinKeyer</strong><small>One physical 1200 baud, 8-N-2 serial connection.</small><span class="port">WinKeyer on COM3</span></div>
-          </div>
-          <p class="diagram-note">The port numbers show one station configuration. Every serial client receives a separate virtual pair. CatHub opens the hub side; the application or OmniRig opens the other side. Only CatHub opens COM4 and COM3.</p>
-        </div>
-      </div>
-    </section>
-
-    <section id="identity" aria-labelledby="identity-heading">
-      <div class="shell">
-        <div class="section-head">
-          <div><p class="label">Client identity</p><h2 id="identity-heading">CatHub identifies the endpoint, not the application</h2></div>
-          <p>CatHub does not inspect commands to guess which program sent them. The operator assigns each program a virtual COM pair or loopback TCP address. That configured endpoint establishes the protocol, permissions, and compatibility policy before any bytes arrive.</p>
-        </div>
-        <div class="comparison">
-          <table>
-            <thead><tr><th>Connection</th><th>What identifies it</th><th>Policy selected by the endpoint</th><th>What CatHub does not infer</th></tr></thead>
-            <tbody>
-              <tr><td>Serial CAT endpoint</td><td>The hub side of a dedicated virtual COM pair.</td><td>A fixed client dialect, such as TS-590 or TS-2000, plus permissions and optional single-VFO presentation.</td><td>Whether the process on the paired port is N1MM, ARCP-590, OmniRig, or another compatible client.</td></tr>
-              <tr><td>Hamlib NET endpoint</td><td>The TCP listener that accepts the connection, such as <code>127.0.0.1:4532</code> or <code>:4533</code>.</td><td>The rigctld-compatible command parser, endpoint permissions, and optional single-VFO presentation.</td><td>Whether the connecting process is QsoRipper, WSJT-X, JS8Call, Log4OM, or another Hamlib NET client.</td></tr>
-              <tr><td>Virtual WinKeyer endpoint</td><td>The hub side of its dedicated virtual COM pair.</td><td>The WinKeyer host protocol, primary-client role, and status, send, control, PTT, or maintenance permissions.</td><td>The application name. The configured endpoint establishes policy; the live connection is a client session.</td></tr>
-              <tr><td>Typed WinKeyer service</td><td>A <code>client_name</code> supplied in the loopback gRPC request.</td><td>Named job ownership, cancellation, speed, and event routing through the typed WinKeyer API.</td><td>That the supplied name proves the operating-system identity of the caller.</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="subsection-head">
-          <p class="label">Runtime ownership</p>
-          <h2>Internal IDs track work, not software brands</h2>
-          <p>CatHub creates a client session for each opened serial endpoint and each accepted Hamlib NET connection. Every session receives a fresh internal session ID. CatHub uses session IDs to preserve command order, own and release PTT, attribute queued work, and clean up after a disconnect. The configured endpoint name remains a label for logs and status; it is not application authentication.</p>
-        </div>
-        <div class="two-column">
-          <article class="plain-card"><h3>Client side</h3><p>The endpoint selects how CatHub parses requests and formats replies. A TS-2000 endpoint can therefore present TS-2000 behavior to OmniRig even when the physical radio is a TS-590.</p></article>
-          <article class="plain-card"><h3>Radio side</h3><p>The separately configured radio backend controls the physical device. Supported client requests become shared state operations that the active backend applies to the radio.</p></article>
-        </div>
-        <div class="caution"><p><strong>Operational consequence:</strong> connecting a program to the wrong endpoint does not trigger automatic dialect detection. CatHub applies that endpoint's configured protocol and permissions. Unsupported commands fail, and any local process that can open a writable endpoint receives that endpoint's authority.</p></div>
-      </div>
-    </section>
-
-    <section id="routes" aria-labelledby="routes-heading">
-      <div class="shell">
-        <div class="section-head">
-          <div><p class="label">Radio request paths</p><h2 id="routes-heading">Three interfaces, one radio actor</h2></div>
-          <p>OmniRig, Hamlib NET, and serial CAT are client-side choices. After CatHub parses a request, every allowed operation enters the same radio scheduler and shared state model.</p>
-        </div>
-        <div class="routes">
-          <article class="route"><span class="route-number">01 / OmniRig route</span><h3>Application → OmniRig → CatHub</h3><ol><li>The application calls OmniRig.</li><li>OmniRig emits the CAT dialect configured for its virtual radio.</li><li>A virtual COM pair delivers those bytes to CatHub's TS-2000 endpoint.</li><li>CatHub maps the request to shared radio state and the physical radio.</li></ol></article>
-          <article class="route"><span class="route-number">02 / Hamlib route</span><h3>Application → CatHub TCP endpoint</h3><ol><li>The application selects Hamlib's NET rigctl model.</li><li>It sends rigctld protocol commands to a CatHub listener.</li><li>CatHub returns state in the form the client expects.</li><li>Allowed writes go through the same radio actor as every other route.</li></ol></article>
-          <article class="route"><span class="route-number">03 / Serial route</span><h3>Application → virtual COM → CatHub</h3><ol><li>The application selects a supported radio model and its assigned COM port.</li><li>The paired port delivers its CAT frames to CatHub.</li><li>CatHub parses or transparently mirrors supported commands according to the endpoint configuration.</li><li>The physical radio still has only one owner.</li></ol></article>
-        </div>
-        <div class="subsection-head">
-          <p class="label">WinKeyer request paths</p>
-          <h2>Two operating interfaces and one maintenance path</h2>
-          <p>WinKeyer is a stateful byte protocol, not a CAT dialect. CatHub gives it a separate broker and physical-device actor.</p>
-        </div>
-        <div class="routes">
-          <article class="route"><span class="route-number">01 / Legacy serial</span><h3>N1MM → virtual WinKeyer endpoint</h3><ol><li>N1MM opens its assigned virtual COM port.</li><li>CatHub tracks that client's Host Open state, speed, mode, and permissions.</li><li>Complete sends enter the broker queue without interleaving another client's bytes.</li><li>Physical busy, idle, speed-pot, and error status return through the virtual endpoint.</li></ol></article>
-          <article class="route"><span class="route-number">02 / Typed service</span><h3>QsoRipper → WinKeyer gRPC</h3><ol><li>A named QsoRipper client submits text, speed, or cancellation through the loopback service.</li><li>The broker records the work as an atomic job.</li><li>The selected client profile is applied before transmission.</li><li>Completion, cancellation, and error events return as typed messages.</li></ol></article>
-          <article class="route"><span class="route-number">03 / Maintenance</span><h3>WKTools → exclusive serial endpoint</h3><ol><li>WKTools opens its dedicated virtual COM port.</li><li>Permission-gated maintenance commands acquire exclusive access.</li><li>Private device replies return only to the maintenance client.</li><li>Normal transmission remains blocked until maintenance releases the keyer.</li></ol></article>
-        </div>
-      </div>
-    </section>
-
-    <section aria-labelledby="value-heading">
-      <div class="shell">
-        <div class="section-head">
-          <div><p class="label">Engineering effect</p><h2 id="value-heading">Brokering is more than copying bytes</h2></div>
-          <p>Both devices carry bidirectional, stateful control traffic. A safe broker must interpret operations, preserve client context, and decide who may transmit or change configuration.</p>
-        </div>
-        <div class="two-column">
-          <article class="plain-card"><h3>Radio control broker</h3><ul><li>Translates supported client dialects into one shared radio model.</li><li>Serves routine reads from current state instead of multiplying hardware polls.</li><li>Orders writes, maintains native push state, and applies per-endpoint permissions.</li><li>Provides compatibility views such as single-VFO presentation without changing the physical radio state.</li></ul></article>
-          <article class="plain-card"><h3>WinKeyer broker</h3><ul><li>Maintains one physical Host Open session and separate state for each virtual client.</li><li>Queues complete CW jobs so commands and text from different clients do not interleave.</li><li>Returns device status to clients and restores the primary operating profile between jobs.</li><li>Separates normal sending from exclusive configuration and diagnostic work.</li></ul></article>
-        </div>
-        <div class="caution"><p><strong>Shared transmit boundary:</strong> radio CAT PTT and WinKeyer transmission use one station-wide PTT lease. A transmit-time ceiling and disconnect handling return the station to receive when a client or hardware path fails.</p></div>
-      </div>
-    </section>
-
-    <section aria-labelledby="ports-heading">
-      <div class="shell">
-        <div class="section-head">
-          <div><p class="label">Serial examples</p><h2 id="ports-heading">CAT and WinKeyer clients each receive private COM pairs</h2></div>
-          <p>A com0com pair acts like a null-modem cable between two programs. It connects one application endpoint to one CatHub endpoint; it does not make a single COM port shareable.</p>
-        </div>
-        <p class="flow-heading">OmniRig radio-control path</p>
-        <div class="connection-flow" aria-label="OmniRig COM11 connects through a virtual pair to CatHub COM10, which controls the radio on COM4">
-          <div class="node app"><strong>OmniRig</strong><small>Opens application side</small><span class="mono">COM11</span></div>
-          <span class="flow-arrow" aria-hidden="true">⇄</span>
-          <div class="node"><strong>com0com pair</strong><small>Bytes written at one end appear at the other.</small></div>
-          <span class="flow-arrow" aria-hidden="true">⇄</span>
-          <div class="node hub"><strong>CatHub serial endpoint</strong><small>Opens hub side</small><span class="mono">COM10</span></div>
-          <span class="flow-arrow" aria-hidden="true">⇄</span>
-          <div class="node hardware"><strong>Physical radio</strong><small>Opened only by CatHub</small><span class="mono">COM4</span></div>
-        </div>
-        <p class="flow-heading">N1MM WinKeyer path</p>
-        <div class="connection-flow" aria-label="N1MM COM41 connects through a virtual pair to the CatHub WinKeyer endpoint on COM40, which controls the physical WinKeyer on COM3">
-          <div class="node app"><strong>N1MM Logger+</strong><small>Opens application side</small><span class="mono">COM41</span></div>
-          <span class="flow-arrow" aria-hidden="true">⇄</span>
-          <div class="node"><strong>com0com pair</strong><small>Carries WinKeyer's 1200 baud, 8-N-2 byte protocol.</small></div>
-          <span class="flow-arrow" aria-hidden="true">⇄</span>
-          <div class="node hub"><strong>CatHub WinKeyer endpoint</strong><small>Opens hub side</small><span class="mono">COM40</span></div>
-          <span class="flow-arrow" aria-hidden="true">⇄</span>
-          <div class="node hardware"><strong>Physical WinKeyer</strong><small>Opened only by CatHub</small><span class="mono">COM3</span></div>
-        </div>
-        <div class="caution"><p>The application side and hub side are not interchangeable. In these examples, OmniRig opens COM11 and CatHub opens COM10; N1MM opens COM41 and CatHub opens COM40. Only CatHub opens the physical device ports, COM4 and COM3.</p></div>
-      </div>
-    </section>
-
-    <section id="boundaries" aria-labelledby="boundaries-heading">
-      <div class="shell">
-        <div class="section-head">
-          <div><p class="label">Current implementation</p><h2 id="boundaries-heading">Supported interfaces and limits</h2></div>
-          <p>The architecture is general, but the present CatHub implementation has explicit backends and dialects.</p>
-        </div>
-        <ul class="implementation-list">
-          <li><strong>Radio backends:</strong> the current configuration accepts native TS-590 control, an upstream rigctld backend, or a loopback test backend.</li>
-          <li><strong>Serial endpoints:</strong> the current implementation exposes TS-590, transparent TS-590, and TS-2000 client dialects.</li>
-          <li><strong>Network endpoints:</strong> CatHub exposes rigctld-compatible Hamlib NET endpoints, including per-endpoint permissions and compatibility policy.</li>
-          <li><strong>OmniRig:</strong> CatHub does not replace OmniRig for programs that use its automation API. OmniRig becomes one CatHub client through a virtual serial endpoint.</li>
-          <li><strong>Direct serial:</strong> this means a program sends a supported CAT dialect over its own virtual pair. It does not mean every arbitrary serial protocol is accepted.</li>
-          <li><strong>Physical WinKeyer:</strong> CatHub maintains the single hardware session at 1200 baud and enforces a separate transmit-time ceiling.</li>
-          <li><strong>Virtual WinKeyer endpoints:</strong> unmodified serial clients receive private 8-N-2 COM pairs with explicit status, send, control, PTT, and configuration permissions.</li>
-          <li><strong>Typed WinKeyer service:</strong> QsoRipper clients use a loopback gRPC API for status, text jobs, speed, cancellation, abort, and event streaming.</li>
-          <li><strong>Maintenance:</strong> configuration tools use an exclusive endpoint whose private replies are not broadcast to ordinary clients.</li>
-        </ul>
-      </div>
-    </section>
-
-    <section id="sources" aria-labelledby="sources-heading">
-      <div class="shell">
-        <div class="section-head">
-          <div><p class="label">Verification</p><h2 id="sources-heading">Technical basis</h2></div>
-          <p>This architecture note is based on the current implementation and primary documentation for the interfaces CatHub composes.</p>
-        </div>
-        <ol class="sources">
-          <li><a href="https://github.com/treitforge/qsoripper/blob/main/docs/architecture/engine-specification.md">QsoRipper engine specification</a>, especially the CAT hub behavior, endpoint, dialect, state, and PTT sections.</li>
-          <li><a href="https://github.com/treitforge/qsoripper/blob/main/docs/design/cathub-multi-client-cat-hub.md">Multi-client CAT hub design</a> and <a href="https://github.com/treitforge/qsoripper/blob/main/docs/design/cathub-winkeyer-broker.md">multi-client WinKeyer broker design</a>, which define the two physical-device actors, client-facing interfaces, scheduling, and shared transmit boundary.</li>
-          <li><a href="https://www.dxatlas.com/OmniRig/">OmniRig product documentation</a>, which describes its COM component and support for several programs controlling one radio.</li>
-          <li><a href="https://hamlib.sourceforge.net/html/rigctld.1.html">Hamlib rigctld manual</a>, which defines the TCP daemon and notes its multiple-program sharing behavior and compatibility qualifications.</li>
-          <li><a href="https://learn.microsoft.com/en-us/windows/win32/devio/communications-resource-handles">Microsoft: Communications Resource Handles</a>, which documents exclusive opening of Windows communications resources.</li>
-          <li><a href="https://com0com.sourceforge.net/">com0com project documentation</a>, which defines a virtual COM pair and its bidirectional byte flow.</li>
-          <li>Implementation files: <a href="https://github.com/treitforge/qsoripper/blob/main/src/rust/qsoripper-cathub/src/serial_endpoint.rs"><code>serial_endpoint.rs</code></a>, <a href="https://github.com/treitforge/qsoripper/blob/main/src/rust/qsoripper-cathub/src/hamlib_net.rs"><code>hamlib_net.rs</code></a>, the radio <a href="https://github.com/treitforge/qsoripper/tree/main/src/rust/qsoripper-cathub/src/dialect"><code>dialect</code> modules</a>, and the <a href="https://github.com/treitforge/qsoripper/tree/main/src/rust/qsoripper-cathub/src/winkeyer"><code>winkeyer</code> broker modules</a>.</li>
-        </ol>
-      </div>
-    </section>
-  </main>
-
-  <footer><div class="shell">QsoRipper CatHub architecture note. Examples describe the current TS-590 station configuration.</div></footer>
+  <footer><div class="footer-inner">QsoRipper CatHub architecture note. Equipment names and port assignments are documented examples, not required deployment values.</div></footer>
 </body>
 </html>
