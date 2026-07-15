@@ -6,10 +6,10 @@ option csharp_namespace = "QsoRipper.Services";
 
 import "services/cat_hub_permission.proto";
 
-// A CAT hub `[[cat_hub.hamlib_net]]` endpoint: a rigctld-compatible TCP face
+// A CAT hub `[[cat_hub.hamlib_net]]` endpoint: a rigctld-compatible TCP listener
 // that a client application (the engine, WSJT-X, Log4OM, ...) connects to.
 message CatHubHamlibNetEndpoint {
-  // A label for logging and identification (unique across all faces/endpoints).
+  // A label for logging and identification (unique across all client endpoints).
   string name = 1;
   // The bind address (e.g. `127.0.0.1:4532`).
   string bind = 2;

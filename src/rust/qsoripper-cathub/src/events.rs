@@ -2,7 +2,7 @@
 //!
 //! The daemon — not any client — owns the radio's spontaneous-update stream. At startup
 //! (and on reconnect) it enables the rig's native push (`AI2;` on a TS-590) once and keeps
-//! it on for the daemon's lifetime. Per-face auto-info is virtualized in [`crate::dialect`]
+//! it on for the daemon's lifetime. Per-endpoint auto-info is virtualized in [`crate::dialect`]
 //! and never reaches the wire.
 //!
 //! The poller submits one baseline poll cycle at [`PollConfig`](crate::config::PollConfig)
@@ -17,8 +17,8 @@ use crate::model::Field;
 use crate::radio::{Expect, OpKind, Priority, RadioHandle, RadioLink};
 use crate::state::StateHandle;
 
-/// Reserved face id for the background poller (clients use ids `>= 1`).
-pub(crate) const POLLER_FACE: u64 = 0;
+/// Reserved session id for the background poller (client sessions use ids `>= 1`).
+pub(crate) const POLLER_SESSION: u64 = 0;
 
 /// Enable the radio's native push stream if the backend has one. Returns whether a push
 /// command was issued (so the poller knows native push is in play).
@@ -64,7 +64,7 @@ pub(crate) fn spawn_poller(
     tokio::spawn(async move {
         loop {
             let _ = radio
-                .submit(POLLER_FACE, Priority::Poll, OpKind::Poll)
+                .submit(POLLER_SESSION, Priority::Poll, OpKind::Poll)
                 .await;
             let interval = next_interval(&state, native_push_active, baseline, heartbeat);
             tokio::time::sleep(interval).await;

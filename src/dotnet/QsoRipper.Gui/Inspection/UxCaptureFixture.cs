@@ -99,13 +99,13 @@ internal sealed record UxCaptureFixture
 
     public uint? CatHubBaud { get; init; }
 
-    public string? CatHubFaceName { get; init; }
+    public string? CatHubSerialEndpointName { get; init; }
 
-    public string? CatHubFaceDialect { get; init; }
+    public string? CatHubSerialEndpointDialect { get; init; }
 
-    public string? CatHubEndpointName { get; init; }
+    public string? CatHubHamlibNetEndpointName { get; init; }
 
-    public string? CatHubEndpointBind { get; init; }
+    public string? CatHubHamlibNetEndpointBind { get; init; }
 
     public bool? WsjtxIngestEnabled { get; init; }
 
@@ -234,8 +234,8 @@ internal sealed record UxCaptureFixture
             || !string.IsNullOrWhiteSpace(CatHubTransport)
             || !string.IsNullOrWhiteSpace(CatHubPort)
             || CatHubBaud.HasValue
-            || !string.IsNullOrWhiteSpace(CatHubFaceName)
-            || !string.IsNullOrWhiteSpace(CatHubEndpointName);
+            || !string.IsNullOrWhiteSpace(CatHubSerialEndpointName)
+            || !string.IsNullOrWhiteSpace(CatHubHamlibNetEndpointName);
 
         if (!hasValues)
         {
@@ -263,26 +263,28 @@ internal sealed record UxCaptureFixture
             settings.Radio.Baud = CatHubBaud.Value;
         }
 
-        if (!string.IsNullOrWhiteSpace(CatHubFaceName))
+        if (!string.IsNullOrWhiteSpace(CatHubSerialEndpointName))
         {
-            var face = new CatHubSerialFace
+            var endpoint = new CatHubSerialEndpoint
             {
-                Name = CatHubFaceName,
+                Name = CatHubSerialEndpointName,
                 Transport = "COM10",
                 ApplicationTransport = "COM11",
-                Dialect = string.IsNullOrWhiteSpace(CatHubFaceDialect) ? "ts590" : CatHubFaceDialect,
+                Dialect = string.IsNullOrWhiteSpace(CatHubSerialEndpointDialect) ? "ts590" : CatHubSerialEndpointDialect,
             };
-            face.Perms.Add(CatHubPermission.Read);
-            face.Perms.Add(CatHubPermission.Write);
-            settings.Faces.Add(face);
+            endpoint.Perms.Add(CatHubPermission.Read);
+            endpoint.Perms.Add(CatHubPermission.Write);
+            settings.SerialEndpoints.Add(endpoint);
         }
 
-        if (!string.IsNullOrWhiteSpace(CatHubEndpointName))
+        if (!string.IsNullOrWhiteSpace(CatHubHamlibNetEndpointName))
         {
             var endpoint = new CatHubHamlibNetEndpoint
             {
-                Name = CatHubEndpointName,
-                Bind = string.IsNullOrWhiteSpace(CatHubEndpointBind) ? "127.0.0.1:4532" : CatHubEndpointBind,
+                Name = CatHubHamlibNetEndpointName,
+                Bind = string.IsNullOrWhiteSpace(CatHubHamlibNetEndpointBind)
+                    ? "127.0.0.1:4532"
+                    : CatHubHamlibNetEndpointBind,
             };
             endpoint.Perms.Add(CatHubPermission.Read);
             settings.HamlibNet.Add(endpoint);

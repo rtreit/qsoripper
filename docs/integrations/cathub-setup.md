@@ -45,7 +45,7 @@ each pair; the application binds the second. Using the com0com "setupc" tool, cr
 WSJT-X, Log4OM, and the QsoRipper engine use the Hamlib NET (TCP) endpoints instead and need
 no serial pair.
 
-The WinKeyer pairs are separate from N1MM's radio-CAT pair. N1MM uses COM21 for its TS-590 radio and COM41 for WinKeyer. WKTools uses COM43 only for maintenance. CatHub owns physical WinKeyer COM3 and the hub sides COM40 and COM42. This permits N1MM and QsoRipper to remain connected to one keyer without attempting an unsafe shared open of COM3, while device maintenance receives a separately permissioned face.
+The WinKeyer pairs are separate from N1MM's radio-CAT pair. N1MM uses COM21 for its TS-590 radio and COM41 for WinKeyer. WKTools uses COM43 only for maintenance. CatHub owns physical WinKeyer COM3 and the hub sides COM40 and COM42. This permits N1MM and QsoRipper to remain connected to one keyer without attempting an unsafe shared open of COM3, while device maintenance receives a separately permissioned endpoint.
 
 Each pair has two COM numbers: a **daemon side** (the lower, even number COM10/20/30 that the
 hub opens via `transport`) and an **application side** (the partner COM11/21/31). Point each
@@ -53,8 +53,8 @@ application at its application-side port. The daemon-side port is held open by t
 typically will **not** appear in an application's COM-port dropdown at all -- that is expected,
 and the partner port (COM11/21/31) is the one to select.
 
-Record the application side as `application_transport` on each `[[cat_hub.face]]` and
-`[[cat_hub.winkeyer_face]]`. CatHub does not open this endpoint. It uses the value in setup
+Record the application side as `application_transport` on each `[[cat_hub.serial_endpoint]]` and
+`[[cat_hub.winkeyer_endpoint]]`. CatHub does not open this endpoint. It uses the value in setup
 status and dry-run guidance so the application port remains discoverable after comments are
 removed from the active configuration.
 
@@ -68,8 +68,8 @@ launcher, under a `[cat_hub]` table:
 - Override the location for every component with the `QSORIPPER_CONFIG_PATH` environment variable.
 
 Settings nest under `[cat_hub]`, for example `[cat_hub.radio]`, `[cat_hub.poll]`,
-`[cat_hub.ptt]`, `[cat_hub.events]`, `[[cat_hub.face]]`, `[[cat_hub.hamlib_net]]`,
-`[cat_hub.winkeyer]`, and `[[cat_hub.winkeyer_face]]`. The
+`[cat_hub.ptt]`, `[cat_hub.events]`, `[[cat_hub.serial_endpoint]]`, `[[cat_hub.hamlib_net]]`,
+`[cat_hub.winkeyer]`, and `[[cat_hub.winkeyer_endpoint]]`. The
 engine and launcher own other top-level tables in the same file (`[station_profile]`,
 `[launcher]`, `[rig_control]`, …); each component preserves the others' tables when it saves,
 so the file is safe to share.
@@ -82,13 +82,13 @@ For a standalone setup you can still keep a separate file (the repo ships
 
 When `-Config` is omitted the script uses the unified `config.toml` if it contains a
 `[cat_hub]` section, otherwise it falls back to the `config\cathub.toml` sample. The dry run
-prints the resolved radio, poll, PTT, events, faces, and Hamlib NET endpoints. Adjust COM port
+prints the resolved radio, poll, PTT, events, endpoints, and Hamlib NET endpoints. Adjust COM port
 numbers and baud to match your com0com pairs and the TS-590's CAT baud, then re-run the dry run
 until it is clean.
 
 The `[radio].baud` value **must match the radio's own PC/CAT port speed** (TS-590 menu 62;
 e.g. 57600). If they differ, the daemon opens COM4 but cannot talk to the radio. The
-`[[face]].baud` values are nominal only -- com0com virtual pairs pass data regardless of baud,
+`[[serial_endpoint]].baud` values are nominal only -- com0com virtual pairs pass data regardless of baud,
 so a client app can use any baud on its side of the pair.
 
 ## 4. Start the hub
@@ -97,7 +97,7 @@ so a client app can use any baud on its side of the pair.
 
 The daemon opens COM4, enables and owns the TS-590 `AI2;` native push stream, starts the
 baseline poller (which backs off to heartbeat once push covers a field), opens each serial
-face, and binds each Hamlib NET endpoint. Watch the log in another terminal:
+endpoint, and binds each Hamlib NET endpoint. Watch the log in another terminal:
 
     .\scripts\Get-CatHubLog.ps1 -Follow
 
@@ -115,7 +115,7 @@ engines and UIs from the launcher TUI:
 
 In the launcher, the first column ("Services") lists the **CAT hub daemon (rigctld :4532)**
 above the engines. Check it with `Space`, then press `Enter`. The launcher starts the hub
-first, waits for its rigctld face on `127.0.0.1:4532`, and only then starts the selected
+first, waits for its rigctld endpoint on `127.0.0.1:4532`, and only then starts the selected
 engines and UIs so everything connects to the hub. If the hub fails to come up the launcher
 aborts the rest of the launch; check `.\scripts\Get-CatHubLog.ps1 -Follow` for the cause. The
 hub reads the unified `config.toml` when it has a `[cat_hub]` table, otherwise the repo sample
@@ -128,7 +128,7 @@ hub on its own (for example with `-DryRun` to validate config).
 
 ### HDSDR (via OmniRig)
 - OmniRig: Rig type `Kenwood TS-2000`, port **COM11**, baud 115200, 8-N-1.
-- The `hdsdr-omnirig` face is `dialect = "ts2000"`,
+- The `hdsdr-omnirig` endpoint is `dialect = "ts2000"`,
   `perms = ["read", "frequency_write"]`. The panadapter follows the radio and click-to-tune
   on the waterfall sets frequency. OmniRig mode writes are denied, preventing its band-plan
   mode selection from changing WSJT-X's USB+Data operation to CW after a frequency update.
@@ -140,15 +140,15 @@ hub on its own (for example with `-DryRun` to validate config).
   side of the dedicated COM40/COM41 keyer pair; never select physical COM3 or CatHub's COM40.
 - Configure WKTools for **COM43**, 1200 baud. COM43 is the application side of the maintenance
   COM42/COM43 pair. Close WKTools after maintenance so the port is released.
-- The `n1mm` face is `dialect = "ts590"`, `single_vfo = true`, `perms = ["read", "write", "ptt"]`.
+- The `n1mm` endpoint is `dialect = "ts590"`, `single_vfo = true`, `perms = ["read", "write", "ptt"]`.
 - **`single_vfo = true` is required for SO1V.** N1MM in single-VFO (SO1V) mode refuses VFO B
   ("You should not use VFO B when configured for SO1V") and freezes its frequency display when
   the radio is on VFO B. With `single_vfo = true` the hub presents whichever VFO the radio is
   on as VFO A, so N1MM tracks the radio across A/B switches with no warning. If you run N1MM in
   SO2V instead, you may set `single_vfo = false`; for SO1V leave it on (the shipped default for
-  this face). See design §8.4.2.
-- Keep the everyday `n1mm-cw` WinKeyer face limited to `status`, `send`, `control`, and `ptt`.
-  Persistent EEPROM/reset access belongs on a separate, normally disabled maintenance face.
+  this endpoint). See design §8.4.2.
+- Keep the everyday `n1mm-cw` WinKeyer endpoint limited to `status`, `send`, `control`, and `ptt`.
+  Persistent EEPROM/reset access belongs on a separate, normally disabled maintenance endpoint.
 - CatHub preserves N1MM's authorized runtime stream byte-for-byte. In particular, the observed
   `16 02 <position> 1C <wpm> <text>` sequence remains an append-pointer command followed by a
   buffered-speed command and the intended text. CatHub does not reinterpret the position byte as
@@ -156,8 +156,8 @@ hub on its own (for example with `-DryRun` to validate config).
 
 ### ARCP-590
 - Set ARCP-590's COM port to **COM31**, 115200, 8-N-1.
-- The `arcp590` face is `dialect = "ts590"`, `perms = ["read", "write", "ptt", "config_write"]`
-  so the full faceplate (including EX-menu writes) works.
+- The `arcp590` endpoint is `dialect = "ts590"`, `perms = ["read", "write", "ptt", "config_write"]`
+  so the full control-panel (including EX-menu writes) works.
 
 ### WSJT-X
 - Settings > Radio: Rig `Hamlib NET rigctl`, Network Server **127.0.0.1:4533**.
@@ -221,7 +221,7 @@ No radio-menu change is needed. Leave **Beep Volume** at your normal setting.
 - The `log4om` endpoint is `perms = ["read", "write"]`, `single_vfo = true`.
 - Log4OM-NG uses Hamlib's **Extended Response Protocol** (ERP): it opens every session with
   `;V ?` (list supported VFOs) and then polls with `+\get_vfo_info VFOA` (~2 Hz). The hub's
-  `hamlib_net` face parses the ERP separator prefix (`+ ; | ,`) and answers both shapes in the
+  `hamlib_net` endpoint parses the ERP separator prefix (`+ ; | ,`) and answers both shapes in the
   exact byte format real `rigctld` produces, so Log4OM connects and stays **online**. Plain
   clients (WSJT-X, N1MM, the engine) are unaffected — they never send the ERP prefix.
 - **`single_vfo = true` makes Log4OM log the live frequency on either VFO.** Because Log4OM
@@ -280,7 +280,7 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
 - An app sees no data on its serial port: the com0com pair is reversed or the app is on the
   daemon's half of the pair. The app binds the **second** port of each pair (COM11/21/31).
 - N1MM cannot open the WinKeyer: select COM41, not COM3 or COM40, and confirm the hub log says
-  the `n1mm-cw` face opened COM40 at 1200 baud, 8-N-2.
+  the `n1mm-cw` endpoint opened COM40 at 1200 baud, 8-N-2.
 - A physical WinKeyer USB disconnect cancels queued keying, releases station PTT, and starts
   capped reconnect attempts without stopping the radio hub. N1MM may need to reopen its
   logical keyer session after the physical device reconnects.
@@ -289,11 +289,11 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
 - An app that relies on Kenwood auto-information (notably **ARCP-590**) connects but never
   tracks the dial / shows "BUSY": such apps poll `AI;` as a keepalive and depend entirely on
   the radio pushing `FA;`/`IF;` frames. The hub virtualizes auto-info per connection — an `AI;`
-  read reports the face's current state (`AI0;`/`AI2;`) without disabling it, and the hub fans
-  out native-push frames to any face that has enabled `AI2;`. This works in current builds; if
+  read reports the endpoint's current state (`AI0;`/`AI2;`) without disabling it, and the hub fans
+  out native-push frames to any endpoint that has enabled `AI2;`. This works in current builds; if
   an older build froze ARCP-590 on connect, update the daemon.
 - Set `CATHUB_LOG=debug` before starting for verbose tracing. Use
-  `CATHUB_LOG=qsoripper_cathub::serial_face=trace` to see each face's request/reply/notify
+  `CATHUB_LOG=qsoripper_cathub::serial_endpoint=trace` to see each endpoint's request/reply/notify
   frames, which is the fastest way to diagnose a client handshake.
 
 ## 8. Known v1 limitations
@@ -303,10 +303,10 @@ transmitter from automation. Watch `Get-CatHubLog.ps1 -Follow` throughout.
   link automatically with capped exponential backoff (0.5 s up to 5 s) and resumes serving the
   same client command queue — you no longer need to restart the hub. On each reconnect it also
   re-arms the radio's native push (auto-info) state, which a power-cycled radio forgets (design
-  §8.4/§8.7). Client faces and NET endpoints stay up throughout. Note: clients that hold their
+  §8.4/§8.7). Client endpoints and NET endpoints stay up throughout. Note: clients that hold their
   own CAT session above the hub (e.g. HDSDR via OmniRig) may still need their own
   OmniRig/session restart if they latched onto the dead link before the hub recovered.
-- **Hamlib NET bind errors surface in the log, not at startup.** A serial face that fails to
+- **Hamlib NET bind errors surface in the log, not at startup.** A serial endpoint that fails to
   open aborts startup with a clear error, but a `[[hamlib_net]]` endpoint whose bind address
   is already in use logs the error from its listener task rather than failing the whole
   daemon. If a NET client cannot connect, check the log for that endpoint.

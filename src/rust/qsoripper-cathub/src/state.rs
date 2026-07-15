@@ -1,5 +1,5 @@
-//! The universal radio state: a single in-memory snapshot every face reads from, plus a
-//! broadcast channel of [`StateChange`] notifications faces subscribe to for auto-info
+//! The universal radio state: a single in-memory snapshot every endpoint reads from, plus a
+//! broadcast channel of [`StateChange`] notifications endpoints subscribe to for auto-info
 //! fan-out (design §8.3, §8.4).
 //!
 //! [`StateHandle`] is synchronous (a plain `Mutex`/`RwLock`): reads and writes are short,
@@ -155,11 +155,11 @@ impl Snapshot {
     /// Decompose this snapshot into the full ordered list of [`StateChange`]s that
     /// reconstruct it.
     ///
-    /// Used to re-synchronize a face that fell behind the broadcast ring
+    /// Used to re-synchronize a client session that fell behind the broadcast ring
     /// ([`RecvError::Lagged`](tokio::sync::broadcast::error::RecvError::Lagged)): replaying
     /// these through the dialect's notification formatter restores the client to the current
     /// radio state even when a one-shot event (a mode or VFO change) was evicted from the
-    /// ring before the face read it. `RxVfo` is emitted last so a foreign dialect's
+    /// ring before the endpoint read it. `RxVfo` is emitted last so a foreign dialect's
     /// VFO-switch frame (which leads with the active `FA`/`MD`) reflects the final state.
     pub(crate) fn as_changes(&self) -> Vec<StateChange> {
         vec![
@@ -208,22 +208,22 @@ impl Snapshot {
     }
 }
 
-/// An ordered radio-output event delivered to faces for auto-information fan-out.
+/// An ordered radio-output event delivered to endpoints for auto-information fan-out.
 ///
 /// Both modeled changes and unmodeled native frames travel on the **same** broadcast so
-/// faces observe them in the order the radio produced them — important for native
+/// endpoints observe them in the order the radio produced them — important for native
 /// pass-through clients that consume the CAT stream directly.
 #[derive(Debug, Clone)]
 pub(crate) enum RadioEvent {
     /// A coalesced modeled state change (poll diff or native push).
     Change(StateChange),
     /// An unsolicited native frame the backend does not model, forwarded verbatim to
-    /// native pass-through faces so client-side feature state machines (for example
+    /// native pass-through endpoints so client-side feature state machines (for example
     /// ARCP-590's NB on/NB1/NB2/off cycle) and front-panel changes stay in sync.
     Raw(Arc<[u8]>),
     /// A native frame the backend *did* model, forwarded verbatim for transparent mirror
-    /// faces (ARCP-590). Virtualizing faces ignore it — they consume the coalesced
-    /// [`RadioEvent::Change`] instead — but a transparent face relays it so it tracks the
+    /// endpoints (ARCP-590). Virtualizing endpoints ignore it — they consume the coalesced
+    /// [`RadioEvent::Change`] instead — but a transparent endpoint relays it so it tracks the
     /// radio's real CAT stream rather than a synthesis, eliminating push/snapshot drift.
     RawNative(Arc<[u8]>),
 }
@@ -246,7 +246,7 @@ impl StateHandle {
     pub(crate) fn new() -> Self {
         // Capacity headroom: a modeled native frame now broadcasts both a coalesced `Change`
         // and a verbatim `RawNative`, so the bus carries up to two events per radio frame.
-        // A larger ring keeps a momentarily busy face (notably a transparent mirror during a
+        // A larger ring keeps a momentarily busy endpoint (notably a transparent mirror during a
         // contest-rate tuning sweep) from lagging and having to re-sync.
         let (tx, _rx) = broadcast::channel(1024);
         StateHandle {
@@ -313,16 +313,16 @@ impl StateHandle {
     }
 
     /// Broadcast an unsolicited native frame the backend does not model, so native
-    /// pass-through faces can forward it verbatim. This does not touch the snapshot or the
+    /// pass-through endpoints can forward it verbatim. This does not touch the snapshot or the
     /// native-push coverage set; it is a transparent relay of the radio's CAT stream.
     pub(crate) fn record_raw(&self, frame: &[u8]) {
         let _ = self.inner.tx.send(RadioEvent::Raw(Arc::from(frame)));
     }
 
-    /// Broadcast a *modeled* native frame verbatim for transparent mirror faces. The caller
+    /// Broadcast a *modeled* native frame verbatim for transparent mirror endpoints. The caller
     /// has already recorded the modeled change (updating the snapshot and broadcasting a
     /// coalesced [`RadioEvent::Change`]); this additionally relays the original bytes so a
-    /// transparent face mirrors the radio's exact CAT stream. Non-transparent faces ignore
+    /// transparent endpoint mirrors the radio's exact CAT stream. Non-transparent endpoints ignore
     /// this event. It does not touch the snapshot or the native-push coverage set.
     pub(crate) fn record_raw_native(&self, frame: &[u8]) {
         let _ = self.inner.tx.send(RadioEvent::RawNative(Arc::from(frame)));
@@ -356,7 +356,7 @@ impl StateHandle {
         !invalidated && self.snapshot().is_redundant(mutation)
     }
 
-    /// Subscribe to the radio-output event stream (for a face's auto-info fan-out).
+    /// Subscribe to the radio-output event stream for a client session's auto-info fan-out.
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<RadioEvent> {
         self.inner.tx.subscribe()
     }

@@ -56,7 +56,7 @@ pub(crate) enum NativeCommandFamily {
     Kenwood,
 }
 
-/// What a backend can do, advertised to faces and the poller.
+/// What a backend can do, advertised to endpoints and the poller.
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_excessive_bools)] // Each flag is an independent capability bit.
 pub(crate) struct BackendCapabilities {

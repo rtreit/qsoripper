@@ -2,7 +2,7 @@
 //!
 //! Commands occupy byte values `0x00..=0x1f`; printable bytes are Morse data. Command
 //! lengths are defined by the K1EL WinKeyer 3.1 interface manual. The parser retains a
-//! partial command across serial reads and emits data immediately so a virtual face can
+//! partial command across serial reads and emits data immediately so a virtual endpoint can
 //! preserve the client's byte order without using timing to distinguish commands.
 
 /// Maximum bytes in one WinKeyer command, including a 256-byte EEPROM payload.
@@ -140,7 +140,7 @@ impl DeviceEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct DeviceStatus {
-    /// Original byte, retained for protocol-compatible virtual faces.
+    /// Original byte, retained for protocol-compatible virtual endpoints.
     pub(crate) raw: u8,
     /// Timed wait in progress.
     pub(crate) waiting: bool,

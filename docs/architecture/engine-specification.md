@@ -517,7 +517,7 @@ a single-owner lease and a hard transmit-time ceiling. The engine's behavior con
 are unchanged: it remains a read-mostly NET rigctl client and is agnostic to whether the
 endpoint is the cathub daemon or a bare `rigctld`.
 
-The hub's read-only Hamlib NET face implements the engine's optional logging probes:
+The hub's read-only Hamlib NET endpoint implements the engine's optional logging probes:
 `i`/`\get_split_freq`, `x`/`\get_split_mode`, `l RFPOWER`, and `2`/`\power2mW`. CatHub serves
 these from its universal radio snapshot. The native TS-590 backend populates configured power
 from `PC;`; the rigctld bridge forwards the optional probes to its private downstream rigctld.
@@ -528,56 +528,56 @@ capability-tolerant behavior.
 - Operator setup: `docs/integrations/cathub-setup.md`.
 - Implementation: the `qsoripper-cathub` crate under `src/rust/`.
 
-Native `ts590` faces support an opt-in, per-face **single-VFO operating-VFO virtualization**
-policy (`single_vfo = true`). When enabled, the face never exposes the physical VFO letter:
+Native `ts590` endpoints support an opt-in, per-endpoint **single-VFO operating-VFO virtualization**
+policy (`single_vfo = true`). When enabled, the endpoint never exposes the physical VFO letter:
 it always presents the operating (receive) VFO as VFO A, mirroring `FA`/`FB` reads and writes
 onto whichever VFO the radio is on, intercepting `FR`/`FT` VFO-select verbs, forcing the `IF;`
 active-VFO digit (P10) and split to `0`, and re-presenting an A/B switch by pushing the new
 operating VFO's `FA` + `MD` + `IF`. This makes single-VFO loggers — N1MM Logger+ in SO1V mode,
 which otherwise warns "You should not use VFO B when configured for SO1V" and freezes — track
 the radio seamlessly across A/B switches. It is **off by default** and must stay off for genuine
-dual-VFO faceplates such as ARCP-590. See design §8.4.2.
+dual-VFO control panels such as ARCP-590. See design §8.4.2.
 
 The **same `single_vfo` policy is available on `[[hamlib_net]]` (rigctld) endpoints** for
 rigctld clients that, like N1MM SO1V, expect to receive on VFO A: WSJT-X stops decoding when
 it sees VFO B as the active VFO, and Log4OM polls the fixed `\get_vfo_info VFOA` and would log
-the inactive VFO's stale frequency on VFO B. On a `single_vfo` Hamlib NET endpoint the face
+the inactive VFO's stale frequency on VFO B. On a `single_vfo` Hamlib NET endpoint the endpoint
 uses a **strict** single-VFO contract: `get_vfo` reports `VFOA`; `get_vfo_info` resolves any
 requested VFO to the operating VFO and reports `Split: 0`; `get_split_vfo` reports `0`/`VFOA`;
 `set_split_vfo 1` is **rejected** (`RPRT -11`) because the presentation cannot model a real
 split (use WSJT-X "Fake It"); and `\set_vfo ?` advertises only `VFOA`. Reads and writes already
 target the operating VFO, so the frequency/mode are real on either physical VFO. The engine's
 read-only endpoint leaves `single_vfo = false` so it logs the true operating VFO. Plain
-`get_freq` / `get_mode` already read the operating VFO on every face, which is why a logger that
+`get_freq` / `get_mode` already read the operating VFO on every endpoint, which is why a logger that
 polls only `f` (WSJT-X) tracks A/B even without virtualization, whereas one that polls
 `get_vfo_info VFOA` (Log4OM) requires it.
 
 Native TS-590 controllers that speak the radio's exact protocol — notably **ARCP-590**, Kenwood's
 own control panel — get a dedicated **transparent mirror** dialect (`dialect = "ts590-transparent"`)
-instead of the virtualizing `ts590` dialect. A transparent face behaves as if it were wired
+instead of the virtualizing `ts590` dialect. A transparent endpoint behaves as if it were wired
 directly to the rig: every request except PTT and auto-information is forwarded to the radio
-verbatim (`format_notification` returns nothing — the face never consumes a synthesized frame),
+verbatim (`format_notification` returns nothing — the endpoint never consumes a synthesized frame),
 and the radio's entire CAT stream — both modeled frames and unmodeled ones — is relayed back
-byte-for-byte whenever the face has auto-information enabled. Because the rig runs in AI2 and
+byte-for-byte whenever the endpoint has auto-information enabled. Because the rig runs in AI2 and
 echoes every change any client makes through the hub, a transparent controller stays perfectly in
 sync with the radio's true VFO/frequency/mode/split state, eliminating the synthesis/snapshot
 drift (stale A/B, frozen frequency) that a virtualizing view can accumulate for a client that
 already knows the native protocol. The hub still owns the single physical port, so three things
-stay hub-mediated even on a mirror face: PTT (`TX`/`RX`) routes through the shared single-owner
-lease; auto-information (`AI`) is virtualized per face (the rig itself stays in hub-owned AI2);
+stay hub-mediated even on a mirror endpoint: PTT (`TX`/`RX`) routes through the shared single-owner
+lease; auto-information (`AI`) is virtualized per endpoint (the rig itself stays in hub-owned AI2);
 and identity/keepalive reads (`ID;`/`PS;`) are answered locally so the controller's steady-state
-heartbeat generates zero radio traffic. A lagged mirror face is re-synced by re-presenting the
+heartbeat generates zero radio traffic. A lagged mirror endpoint is re-synced by re-presenting the
 full current state as raw frames (`FA`/`FB`/`FR`/`FT`/`MD`/`IF`). `ts590-transparent` is
 mutually exclusive with `single_vfo = true` (a mirror relays the radio's real dual-VFO stream and
 cannot virtualize the operating VFO); the daemon rejects that combination at config validation.
 
 To support transparent relay, the hub broadcasts a modeled native frame **twice** on its internal
-event bus: once as a coalesced modeled change (consumed by virtualizing faces) and once as a
-verbatim raw-native event (consumed only by transparent faces). Unmodeled frames continue to
+event bus: once as a coalesced modeled change (consumed by virtualizing endpoints) and once as a
+verbatim raw-native event (consumed only by transparent endpoints). Unmodeled frames continue to
 broadcast as a single verbatim raw event. This keeps existing virtualizing dialects byte-for-byte
-unchanged while giving a mirror face the radio's exact stream.
+unchanged while giving a mirror endpoint the radio's exact stream.
 
-The hub's Hamlib NET faces accept both the plain rigctld protocol (WSJT-X, N1MM, the engine)
+The hub's Hamlib NET endpoints accept both the plain rigctld protocol (WSJT-X, N1MM, the engine)
 and Hamlib's **Extended Response Protocol** (ERP). An ERP request prefixes the command with a
 separator (`+` joins records with newlines; `;`, `|`, or `,` joins them on one line with that
 character), and the reply echoes the long command name, emits labeled data records, and ends
@@ -590,7 +590,7 @@ those shapes, not just the plain protocol, or Log4OM stays offline.
 The CAT hub daemon, the engine, and the launcher share one per-user `config.toml`
 (`%APPDATA%\qsoripper\config.toml` on Windows, `$XDG_CONFIG_HOME`/`$HOME/.config` on Unix,
 overridable with `QSORIPPER_CONFIG_PATH`). The daemon reads its settings from a `[cat_hub]`
-table in that file (radio/poll/ptt/events plus `[[cat_hub.face]]` and `[[cat_hub.hamlib_net]]`
+table in that file (radio/poll/ptt/events plus `[[cat_hub.serial_endpoint]]` and `[[cat_hub.hamlib_net]]`
 arrays); a standalone file with top-level `[radio]` … tables is still accepted via `--config`.
 
 Because multiple components write the same file, every engine setup save is **merge-preserving**:
@@ -686,24 +686,24 @@ Persists setup configuration and station profile.
 4. Mark setup as complete.
 
 **CAT hub (`cat_hub`) management:**
-- Serial and WinKeyer faces may include `application_transport`, the paired virtual endpoint
+- Serial and WinKeyer endpoints may include `application_transport`, the paired virtual endpoint
   opened by the client application. The hub opens only `transport`. Engines preserve and return
-  the application-side value for setup guidance and reject a face whose two transports are the
+  the application-side value for setup guidance and reject an endpoint whose two transports are the
   same.
 - The optional `cat_hub` field (`CatHubSettings`) lets a setup UI manage the standalone
   `qsoripper-cathub` daemon's `[cat_hub]` section without hand-editing TOML.
 - The field is **full-replacement**: when present it is the complete desired `[cat_hub]`
-  section. A `radio` (with a `backend`) is required and at least one endpoint (a `faces` or
-  `hamlib_net` entry) is required; the engine rewrites `[cat_hub]` from it.
+  section. A `radio` (with a `backend`) is required and at least one endpoint (a
+  `serial_endpoints` or `hamlib_net` entry) is required; the engine rewrites `[cat_hub]` from it.
 - When `cat_hub` is omitted, the engine leaves any existing `[cat_hub]` section **untouched**
   (verbatim, including comments and unknown keys). Only an explicit `cat_hub` triggers a
   rewrite — so a routine save (e.g. updating QRZ credentials) never reserializes the daemon's
   configuration. This mirrors the conditional-ownership rule in the unified-configuration note.
 - Validation enforces the same constraints the daemon accepts: `backend` ∈ {ts590, rigctld,
   loopback}; radio `transport` ∈ {serial, tcp}; non-loopback serial radios require a `port`;
-  face `dialect` ∈ {ts590, ts590-transparent, ts2000}; endpoint names unique across faces and hamlib_net; face
-  transports distinct; hamlib_net binds distinct and in `host:port` form; a face transport may
-  not reuse the radio port. CAT face permission tokens include `read`, `frequency_write`,
+  endpoint `dialect` ∈ {ts590, ts590-transparent, ts2000}; endpoint names unique across endpoints and hamlib_net; endpoint
+  transports distinct; hamlib_net binds distinct and in `host:port` form; an endpoint transport may
+  not reuse the radio port. CAT endpoint permission tokens include `read`, `frequency_write`,
   `write`, `ptt`, and `config_write`; `frequency_write` grants tuning without other modeled
   mutations, while `write` grants all modeled writes. Violations return `INVALID_ARGUMENT`.
 

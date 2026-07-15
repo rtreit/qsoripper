@@ -13,7 +13,7 @@
       "milliseconds": 600
     },
     {
-      "type": "click",
+      "type": "invoke",
       "automationId": "SettingsCatHubTab"
     },
     {
@@ -25,16 +25,16 @@
       "path": "cathub-start.png"
     },
     {
-      "type": "click",
-      "automationId": "SettingsCatHubAddFaceButton"
+      "type": "invoke",
+      "automationId": "SettingsCatHubAddSerialEndpointButton"
     },
     {
       "type": "wait",
       "milliseconds": 150
     },
     {
-      "type": "click",
-      "automationId": "SettingsCatHubAddEndpointButton"
+      "type": "invoke",
+      "automationId": "SettingsCatHubAddHamlibNetEndpointButton"
     },
     {
       "type": "wait",

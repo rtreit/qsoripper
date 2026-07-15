@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use super::protocol::DeviceStatus;
 
-/// Stable identity assigned to one virtual face or typed API connection.
+/// Stable identity assigned to one virtual endpoint or typed API connection.
 pub(crate) type ClientId = u64;
 /// Stable identity assigned to one queued transmit job.
 pub(crate) type JobId = u64;

@@ -46,7 +46,7 @@ pub(crate) enum BrokerError {
     QueueFull,
 }
 
-/// Events emitted by the broker for virtual faces and diagnostics.
+/// Events emitted by the broker for virtual endpoints and diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BrokerEvent {
     Connected { firmware_revision: u8 },
@@ -117,7 +117,7 @@ enum Request {
     },
 }
 
-/// Cloneable command/status surface shared by gRPC and virtual COM faces.
+/// Cloneable command/status surface shared by gRPC and virtual COM endpoints.
 #[derive(Clone)]
 pub(crate) struct BrokerHandle {
     requests: mpsc::Sender<Request>,

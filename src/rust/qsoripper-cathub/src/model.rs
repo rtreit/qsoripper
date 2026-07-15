@@ -362,7 +362,7 @@ impl StateMutation {
     }
 }
 
-/// A single observed change to the universal state, broadcast to faces for AI
+/// A single observed change to the universal state, broadcast to endpoints for AI
 /// fan-out and recorded into the [`Snapshot`](crate::state::Snapshot).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StateChange {
