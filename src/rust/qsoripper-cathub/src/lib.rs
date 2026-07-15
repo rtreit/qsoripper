@@ -1,6 +1,6 @@
 //! qsoripper-cathub: a multi-client CAT hub daemon.
 //!
-//! The daemon is the single owner of the radio link and fans it out to many client faces
+//! The daemon is the single owner of the radio link and fans it out to many client endpoints
 //! (HDSDR/OmniRig, N1MM Logger+, ARCP-590, WSJT-X, Log4OM, and the QsoRipper engine) over
 //! their native protocols. It serializes every write, owns the radio's native push stream,
 //! serves reads from a universal cache, arbitrates PTT with a single-owner lease, and never
@@ -28,7 +28,7 @@ mod model;
 mod permissions;
 mod ptt;
 mod radio;
-mod serial_face;
+mod serial_endpoint;
 mod state;
 mod winkeyer;
 
@@ -52,8 +52,8 @@ use crate::config::{Config, RadioConfig};
 use crate::dialect::kenwood::transparent::TransparentTs590Dialect;
 use crate::dialect::kenwood::ts2000::Ts2000Dialect;
 use crate::dialect::kenwood::ts590::Ts590Dialect;
-use crate::dialect::{ClientDialect, FaceContext};
-use crate::events::{spawn_poller, POLLER_FACE};
+use crate::dialect::{ClientDialect, ClientSessionContext};
+use crate::events::{spawn_poller, POLLER_SESSION};
 use crate::hamlib_net::run_listener;
 use crate::model::StateMutation;
 use crate::ptt::PttManager;
@@ -61,12 +61,12 @@ use crate::radio::{
     link_channel, run_transport_supervised, spawn_scheduler, OpKind, Priority, RECONNECT_INITIAL,
     RECONNECT_MAX,
 };
-use crate::serial_face::{open_serial, run_face};
+use crate::serial_endpoint::{open_serial, run_endpoint_session};
 use crate::state::StateHandle;
 use crate::winkeyer::{
-    bind_server as bind_winkeyer_server, open_serial_face as open_winkeyer_face,
-    run_serial_face as run_winkeyer_face, spawn_supervised as spawn_winkeyer,
-    BrokerHandle as WinkeyerBrokerHandle, FacePermissions as WinkeyerFacePermissions,
+    bind_server as bind_winkeyer_server, open_serial_endpoint as open_winkeyer_endpoint,
+    run_serial_endpoint as run_winkeyer_endpoint, spawn_supervised as spawn_winkeyer,
+    BrokerHandle as WinkeyerBrokerHandle, EndpointPermissions as WinkeyerEndpointPermissions,
 };
 
 pub use crate::error::CatHubError;
@@ -176,7 +176,7 @@ async fn open_radio_tcp(radio: &RadioConfig) -> std::io::Result<TcpStream> {
 /// # Errors
 ///
 /// Returns a [`CatHubError`] if the configuration cannot be loaded or validated, the
-/// backend or a dialect cannot be built, the radio transport or a face port cannot be
+/// backend or a dialect cannot be built, the radio transport or an endpoint port cannot be
 /// opened, or the process fails to install its Ctrl+C handler.
 #[allow(clippy::too_many_lines)] // The wiring is one cohesive bring-up sequence.
 pub async fn run(cli: Cli) -> Result<(), CatHubError> {
@@ -312,13 +312,13 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
         cfg.heartbeat_interval(),
     );
 
-    // Prime the universal state with one awaited poll before any face begins serving, so the
+    // Prime the universal state with one awaited poll before any endpoint begins serving, so the
     // first client read (e.g. HDSDR/OmniRig connecting at startup) sees real radio state
     // instead of defaults. Best-effort and time-bounded: a slow or absent radio must not
     // block startup, since the baseline poller keeps retrying afterwards.
     match tokio::time::timeout(
         Duration::from_millis(1_000),
-        radio.submit(POLLER_FACE, Priority::Poll, OpKind::Poll),
+        radio.submit(POLLER_SESSION, Priority::Poll, OpKind::Poll),
     )
     .await
     {
@@ -334,49 +334,55 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
     let next_id = Arc::new(AtomicU64::new(1));
 
     if let Some(keyer) = &winkeyer {
-        for face in &cfg.winkeyer_face {
+        for endpoint in &cfg.winkeyer_endpoint {
             let id = next_id.fetch_add(1, Ordering::SeqCst);
-            let port = open_winkeyer_face(&face.transport, face.baud)?;
+            let port = open_winkeyer_endpoint(&endpoint.transport, endpoint.baud)?;
             let handle = keyer.clone();
-            let primary = face.primary;
-            let permissions = WinkeyerFacePermissions::from_tokens(&face.perms);
-            tokio::spawn(run_winkeyer_face(port, handle, id, primary, permissions));
-            tracing::info!(
-                face = %face.name,
+            let primary = endpoint.primary;
+            let permissions = WinkeyerEndpointPermissions::from_tokens(&endpoint.perms);
+            tokio::spawn(run_winkeyer_endpoint(
+                port,
+                handle,
                 id,
-                hub_port = %face.transport,
                 primary,
-                "virtual WinKeyer face listening; point the application at the paired port"
+                permissions,
+            ));
+            tracing::info!(
+                endpoint = %endpoint.name,
+                id,
+                hub_port = %endpoint.transport,
+                primary,
+                "virtual WinKeyer endpoint listening; point the application at the paired port"
             );
         }
     }
 
-    for face in &cfg.face {
-        let dialect = dialect_for(&face.dialect)?;
+    for endpoint in &cfg.serial_endpoint {
+        let dialect = dialect_for(&endpoint.dialect)?;
         let id = next_id.fetch_add(1, Ordering::SeqCst);
-        let ctx = FaceContext::new(
+        let ctx = ClientSessionContext::new(
             id,
-            face.permissions(),
+            endpoint.permissions(),
             state.clone(),
             radio.clone(),
             ptt.clone(),
             caps.clone(),
         )
-        .with_single_vfo(face.single_vfo);
-        let port = open_serial(&face.name, &face.transport, face.baud)?;
-        tokio::spawn(run_face(port, dialect, ctx, b';'));
+        .with_single_vfo(endpoint.single_vfo);
+        let port = open_serial(&endpoint.name, &endpoint.transport, endpoint.baud)?;
+        tokio::spawn(run_endpoint_session(port, dialect, ctx, b';'));
         tracing::info!(
-            face = %face.name,
+            endpoint = %endpoint.name,
             id,
-            hub_port = %face.transport,
-            "serial face listening; hub owns this port -- point the application at the paired \
+            hub_port = %endpoint.transport,
+            "serial endpoint listening; hub owns this port -- point the application at the paired \
              com0com port, not this one"
         );
     }
 
     for ep in &cfg.hamlib_net {
         let id = next_id.fetch_add(1, Ordering::SeqCst);
-        let template = FaceContext::new(
+        let template = ClientSessionContext::new(
             id,
             ep.permissions(),
             state.clone(),
@@ -405,10 +411,10 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_millis(500)).await;
-                if let Some(face) = ptt.expired_owner() {
+                if let Some(endpoint) = ptt.expired_owner() {
                     let _ = radio
                         .submit(
-                            face,
+                            endpoint,
                             Priority::Ptt,
                             OpKind::Apply(StateMutation::SetPtt {
                                 keyed: false,
@@ -416,8 +422,8 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
                             }),
                         )
                         .await;
-                    ptt.unkey(face);
-                    tracing::warn!(face, "PTT safety ceiling reached; transmitter released");
+                    ptt.unkey(endpoint);
+                    tracing::warn!(endpoint, "PTT safety ceiling reached; transmitter released");
                 }
             }
         });
@@ -450,7 +456,7 @@ pub async fn run(cli: Cli) -> Result<(), CatHubError> {
         )
         .await;
         ptt.unkey(owner);
-        tracing::info!(face = owner, "released PTT on shutdown");
+        tracing::info!(session_id = owner, "released PTT on shutdown");
     }
     Ok(())
 }
@@ -477,7 +483,7 @@ mod tests {
     fn build_backend_dispatches_each_kind() {
         let cfg = Config::parse(
             "[radio]\nbackend = \"ts590\"\nport = \"COM3\"\n\
-             [[face]]\nname=\"f\"\ntransport=\"COM5\"\ndialect=\"ts590\"\n",
+             [[serial_endpoint]]\nname=\"f\"\ntransport=\"COM5\"\ndialect=\"ts590\"\n",
         )
         .expect("parse");
         assert_eq!(
@@ -487,7 +493,7 @@ mod tests {
 
         let cfg = Config::parse(
             "[radio]\nbackend = \"rigctld\"\nmodel=\"TS-590SG\"\ntransport=\"tcp\"\n\
-             [[face]]\nname=\"f\"\ntransport=\"COM5\"\ndialect=\"ts590\"\n",
+             [[serial_endpoint]]\nname=\"f\"\ntransport=\"COM5\"\ndialect=\"ts590\"\n",
         )
         .expect("parse");
         assert!(build_backend(&cfg)
@@ -497,7 +503,7 @@ mod tests {
             .starts_with("rigctld:"));
 
         let cfg = Config::parse(
-            "[radio]\nbackend = \"loopback\"\n[[face]]\nname=\"f\"\ntransport=\"COM5\"\ndialect=\"ts590\"\n",
+            "[radio]\nbackend = \"loopback\"\n[[serial_endpoint]]\nname=\"f\"\ntransport=\"COM5\"\ndialect=\"ts590\"\n",
         )
         .expect("parse");
         assert_eq!(
@@ -520,7 +526,7 @@ mod tests {
         std::fs::write(
             &path,
             "[radio]\nbackend = \"loopback\"\n\
-             [[face]]\nname=\"f\"\ntransport=\"COM5\"\ndialect=\"ts590\"\n",
+             [[serial_endpoint]]\nname=\"f\"\ntransport=\"COM5\"\ndialect=\"ts590\"\n",
         )
         .expect("write");
         let cli = Cli {
@@ -546,7 +552,7 @@ mod tests {
     async fn open_transport_rejects_unknown_transport() {
         let mut cfg = Config::parse(
             "[radio]\nbackend = \"ts590\"\ntransport = \"serial\"\nport = \"COM3\"\n\
-             [[face]]\nname=\"f\"\ntransport=\"COM5\"\ndialect=\"ts590\"\n",
+             [[serial_endpoint]]\nname=\"f\"\ntransport=\"COM5\"\ndialect=\"ts590\"\n",
         )
         .expect("parse");
         // open_transport defends against a transport string that bypassed validation.
@@ -555,15 +561,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_wires_loopback_then_fails_opening_a_bogus_face_port() {
+    async fn run_wires_loopback_then_fails_opening_a_bogus_endpoint_port() {
         // Exercises the full bring-up: backend, state, PTT, scheduler, native-push probe,
-        // and poller, failing only when it tries to open a face's (nonexistent) serial port.
+        // and poller, failing only when it tries to open an endpoint's nonexistent serial port.
         let dir = std::env::temp_dir();
         let path = dir.join(format!("cathub-run-{}.toml", std::process::id()));
         std::fs::write(
             &path,
             "[radio]\nbackend = \"loopback\"\n\
-             [[face]]\nname = \"bogus\"\ntransport = \"COM_DOES_NOT_EXIST\"\ndialect = \"ts590\"\n",
+             [[serial_endpoint]]\nname = \"bogus\"\ntransport = \"COM_DOES_NOT_EXIST\"\ndialect = \"ts590\"\n",
         )
         .expect("write");
         let cli = Cli {
@@ -573,6 +579,9 @@ mod tests {
         };
         let result = tokio::time::timeout(std::time::Duration::from_secs(5), run(cli)).await;
         let _ = std::fs::remove_file(&path);
-        assert!(matches!(result, Ok(Err(_))), "expected a face open error");
+        assert!(
+            matches!(result, Ok(Err(_))),
+            "expected an endpoint open error"
+        );
     }
 }

@@ -1,12 +1,12 @@
-//! The single-owner radio task: transport framing + reply matching, and the per-face
+//! The single-owner radio task: transport framing + reply matching, and the per-endpoint
 //! priority scheduler that serializes every backend operation.
 //!
 //! Two cooperating layers:
 //! * [`run_transport`] owns the byte transport. It writes one command at a time, matches
 //!   solicited replies by verb, and routes every unsolicited frame to the backend's
 //!   `parse_event` (native push). It exposes [`RadioLink`].
-//! * [`spawn_scheduler`] owns per-face FIFO queues and selects the next backend
-//!   operation by priority across the ready heads, never reordering one face's stream.
+//! * [`spawn_scheduler`] owns per-session FIFO queues and selects the next backend
+//!   operation by priority across the ready heads, never reordering one endpoint's stream.
 
 use std::collections::VecDeque;
 use std::future::Future;
@@ -25,7 +25,7 @@ use crate::state::StateHandle;
 /// Default per-command reply timeout.
 const REPLY_TIMEOUT: Duration = Duration::from_millis(1_000);
 
-/// Priority class for scheduling across faces. Lower discriminant wins.
+/// Priority class for scheduling across endpoints. Lower discriminant wins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Priority {
     /// PTT (keying) — always preempts everything else at selection time.
@@ -414,18 +414,18 @@ pub(crate) async fn run_transport_supervised<T, F, Fut>(
 ///
 /// Modeled frames update the snapshot and broadcast a coalesced change. Frames the backend
 /// does not model are relayed verbatim on the same ordered event bus so native pass-through
-/// faces (which consume the CAT stream directly) keep features like the radio's noise
+/// endpoints (which consume the CAT stream directly) keep features like the radio's noise
 /// blanker and front-panel changes in sync.
 fn route_event(backend: &Arc<dyn RadioBackend>, state: &StateHandle, frame: &[u8]) {
     if backend.record_event(frame, state, RadioEventSource::NativePush) {
         // The frame was modeled: the snapshot is updated and a coalesced `Change` is
-        // broadcast for virtualizing faces. Also relay the verbatim frame so transparent
-        // mirror faces (ARCP-590) track the radio's real CAT stream instead of a synthesis.
+        // broadcast for virtualizing endpoints. Also relay the verbatim frame so transparent
+        // mirror endpoints (ARCP-590) track the radio's real CAT stream instead of a synthesis.
         state.record_raw_native(frame);
     } else {
         tracing::trace!(
             frame = %String::from_utf8_lossy(frame),
-            "relaying unmodeled unsolicited radio frame to native pass-through faces"
+            "relaying unmodeled unsolicited radio frame to native pass-through endpoints"
         );
         state.record_raw(frame);
     }
@@ -433,7 +433,7 @@ fn route_event(backend: &Arc<dyn RadioBackend>, state: &StateHandle, frame: &[u8
 
 // --- Operation scheduler -------------------------------------------------------------
 
-/// The kind of backend operation a face requests.
+/// The kind of backend operation a client session requests.
 pub(crate) enum OpKind {
     /// Run one baseline poll cycle.
     Poll,
@@ -444,30 +444,30 @@ pub(crate) enum OpKind {
 }
 
 struct Operation {
-    face: u64,
+    session_id: u64,
     priority: Priority,
     kind: OpKind,
     reply: oneshot::Sender<Result<Vec<u8>, BackendError>>,
 }
 
-/// A clonable handle faces and the poller use to submit operations.
+/// A clonable handle client sessions and the poller use to submit operations.
 #[derive(Clone)]
 pub(crate) struct RadioHandle {
     tx: mpsc::Sender<Operation>,
 }
 
 impl RadioHandle {
-    /// Submit an operation tagged with the calling face's id and priority.
+    /// Submit an operation tagged with the calling session's id and priority.
     pub(crate) async fn submit(
         &self,
-        face: u64,
+        session_id: u64,
         priority: Priority,
         kind: OpKind,
     ) -> Result<Vec<u8>, BackendError> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .send(Operation {
-                face,
+                session_id,
                 priority,
                 kind,
                 reply,
@@ -479,7 +479,7 @@ impl RadioHandle {
     }
 }
 
-/// Spawn the per-face priority scheduler. Returns a clonable [`RadioHandle`].
+/// Spawn the per-session priority scheduler. Returns a clonable [`RadioHandle`].
 pub(crate) fn spawn_scheduler(
     backend: Arc<dyn RadioBackend>,
     link: RadioLink,
@@ -509,17 +509,17 @@ pub(crate) fn spawn_scheduler(
 }
 
 fn enqueue(queues: &mut Vec<(u64, VecDeque<Operation>)>, op: Operation) {
-    if let Some((_, q)) = queues.iter_mut().find(|(id, _)| *id == op.face) {
+    if let Some((_, q)) = queues.iter_mut().find(|(id, _)| *id == op.session_id) {
         q.push_back(op);
     } else {
         let mut q = VecDeque::new();
-        let face = op.face;
+        let session_id = op.session_id;
         q.push_back(op);
-        queues.push((face, q));
+        queues.push((session_id, q));
     }
 }
 
-/// Pick the highest-priority ready head across all per-face queues (FIFO within a face).
+/// Pick the highest-priority ready head across all per-session queues (FIFO within a session).
 fn select_next(queues: &mut [(u64, VecDeque<Operation>)]) -> Option<Operation> {
     let mut best: Option<usize> = None;
     let mut best_priority = Priority::Poll;
@@ -615,15 +615,15 @@ mod tests {
     }
 
     #[test]
-    fn route_event_relays_modeled_frame_as_raw_native_for_mirror_faces() {
+    fn route_event_relays_modeled_frame_as_raw_native_for_mirror_endpoints() {
         let backend: Arc<dyn RadioBackend> = Arc::new(Ts590Backend::new());
         let state = StateHandle::new();
         let mut rx = state.subscribe();
 
         route_event(&backend, &state, b"FA00014035000;");
 
-        // A modeled frame must broadcast BOTH the coalesced Change (for virtualizing faces)
-        // and the verbatim RawNative (for transparent mirror faces like ARCP-590).
+        // A modeled frame must broadcast BOTH the coalesced Change (for virtualizing endpoints)
+        // and the verbatim RawNative (for transparent mirror endpoints like ARCP-590).
         let mut saw_change = false;
         let mut saw_raw_native = false;
         while let Ok(evt) = rx.try_recv() {

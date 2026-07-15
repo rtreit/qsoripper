@@ -1,10 +1,10 @@
-//! Hamlib `rigctld`-compatible TCP server face (design §6/§8, validated against golden
+//! Hamlib `rigctld`-compatible TCP server endpoint (design §6/§8, validated against golden
 //! transcripts captured from a real `rigctld`, §10.1).
 //!
 //! This is a thin server-side reimplementation of the rigctld net protocol — it never
 //! links Hamlib (§8.8). It serves the QsoRipper engine (read-only endpoint) and WSJT-X
 //! (write/PTT endpoint). Modeled reads come from the universal state; writes go through
-//! [`FaceContext::apply_modeled`] so they participate in serialization, the PTT lease, and
+//! [`ClientSessionContext::apply_modeled`] so they participate in serialization, the PTT lease, and
 //! event fan-out. Set commands never emit a VFO-target write (frequency always lands on
 //! the active VFO), preserving the no-VFO-retargeting invariant.
 
@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 
-use crate::dialect::{ApplyOutcome, FaceContext};
+use crate::dialect::{ApplyOutcome, ClientSessionContext};
 use crate::model::{Mode, PttSource, StateMutation, TxPower, Vfo};
 use crate::permissions::CommandClass;
 use crate::state::Snapshot;
@@ -35,12 +35,12 @@ fn vfo_name(vfo: Vfo) -> &'static str {
     }
 }
 
-/// The VFO whose data this face presents when a client requests `requested`.
+/// The VFO whose data this endpoint presents when a client requests `requested`.
 ///
-/// Single-VFO faces (N1MM SO1V, Log4OM) always present the operating (receive) VFO so
-/// the radio's physical A/B identity never leaks; dual-VFO faces honor the literal
+/// Single-VFO endpoints (N1MM SO1V, Log4OM) always present the operating (receive) VFO so
+/// the radio's physical A/B identity never leaks; dual-VFO endpoints honor the literal
 /// requested VFO. This is the chokepoint that makes single-VFO loggers follow A/B swaps.
-fn presented_vfo(ctx: &FaceContext, snapshot: &Snapshot, requested: Vfo) -> Vfo {
+fn presented_vfo(ctx: &ClientSessionContext, snapshot: &Snapshot, requested: Vfo) -> Vfo {
     if ctx.single_vfo() {
         snapshot.rx_vfo
     } else {
@@ -48,10 +48,10 @@ fn presented_vfo(ctx: &FaceContext, snapshot: &Snapshot, requested: Vfo) -> Vfo 
     }
 }
 
-/// The VFO name this face advertises for the real VFO `real`. Single-VFO faces always
-/// claim `VFOA` (the operating VFO is virtualized as A); dual-VFO faces report the real
+/// The VFO name this endpoint advertises for the real VFO `real`. Single-VFO endpoints always
+/// claim `VFOA` (the operating VFO is virtualized as A); dual-VFO endpoints report the real
 /// name.
-fn presented_vfo_name(ctx: &FaceContext, real: Vfo) -> &'static str {
+fn presented_vfo_name(ctx: &ClientSessionContext, real: Vfo) -> &'static str {
     if ctx.single_vfo() {
         "VFOA"
     } else {
@@ -59,9 +59,9 @@ fn presented_vfo_name(ctx: &FaceContext, real: Vfo) -> &'static str {
     }
 }
 
-/// The split flag this face exposes. Single-VFO faces always hide split (they know only
+/// The split flag this endpoint exposes. Single-VFO endpoints always hide split (they know only
 /// the operating VFO), matching the single-VFO virtualization contract.
-fn presented_split(ctx: &FaceContext, snapshot: &Snapshot) -> bool {
+fn presented_split(ctx: &ClientSessionContext, snapshot: &Snapshot) -> bool {
     !ctx.single_vfo() && snapshot.split
 }
 
@@ -166,7 +166,7 @@ fn ext_echo(cmd: &str, args: &[&str]) -> String {
 /// Handle one rigctld protocol line against the universal state, dispatching the
 /// Extended Response Protocol (separator-prefixed) path used by Log4OM-NG separately
 /// from the plain protocol used by WSJT-X / N1MM / the engine.
-async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
+async fn handle_line(line: &str, ctx: &ClientSessionContext) -> LineResult {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return LineResult::Reply(Vec::new());
@@ -186,7 +186,7 @@ async fn handle_line(line: &str, ctx: &FaceContext) -> LineResult {
 /// `;V ?` (list supported VFOs) and then polls with `+\get_vfo_info VFOA`, so those two
 /// shapes are formatted explicitly; the common labeled gets are also supported, and any
 /// other command (sets, unknown) is wrapped generically as `echo <sep> <plain reply>`.
-async fn handle_ext(sep: char, rest: &str, ctx: &FaceContext) -> Vec<u8> {
+async fn handle_ext(sep: char, rest: &str, ctx: &ClientSessionContext) -> Vec<u8> {
     let trimmed = rest.trim();
     if trimmed.is_empty() {
         return Vec::new();
@@ -291,7 +291,7 @@ async fn handle_ext(sep: char, rest: &str, ctx: &FaceContext) -> Vec<u8> {
 
 /// Dispatch one plain (non-extended) rigctld protocol command against the universal state.
 #[allow(clippy::too_many_lines)] // A flat protocol dispatch table reads best as one match.
-async fn dispatch_plain(cmd: &str, args: &[&str], ctx: &FaceContext) -> LineResult {
+async fn dispatch_plain(cmd: &str, args: &[&str], ctx: &ClientSessionContext) -> LineResult {
     let snapshot = ctx.snapshot();
 
     let reply: Vec<u8> = match cmd {
@@ -461,7 +461,7 @@ async fn dispatch_plain(cmd: &str, args: &[&str], ctx: &FaceContext) -> LineResu
             if !ctx.perms.allows(CommandClass::ModeledWrite) {
                 RPRT_EINVAL.to_vec()
             } else if ctx.single_vfo() {
-                // Single-VFO faces present one operating VFO and cannot model a real A/B
+                // Single-VFO endpoints present one operating VFO and cannot model a real A/B
                 // split. Accept "split off" as a no-op success, but reject "split on" with
                 // RPRT_ENAVAIL so a client (e.g. WSJT-X "Rig" split) sees split is
                 // unavailable and falls back to "Fake It" instead of believing a false
@@ -578,7 +578,7 @@ async fn dispatch_plain(cmd: &str, args: &[&str], ctx: &FaceContext) -> LineResu
 }
 
 /// Run a read-only command, enforcing the `read` permission.
-fn guard_read(ctx: &FaceContext, f: impl FnOnce() -> Vec<u8>) -> Vec<u8> {
+fn guard_read(ctx: &ClientSessionContext, f: impl FnOnce() -> Vec<u8>) -> Vec<u8> {
     if ctx.perms.allows(CommandClass::ModeledRead) {
         f()
     } else {
@@ -587,11 +587,11 @@ fn guard_read(ctx: &FaceContext, f: impl FnOnce() -> Vec<u8>) -> Vec<u8> {
 }
 
 /// Serve one accepted connection until it closes or quits.
-pub(crate) async fn serve_conn<S>(stream: S, ctx: FaceContext)
+pub(crate) async fn serve_conn<S>(stream: S, ctx: ClientSessionContext)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
 {
-    let face_id = ctx.face_id;
+    let session_id = ctx.session_id;
     let (reader, mut writer) = tokio::io::split(stream);
     let mut reader = BufReader::new(reader);
     let mut line: Vec<u8> = Vec::with_capacity(64);
@@ -612,7 +612,7 @@ where
                     }
                     if line.len() >= MAX_LINE_LEN {
                         tracing::warn!(
-                            face_id,
+                            session_id,
                             "hamlib_net request exceeded {MAX_LINE_LEN} bytes without a \
                              newline; closing connection"
                         );
@@ -631,11 +631,11 @@ where
             line.pop();
         }
         let text = String::from_utf8_lossy(&line).into_owned();
-        tracing::trace!(face_id, req = %text.trim(), "hamlib_net request");
+        tracing::trace!(session_id, req = %text.trim(), "hamlib_net request");
         match handle_line(&text, &ctx).await {
             LineResult::Reply(bytes) => {
                 tracing::trace!(
-                    face_id,
+                    session_id,
                     reply = %String::from_utf8_lossy(&bytes).trim_end(),
                     "hamlib_net reply"
                 );
@@ -645,7 +645,7 @@ where
                 let _ = writer.flush().await;
             }
             LineResult::Quit => {
-                tracing::trace!(face_id, "hamlib_net client quit");
+                tracing::trace!(session_id, "hamlib_net client quit");
                 break 'serve;
             }
         }
@@ -660,20 +660,20 @@ where
 const MAX_LINE_LEN: usize = 4096;
 
 /// Bind a Hamlib net endpoint and serve connections. Each connection gets a fresh
-/// [`FaceContext`] sharing the same state/radio/ptt but its own face id and the
+/// [`ClientSessionContext`] sharing the same state/radio/ptt but its own session id and the
 /// endpoint's permissions.
 pub(crate) async fn run_listener(
     bind: &str,
-    next_face_id: Arc<std::sync::atomic::AtomicU64>,
-    template: FaceContext,
+    next_session_id: Arc<std::sync::atomic::AtomicU64>,
+    template: ClientSessionContext,
 ) -> std::io::Result<()> {
     let listener = TcpListener::bind(bind).await?;
     tracing::info!(bind, "hamlib_net endpoint listening");
     loop {
         let (stream, peer) = listener.accept().await?;
-        let face_id = next_face_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let ctx = template.clone_with_face(face_id);
-        tracing::debug!(%peer, face_id, "hamlib_net client connected");
+        let session_id = next_session_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let ctx = template.clone_for_session(session_id);
+        tracing::debug!(%peer, session_id, "hamlib_net client connected");
         tokio::spawn(serve_conn(stream, ctx));
     }
 }
@@ -685,26 +685,30 @@ mod tests {
     use crate::backend::loopback::LoopbackBackend;
     use crate::backend::RadioBackend;
     use crate::model::{RadioEventSource, StateChange, TxPower};
-    use crate::permissions::FacePermissions;
+    use crate::permissions::EndpointPermissions;
     use crate::ptt::PttManager;
     use crate::radio::{detached_link, spawn_scheduler};
     use crate::state::StateHandle;
     use std::time::Duration;
 
-    fn ctx_with(perms: FacePermissions) -> (FaceContext, LoopbackBackend, StateHandle) {
+    fn ctx_with(
+        perms: EndpointPermissions,
+    ) -> (ClientSessionContext, LoopbackBackend, StateHandle) {
         let backend = LoopbackBackend::new();
         let caps = backend.capabilities();
         let arc: Arc<dyn RadioBackend> = Arc::new(backend.clone());
         let state = StateHandle::new();
         let radio = spawn_scheduler(arc, detached_link(), state.clone());
         let ptt = PttManager::new(Duration::from_secs(300));
-        let ctx = FaceContext::new(1, perms, state.clone(), radio, ptt, caps);
+        let ctx = ClientSessionContext::new(1, perms, state.clone(), radio, ptt, caps);
         (ctx, backend, state)
     }
 
-    /// A single-VFO-virtualized face: the operating VFO is always presented as `VFOA`,
+    /// A single-VFO-virtualized endpoint: the operating VFO is always presented as `VFOA`,
     /// split is hidden, and physical A/B identity never leaks (N1MM SO1V, Log4OM).
-    fn ctx_single_vfo(perms: FacePermissions) -> (FaceContext, LoopbackBackend, StateHandle) {
+    fn ctx_single_vfo(
+        perms: EndpointPermissions,
+    ) -> (ClientSessionContext, LoopbackBackend, StateHandle) {
         let (ctx, backend, state) = ctx_with(perms);
         (ctx.with_single_vfo(true), backend, state)
     }
@@ -754,7 +758,7 @@ mod tests {
         );
     }
 
-    async fn reply_of(line: &str, ctx: &FaceContext) -> Vec<u8> {
+    async fn reply_of(line: &str, ctx: &ClientSessionContext) -> Vec<u8> {
         match handle_line(line, ctx).await {
             LineResult::Reply(b) => b,
             LineResult::Quit => b"<quit>".to_vec(),
@@ -763,7 +767,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_freq_reads_from_state() {
-        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_with(EndpointPermissions::read_only());
         state.record(
             StateChange::Freq {
                 vfo: Vfo::A,
@@ -776,7 +780,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_mode_returns_token_and_passband() {
-        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_with(EndpointPermissions::read_only());
         state.record(
             StateChange::Mode {
                 vfo: Vfo::A,
@@ -789,7 +793,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_freq_and_mode_follow_active_vfo_b() {
-        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_with(EndpointPermissions::read_only());
         state.record(
             StateChange::Freq {
                 vfo: Vfo::B,
@@ -816,7 +820,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_split_freq_and_mode_read_the_transmit_vfo() {
-        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_with(EndpointPermissions::read_only());
         operating_on_b(&state);
 
         assert_eq!(reply_of("i", &ctx).await, b"14035000\n".to_vec());
@@ -825,7 +829,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_rfpower_and_power2mw_use_cached_transmit_power() {
-        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_with(EndpointPermissions::read_only());
         state.record(
             StateChange::TxPower {
                 power: Some(TxPower::from_watts(50, 100)),
@@ -842,7 +846,7 @@ mod tests {
 
     #[tokio::test]
     async fn rfpower_reads_report_unavailable_without_cached_power() {
-        let (ctx, _b, _state) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, _state) = ctx_with(EndpointPermissions::read_only());
 
         assert_eq!(reply_of("l RFPOWER", &ctx).await, RPRT_ENAVAIL.to_vec());
         assert_eq!(
@@ -853,7 +857,7 @@ mod tests {
 
     #[tokio::test]
     async fn split_mode_is_unavailable_until_the_transmit_mode_is_observed() {
-        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_with(EndpointPermissions::read_only());
         state.record(
             StateChange::Freq {
                 vfo: Vfo::B,
@@ -875,7 +879,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_only_endpoint_rejects_set_freq() {
-        let (ctx, backend, _s) = ctx_with(FacePermissions::read_only());
+        let (ctx, backend, _s) = ctx_with(EndpointPermissions::read_only());
         assert_eq!(reply_of("F 14074000", &ctx).await, RPRT_EINVAL.to_vec());
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(backend.mutations().is_empty());
@@ -883,14 +887,15 @@ mod tests {
 
     #[tokio::test]
     async fn read_only_endpoint_rejects_set_mode_and_ptt() {
-        let (ctx, _b, _s) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, _s) = ctx_with(EndpointPermissions::read_only());
         assert_eq!(reply_of("M USB 0", &ctx).await, RPRT_EINVAL.to_vec());
         assert_eq!(reply_of("T 1", &ctx).await, RPRT_EINVAL.to_vec());
     }
 
     #[tokio::test]
     async fn write_endpoint_sets_frequency() {
-        let (ctx, backend, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write", "ptt"]));
+        let (ctx, backend, _s) =
+            ctx_with(EndpointPermissions::from_tokens(&["read", "write", "ptt"]));
         assert_eq!(reply_of("F 14074000", &ctx).await, RPRT_OK.to_vec());
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(
@@ -906,7 +911,7 @@ mod tests {
     async fn set_freq_accepts_hamlib_decimal_format() {
         // Hamlib (WSJT-X, engine, Log4OM) sends set_freq as a "%f" double, e.g.
         // "F 14040005.000000". Earlier this was rejected with RPRT -1.
-        let (ctx, backend, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend, _s) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         assert_eq!(reply_of("F 14040005.000000", &ctx).await, RPRT_OK.to_vec());
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(
@@ -929,7 +934,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_freq_never_retargets_vfo() {
-        let (ctx, backend, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend, _s) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         let _ = reply_of("F 14074000", &ctx).await;
         tokio::time::sleep(Duration::from_millis(20)).await;
         // No SetSplit (FR/FT) mutation: frequency landed on the active VFO only.
@@ -944,7 +949,7 @@ mod tests {
         // WSJT-X sends PKTUSB/PKTLSB for digital modes. The hub must split it into a base
         // mode write plus the independent DATA flag. Starting from the default USB/no-data,
         // PKTLSB is a genuine change on both axes, so both mutations reach the radio in order.
-        let (ctx, backend, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend, _s) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         assert_eq!(reply_of("M PKTLSB 0", &ctx).await, RPRT_OK.to_vec());
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(
@@ -968,7 +973,7 @@ mod tests {
         // boundary. Before its AI/poll updates arrive, the cache still contains the old
         // PKTUSB value. WSJT-X then sends M PKTUSB; that re-assertion must reach the radio
         // instead of being incorrectly deduped against the stale pre-tune cache.
-        let (ctx, backend, state) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend, state) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         state.record(
             StateChange::DataMode {
                 vfo: Vfo::A,
@@ -1004,7 +1009,7 @@ mod tests {
     async fn set_mode_plain_clears_data_flag() {
         // Switching from a data mode to a plain mode must emit DA0. Prime DATA on, then send
         // plain USB: the base mode is unchanged (deduped) but the DATA-off write lands.
-        let (ctx, backend, state) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend, state) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         state.record(
             StateChange::DataMode {
                 vfo: Vfo::A,
@@ -1025,9 +1030,9 @@ mod tests {
 
     #[tokio::test]
     async fn set_freq_and_mode_target_active_vfo_b() {
-        // WSJT-X / Log4OM write through the hamlib_net face. When the rig is on VFO B, a
+        // WSJT-X / Log4OM write through the hamlib_net endpoint. When the rig is on VFO B, a
         // set_freq / set_mode must land on VFO B (the active VFO), never be forced to A.
-        let (ctx, backend, state) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend, state) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         state.record(
             StateChange::RxVfo { vfo: Vfo::B },
             RadioEventSource::PollDiff,
@@ -1054,7 +1059,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_mode_composes_pkt_token_when_data_on() {
-        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_with(EndpointPermissions::read_only());
         state.record(
             StateChange::DataMode {
                 vfo: Vfo::A,
@@ -1068,7 +1073,7 @@ mod tests {
 
     #[tokio::test]
     async fn ptt_requires_ptt_permission() {
-        let (ctx, _b, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, _b, _s) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         // Has write but not ptt.
         assert_eq!(reply_of("T 1", &ctx).await, RPRT_EINVAL.to_vec());
     }
@@ -1085,7 +1090,7 @@ mod tests {
             ("3", PttSource::Data),
         ] {
             let (ctx, backend, _s) =
-                ctx_with(FacePermissions::from_tokens(&["read", "write", "ptt"]));
+                ctx_with(EndpointPermissions::from_tokens(&["read", "write", "ptt"]));
             assert_eq!(
                 reply_of(&format!("T {arg}"), &ctx).await,
                 RPRT_OK.to_vec(),
@@ -1102,7 +1107,8 @@ mod tests {
             );
         }
 
-        let (ctx, backend, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write", "ptt"]));
+        let (ctx, backend, _s) =
+            ctx_with(EndpointPermissions::from_tokens(&["read", "write", "ptt"]));
         assert_eq!(reply_of("T 0", &ctx).await, RPRT_OK.to_vec());
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(
@@ -1116,7 +1122,7 @@ mod tests {
 
     #[tokio::test]
     async fn dump_state_and_chk_vfo_match_golden() {
-        let (ctx, _b, _s) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, _s) = ctx_with(EndpointPermissions::read_only());
         let dump = reply_of("\\dump_state", &ctx).await;
         assert!(dump.starts_with(b"1\n"), "protocol version 1 first line");
         assert!(dump.ends_with(b"done\n"));
@@ -1126,13 +1132,13 @@ mod tests {
 
     #[tokio::test]
     async fn quit_closes() {
-        let (ctx, _b, _s) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, _s) = ctx_with(EndpointPermissions::read_only());
         assert!(matches!(handle_line("q", &ctx).await, LineResult::Quit));
     }
 
     #[tokio::test]
     async fn set_rit_applies_offset_when_capable() {
-        let (ctx, backend, state) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend, state) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         assert_eq!(reply_of("\\set_rit 100", &ctx).await, RPRT_OK.to_vec());
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(
@@ -1149,7 +1155,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_xit_applies_offset_when_capable() {
-        let (ctx, backend, state) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend, state) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         assert_eq!(reply_of("Z -250", &ctx).await, RPRT_OK.to_vec());
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert_eq!(
@@ -1164,7 +1170,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_rit_zero_offset_disables_rit() {
-        let (ctx, _b, state) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, _b, state) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         assert_eq!(reply_of("\\set_rit 0", &ctx).await, RPRT_OK.to_vec());
         tokio::time::sleep(Duration::from_millis(20)).await;
         assert!(!state.snapshot().rit_enabled);
@@ -1172,7 +1178,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_rit_and_xit_report_offsets() {
-        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_with(EndpointPermissions::read_only());
         assert_eq!(reply_of("\\get_rit", &ctx).await, b"0\n".to_vec());
         state.record(
             StateChange::Rit {
@@ -1203,9 +1209,9 @@ mod tests {
         let state = StateHandle::new();
         let radio = spawn_scheduler(arc, detached_link(), state.clone());
         let ptt = PttManager::new(Duration::from_secs(300));
-        let ctx = FaceContext::new(
+        let ctx = ClientSessionContext::new(
             1,
-            FacePermissions::from_tokens(&["read", "write"]),
+            EndpointPermissions::from_tokens(&["read", "write"]),
             state,
             radio,
             ptt,
@@ -1222,7 +1228,7 @@ mod tests {
         // Log4OM-NG opens every session with `;V ?` (extended set_vfo query). The reply
         // must echo the command, list the supported VFOs (newline before RPRT, matching
         // real rigctld), and end with RPRT 0 — all `;`-separated on one logical block.
-        let (ctx, _b, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, _b, _s) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         assert_eq!(
             reply_of(";V ?", &ctx).await,
             b"set_vfo: ?;VFOA VFOB \nRPRT 0\n".to_vec()
@@ -1232,7 +1238,7 @@ mod tests {
     #[tokio::test]
     async fn erp_get_vfo_info_reports_active_vfo_block() {
         // Log4OM-NG polls with `+\get_vfo_info VFOA` (newline-separated extended form).
-        let (ctx, _b, state) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, _b, state) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         state.record(
             StateChange::Freq {
                 vfo: Vfo::A,
@@ -1257,7 +1263,7 @@ mod tests {
     #[tokio::test]
     async fn plain_get_vfo_info_reports_bare_values() {
         // The non-extended form returns just the values (Freq, Mode, Width, Split, SatMode).
-        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_with(EndpointPermissions::read_only());
         state.record(
             StateChange::Freq {
                 vfo: Vfo::A,
@@ -1282,7 +1288,7 @@ mod tests {
     async fn erp_generic_set_echoes_command_then_rprt() {
         // A generic extended set (e.g. `+F`) echoes `set_freq: <arg>` then `RPRT 0`,
         // newline-separated for the `+` separator.
-        let (ctx, _b, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, _b, _s) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         assert_eq!(
             reply_of("+F 14200000", &ctx).await,
             b"set_freq: 14200000\nRPRT 0\n".to_vec()
@@ -1292,7 +1298,7 @@ mod tests {
     #[tokio::test]
     async fn erp_set_vfo_with_arg_echoes_on_one_line() {
         // `;V VFOA` selects the active VFO (never retargets) and replies on one line.
-        let (ctx, _b, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, _b, _s) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         assert_eq!(
             reply_of(";V VFOA", &ctx).await,
             b"set_vfo: VFOA;RPRT 0\n".to_vec()
@@ -1302,7 +1308,7 @@ mod tests {
     #[tokio::test]
     async fn erp_labeled_get_freq_single_line() {
         // `;f` returns a single-line labeled extended response.
-        let (ctx, _b, state) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_with(EndpointPermissions::read_only());
         state.record(
             StateChange::Freq {
                 vfo: Vfo::A,
@@ -1321,7 +1327,7 @@ mod tests {
         // `\get_split_vfo` returns data only in the plain protocol. Through the ERP generic
         // fallback it must still end with an `RPRT` record so an ERP client (Log4OM-NG)
         // reading until the terminator does not block.
-        let (ctx, _b, _s) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b, _s) = ctx_with(EndpointPermissions::read_only());
         assert_eq!(
             reply_of("+\\get_split_vfo", &ctx).await,
             b"get_split_vfo:\n0\nVFOA\nRPRT 0\n".to_vec()
@@ -1332,7 +1338,7 @@ mod tests {
     async fn set_mode_rejects_unknown_token() {
         // An unrecognized mode token must be rejected (RPRT -1), never silently applied as
         // USB with a false `RPRT 0`.
-        let (ctx, backend, _s) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend, _s) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         assert_eq!(reply_of("M WAT", &ctx).await, RPRT_EINVAL.to_vec());
         // And nothing was written to the radio.
         assert!(
@@ -1351,8 +1357,8 @@ mod tests {
         let state = StateHandle::new();
         let radio = spawn_scheduler(arc, detached_link(), state.clone());
         let ptt = PttManager::new(Duration::from_secs(300));
-        let perms = FacePermissions::from_tokens(&["read", "ptt"]);
-        let ctx = FaceContext::new(7, perms, state.clone(), radio, ptt.clone(), caps);
+        let perms = EndpointPermissions::from_tokens(&["read", "ptt"]);
+        let ctx = ClientSessionContext::new(7, perms, state.clone(), radio, ptt.clone(), caps);
         let (client, server) = tokio::io::duplex(1024);
         let handle = tokio::spawn(serve_conn(server, ctx));
 
@@ -1390,8 +1396,8 @@ mod tests {
         let state = StateHandle::new();
         let radio = spawn_scheduler(arc, detached_link(), state.clone());
         let ptt = PttManager::new(Duration::from_secs(300));
-        let perms = FacePermissions::from_tokens(&["read"]);
-        let ctx = FaceContext::new(9, perms, state.clone(), radio, ptt.clone(), caps);
+        let perms = EndpointPermissions::from_tokens(&["read"]);
+        let ctx = ClientSessionContext::new(9, perms, state.clone(), radio, ptt.clone(), caps);
         let (client, server) = tokio::io::duplex(8192);
         let handle = tokio::spawn(serve_conn(server, ctx));
 
@@ -1415,7 +1421,7 @@ mod tests {
     async fn single_vfo_erp_get_vfo_info_follows_operating_vfo_as_vfoa() {
         // Log4OM bug: it polls `+\get_vfo_info VFOA` and must see the OPERATING VFO (B),
         // presented as VFOA, with split hidden — not stale physical VFO A.
-        let (ctx, _b, state) = ctx_single_vfo(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, _b, state) = ctx_single_vfo(EndpointPermissions::from_tokens(&["read", "write"]));
         operating_on_b(&state);
         assert_eq!(
             reply_of("+\\get_vfo_info VFOA", &ctx).await,
@@ -1426,7 +1432,7 @@ mod tests {
 
     #[tokio::test]
     async fn single_vfo_plain_get_vfo_info_follows_operating_vfo() {
-        let (ctx, _b, state) = ctx_single_vfo(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_single_vfo(EndpointPermissions::read_only());
         operating_on_b(&state);
         // Bare values: operating VFO B's freq/mode/width, split forced to 0.
         assert_eq!(
@@ -1437,23 +1443,23 @@ mod tests {
 
     #[tokio::test]
     async fn single_vfo_get_vfo_always_reports_vfoa() {
-        let (ctx, _b, state) = ctx_single_vfo(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_single_vfo(EndpointPermissions::read_only());
         operating_on_b(&state);
-        // Even operating on physical B, a single-VFO face claims VFOA.
+        // Even operating on physical B, a single-VFO endpoint claims VFOA.
         assert_eq!(reply_of("v", &ctx).await, b"VFOA\n".to_vec());
     }
 
     #[tokio::test]
     async fn single_vfo_get_split_vfo_hides_split() {
-        let (ctx, _b, state) = ctx_single_vfo(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_single_vfo(EndpointPermissions::read_only());
         operating_on_b(&state);
-        // Radio is split, but a single-VFO face reports no split and TX on VFOA.
+        // Radio is split, but a single-VFO endpoint reports no split and TX on VFOA.
         assert_eq!(reply_of("s", &ctx).await, b"0\nVFOA\n".to_vec());
     }
 
     #[tokio::test]
     async fn single_vfo_split_freq_and_mode_are_unavailable() {
-        let (ctx, _b, state) = ctx_single_vfo(FacePermissions::read_only());
+        let (ctx, _b, state) = ctx_single_vfo(EndpointPermissions::read_only());
         operating_on_b(&state);
 
         assert_eq!(reply_of("i", &ctx).await, RPRT_ENAVAIL.to_vec());
@@ -1462,7 +1468,7 @@ mod tests {
 
     #[tokio::test]
     async fn single_vfo_erp_set_vfo_query_lists_only_vfoa() {
-        let (ctx, _b, _s) = ctx_single_vfo(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, _b, _s) = ctx_single_vfo(EndpointPermissions::from_tokens(&["read", "write"]));
         assert_eq!(
             reply_of(";V ?", &ctx).await,
             b"set_vfo: ?;VFOA \nRPRT 0\n".to_vec()
@@ -1471,7 +1477,8 @@ mod tests {
 
     #[tokio::test]
     async fn single_vfo_set_split_on_is_rejected_without_mutating_radio() {
-        let (ctx, backend, _s) = ctx_single_vfo(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend, _s) =
+            ctx_single_vfo(EndpointPermissions::from_tokens(&["read", "write"]));
         // A single-VFO client must never desync the radio's real split state. "Split on"
         // is rejected (RPRT_ENAVAIL) so WSJT-X falls back to "Fake It"; "split off" is an
         // accepted no-op. Neither path mutates the real radio.
@@ -1486,16 +1493,16 @@ mod tests {
 
     #[tokio::test]
     async fn single_vfo_read_only_set_split_is_denied() {
-        let (ctx, _b, _s) = ctx_single_vfo(FacePermissions::read_only());
+        let (ctx, _b, _s) = ctx_single_vfo(EndpointPermissions::read_only());
         assert_eq!(reply_of("S 1 VFOB", &ctx).await, RPRT_EINVAL.to_vec());
     }
 
     #[tokio::test]
     async fn dual_vfo_get_vfo_info_still_reports_literal_physical_vfo() {
-        // Regression guard: a non-single-VFO face (e.g. the engine endpoint) keeps the
+        // Regression guard: a non-single-VFO endpoint (e.g. the engine endpoint) keeps the
         // faithful dual-VFO view — `get_vfo_info VFOA` returns physical VFO A even when
         // operating on B, and real split is reported.
-        let (ctx, _b, state) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, _b, state) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         operating_on_b(&state);
         assert_eq!(
             reply_of("+\\get_vfo_info VFOA", &ctx).await,

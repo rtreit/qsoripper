@@ -667,17 +667,17 @@
               <TextBlock DockPanel.Dock="Left"
                          Classes="settingsSectionHeader" FontSize="14"
                          VerticalAlignment="Center"
-                         Text="Virtual WinKeyer faces" />
+                         Text="Virtual WinKeyer endpoints" />
               <Button DockPanel.Dock="Right"
-                      AutomationProperties.AutomationId="SettingsCatHubAddWinkeyerFaceButton"
+                      AutomationProperties.AutomationId="SettingsCatHubAddWinkeyerEndpointButton"
                       HorizontalAlignment="Right"
-                      Content="Add WinKeyer face"
-                      Command="{Binding AddCatHubWinkeyerFaceCommand}" />
+                      Content="Add WinKeyer endpoint"
+                      Command="{Binding AddCatHubWinkeyerEndpointCommand}" />
             </DockPanel>
             <TextBlock Classes="settingsSectionHint"
                        Text="Record both sides of each virtual pair. CatHub opens the hub port; the named application opens the application port at 1200 baud, 8-N-2." />
-            <ItemsControl AutomationProperties.AutomationId="SettingsCatHubWinkeyerFacesList"
-                          ItemsSource="{Binding CatHubWinkeyerFaces}">
+            <ItemsControl AutomationProperties.AutomationId="SettingsCatHubWinkeyerEndpointsList"
+                          ItemsSource="{Binding CatHubWinkeyerEndpoints}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
                   <Border BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
@@ -689,7 +689,7 @@
                         <TextBlock Grid.Column="2" Text="Baud:" VerticalAlignment="Center" />
                         <TextBox Grid.Column="3" Text="{Binding Baud, Mode=TwoWay}" PlaceholderText="1200" />
                         <Button Grid.Column="4" Content="Remove"
-                                Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).RemoveCatHubWinkeyerFaceCommand}"
+                                Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).RemoveCatHubWinkeyerEndpointCommand}"
                                 CommandParameter="{Binding}" />
                       </Grid>
                       <Grid ColumnDefinitions="110,*,130,*" ColumnSpacing="8">
@@ -716,17 +716,17 @@
               <TextBlock DockPanel.Dock="Left"
                          Classes="settingsSectionHeader" FontSize="14"
                          VerticalAlignment="Center"
-                         Text="Serial faces" />
+                         Text="Serial endpoints" />
               <Button DockPanel.Dock="Right"
-                      AutomationProperties.AutomationId="SettingsCatHubAddFaceButton"
+                      AutomationProperties.AutomationId="SettingsCatHubAddSerialEndpointButton"
                       HorizontalAlignment="Right"
-                      Content="Add face"
-                      Command="{Binding AddCatHubFaceCommand}" />
+                      Content="Add endpoint"
+                      Command="{Binding AddCatHubSerialEndpointCommand}" />
             </DockPanel>
             <TextBlock Classes="settingsSectionHint"
                        Text="Record both endpoints of each com0com pair. CatHub opens the hub port; the named application opens the application port." />
-            <ItemsControl AutomationProperties.AutomationId="SettingsCatHubFacesList"
-                          ItemsSource="{Binding CatHubFaces}">
+            <ItemsControl AutomationProperties.AutomationId="SettingsCatHubSerialEndpointsList"
+                          ItemsSource="{Binding CatHubSerialEndpoints}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
                   <Border BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
@@ -748,7 +748,7 @@
                                   SelectedItem="{Binding Dialect, Mode=TwoWay}" />
                         <Button Grid.Column="6"
                                 Content="Remove"
-                                Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).RemoveCatHubFaceCommand}"
+                                Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).RemoveCatHubSerialEndpointCommand}"
                                 CommandParameter="{Binding}" />
                       </Grid>
                       <Grid ColumnDefinitions="110,*,130,*" ColumnSpacing="8">
@@ -775,15 +775,15 @@
                          VerticalAlignment="Center"
                          Text="Network endpoints (Hamlib rigctld)" />
               <Button DockPanel.Dock="Right"
-                      AutomationProperties.AutomationId="SettingsCatHubAddEndpointButton"
+                      AutomationProperties.AutomationId="SettingsCatHubAddHamlibNetEndpointButton"
                       HorizontalAlignment="Right"
                       Content="Add endpoint"
-                      Command="{Binding AddCatHubEndpointCommand}" />
+                      Command="{Binding AddCatHubHamlibNetEndpointCommand}" />
             </DockPanel>
             <TextBlock Classes="settingsSectionHint"
                        Text="Each endpoint is a rigctld-compatible TCP server (host:port) for apps like WSJT-X, N1MM and Log4OM." />
-            <ItemsControl AutomationProperties.AutomationId="SettingsCatHubEndpointsList"
-                          ItemsSource="{Binding CatHubEndpoints}">
+            <ItemsControl AutomationProperties.AutomationId="SettingsCatHubHamlibNetEndpointsList"
+                          ItemsSource="{Binding CatHubHamlibNetEndpoints}">
               <ItemsControl.ItemTemplate>
                 <DataTemplate>
                   <Border BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
@@ -799,7 +799,7 @@
                         <TextBox Grid.Column="3" Text="{Binding Bind, Mode=TwoWay}" PlaceholderText="127.0.0.1:4532" />
                         <Button Grid.Column="4"
                                 Content="Remove"
-                                Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).RemoveCatHubEndpointCommand}"
+                                Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).RemoveCatHubHamlibNetEndpointCommand}"
                                 CommandParameter="{Binding}" />
                       </Grid>
                       <StackPanel Orientation="Horizontal" Spacing="14">

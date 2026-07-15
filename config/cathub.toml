@@ -39,7 +39,7 @@ baud = 1200
 max_tx_ms = 30000
 api_bind = "127.0.0.1:50071"
 
-[[winkeyer_face]]
+[[winkeyer_endpoint]]
 name = "n1mm-cw"
 transport = "COM40"    # N1MM WinKeyer port is the paired COM41
 application_transport = "COM41"
@@ -47,7 +47,7 @@ baud = 1200
 primary = true
 perms = ["status", "send", "control", "ptt"]
 
-[[winkeyer_face]]
+[[winkeyer_endpoint]]
 name = "wktools-maintenance"
 transport = "COM42"    # WKTools maintenance port is the paired COM43
 application_transport = "COM43"
@@ -92,7 +92,7 @@ bind = "127.0.0.1:4534"
 single_vfo = true
 perms = ["read", "write"]
 
-# --- Serial faces (com0com virtual pairs) ----------------------------------------------
+# --- Serial endpoints (com0com virtual pairs) ----------------------------------------------
 #
 # IMPORTANT: each com0com pair has TWO port numbers. The daemon binds the port named below
 # (`transport`); your application must connect to the OTHER port in the same pair. Never
@@ -108,7 +108,7 @@ perms = ["read", "write"]
 # overwrite WSJT-X's USB+Data mode after following a digital-band frequency change.
 # The ts2000 dialect still rejects VFO-target writes (FR/FT) by design, so HDSDR can tune but
 # can never oscillate the TS-590's A/B VFO selection.
-[[face]]
+[[serial_endpoint]]
 name = "hdsdr-omnirig"
 transport = "COM10"      # OmniRig binds COM11
 application_transport = "COM11"
@@ -120,7 +120,7 @@ perms = ["read", "frequency_write"]
 # N1MM in SO1V mode rejects VFO B ("You should not use VFO B when configured for SO1V"),
 # so present the operating VFO as VFO A. The hub mirrors reads/writes/notifications onto
 # whichever VFO the radio is actually on, so A/B switching tracks seamlessly.
-[[face]]
+[[serial_endpoint]]
 name = "n1mm"
 transport = "COM20"      # N1MM binds COM21
 application_transport = "COM21"
@@ -129,10 +129,10 @@ dialect = "ts590"
 single_vfo = true
 perms = ["read", "write", "ptt"]
 
-# ARCP-590 control panel: full faceplate control, including EX-menu (config_write).
-# ARCP-590 is a genuine dual-VFO faceplate: it must see the real VFO A/B, so leave
+# ARCP-590 control panel: full control-panel control, including EX-menu (config_write).
+# ARCP-590 is a genuine dual-VFO control-panel: it must see the real VFO A/B, so leave
 # single_vfo off (the default).
-[[face]]
+[[serial_endpoint]]
 name = "arcp590"
 transport = "COM30"      # ARCP-590 binds COM31
 application_transport = "COM31"

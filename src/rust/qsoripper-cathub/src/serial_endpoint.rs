@@ -1,8 +1,8 @@
-//! A generic client face: read delimited request frames, dispatch them to a
+//! A generic client endpoint: read delimited request frames, dispatch them to a
 //! [`ClientDialect`], and write replies, while concurrently fanning out state-change
-//! notifications the face has subscribed to (auto-information).
+//! notifications the client session has subscribed to (auto-information).
 //!
-//! `run_face` is transport-agnostic (`AsyncRead + AsyncWrite`): it serves a real serial
+//! `run_endpoint_session` is transport-agnostic (`AsyncRead + AsyncWrite`): it serves a real serial
 //! port, a TCP socket, or an in-memory duplex in tests. [`open_serial`] opens a real COM /
 //! tty port for production wiring.
 
@@ -11,19 +11,19 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::dialect::{ClientDialect, FaceContext};
+use crate::dialect::{ClientDialect, ClientSessionContext};
 use crate::state::RadioEvent;
 
 /// Serve one client connection until the transport closes.
 ///
 /// Inbound bytes are split on `delim` into request frames; each is handed to `dialect`.
-/// Concurrently, every [`StateChange`](crate::model::StateChange) the face is subscribed to
-/// is rendered by the dialect's notification formatter and written out (gated by the face's
+/// Concurrently, every [`StateChange`](crate::model::StateChange) the session is subscribed to
+/// is rendered by the dialect's notification formatter and written out (gated by the session's
 /// virtualized auto-information flag inside the dialect).
-pub(crate) async fn run_face<T>(
+pub(crate) async fn run_endpoint_session<T>(
     transport: T,
     dialect: Arc<dyn ClientDialect>,
-    ctx: FaceContext,
+    ctx: ClientSessionContext,
     delim: u8,
 ) where
     T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + 'static,
@@ -46,7 +46,7 @@ pub(crate) async fn run_face<T>(
                             // without limit (OOM/DoS). Drop the malformed partial frame.
                             if frame.len() >= MAX_FRAME_LEN {
                                 tracing::warn!(
-                                    face = ctx.face_id,
+                                    session_id = ctx.session_id,
                                     "request frame exceeded {MAX_FRAME_LEN} bytes without a \
                                      delimiter; discarding partial frame"
                                 );
@@ -56,15 +56,15 @@ pub(crate) async fn run_face<T>(
                             if byte == delim {
                                 let request = std::mem::take(&mut frame);
                                 tracing::trace!(
-                                    face = ctx.face_id,
+                                    session_id = ctx.session_id,
                                     req = %String::from_utf8_lossy(&request),
-                                    "face request"
+                                    "client session request"
                                 );
                                 let reply = dialect.handle(&request, &ctx).await;
                                 tracing::trace!(
-                                    face = ctx.face_id,
+                                    session_id = ctx.session_id,
                                     reply = %String::from_utf8_lossy(&reply),
-                                    "face reply"
+                                    "client session reply"
                                 );
                                 if !reply.is_empty() && writer.write_all(&reply).await.is_err() {
                                     break 'serve;
@@ -89,9 +89,9 @@ pub(crate) async fn run_face<T>(
                         };
                         if let Some(bytes) = bytes {
                             tracing::trace!(
-                                face = ctx.face_id,
+                                session_id = ctx.session_id,
                                 note = %String::from_utf8_lossy(&bytes),
-                                "face notify"
+                                "client session notification"
                             );
                             if writer.write_all(&bytes).await.is_err() {
                                 break 'serve;
@@ -99,18 +99,18 @@ pub(crate) async fn run_face<T>(
                             let _ = writer.flush().await;
                         }
                     }
-                    // The face fell behind the broadcast ring and missed one or more events.
+                    // The session fell behind the broadcast ring and missed one or more events.
                     // Skipping them is unsafe: a one-shot change (a mode or VFO switch) that
                     // was evicted from the ring is lost forever, leaving the client rendering
                     // permanently stale state. Re-synchronize by replaying the full current
                     // snapshot through the dialect's notification formatter so the client is
-                    // restored to the live radio state (gated by the face's auto-info flag,
-                    // so an AI-off face still emits nothing).
+                    // restored to the live radio state (gated by the session's auto-info flag,
+                    // so an AI-off session still emits nothing).
                     Err(RecvError::Lagged(skipped)) => {
                         tracing::warn!(
-                            face = ctx.face_id,
+                            session_id = ctx.session_id,
                             skipped,
-                            "face lagged the broadcast ring; re-syncing full snapshot"
+                            "client session lagged the broadcast ring; re-syncing full snapshot"
                         );
                         let snapshot = ctx.snapshot();
                         for bytes in dialect.resync(&snapshot, &ctx) {
@@ -126,7 +126,7 @@ pub(crate) async fn run_face<T>(
         }
     }
 
-    // The transport closed: never leave the radio keyed on behalf of a face that vanished.
+    // The transport closed: never leave the radio keyed on behalf of a session that vanished.
     ctx.release_ptt_on_disconnect().await;
 }
 
@@ -135,13 +135,13 @@ pub(crate) async fn run_face<T>(
 /// malicious client that never sends the delimiter.
 const MAX_FRAME_LEN: usize = 4096;
 
-/// Open a real serial port for a serial face.
+/// Open a real serial port for a serial endpoint.
 pub(crate) fn open_serial(
     name: &str,
     port: &str,
     baud: u32,
 ) -> std::io::Result<serial2_tokio::SerialPort> {
-    tracing::info!(face = name, port, baud, "opening serial face");
+    tracing::info!(endpoint = name, port, baud, "opening serial endpoint");
     serial2_tokio::SerialPort::open(port, baud)
 }
 
@@ -154,20 +154,20 @@ mod tests {
     use crate::dialect::kenwood::mode_to_digit;
     use crate::dialect::kenwood::ts590::Ts590Dialect;
     use crate::model::{RadioEventSource, StateChange, Vfo};
-    use crate::permissions::FacePermissions;
+    use crate::permissions::EndpointPermissions;
     use crate::ptt::PttManager;
     use crate::radio::{detached_link, spawn_scheduler};
     use crate::state::StateHandle;
     use std::time::Duration;
     use tokio::io::DuplexStream;
 
-    fn spawn_ts590_face(perms: FacePermissions) -> (DuplexStream, StateHandle) {
-        let (client, state, _ptt) = spawn_ts590_face_with_ptt(perms);
+    fn spawn_ts590_session(perms: EndpointPermissions) -> (DuplexStream, StateHandle) {
+        let (client, state, _ptt) = spawn_ts590_session_with_ptt(perms);
         (client, state)
     }
 
-    fn spawn_ts590_face_with_ptt(
-        perms: FacePermissions,
+    fn spawn_ts590_session_with_ptt(
+        perms: EndpointPermissions,
     ) -> (DuplexStream, StateHandle, PttManager) {
         let backend = LoopbackBackend::new();
         let caps = backend.capabilities();
@@ -175,9 +175,9 @@ mod tests {
         let state = StateHandle::new();
         let radio = spawn_scheduler(arc, detached_link(), state.clone());
         let ptt = PttManager::new(Duration::from_secs(300));
-        let ctx = FaceContext::new(1, perms, state.clone(), radio, ptt.clone(), caps);
+        let ctx = ClientSessionContext::new(1, perms, state.clone(), radio, ptt.clone(), caps);
         let (client, server) = tokio::io::duplex(1024);
-        tokio::spawn(run_face(
+        tokio::spawn(run_endpoint_session(
             server,
             Arc::new(Ts590Dialect::new()) as Arc<dyn ClientDialect>,
             ctx,
@@ -207,7 +207,7 @@ mod tests {
 
     #[tokio::test]
     async fn serves_a_read_request() {
-        let (mut client, state) = spawn_ts590_face(FacePermissions::read_only());
+        let (mut client, state) = spawn_ts590_session(EndpointPermissions::read_only());
         state.record(
             StateChange::Freq {
                 vfo: Vfo::A,
@@ -220,9 +220,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fans_out_notifications_to_subscribed_face() {
-        let (mut client, state) = spawn_ts590_face(FacePermissions::read_only());
-        // Enable auto-info on the face.
+    async fn fans_out_notifications_to_subscribed_session() {
+        let (mut client, state) = spawn_ts590_session(EndpointPermissions::read_only());
+        // Enable auto-info on the endpoint.
         client.write_all(b"AI2;").await.expect("write");
         tokio::time::sleep(Duration::from_millis(20)).await;
         // A state change is pushed without the client polling.
@@ -237,9 +237,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn relays_unmodeled_radio_frame_to_subscribed_face() {
-        let (mut client, state) = spawn_ts590_face(FacePermissions::read_only());
-        // Enable auto-info on the face.
+    async fn relays_unmodeled_radio_frame_to_subscribed_session() {
+        let (mut client, state) = spawn_ts590_session(EndpointPermissions::read_only());
+        // Enable auto-info on the endpoint.
         client.write_all(b"AI2;").await.expect("write");
         tokio::time::sleep(Duration::from_millis(20)).await;
         // The radio echoes a noise-blanker change the backend does not model; it must reach
@@ -254,7 +254,7 @@ mod tests {
         // A client keys the transmitter, then its transport vanishes (crash/cable pull).
         // The hub must drop TX immediately, not hold it until the safety ceiling fires.
         let (mut client, _state, ptt) =
-            spawn_ts590_face_with_ptt(FacePermissions::from_tokens(&["read", "ptt"]));
+            spawn_ts590_session_with_ptt(EndpointPermissions::from_tokens(&["read", "ptt"]));
         client.write_all(b"TX;").await.expect("write");
         // Let the key reach the lease.
         for _ in 0..50 {
@@ -268,7 +268,7 @@ mod tests {
         // Close the transport.
         drop(client);
 
-        // The face must release the lease promptly on disconnect.
+        // The endpoint must release the lease promptly on disconnect.
         for _ in 0..50 {
             if ptt.owner().is_none() {
                 break;
@@ -283,11 +283,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lagged_face_does_not_permanently_lose_a_one_shot_mode_change() {
-        // Drive the face past the broadcast ring capacity so it lags, after first changing
-        // the mode. A lagged face that merely skips would render the old mode forever; the
+    async fn lagged_session_does_not_permanently_lose_a_one_shot_mode_change() {
+        // Drive the endpoint past the broadcast ring capacity so it lags, after first changing
+        // the mode. A lagged endpoint that merely skips would render the old mode forever; the
         // re-sync must restore the current mode to the client.
-        let (mut client, state) = spawn_ts590_face(FacePermissions::read_only());
+        let (mut client, state) = spawn_ts590_session(EndpointPermissions::read_only());
         client.write_all(b"AI2;").await.expect("write");
         tokio::time::sleep(Duration::from_millis(20)).await;
 
@@ -299,7 +299,7 @@ mod tests {
             },
             RadioEventSource::NativePush,
         );
-        // Flood the ring well past its 256-entry capacity so the face lags and the CW change
+        // Flood the ring well past its 256-entry capacity so the endpoint lags and the CW change
         // is evicted before it is read.
         for i in 0..2_000u64 {
             state.record(
@@ -326,7 +326,7 @@ mod tests {
         }
         assert!(
             saw_cw,
-            "after lagging, the face must be re-synced to the current CW mode"
+            "after lagging, the endpoint must be re-synced to the current CW mode"
         );
     }
 }

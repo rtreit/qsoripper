@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// A capability granted to one virtual WinKeyer serial endpoint.
+enum WinkeyerEndpointPermission {
+  WINKEYER_ENDPOINT_PERMISSION_UNSPECIFIED = 0;
+  WINKEYER_ENDPOINT_PERMISSION_STATUS = 1;
+  WINKEYER_ENDPOINT_PERMISSION_SEND = 2;
+  WINKEYER_ENDPOINT_PERMISSION_CONTROL = 3;
+  WINKEYER_ENDPOINT_PERMISSION_PTT = 4;
+  WINKEYER_ENDPOINT_PERMISSION_CONFIG_WRITE = 5;
+}

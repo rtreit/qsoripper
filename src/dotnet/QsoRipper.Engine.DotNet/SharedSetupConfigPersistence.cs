@@ -643,7 +643,7 @@ internal static class SharedSetupConfigPersistence
 
     private static readonly string[] CatHubRadioBackends = { "ts590", "rigctld", "loopback" };
     private static readonly string[] CatHubRadioTransports = { "serial", "tcp" };
-    private static readonly string[] CatHubFaceDialects = { "ts590", "ts2000" };
+    private static readonly string[] CatHubSerialEndpointDialects = { "ts590", "ts2000" };
 
     /// <summary>
     /// Builds a complete, daemon-valid <c>[cat_hub]</c> <see cref="TomlTable"/> from a wizard
@@ -658,16 +658,17 @@ internal static class SharedSetupConfigPersistence
             ?? throw new InvalidOperationException("CAT hub radio settings are required.");
         var radioTable = BuildCatHubRadioTableOrThrow(radioSettings, out var radioPort);
 
-        var faces = BuildCatHubFacesOrThrow(settings.Faces, radioPort);
-        var endpoints = BuildCatHubEndpointsOrThrow(settings.HamlibNet);
+        var serialEndpoints = BuildCatHubSerialEndpointsOrThrow(settings.SerialEndpoints, radioPort);
+        var hamlibNetEndpoints = BuildCatHubHamlibNetEndpointsOrThrow(settings.HamlibNet);
 
-        if (faces.Count == 0 && endpoints.Count == 0)
+        if (serialEndpoints.Count == 0 && hamlibNetEndpoints.Count == 0)
         {
             throw new InvalidOperationException(
-                "CAT hub configuration requires at least one serial face or hamlib_net endpoint.");
+                "CAT hub configuration requires at least one serial endpoint or hamlib_net endpoint.");
         }
 
-        var names = faces.Select(face => face.Name).Concat(endpoints.Select(endpoint => endpoint.Name));
+        var names = serialEndpoints.Select(endpoint => endpoint.Name)
+            .Concat(hamlibNetEndpoints.Select(endpoint => endpoint.Name));
         if (FirstDuplicate(names) is { } duplicateName)
         {
             throw new InvalidOperationException($"CAT hub endpoint names must be unique: '{duplicateName}'.");
@@ -698,36 +699,36 @@ internal static class SharedSetupConfigPersistence
             catHub["winkeyer"] = BuildCatHubWinkeyerTableOrThrow(winkeyer, radioPort);
         }
 
-        var winkeyerFaces = BuildCatHubWinkeyerFacesOrThrow(
-            settings.WinkeyerFaces,
+        var winkeyerEndpoints = BuildCatHubWinkeyerEndpointsOrThrow(
+            settings.WinkeyerEndpoints,
             settings.Winkeyer,
             radioPort);
-        if (winkeyerFaces.Count > 0)
+        if (winkeyerEndpoints.Count > 0)
         {
-            var faceArray = new TomlTableArray();
-            foreach (var face in winkeyerFaces)
+            var endpointArray = new TomlTableArray();
+            foreach (var endpoint in winkeyerEndpoints)
             {
-                faceArray.Add(face.Table);
+                endpointArray.Add(endpoint.Table);
             }
 
-            catHub["winkeyer_face"] = faceArray;
+            catHub["winkeyer_endpoint"] = endpointArray;
         }
 
-        if (faces.Count > 0)
+        if (serialEndpoints.Count > 0)
         {
-            var faceArray = new TomlTableArray();
-            foreach (var face in faces)
+            var endpointArray = new TomlTableArray();
+            foreach (var endpoint in serialEndpoints)
             {
-                faceArray.Add(face.Table);
+                endpointArray.Add(endpoint.Table);
             }
 
-            catHub["face"] = faceArray;
+            catHub["serial_endpoint"] = endpointArray;
         }
 
-        if (endpoints.Count > 0)
+        if (hamlibNetEndpoints.Count > 0)
         {
             var netArray = new TomlTableArray();
-            foreach (var endpoint in endpoints)
+            foreach (var endpoint in hamlibNetEndpoints)
             {
                 netArray.Add(endpoint.Table);
             }
@@ -816,40 +817,40 @@ internal static class SharedSetupConfigPersistence
         return table;
     }
 
-    private static List<CatHubBuiltEntry> BuildCatHubFacesOrThrow(
-        IEnumerable<CatHubSerialFace> faces,
+    private static List<CatHubBuiltEntry> BuildCatHubSerialEndpointsOrThrow(
+        IEnumerable<CatHubSerialEndpoint> endpoints,
         string? radioPort)
     {
         var result = new List<CatHubBuiltEntry>();
         var transports = new List<string>();
-        foreach (var face in faces)
+        foreach (var endpoint in endpoints)
         {
-            var name = NormalizeOptional(face.Name)
-                ?? throw new InvalidOperationException("CAT hub serial face name is required.");
-            var transport = NormalizeOptional(face.Transport)
-                ?? throw new InvalidOperationException($"CAT hub serial face '{name}' requires a transport.");
-            var applicationTransport = face.HasApplicationTransport
-                ? NormalizeOptional(face.ApplicationTransport)
+            var name = NormalizeOptional(endpoint.Name)
+                ?? throw new InvalidOperationException("CAT hub serial endpoint name is required.");
+            var transport = NormalizeOptional(endpoint.Transport)
+                ?? throw new InvalidOperationException($"CAT hub serial endpoint '{name}' requires a transport.");
+            var applicationTransport = endpoint.HasApplicationTransport
+                ? NormalizeOptional(endpoint.ApplicationTransport)
                 : null;
             if (applicationTransport is not null
                 && string.Equals(transport, applicationTransport, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
-                    $"CAT hub serial face '{name}' application transport must differ from its hub transport.");
+                    $"CAT hub serial endpoint '{name}' application transport must differ from its hub transport.");
             }
             if (radioPort is not null && string.Equals(transport, radioPort, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
-                    $"CAT hub serial face '{name}' cannot reuse the radio port '{radioPort}'.");
+                    $"CAT hub serial endpoint '{name}' cannot reuse the radio port '{radioPort}'.");
             }
 
-            var dialect = NormalizeOptional(face.Dialect)
-                ?? throw new InvalidOperationException($"CAT hub serial face '{name}' requires a dialect.");
+            var dialect = NormalizeOptional(endpoint.Dialect)
+                ?? throw new InvalidOperationException($"CAT hub serial endpoint '{name}' requires a dialect.");
             dialect = ToLowerToken(dialect);
-            if (!CatHubFaceDialects.Contains(dialect))
+            if (!CatHubSerialEndpointDialects.Contains(dialect))
             {
                 throw new InvalidOperationException(
-                    $"CAT hub serial face '{name}' dialect '{dialect}' is not supported (expected one of: {string.Join(", ", CatHubFaceDialects)}).");
+                    $"CAT hub serial endpoint '{name}' dialect '{dialect}' is not supported (expected one of: {string.Join(", ", CatHubSerialEndpointDialects)}).");
             }
 
             var table = new TomlTable
@@ -858,13 +859,13 @@ internal static class SharedSetupConfigPersistence
                 ["transport"] = transport,
             };
             AddIfValue(table, "application_transport", applicationTransport);
-            if (face.Baud != 0)
+            if (endpoint.Baud != 0)
             {
-                table["baud"] = face.Baud;
+                table["baud"] = endpoint.Baud;
             }
 
             table["dialect"] = dialect;
-            var perms = BuildCatHubPermArray(face.Perms);
+            var perms = BuildCatHubPermArray(endpoint.Perms);
             if (perms.Count > 0)
             {
                 table["perms"] = perms;
@@ -877,13 +878,13 @@ internal static class SharedSetupConfigPersistence
         if (FirstDuplicate(transports) is { } duplicate)
         {
             throw new InvalidOperationException(
-                $"CAT hub serial faces must use distinct transports: '{duplicate}'.");
+                $"CAT hub serial endpoints must use distinct transports: '{duplicate}'.");
         }
 
         return result;
     }
 
-    private static List<CatHubBuiltEntry> BuildCatHubEndpointsOrThrow(
+    private static List<CatHubBuiltEntry> BuildCatHubHamlibNetEndpointsOrThrow(
         IEnumerable<CatHubHamlibNetEndpoint> endpoints)
     {
         var result = new List<CatHubBuiltEntry>();
@@ -1061,90 +1062,90 @@ internal static class SharedSetupConfigPersistence
         return table;
     }
 
-    private static List<CatHubBuiltEntry> BuildCatHubWinkeyerFacesOrThrow(
-        IEnumerable<CatHubWinkeyerFace> faces,
+    private static List<CatHubBuiltEntry> BuildCatHubWinkeyerEndpointsOrThrow(
+        IEnumerable<CatHubWinkeyerEndpoint> endpoints,
         CatHubWinkeyerSettings? winkeyer,
         string? radioPort)
     {
-        var faceList = faces.ToList();
-        if (winkeyer is null && faceList.Count > 0)
+        var endpointList = endpoints.ToList();
+        if (winkeyer is null && endpointList.Count > 0)
         {
-            throw new InvalidOperationException("CAT hub WinKeyer faces require WinKeyer settings.");
+            throw new InvalidOperationException("CAT hub WinKeyer endpoints require WinKeyer settings.");
         }
 
         var physicalPort = winkeyer is null ? null : NormalizeOptional(winkeyer.Port);
         var result = new List<CatHubBuiltEntry>();
         var transports = new List<string>();
         var primaryCount = 0;
-        foreach (var face in faceList)
+        foreach (var endpoint in endpointList)
         {
-            var name = NormalizeOptional(face.Name)
-                ?? throw new InvalidOperationException("CAT hub WinKeyer face name is required.");
-            var transport = NormalizeOptional(face.Transport)
+            var name = NormalizeOptional(endpoint.Name)
+                ?? throw new InvalidOperationException("CAT hub WinKeyer endpoint name is required.");
+            var transport = NormalizeOptional(endpoint.Transport)
                 ?? throw new InvalidOperationException(
-                    $"CAT hub WinKeyer face '{name}' requires a transport.");
-            var applicationTransport = face.HasApplicationTransport
-                ? NormalizeOptional(face.ApplicationTransport)
+                    $"CAT hub WinKeyer endpoint '{name}' requires a transport.");
+            var applicationTransport = endpoint.HasApplicationTransport
+                ? NormalizeOptional(endpoint.ApplicationTransport)
                 : null;
             if (applicationTransport is not null
                 && string.Equals(transport, applicationTransport, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
-                    $"CAT hub WinKeyer face '{name}' application transport must differ from its hub transport.");
+                    $"CAT hub WinKeyer endpoint '{name}' application transport must differ from its hub transport.");
             }
             if ((radioPort is not null && string.Equals(transport, radioPort, StringComparison.OrdinalIgnoreCase))
                 || (physicalPort is not null && string.Equals(transport, physicalPort, StringComparison.OrdinalIgnoreCase)))
             {
                 throw new InvalidOperationException(
-                    $"CAT hub WinKeyer face '{name}' cannot reuse a physical device port.");
+                    $"CAT hub WinKeyer endpoint '{name}' cannot reuse a physical device port.");
             }
 
-            if (face.HasBaud && face.Baud != 1200)
+            if (endpoint.HasBaud && endpoint.Baud != 1200)
             {
-                throw new InvalidOperationException($"CAT hub WinKeyer face '{name}' baud must be 1200.");
+                throw new InvalidOperationException($"CAT hub WinKeyer endpoint '{name}' baud must be 1200.");
             }
 
-            if (face.HasPrimary && face.Primary)
+            if (endpoint.HasPrimary && endpoint.Primary)
             {
                 primaryCount++;
             }
 
-            var hasStatus = face.Perms.Contains(WinkeyerFacePermission.Status);
-            var hasSend = face.Perms.Contains(WinkeyerFacePermission.Send);
-            var hasControl = face.Perms.Contains(WinkeyerFacePermission.Control);
-            var hasPtt = face.Perms.Contains(WinkeyerFacePermission.Ptt);
-            var hasConfigWrite = face.Perms.Contains(WinkeyerFacePermission.ConfigWrite);
+            var hasStatus = endpoint.Perms.Contains(WinkeyerEndpointPermission.Status);
+            var hasSend = endpoint.Perms.Contains(WinkeyerEndpointPermission.Send);
+            var hasControl = endpoint.Perms.Contains(WinkeyerEndpointPermission.Control);
+            var hasPtt = endpoint.Perms.Contains(WinkeyerEndpointPermission.Ptt);
+            var hasConfigWrite = endpoint.Perms.Contains(WinkeyerEndpointPermission.ConfigWrite);
             if (hasSend && !hasStatus)
             {
                 throw new InvalidOperationException(
-                    $"CAT hub WinKeyer face '{name}' permission 'send' requires 'status'.");
+                    $"CAT hub WinKeyer endpoint '{name}' permission 'send' requires 'status'.");
             }
 
             if (hasPtt && (!hasSend || !hasControl))
             {
                 throw new InvalidOperationException(
-                    $"CAT hub WinKeyer face '{name}' permission 'ptt' requires 'send' and 'control'.");
+                    $"CAT hub WinKeyer endpoint '{name}' permission 'ptt' requires 'send' and 'control'.");
             }
 
             if (hasConfigWrite && (!hasStatus || !hasControl))
             {
                 throw new InvalidOperationException(
-                    $"CAT hub WinKeyer face '{name}' permission 'config_write' requires 'status' and 'control'.");
+                    $"CAT hub WinKeyer endpoint '{name}' permission 'config_write' requires 'status' and 'control'.");
             }
 
             var table = new TomlTable { ["name"] = name, ["transport"] = transport };
             AddIfValue(table, "application_transport", applicationTransport);
-            if (face.HasBaud)
+            if (endpoint.HasBaud)
             {
-                table["baud"] = face.Baud;
+                table["baud"] = endpoint.Baud;
             }
 
-            if (face.HasPrimary)
+            if (endpoint.HasPrimary)
             {
-                table["primary"] = face.Primary;
+                table["primary"] = endpoint.Primary;
             }
 
-            var perms = BuildWinkeyerPermArray(face.Perms);
+            var perms = BuildWinkeyerPermArray(endpoint.Perms);
             if (perms.Count > 0)
             {
                 table["perms"] = perms;
@@ -1156,19 +1157,19 @@ internal static class SharedSetupConfigPersistence
 
         if (primaryCount > 1)
         {
-            throw new InvalidOperationException("At most one CAT hub WinKeyer face may be primary.");
+            throw new InvalidOperationException("At most one CAT hub WinKeyer endpoint may be primary.");
         }
 
         if (FirstDuplicate(transports) is { } duplicate)
         {
             throw new InvalidOperationException(
-                $"CAT hub WinKeyer faces must use distinct transports: '{duplicate}'.");
+                $"CAT hub WinKeyer endpoints must use distinct transports: '{duplicate}'.");
         }
 
         return result;
     }
 
-    private static TomlArray BuildWinkeyerPermArray(IEnumerable<WinkeyerFacePermission> permissions)
+    private static TomlArray BuildWinkeyerPermArray(IEnumerable<WinkeyerEndpointPermission> permissions)
     {
         var array = new TomlArray();
         foreach (var permission in permissions)
@@ -1183,13 +1184,13 @@ internal static class SharedSetupConfigPersistence
         return array;
     }
 
-    private static string? WinkeyerPermToken(WinkeyerFacePermission permission) => permission switch
+    private static string? WinkeyerPermToken(WinkeyerEndpointPermission permission) => permission switch
     {
-        WinkeyerFacePermission.Status => "status",
-        WinkeyerFacePermission.Send => "send",
-        WinkeyerFacePermission.Control => "control",
-        WinkeyerFacePermission.Ptt => "ptt",
-        WinkeyerFacePermission.ConfigWrite => "config_write",
+        WinkeyerEndpointPermission.Status => "status",
+        WinkeyerEndpointPermission.Send => "send",
+        WinkeyerEndpointPermission.Control => "control",
+        WinkeyerEndpointPermission.Ptt => "ptt",
+        WinkeyerEndpointPermission.ConfigWrite => "config_write",
         _ => null,
     };
 
@@ -1303,23 +1304,23 @@ internal static class SharedSetupConfigPersistence
                 any = true;
             }
 
-            var faceArray = GetTableArray(catHub, "face");
-            if (faceArray is not null)
+            var endpointArray = GetTableArray(catHub, "serial_endpoint");
+            if (endpointArray is not null)
             {
-                foreach (var faceTable in faceArray.OfType<TomlTable>())
+                foreach (var endpointTable in endpointArray.OfType<TomlTable>())
                 {
-                    var face = new CatHubSerialFace
+                    var endpoint = new CatHubSerialEndpoint
                     {
-                        Name = GetString(faceTable, "name") ?? string.Empty,
-                        Transport = GetString(faceTable, "transport") ?? string.Empty,
-                        Dialect = GetString(faceTable, "dialect") ?? string.Empty,
+                        Name = GetString(endpointTable, "name") ?? string.Empty,
+                        Transport = GetString(endpointTable, "transport") ?? string.Empty,
+                        Dialect = GetString(endpointTable, "dialect") ?? string.Empty,
                     };
                     AssignIfPresent(
-                        GetString(faceTable, "application_transport"),
-                        value => face.ApplicationTransport = value);
-                    AssignIfPresent(GetUInt32(faceTable, "baud"), value => face.Baud = value);
-                    face.Perms.AddRange(ParseCatHubPermTokens(GetStringArray(faceTable, "perms")));
-                    settings.Faces.Add(face);
+                        GetString(endpointTable, "application_transport"),
+                        value => endpoint.ApplicationTransport = value);
+                    AssignIfPresent(GetUInt32(endpointTable, "baud"), value => endpoint.Baud = value);
+                    endpoint.Perms.AddRange(ParseCatHubPermTokens(GetStringArray(endpointTable, "perms")));
+                    settings.SerialEndpoints.Add(endpoint);
                     any = true;
                 }
             }
@@ -1341,23 +1342,23 @@ internal static class SharedSetupConfigPersistence
             }
 
 
-            var winkeyerFaceArray = GetTableArray(catHub, "winkeyer_face");
-            if (winkeyerFaceArray is not null)
+            var winkeyerEndpointArray = GetTableArray(catHub, "winkeyer_endpoint");
+            if (winkeyerEndpointArray is not null)
             {
-                foreach (var faceTable in winkeyerFaceArray.OfType<TomlTable>())
+                foreach (var endpointTable in winkeyerEndpointArray.OfType<TomlTable>())
                 {
-                    var face = new CatHubWinkeyerFace
+                    var endpoint = new CatHubWinkeyerEndpoint
                     {
-                        Name = GetString(faceTable, "name") ?? string.Empty,
-                        Transport = GetString(faceTable, "transport") ?? string.Empty,
+                        Name = GetString(endpointTable, "name") ?? string.Empty,
+                        Transport = GetString(endpointTable, "transport") ?? string.Empty,
                     };
                     AssignIfPresent(
-                        GetString(faceTable, "application_transport"),
-                        value => face.ApplicationTransport = value);
-                    AssignIfPresent(GetUInt32(faceTable, "baud"), value => face.Baud = value);
-                    AssignIfPresent(GetBoolean(faceTable, "primary"), value => face.Primary = value);
-                    face.Perms.AddRange(ParseWinkeyerPermTokens(GetStringArray(faceTable, "perms")));
-                    settings.WinkeyerFaces.Add(face);
+                        GetString(endpointTable, "application_transport"),
+                        value => endpoint.ApplicationTransport = value);
+                    AssignIfPresent(GetUInt32(endpointTable, "baud"), value => endpoint.Baud = value);
+                    AssignIfPresent(GetBoolean(endpointTable, "primary"), value => endpoint.Primary = value);
+                    endpoint.Perms.AddRange(ParseWinkeyerPermTokens(GetStringArray(endpointTable, "perms")));
+                    settings.WinkeyerEndpoints.Add(endpoint);
                     any = true;
                 }
             }
@@ -1381,21 +1382,21 @@ internal static class SharedSetupConfigPersistence
         }
     }
 
-    private static IEnumerable<WinkeyerFacePermission> ParseWinkeyerPermTokens(
+    private static IEnumerable<WinkeyerEndpointPermission> ParseWinkeyerPermTokens(
         IEnumerable<string> tokens)
     {
         foreach (var token in tokens)
         {
             var permission = token switch
             {
-                "status" => WinkeyerFacePermission.Status,
-                "send" => WinkeyerFacePermission.Send,
-                "control" => WinkeyerFacePermission.Control,
-                "ptt" => WinkeyerFacePermission.Ptt,
-                "config_write" => WinkeyerFacePermission.ConfigWrite,
-                _ => WinkeyerFacePermission.Unspecified,
+                "status" => WinkeyerEndpointPermission.Status,
+                "send" => WinkeyerEndpointPermission.Send,
+                "control" => WinkeyerEndpointPermission.Control,
+                "ptt" => WinkeyerEndpointPermission.Ptt,
+                "config_write" => WinkeyerEndpointPermission.ConfigWrite,
+                _ => WinkeyerEndpointPermission.Unspecified,
             };
-            if (permission != WinkeyerFacePermission.Unspecified)
+            if (permission != WinkeyerEndpointPermission.Unspecified)
             {
                 yield return permission;
             }

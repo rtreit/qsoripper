@@ -1,11 +1,11 @@
 //! Cross-module integration tests (design §10.2).
 //!
 //! These bring up the full stack — universal state, the priority scheduler over a
-//! [`LoopbackBackend`], multiple serial faces over `tokio::io::duplex`, and the Hamlib net
-//! face over real TCP — and assert the system-level invariants: one radio command per poll
-//! (reads are served from cache), no VFO-target traffic from a TS-2000 face, cross-face
+//! [`LoopbackBackend`], multiple serial endpoints over `tokio::io::duplex`, and the Hamlib net
+//! endpoint over real TCP — and assert the system-level invariants: one radio command per poll
+//! (reads are served from cache), no VFO-target traffic from a TS-2000 endpoint, cross-endpoint
 //! write visibility, front-panel fan-out, strict write ordering, PTT arbitration, and that
-//! the Hamlib net face and a serial face share one radio state.
+//! the Hamlib net endpoint and a serial endpoint share one radio state.
 //!
 //! Binary crates cannot host `tests/` integration crates, so these live in-crate behind
 //! `#[cfg(test)]` to reach the `pub(crate)` surface.
@@ -22,13 +22,13 @@ use crate::backend::loopback::LoopbackBackend;
 use crate::backend::{BackendCapabilities, RadioBackend};
 use crate::dialect::kenwood::ts2000::Ts2000Dialect;
 use crate::dialect::kenwood::ts590::Ts590Dialect;
-use crate::dialect::{ClientDialect, FaceContext};
+use crate::dialect::{ClientDialect, ClientSessionContext};
 use crate::hamlib_net::serve_conn;
 use crate::model::{RadioEventSource, StateChange, StateMutation, Vfo};
-use crate::permissions::FacePermissions;
+use crate::permissions::EndpointPermissions;
 use crate::ptt::PttManager;
 use crate::radio::{detached_link, spawn_scheduler, OpKind, Priority, RadioHandle};
-use crate::serial_face::run_face;
+use crate::serial_endpoint::run_endpoint_session;
 use crate::state::StateHandle;
 
 /// A wired-up radio: shared loopback backend, state, scheduler and PTT lease.
@@ -57,13 +57,13 @@ fn rig() -> Rig {
 }
 
 impl Rig {
-    fn face(
+    fn session(
         &self,
         dialect: Arc<dyn ClientDialect>,
-        perms: FacePermissions,
+        perms: EndpointPermissions,
         id: u64,
     ) -> DuplexStream {
-        let ctx = FaceContext::new(
+        let ctx = ClientSessionContext::new(
             id,
             perms,
             self.state.clone(),
@@ -72,18 +72,18 @@ impl Rig {
             self.caps.clone(),
         );
         let (client, server) = tokio::io::duplex(1024);
-        tokio::spawn(run_face(server, dialect, ctx, b';'));
+        tokio::spawn(run_endpoint_session(server, dialect, ctx, b';'));
         client
     }
 
-    /// A single-VFO face (e.g. N1MM in SO1V) that virtualizes the operating VFO as VFO A.
-    fn single_vfo_face(
+    /// A session on a single-VFO endpoint (e.g. N1MM in SO1V) that presents the operating VFO as VFO A.
+    fn single_vfo_session(
         &self,
         dialect: Arc<dyn ClientDialect>,
-        perms: FacePermissions,
+        perms: EndpointPermissions,
         id: u64,
     ) -> DuplexStream {
-        let ctx = FaceContext::new(
+        let ctx = ClientSessionContext::new(
             id,
             perms,
             self.state.clone(),
@@ -93,7 +93,7 @@ impl Rig {
         )
         .with_single_vfo(true);
         let (client, server) = tokio::io::duplex(1024);
-        tokio::spawn(run_face(server, dialect, ctx, b';'));
+        tokio::spawn(run_endpoint_session(server, dialect, ctx, b';'));
         client
     }
 }
@@ -131,32 +131,36 @@ async fn read_frame(client: &mut DuplexStream) -> Vec<u8> {
     frame
 }
 
-/// A write on one face is visible to a read on another face on the same radio.
+/// A write on one endpoint is visible to a read on another endpoint on the same radio.
 #[tokio::test]
-async fn write_from_one_face_visible_on_another() {
+async fn write_from_one_endpoint_visible_on_another() {
     let rig = rig();
-    let mut writer_face = rig.face(ts590(), FacePermissions::from_tokens(&["read", "write"]), 1);
-    let mut reader_face = rig.face(ts2000(), FacePermissions::read_only(), 2);
+    let mut writer_session = rig.session(
+        ts590(),
+        EndpointPermissions::from_tokens(&["read", "write"]),
+        1,
+    );
+    let mut reader_session = rig.session(ts2000(), EndpointPermissions::read_only(), 2);
 
-    // Set VFO A frequency from the native (N1MM-style) face.
-    writer_face
+    // Set VFO A frequency from the native (N1MM-style) endpoint.
+    writer_session
         .write_all(b"FA00007050000;")
         .await
         .expect("write");
-    // Let the scheduler apply the write before reading from the other face.
+    // Let the scheduler apply the write before reading from the other endpoint.
     tokio::time::sleep(Duration::from_millis(30)).await;
 
-    let reply = request(&mut reader_face, b"FA;").await;
+    let reply = request(&mut reader_session, b"FA;").await;
     assert_eq!(reply, b"FA00007050000;");
 }
 
 /// Modeled reads are served from the cache: no client read ever reaches the backend, so a
-/// flurry of reads from many faces adds zero real-radio commands.
+/// flurry of reads from many endpoints adds zero real-radio commands.
 #[tokio::test]
-async fn face_reads_are_served_from_cache_not_the_backend() {
+async fn session_reads_are_served_from_cache_not_the_backend() {
     let rig = rig();
-    let mut a = rig.face(ts590(), FacePermissions::read_only(), 1);
-    let mut b = rig.face(ts2000(), FacePermissions::read_only(), 2);
+    let mut a = rig.session(ts590(), EndpointPermissions::read_only(), 1);
+    let mut b = rig.session(ts2000(), EndpointPermissions::read_only(), 2);
 
     for _ in 0..20 {
         let _ = request(&mut a, b"FA;").await;
@@ -174,12 +178,12 @@ async fn face_reads_are_served_from_cache_not_the_backend() {
     );
 }
 
-/// A TS-2000 (OmniRig/HDSDR) face never emits VFO-target traffic: status reads come from
+/// A TS-2000 (OmniRig/HDSDR) endpoint never emits VFO-target traffic: status reads come from
 /// cache and a VFO-target write is rejected, never forwarded (the §8.8 invariant).
 #[tokio::test]
-async fn ts2000_face_never_retargets_vfo() {
+async fn ts2000_endpoint_never_retargets_vfo() {
     let rig = rig();
-    let mut omni = rig.face(ts2000(), FacePermissions::read_only(), 1);
+    let mut omni = rig.session(ts2000(), EndpointPermissions::read_only(), 1);
 
     let _ = request(&mut omni, b"IF;").await;
     let _ = request(&mut omni, b"FA;").await;
@@ -195,15 +199,15 @@ async fn ts2000_face_never_retargets_vfo() {
     assert!(rig.backend.passthroughs().is_empty());
 }
 
-/// HDSDR/OmniRig click-to-tune uses the TS-2000 face's FA write as "set the displayed
+/// HDSDR/OmniRig click-to-tune uses the TS-2000 endpoint's FA write as "set the displayed
 /// active frequency". When the real radio is on VFO B, that write must tune VFO B without
 /// emitting a VFO-retarget command.
 #[tokio::test]
-async fn ts2000_face_fa_write_tunes_active_vfo_b() {
+async fn ts2000_endpoint_fa_write_tunes_active_vfo_b() {
     let rig = rig();
-    let mut omni = rig.face(
+    let mut omni = rig.session(
         ts2000(),
-        FacePermissions::from_tokens(&["read", "write"]),
+        EndpointPermissions::from_tokens(&["read", "write"]),
         1,
     );
     rig.state.record(
@@ -228,11 +232,11 @@ async fn ts2000_face_fa_write_tunes_active_vfo_b() {
 /// on VFO A. The TS-2000 translator must treat that as a displayed-frequency write, not as
 /// a request to silently tune inactive physical VFO B.
 #[tokio::test]
-async fn ts2000_face_fb_write_tunes_active_vfo_a() {
+async fn ts2000_endpoint_fb_write_tunes_active_vfo_a() {
     let rig = rig();
-    let mut omni = rig.face(
+    let mut omni = rig.session(
         ts2000(),
-        FacePermissions::from_tokens(&["read", "write"]),
+        EndpointPermissions::from_tokens(&["read", "write"]),
         1,
     );
     rig.state.record(
@@ -257,9 +261,9 @@ async fn ts2000_face_fb_write_tunes_active_vfo_a() {
 /// displayed active frequency, not stale inactive VFO A, because HDSDR treats FA as its main
 /// panadapter frequency.
 #[tokio::test]
-async fn ts2000_face_fa_read_reports_active_vfo_b() {
+async fn ts2000_endpoint_fa_read_reports_active_vfo_b() {
     let rig = rig();
-    let mut omni = rig.face(ts2000(), FacePermissions::read_only(), 1);
+    let mut omni = rig.session(ts2000(), EndpointPermissions::read_only(), 1);
     rig.state.record(
         StateChange::Freq {
             vfo: Vfo::A,
@@ -287,14 +291,14 @@ async fn ts2000_face_fa_read_reports_active_vfo_b() {
 }
 
 /// A simulated front-panel change (a poll-diff from the backend's truth) fans out to every
-/// auto-info-subscribed face without any client having polled.
+/// auto-info-subscribed endpoint without any client having polled.
 #[tokio::test]
-async fn front_panel_change_fans_out_to_all_subscribed_faces() {
+async fn front_panel_change_fans_out_to_all_subscribed_sessions() {
     let rig = rig();
-    let mut a = rig.face(ts590(), FacePermissions::read_only(), 1);
-    let mut b = rig.face(ts590(), FacePermissions::read_only(), 2);
+    let mut a = rig.session(ts590(), EndpointPermissions::read_only(), 1);
+    let mut b = rig.session(ts590(), EndpointPermissions::read_only(), 2);
 
-    // Both faces turn on virtualized auto-info.
+    // Both sessions turn on virtualized auto-info.
     a.write_all(b"AI2;").await.expect("write");
     b.write_all(b"AI2;").await.expect("write");
     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -311,14 +315,14 @@ async fn front_panel_change_fans_out_to_all_subscribed_faces() {
 }
 
 /// End-to-end N1MM SO1V regression: when the operator switches the radio to VFO B, a
-/// single-VFO face must keep tracking. The hub re-presents the operating VFO as VFO A, so
-/// the face receives an `FA`(operating freq) + `MD` + `IF` (with the active-VFO digit '0')
+/// single-VFO endpoint must keep tracking. The hub re-presents the operating VFO as VFO A, so
+/// the endpoint receives an `FA`(operating freq) + `MD` + `IF` (with the active-VFO digit '0')
 /// and never an `FB` or an `IF` reporting VFO B (which trips N1MM's "do not use VFO B"
 /// guard and freezes its frequency display).
 #[tokio::test]
-async fn single_vfo_face_tracks_an_a_to_b_switch_without_leaking_vfo_b() {
+async fn single_vfo_session_tracks_an_a_to_b_switch_without_leaking_vfo_b() {
     let rig = rig();
-    let mut n1mm = rig.single_vfo_face(ts590(), FacePermissions::read_only(), 1);
+    let mut n1mm = rig.single_vfo_session(ts590(), EndpointPermissions::read_only(), 1);
 
     // N1MM enables auto-info.
     n1mm.write_all(b"AI2;").await.expect("write");
@@ -369,7 +373,7 @@ async fn single_vfo_face_tracks_an_a_to_b_switch_without_leaking_vfo_b() {
     );
     assert!(
         !pushed.windows(2).any(|w| w == b"FB"),
-        "a single-VFO face must never receive an FB frame; got {}",
+        "a single-VFO endpoint must never receive an FB frame; got {}",
         String::from_utf8_lossy(&pushed)
     );
     let if_pos = pushed
@@ -383,14 +387,14 @@ async fn single_vfo_face_tracks_an_a_to_b_switch_without_leaking_vfo_b() {
     );
 }
 
-/// Writes fanned in from several faces are strictly serialized through the one radio task.
+/// Writes fanned in from several client sessions are strictly serialized through the one radio task.
 #[tokio::test]
-async fn writes_from_all_faces_are_strictly_ordered() {
+async fn writes_from_all_sessions_are_strictly_ordered() {
     let rig = rig();
-    let perms = FacePermissions::from_tokens(&["read", "write"]);
-    let mut f1 = rig.face(ts590(), perms, 1);
-    let mut f2 = rig.face(ts590(), perms, 2);
-    let mut f3 = rig.face(ts590(), perms, 3);
+    let perms = EndpointPermissions::from_tokens(&["read", "write"]);
+    let mut f1 = rig.session(ts590(), perms, 1);
+    let mut f2 = rig.session(ts590(), perms, 2);
+    let mut f3 = rig.session(ts590(), perms, 3);
 
     f1.write_all(b"FA00007010000;").await.expect("w1");
     f2.write_all(b"FA00007020000;").await.expect("w2");
@@ -401,14 +405,14 @@ async fn writes_from_all_faces_are_strictly_ordered() {
     assert_eq!(muts.len(), 3, "every write reaches the radio exactly once");
 }
 
-/// PTT is a single-owner lease: the first capable face keys, a second is refused while the
-/// lease is held, and the lease frees on `RX;` so the second face can then key.
+/// PTT is a single-owner lease: the first capable endpoint keys, a second is refused while the
+/// lease is held, and the lease frees on `RX;` so the second endpoint can then key.
 #[tokio::test]
-async fn ptt_lease_is_arbitrated_across_faces() {
+async fn ptt_lease_is_arbitrated_across_sessions() {
     let rig = rig();
-    let perms = FacePermissions::from_tokens(&["read", "write", "ptt"]);
-    let mut f1 = rig.face(ts590(), perms, 1);
-    let mut f2 = rig.face(ts590(), perms, 2);
+    let perms = EndpointPermissions::from_tokens(&["read", "write", "ptt"]);
+    let mut f1 = rig.session(ts590(), perms, 1);
+    let mut f2 = rig.session(ts590(), perms, 2);
 
     // f1 keys: a Kenwood set has no positive reply, so nothing comes back.
     f1.write_all(b"TX;").await.expect("tx1");
@@ -427,21 +431,25 @@ async fn ptt_lease_is_arbitrated_across_faces() {
     assert_eq!(rig.ptt.owner(), Some(2));
 }
 
-/// The Hamlib net face (engine / WSJT-X) and a serial face share one radio state: a write on
-/// the serial face is read back over TCP, and a read-only endpoint rejects writes.
+/// The Hamlib net endpoint (engine / WSJT-X) and a serial endpoint share one radio state: a write on
+/// the serial endpoint is read back over TCP, and a read-only endpoint rejects writes.
 #[tokio::test]
-async fn hamlib_net_and_serial_face_share_radio_state() {
+async fn hamlib_net_and_serial_endpoint_share_radio_state() {
     let rig = rig();
 
-    // A native serial face that can write (N1MM-style).
-    let mut n1mm = rig.face(ts590(), FacePermissions::from_tokens(&["read", "write"]), 1);
+    // A native serial endpoint that can write (N1MM-style).
+    let mut n1mm = rig.session(
+        ts590(),
+        EndpointPermissions::from_tokens(&["read", "write"]),
+        1,
+    );
 
     // A read-only Hamlib net endpoint (the QsoRipper engine).
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
-    let ro_ctx = FaceContext::new(
+    let ro_ctx = ClientSessionContext::new(
         2,
-        FacePermissions::read_only(),
+        EndpointPermissions::read_only(),
         rig.state.clone(),
         rig.radio.clone(),
         rig.ptt.clone(),
@@ -452,7 +460,7 @@ async fn hamlib_net_and_serial_face_share_radio_state() {
         serve_conn(stream, ro_ctx).await;
     });
 
-    // Set the frequency from the serial face.
+    // Set the frequency from the serial endpoint.
     n1mm.write_all(b"FA00014250000;").await.expect("write");
     tokio::time::sleep(Duration::from_millis(30)).await;
 

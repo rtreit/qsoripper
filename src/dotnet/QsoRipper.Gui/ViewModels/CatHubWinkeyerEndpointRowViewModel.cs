@@ -2,8 +2,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 
 namespace QsoRipper.Gui.ViewModels;
 
-/// <summary>One editable <c>[[cat_hub.winkeyer_face]]</c> virtual serial endpoint.</summary>
-internal sealed partial class CatHubWinkeyerFaceRowViewModel : ObservableObject
+/// <summary>One editable <c>[[cat_hub.winkeyer_endpoint]]</c> virtual serial endpoint.</summary>
+internal sealed partial class CatHubWinkeyerEndpointRowViewModel : ObservableObject
 {
     [ObservableProperty] private string _name = string.Empty;
     [ObservableProperty] private string _transport = string.Empty;

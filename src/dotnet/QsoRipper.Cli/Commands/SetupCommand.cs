@@ -1018,9 +1018,9 @@ internal static class SetupCommand
 
         var backend = catHub.Radio?.Backend;
         var backendLabel = string.IsNullOrWhiteSpace(backend) ? "unset" : backend;
-        var faceCount = catHub.Faces.Count;
-        var endpointCount = catHub.HamlibNet.Count;
-        return $"{backendLabel} ({faceCount} face(s), {endpointCount} endpoint(s))";
+        var serialEndpointCount = catHub.SerialEndpoints.Count;
+        var hamlibNetEndpointCount = catHub.HamlibNet.Count;
+        return $"{backendLabel} ({serialEndpointCount} serial endpoint(s), {hamlibNetEndpointCount} Hamlib NET endpoint(s))";
     }
 
     private static string FormatRigControlSummary(RigControlSettings? rigControl)

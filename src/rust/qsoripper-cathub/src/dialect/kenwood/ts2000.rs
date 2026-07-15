@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 
 use super::{ai_frame, freq_frame, mode_from_digit, mode_to_digit, parse_command, ERR};
-use crate::dialect::{ApplyOutcome, ClientDialect, FaceContext};
+use crate::dialect::{ApplyOutcome, ClientDialect, ClientSessionContext};
 use crate::model::{StateChange, StateMutation, Vfo};
 use crate::permissions::CommandClass;
 use crate::state::Snapshot;
@@ -46,7 +46,7 @@ fn synth_if(snapshot: &Snapshot) -> Vec<u8> {
 
 #[async_trait]
 impl ClientDialect for Ts2000Dialect {
-    async fn handle(&self, request: &[u8], ctx: &FaceContext) -> Vec<u8> {
+    async fn handle(&self, request: &[u8], ctx: &ClientSessionContext) -> Vec<u8> {
         let Some((verb, payload)) = parse_command(request) else {
             return ERR.to_vec();
         };
@@ -118,7 +118,11 @@ impl ClientDialect for Ts2000Dialect {
         }
     }
 
-    fn format_notification(&self, change: &StateChange, ctx: &FaceContext) -> Option<Vec<u8>> {
+    fn format_notification(
+        &self,
+        change: &StateChange,
+        ctx: &ClientSessionContext,
+    ) -> Option<Vec<u8>> {
         if !ctx.ai_on() {
             return None;
         }
@@ -155,7 +159,7 @@ fn vfo_digit(vfo: Vfo) -> u8 {
     }
 }
 
-async fn set_freq(ctx: &FaceContext, vfo: Vfo, payload: &[u8]) -> Vec<u8> {
+async fn set_freq(ctx: &ClientSessionContext, vfo: Vfo, payload: &[u8]) -> Vec<u8> {
     let Ok(hz) = std::str::from_utf8(payload)
         .unwrap_or("")
         .trim()
@@ -186,27 +190,27 @@ mod tests {
     use crate::backend::loopback::LoopbackBackend;
     use crate::backend::RadioBackend;
     use crate::model::RadioEventSource;
-    use crate::permissions::FacePermissions;
+    use crate::permissions::EndpointPermissions;
     use crate::ptt::PttManager;
     use crate::radio::{detached_link, spawn_scheduler};
     use crate::state::StateHandle;
     use std::sync::Arc;
     use std::time::Duration;
 
-    fn ctx_with(perms: FacePermissions) -> (FaceContext, LoopbackBackend) {
+    fn ctx_with(perms: EndpointPermissions) -> (ClientSessionContext, LoopbackBackend) {
         let backend = LoopbackBackend::new();
         let caps = backend.capabilities();
         let arc: Arc<dyn RadioBackend> = Arc::new(backend.clone());
         let state = StateHandle::new();
         let radio = spawn_scheduler(arc, detached_link(), state.clone());
         let ptt = PttManager::new(Duration::from_secs(300));
-        let ctx = FaceContext::new(7, perms, state, radio, ptt, caps);
+        let ctx = ClientSessionContext::new(7, perms, state, radio, ptt, caps);
         (ctx, backend)
     }
 
     #[tokio::test]
     async fn if_response_contains_frequency() {
-        let (ctx, _b) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b) = ctx_with(EndpointPermissions::read_only());
         ctx.state.record(
             StateChange::Freq {
                 vfo: Vfo::A,
@@ -222,7 +226,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_vfo_target_write() {
-        let (ctx, backend) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         let reply = Ts2000Dialect::new().handle(b"FR1;", &ctx).await;
         assert_eq!(reply, ERR.to_vec());
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -232,7 +236,7 @@ mod tests {
 
     #[tokio::test]
     async fn rx_vfo_change_notifies_with_current_if_status() {
-        let (ctx, _backend) = ctx_with(FacePermissions::read_only());
+        let (ctx, _backend) = ctx_with(EndpointPermissions::read_only());
         ctx.set_ai(true);
         ctx.state.record(
             StateChange::Freq {
@@ -278,7 +282,7 @@ mod tests {
     async fn vfo_switch_pushes_fa_for_new_active_frequency() {
         // Regression for the HDSDR VFO-switch bug: a VFO A->B switch must push an `FA`
         // (and `MD`) frame for the new active VFO so HDSDR/OmniRig retunes the panadapter.
-        let (ctx, _backend) = ctx_with(FacePermissions::read_only());
+        let (ctx, _backend) = ctx_with(EndpointPermissions::read_only());
         ctx.set_ai(true);
         ctx.state.record(
             StateChange::Freq {
@@ -318,7 +322,7 @@ mod tests {
 
     #[tokio::test]
     async fn answers_id_as_ts2000() {
-        let (ctx, _b) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b) = ctx_with(EndpointPermissions::read_only());
         assert_eq!(
             Ts2000Dialect::new().handle(b"ID;", &ctx).await,
             b"ID019;".to_vec()
@@ -327,7 +331,7 @@ mod tests {
 
     #[tokio::test]
     async fn ai_read_reports_state_without_changing_it() {
-        let (ctx, _b) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b) = ctx_with(EndpointPermissions::read_only());
         assert_eq!(
             Ts2000Dialect::new().handle(b"AI;", &ctx).await,
             b"AI0;".to_vec()
@@ -343,7 +347,7 @@ mod tests {
 
     #[tokio::test]
     async fn reads_frequency_from_state() {
-        let (ctx, _b) = ctx_with(FacePermissions::read_only());
+        let (ctx, _b) = ctx_with(EndpointPermissions::read_only());
         ctx.state.record(
             StateChange::Freq {
                 vfo: Vfo::A,
@@ -359,7 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn fa_write_tunes_active_vfo_b() {
-        let (ctx, backend) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         ctx.state.record(
             StateChange::RxVfo { vfo: Vfo::B },
             RadioEventSource::NativePush,
@@ -383,7 +387,7 @@ mod tests {
 
     #[tokio::test]
     async fn fb_write_tunes_active_vfo_a() {
-        let (ctx, backend) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         ctx.state.record(
             StateChange::RxVfo { vfo: Vfo::A },
             RadioEventSource::NativePush,
@@ -407,7 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn fa_read_reports_active_vfo_b_frequency() {
-        let (ctx, _backend) = ctx_with(FacePermissions::read_only());
+        let (ctx, _backend) = ctx_with(EndpointPermissions::read_only());
         ctx.state.record(
             StateChange::Freq {
                 vfo: Vfo::A,
@@ -436,7 +440,7 @@ mod tests {
 
     #[tokio::test]
     async fn active_vfo_b_frequency_notifies_as_fa() {
-        let (ctx, _backend) = ctx_with(FacePermissions::read_only());
+        let (ctx, _backend) = ctx_with(EndpointPermissions::read_only());
         ctx.set_ai(true);
         ctx.state.record(
             StateChange::RxVfo { vfo: Vfo::B },
@@ -458,7 +462,7 @@ mod tests {
 
     #[tokio::test]
     async fn md_read_and_write_use_active_vfo_b() {
-        let (ctx, backend) = ctx_with(FacePermissions::from_tokens(&["read", "write"]));
+        let (ctx, backend) = ctx_with(EndpointPermissions::from_tokens(&["read", "write"]));
         ctx.state.record(
             StateChange::Mode {
                 vfo: Vfo::A,

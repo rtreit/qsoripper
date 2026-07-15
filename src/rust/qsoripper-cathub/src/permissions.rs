@@ -1,9 +1,9 @@
-//! Per-face capability sets and command classification.
+//! Per-endpoint capability sets and command classification.
 //!
-//! The face flags gate the command classes a dialect assigns to each inbound command.
+//! The endpoint flags gate the command classes a dialect assigns to each inbound command.
 //! `frequency_write` grants narrow tuning authority without mode or VFO control, while
 //! `write` retains full modeled-write authority. Unknown passthrough writes default to
-//! denied unless the face opts into unsafe full control.
+//! denied unless the endpoint opts into unsafe full control.
 
 use crate::model::StateMutation;
 
@@ -29,10 +29,10 @@ pub(crate) enum CommandClass {
     Denied,
 }
 
-/// The capability set for one face or Hamlib listener.
+/// The capability set for one endpoint or Hamlib listener.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(clippy::struct_excessive_bools)] // Each flag is an independent face capability.
-pub(crate) struct FacePermissions {
+#[allow(clippy::struct_excessive_bools)] // Each flag is an independent endpoint capability.
+pub(crate) struct EndpointPermissions {
     /// May read modeled state.
     pub(crate) read: bool,
     /// May issue modeled writes (frequency, mode, split).
@@ -45,11 +45,11 @@ pub(crate) struct FacePermissions {
     pub(crate) config_write: bool,
 }
 
-impl FacePermissions {
-    /// A read-only face.
+impl EndpointPermissions {
+    /// A read-only endpoint.
     #[cfg(test)]
     pub(crate) fn read_only() -> Self {
-        FacePermissions {
+        EndpointPermissions {
             read: true,
             write: false,
             frequency_write: false,
@@ -60,7 +60,7 @@ impl FacePermissions {
 
     /// Parse a permission list from config tokens.
     pub(crate) fn from_tokens<S: AsRef<str>>(tokens: &[S]) -> Self {
-        let mut perms = FacePermissions {
+        let mut perms = EndpointPermissions {
             read: false,
             write: false,
             frequency_write: false,
@@ -80,21 +80,21 @@ impl FacePermissions {
         perms
     }
 
-    /// Whether this face is permitted to run a command of the given class.
+    /// Whether this endpoint is permitted to run a command of the given class.
     pub(crate) fn allows(self, class: CommandClass) -> bool {
         match class {
             CommandClass::ModeledRead | CommandClass::PassthroughRead => self.read,
             CommandClass::ModeledWrite => self.write,
             CommandClass::PttWrite => self.ptt,
             CommandClass::ConfigWrite => self.config_write,
-            // Auto-info toggles are always allowed: they are virtualized per face and
+            // Auto-info toggles are always allowed: they are virtualized per endpoint and
             // never touch the radio.
             CommandClass::AutoInfoToggle => true,
             CommandClass::Denied => false,
         }
     }
 
-    /// Whether this face may apply a specific modeled mutation.
+    /// Whether this endpoint may apply a specific modeled mutation.
     pub(crate) fn allows_mutation(self, class: CommandClass, mutation: &StateMutation) -> bool {
         if class != CommandClass::ModeledWrite {
             return self.allows(class);
@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn tokens_parse_into_flags() {
-        let perms = FacePermissions::from_tokens(&["read", "write", "ptt"]);
+        let perms = EndpointPermissions::from_tokens(&["read", "write", "ptt"]);
         assert!(perms.read && perms.write && perms.ptt);
         assert!(!perms.frequency_write);
         assert!(!perms.config_write);
@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn frequency_write_is_narrowly_scoped() {
-        let perms = FacePermissions::from_tokens(&["read", "frequency_write"]);
+        let perms = EndpointPermissions::from_tokens(&["read", "frequency_write"]);
         assert!(perms.frequency_write);
         assert!(!perms.write);
         assert!(perms.allows_mutation(
@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn read_only_denies_writes_and_ptt() {
-        let perms = FacePermissions::read_only();
+        let perms = EndpointPermissions::read_only();
         assert!(perms.allows(CommandClass::ModeledRead));
         assert!(!perms.allows(CommandClass::ModeledWrite));
         assert!(!perms.allows(CommandClass::PttWrite));
@@ -148,13 +148,13 @@ mod tests {
 
     #[test]
     fn auto_info_toggle_always_allowed() {
-        let perms = FacePermissions::read_only();
+        let perms = EndpointPermissions::read_only();
         assert!(perms.allows(CommandClass::AutoInfoToggle));
     }
 
     #[test]
     fn config_write_requires_flag() {
-        let perms = FacePermissions::from_tokens(&["read", "write", "ptt", "config_write"]);
+        let perms = EndpointPermissions::from_tokens(&["read", "write", "ptt", "config_write"]);
         assert!(perms.allows(CommandClass::ConfigWrite));
     }
 }

@@ -6,10 +6,10 @@
 
 mod actor;
 mod broker;
-mod face;
+mod endpoint;
 mod grpc;
 mod protocol;
 
 pub(crate) use actor::{spawn_supervised, BrokerHandle};
-pub(crate) use face::{open_serial_face, run_serial_face, FacePermissions};
+pub(crate) use endpoint::{open_serial_endpoint, run_serial_endpoint, EndpointPermissions};
 pub(crate) use grpc::bind_server;

@@ -7,7 +7,7 @@ namespace QsoRipper.Gui.ViewModels;
 /// (<c>[[cat_hub.hamlib_net]]</c>) in the CAT Hub settings tab. Network-CAT
 /// applications (the engine, WSJT-X, Log4OM, ...) connect to the bind address.
 /// </summary>
-internal sealed partial class CatHubEndpointRowViewModel : ObservableObject
+internal sealed partial class CatHubHamlibNetEndpointRowViewModel : ObservableObject
 {
     [ObservableProperty]
     private string _name = string.Empty;
