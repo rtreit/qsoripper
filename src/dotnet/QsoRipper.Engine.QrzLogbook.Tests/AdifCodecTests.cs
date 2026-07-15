@@ -96,6 +96,17 @@ public sealed class AdifCodecTests
     }
 
     [Fact]
+    public void Parse_treats_empty_rst_fields_as_absent()
+    {
+        const string adif = "<EOH><CALL:4>W1AW<RST_SENT:0><RST_RCVD:0><MODE:2>CW<QSO_DATE:8>20240101<TIME_ON:4>1200<eor>";
+
+        var qso = Assert.Single(AdifCodec.ParseAdif(adif));
+
+        Assert.Null(qso.RstSent);
+        Assert.Null(qso.RstReceived);
+    }
+
+    [Fact]
     public void Parse_maps_station_snapshot_fields()
     {
         const string adif = "<EOH><CALL:4>W1AW<STATION_CALLSIGN:5>K7RND<MY_GRIDSQUARE:4>CN87<MY_STATE:2>WA<QSO_DATE:8>20240101<TIME_ON:4>1200<MODE:3>SSB<eor>";
@@ -340,6 +351,44 @@ public sealed class AdifCodecTests
         // The app key should not leak into ExtraFields — it is represented
         // by the dedicated QrzLogid domain field only.
         Assert.False(parsed[0].ExtraFields.ContainsKey("APP_QRZLOG_LOGID"));
+    }
+
+    [Fact]
+    public void Qrz_adif_typed_confirmation_and_station_fields_round_trip()
+    {
+        const string adif = "<EOH><CALL:4>W1AW<QSO_DATE:8>20260115<TIME_ON:6>120000<BAND:3>20M<MODE:3>SSB"
+            + "<ARRL_SECT:3>WWA<SKCC:6>12345T<MY_LAT:11>N047 36.372<MY_LON:11>W122 19.866"
+            + "<MY_ARRL_SECT:3>WWA<MY_CQ_ZONE:1>3<MY_ITU_ZONE:1>6<QSL_SENT:1>Y<QSL_RCVD:1>R"
+            + "<QSLSDATE:8>20260120<QSLRDATE:8>20260122<LOTW_QSL_SENT:1>Y<LOTW_QSL_RCVD:1>N"
+            + "<EQSL_QSL_SENT:1>N<EQSL_QSL_RCVD:1>Y<eor>";
+
+        var qso = Assert.Single(AdifCodec.ParseAdif(adif));
+
+        Assert.Equal("WWA", qso.WorkedArrlSection);
+        Assert.Equal("12345T", qso.Skcc);
+        Assert.Equal(QslStatus.Yes, qso.QslSentStatus);
+        Assert.Equal(QslStatus.Requested, qso.QslReceivedStatus);
+        Assert.True(qso.LotwSent);
+        Assert.False(qso.LotwReceived);
+        Assert.False(qso.EqslSent);
+        Assert.True(qso.EqslReceived);
+        Assert.Equal(47.6062, qso.StationSnapshot.Latitude, precision: 4);
+        Assert.Equal(-122.3311, qso.StationSnapshot.Longitude, precision: 4);
+        Assert.Equal("WWA", qso.StationSnapshot.ArrlSection);
+        Assert.Equal(3U, qso.StationSnapshot.CqZone);
+        Assert.Equal(6U, qso.StationSnapshot.ItuZone);
+
+        var serialized = AdifCodec.SerializeSingleQso(qso);
+        Assert.Contains("<ARRL_SECT:3>WWA", serialized);
+        Assert.Contains("<SKCC:6>12345T", serialized);
+        Assert.Contains("<MY_LAT:11>N047 36.372", serialized);
+        Assert.Contains("<MY_LON:11>W122 19.866", serialized);
+        Assert.Contains("<QSL_SENT:1>Y", serialized);
+        Assert.Contains("<QSL_RCVD:1>R", serialized);
+        Assert.Contains("<QSLSDATE:8>20260120", serialized);
+        Assert.Contains("<QSLRDATE:8>20260122", serialized);
+        Assert.Contains("<LOTW_QSL_SENT:1>Y", serialized);
+        Assert.Contains("<EQSL_QSL_RCVD:1>Y", serialized);
     }
 
     [Fact]

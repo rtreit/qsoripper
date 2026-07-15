@@ -143,19 +143,20 @@ public sealed class MemoryStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
 
             if (query.After is { } after)
             {
-                items = items.Where(q => ToOffset(q.UtcTimestamp) > after);
+                items = items.Where(q => ToOffset(q.UtcTimestamp) >= after);
             }
 
             if (query.Before is { } before)
             {
-                items = items.Where(q => ToOffset(q.UtcTimestamp) < before);
+                items = items.Where(q => ToOffset(q.UtcTimestamp) <= before);
             }
 
             if (!string.IsNullOrWhiteSpace(query.CallsignFilter))
             {
                 var filter = query.CallsignFilter.Trim();
                 items = items.Where(q =>
-                    q.WorkedCallsign.Contains(filter, StringComparison.OrdinalIgnoreCase));
+                    q.WorkedCallsign.Contains(filter, StringComparison.OrdinalIgnoreCase)
+                    || q.StationCallsign.Contains(filter, StringComparison.OrdinalIgnoreCase));
             }
 
             if (query.BandFilter is { } band)

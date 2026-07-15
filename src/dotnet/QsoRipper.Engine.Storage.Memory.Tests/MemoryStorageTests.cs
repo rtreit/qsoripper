@@ -153,8 +153,8 @@ public sealed class MemoryStorageTests
             After = DateTimeOffset.Parse("2026-01-15T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
         });
 
-        Assert.Equal(2, result.Count);
-        Assert.All(result, q => Assert.True(q.UtcTimestamp.ToDateTimeOffset() > DateTimeOffset.Parse("2026-01-15T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture)));
+        Assert.Equal(3, result.Count);
+        Assert.All(result, q => Assert.True(q.UtcTimestamp.ToDateTimeOffset() >= DateTimeOffset.Parse("2026-01-15T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture)));
     }
 
     [Fact]
@@ -164,10 +164,26 @@ public sealed class MemoryStorageTests
 
         var result = await _storage.Logbook.ListQsosAsync(new QsoListQuery
         {
-            Before = DateTimeOffset.Parse("2026-01-16T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
+            Before = DateTimeOffset.Parse("2026-01-16T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
         });
 
         Assert.Equal(2, result.Count);
+    }
+
+    [Fact]
+    public async Task List_callsign_filter_matches_station_or_worked_callsign()
+    {
+        var qso = MakeQso("q1", "W1AW", Band._20M, Mode.Ft8, "2026-01-15T12:00:00Z");
+        qso.StationCallsign = "K7RND";
+        await _storage.Logbook.InsertQsoAsync(qso);
+
+        var stationMatches = await _storage.Logbook.ListQsosAsync(new QsoListQuery { CallsignFilter = "k7rnd" });
+        var workedMatches = await _storage.Logbook.ListQsosAsync(new QsoListQuery { CallsignFilter = "w1aw" });
+
+        Assert.Single(stationMatches);
+        Assert.Single(workedMatches);
+        Assert.Equal("q1", stationMatches[0].LocalId);
+        Assert.Equal("q1", workedMatches[0].LocalId);
     }
 
     [Fact]

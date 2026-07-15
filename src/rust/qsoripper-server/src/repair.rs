@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 
 use qsoripper_core::proto::qsoripper::domain::QsoRecord;
-use qsoripper_core::storage::{LogbookStore, QsoListQuery, StorageError};
+use qsoripper_core::storage::{DeletedRecordsFilter, LogbookStore, QsoListQuery, StorageError};
 
 /// Extra-field keys to consult when backfilling `qrz_logid` from records
 /// persisted before the ADIF mapper recognised them.
@@ -58,7 +58,12 @@ impl RepairReport {
 pub(crate) async fn backfill_qrz_logids(
     store: &dyn LogbookStore,
 ) -> Result<RepairReport, StorageError> {
-    let qsos = store.list_qsos(&QsoListQuery::default()).await?;
+    let qsos = store
+        .list_qsos(&QsoListQuery {
+            deleted_filter: DeletedRecordsFilter::All,
+            ..QsoListQuery::default()
+        })
+        .await?;
     let mut report = RepairReport::default();
 
     // ---- Step 1: backfill the dedicated field from extra_fields ----------
@@ -206,7 +211,7 @@ fn merge_in_place(keeper: &mut QsoRecord, victim: &QsoRecord) -> bool {
     }
 
     for (k, v) in &victim.extra_fields {
-        if v.is_empty() {
+        if v.is_empty() || QRZ_LOGID_EXTRA_FIELD_KEYS.contains(&k.as_str()) {
             continue;
         }
         if !keeper.extra_fields.contains_key(k) {

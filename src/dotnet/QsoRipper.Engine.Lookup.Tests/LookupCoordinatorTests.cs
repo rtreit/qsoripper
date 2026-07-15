@@ -27,6 +27,19 @@ public sealed class LookupCoordinatorTests
         }
     }
 
+    private sealed class BlockingProvider : ICallsignProvider
+    {
+        private readonly TaskCompletionSource<ProviderLookupResult> _completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string ProviderName => "blocking";
+
+        public Task<ProviderLookupResult> LookupAsync(string callsign, CancellationToken ct = default) =>
+            _completion.Task.WaitAsync(ct);
+
+        public void Complete(ProviderLookupResult result) => _completion.SetResult(result);
+    }
+
     private static ProviderLookupResult FoundResult(string callsign, string firstName = "Test") =>
         new()
         {
@@ -200,6 +213,24 @@ public sealed class LookupCoordinatorTests
     }
 
     [Fact]
+    public async Task StreamLookup_YieldsLoadingBeforeProviderCompletes()
+    {
+        var provider = new BlockingProvider();
+        var coordinator = new LookupCoordinator(provider);
+        await using var updates = coordinator
+            .StreamLookupIncrementallyAsync("W1AW")
+            .GetAsyncEnumerator();
+
+        Assert.True(await updates.MoveNextAsync());
+        Assert.Equal(LookupState.Loading, updates.Current.State);
+
+        provider.Complete(FoundResult("W1AW"));
+        Assert.True(await updates.MoveNextAsync());
+        Assert.Equal(LookupState.Found, updates.Current.State);
+        Assert.False(await updates.MoveNextAsync());
+    }
+
+    [Fact]
     public async Task StreamLookup_EmitsLoadingStaleThenRefreshed()
     {
         var provider = new FakeProvider();
@@ -238,6 +269,42 @@ public sealed class LookupCoordinatorTests
     }
 
     [Fact]
+    public async Task StreamLookup_SkipCacheBypassesFreshEntry()
+    {
+        var provider = new FakeProvider();
+        provider.Enqueue(FoundResult("W1AW", "Cached"));
+        provider.Enqueue(FoundResult("W1AW", "Fresh"));
+        var coordinator = new LookupCoordinator(provider, positiveTtl: TimeSpan.FromMinutes(15));
+
+        _ = await coordinator.LookupAsync("W1AW");
+        var updates = new List<LookupResult>();
+        await foreach (var update in coordinator.StreamLookupIncrementallyAsync("W1AW", skipCache: true))
+        {
+            updates.Add(update);
+        }
+
+        Assert.Equal(2, updates.Count);
+        Assert.Equal("Fresh", updates[^1].Record!.FirstName);
+        Assert.False(updates[^1].CacheHit);
+        Assert.Equal(2, provider.CallCount);
+    }
+
+    [Fact]
+    public async Task StreamLookup_PropagatesCancellationToProvider()
+    {
+        var coordinator = new LookupCoordinator(new BlockingProvider());
+        using var cancellation = new CancellationTokenSource();
+        await using var updates = coordinator
+            .StreamLookupIncrementallyAsync("W1AW", ct: cancellation.Token)
+            .GetAsyncEnumerator();
+
+        Assert.True(await updates.MoveNextAsync());
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await updates.MoveNextAsync());
+    }
+
+    [Fact]
     public async Task Lookup_ProviderError_ReturnsErrorState()
     {
         var provider = new FakeProvider();
@@ -255,12 +322,13 @@ public sealed class LookupCoordinatorTests
     }
 
     [Fact]
-    public async Task DisabledProvider_ReturnsNotFound()
+    public async Task DisabledProvider_ReturnsError()
     {
         var provider = new DisabledCallsignProvider();
         var result = await provider.LookupAsync("W1AW");
 
-        Assert.Equal(ProviderLookupState.NotFound, result.State);
+        Assert.Equal(ProviderLookupState.AuthenticationError, result.State);
+        Assert.Contains("credentials", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("disabled", provider.ProviderName);
     }
 

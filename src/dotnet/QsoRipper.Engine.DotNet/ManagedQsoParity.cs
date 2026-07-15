@@ -149,8 +149,8 @@ internal static class ManagedQsoParity
     {
         ArgumentNullException.ThrowIfNull(qso);
 
-        qso.StationCallsign = qso.StationCallsign.Trim();
-        qso.WorkedCallsign = qso.WorkedCallsign.Trim();
+        qso.StationCallsign = qso.StationCallsign.Trim().ToUpperInvariant();
+        qso.WorkedCallsign = qso.WorkedCallsign.Trim().ToUpperInvariant();
     }
 
     public static void ValidateQsoForPersistence(QsoRecord qso)

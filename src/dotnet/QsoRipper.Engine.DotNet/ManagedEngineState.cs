@@ -27,6 +27,19 @@ internal sealed record WsjtxQrzSyncOutcome(string LocalId, string WorkedCallsign
 
 internal sealed record RestoreQsoOutcome(bool Found, QsoRecord? Restored);
 
+internal sealed record PurgeDeletedQsosOutcome(
+    int PurgedCount,
+    int RemoteDeletesPushed,
+    int RemoteDeletesFailed,
+    string? ErrorSummary);
+
+internal enum StationProfileDeleteOutcome
+{
+    Deleted,
+    NotFound,
+    ActiveProfile,
+}
+
 internal sealed class QsoSoftDeletedException : InvalidOperationException
 {
     public QsoSoftDeletedException()
@@ -48,6 +61,42 @@ internal sealed class QsoSoftDeletedException : InvalidOperationException
     }
 
     public string LocalId { get; }
+}
+
+internal sealed class NoActiveStationProfileException : InvalidOperationException
+{
+    public NoActiveStationProfileException()
+        : base("An active station profile is required before logging a QSO.")
+    {
+    }
+
+    public NoActiveStationProfileException(string message)
+        : base(message)
+    {
+    }
+
+    public NoActiveStationProfileException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+internal sealed class QrzSyncUnavailableException : InvalidOperationException
+{
+    public QrzSyncUnavailableException()
+        : base("QRZ sync is unavailable.")
+    {
+    }
+
+    public QrzSyncUnavailableException(string message)
+        : base(message)
+    {
+    }
+
+    public QrzSyncUnavailableException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
 }
 
 internal sealed class ManagedEngineState
@@ -76,6 +125,7 @@ internal sealed class ManagedEngineState
     private readonly ContestCalendarMonitor? _contestCalendarMonitor;
     private readonly RigControlMonitor? _rigControlMonitor;
     private readonly SpaceWeatherMonitor? _spaceWeatherMonitor;
+    private readonly IQrzCredentialTester _qrzCredentialTester;
     private readonly string _configPath;
     private readonly SharedPersistedSetupConfig _persistedSetup;
     private readonly string? _currentPersistenceLocation;
@@ -84,6 +134,10 @@ internal sealed class ManagedEngineState
     private bool _hasQrzXmlPassword;
     private string? _qrzLogbookApiKey;
     private bool _hasQrzLogbookApiKey;
+    private string? _baseQrzXmlUsername;
+    private string? _baseQrzXmlPassword;
+    private string? _baseQrzLogbookApiKey;
+    private RigControlSettings? _baseRigControl;
     private SyncConfig _syncConfig;
     private RigControlSettings? _rigControl;
     private readonly List<ManagedPersistedStationProfile> _stationProfiles;
@@ -93,6 +147,9 @@ internal sealed class ManagedEngineState
     private readonly bool _ownsSyncEngine;
     private QrzLogbookClient? _ownedSyncClient;
     private QrzSyncEngine? _syncEngine;
+    private bool _isSyncing;
+    private DateTimeOffset? _nextSync;
+    private string? _lastSyncError;
 
     // Latest live WSJT-X ingest diagnostics published by the ingest supervisor. A null value means
     // the supervisor has not published a snapshot yet; BuildSetupStatusNoLock then leaves
@@ -130,7 +187,7 @@ internal sealed class ManagedEngineState
     {
     }
 
-    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, ContestCalendarMonitor? contestCalendarMonitor, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor, QrzSyncEngine? syncEngine, string? currentPersistenceLocation, LoadedSharedSetupConfig? loadedPersistedSetup)
+    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, ContestCalendarMonitor? contestCalendarMonitor, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor, QrzSyncEngine? syncEngine, string? currentPersistenceLocation, LoadedSharedSetupConfig? loadedPersistedSetup, IQrzCredentialTester? qrzCredentialTester = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
         ArgumentNullException.ThrowIfNull(storage);
@@ -141,6 +198,7 @@ internal sealed class ManagedEngineState
         _contestCalendarMonitor = contestCalendarMonitor;
         _rigControlMonitor = rigControlMonitor;
         _spaceWeatherMonitor = spaceWeatherMonitor;
+        _qrzCredentialTester = qrzCredentialTester ?? new QrzCredentialTester();
         _ownsSyncEngine = syncEngine is null;
         _syncEngine = syncEngine;
         var loadedSetup = loadedPersistedSetup ?? SharedSetupConfigPersistence.Load(_configPath);
@@ -149,11 +207,18 @@ internal sealed class ManagedEngineState
             ?? (_storage.BackendName.Equals("sqlite", StringComparison.OrdinalIgnoreCase)
                 ? NormalizeOptional(_persistedSetup.GetPersistedLogFilePath())
                 : null);
-        _qrzXmlUsername = NormalizeOptional(_persistedSetup.QrzXmlUsername);
-        _qrzXmlPassword = NormalizeOptional(_persistedSetup.QrzXmlPassword);
+        _qrzXmlUsername = NormalizeOptional(Environment.GetEnvironmentVariable(QrzXmlUsernameKey))
+            ?? NormalizeOptional(_persistedSetup.QrzXmlUsername);
+        _qrzXmlPassword = NormalizeOptional(Environment.GetEnvironmentVariable(QrzXmlPasswordKey))
+            ?? NormalizeOptional(_persistedSetup.QrzXmlPassword);
         _hasQrzXmlPassword = _qrzXmlPassword is not null;
-        _qrzLogbookApiKey = NormalizeOptional(_persistedSetup.QrzLogbookApiKey);
+        _qrzLogbookApiKey = NormalizeOptional(Environment.GetEnvironmentVariable(QrzLogbookApiKeyKey))
+            ?? NormalizeOptional(_persistedSetup.QrzLogbookApiKey);
         _hasQrzLogbookApiKey = _qrzLogbookApiKey is not null;
+        var hadPersistedSecrets = !string.IsNullOrWhiteSpace(_persistedSetup.QrzXmlPassword)
+            || !string.IsNullOrWhiteSpace(_persistedSetup.QrzLogbookApiKey);
+        _persistedSetup.QrzXmlPassword = null;
+        _persistedSetup.QrzLogbookApiKey = null;
         _syncConfig = NormalizeSyncConfig(_persistedSetup.SyncConfig);
         _persistedSetup.SyncConfig = _syncConfig.Clone();
         if (_persistedSetup.WsjtxIngest is not null)
@@ -162,6 +227,10 @@ internal sealed class ManagedEngineState
         }
 
         _rigControl = _persistedSetup.RigControl?.Clone();
+        _baseQrzXmlUsername = _qrzXmlUsername;
+        _baseQrzXmlPassword = _qrzXmlPassword;
+        _baseQrzLogbookApiKey = _qrzLogbookApiKey;
+        _baseRigControl = _rigControl?.Clone();
         _stationProfiles = _persistedSetup.StationProfiles
             .Select(static entry => new ManagedPersistedStationProfile
             {
@@ -182,6 +251,13 @@ internal sealed class ManagedEngineState
         {
             RebuildSyncEngineNoLock();
         }
+
+        if (hadPersistedSecrets)
+        {
+            PersistNoLock();
+        }
+
+        RepairLegacyQrzLogids();
 
         if (loadedSetup.LastSyncUtc is { } lastSync)
         {
@@ -266,65 +342,19 @@ internal sealed class ManagedEngineState
         return response;
     }
 
-    public static TestQrzCredentialsResponse TestQrzCredentials(string username, string password)
+    public Task<TestQrzCredentialsResponse> TestQrzCredentialsAsync(
+        string username,
+        string password,
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
-        {
-            return new TestQrzCredentialsResponse
-            {
-                Success = false,
-                ErrorMessage = "Username and password are required.",
-            };
-        }
-
-        if (LooksRejected(username) || LooksRejected(password))
-        {
-            return new TestQrzCredentialsResponse
-            {
-                Success = false,
-                ErrorMessage = "Managed engine rejected the supplied QRZ XML credentials.",
-            };
-        }
-
-        return new TestQrzCredentialsResponse { Success = true };
+        return _qrzCredentialTester.TestXmlCredentialsAsync(username, password, cancellationToken);
     }
 
-    public TestQrzLogbookCredentialsResponse TestQrzLogbookCredentials(string apiKey)
+    public Task<TestQrzLogbookCredentialsResponse> TestQrzLogbookCredentialsAsync(
+        string apiKey,
+        CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(apiKey))
-        {
-            return new TestQrzLogbookCredentialsResponse
-            {
-                Success = false,
-                ErrorMessage = "API key is required.",
-            };
-        }
-
-        if (LooksRejected(apiKey))
-        {
-            return new TestQrzLogbookCredentialsResponse
-            {
-                Success = false,
-                ErrorMessage = "Managed engine rejected the supplied QRZ logbook API key.",
-            };
-        }
-
-        lock (_gate)
-        {
-            var counts = Sync(_storage.Logbook.GetCountsAsync());
-            var response = new TestQrzLogbookCredentialsResponse
-            {
-                Success = true,
-                QsoCount = (uint)counts.LocalQsoCount,
-            };
-            var active = GetEffectiveActiveProfileNoLock();
-            if (!string.IsNullOrWhiteSpace(active?.StationCallsign))
-            {
-                response.LogbookOwner = active.StationCallsign;
-            }
-
-            return response;
-        }
+        return _qrzCredentialTester.TestLogbookCredentialsAsync(apiKey, cancellationToken);
     }
 
     public SaveSetupResponse SaveSetup(SaveSetupRequest request)
@@ -364,7 +394,6 @@ internal sealed class ManagedEngineState
             {
                 _qrzXmlPassword = request.QrzXmlPassword.Trim();
                 _hasQrzXmlPassword = true;
-                _persistedSetup.QrzXmlPassword = _qrzXmlPassword;
                 _runtimeOverrides.Remove(QrzXmlPasswordKey);
                 RebuildLookupCoordinatorNoLock();
             }
@@ -373,7 +402,6 @@ internal sealed class ManagedEngineState
             {
                 _qrzLogbookApiKey = request.QrzLogbookApiKey.Trim();
                 _hasQrzLogbookApiKey = true;
-                _persistedSetup.QrzLogbookApiKey = _qrzLogbookApiKey;
                 _runtimeOverrides.Remove(QrzLogbookApiKeyKey);
                 if (_ownsSyncEngine)
                 {
@@ -411,6 +439,11 @@ internal sealed class ManagedEngineState
             UpdatePersistedStorageSettingsNoLock(request);
             SyncPersistedProfilesNoLock();
             _runtimeOverrides.Remove(StorageBackendKey);
+
+            _baseQrzXmlUsername = _qrzXmlUsername;
+            _baseQrzXmlPassword = _qrzXmlPassword;
+            _baseQrzLogbookApiKey = _qrzLogbookApiKey;
+            _baseRigControl = _rigControl?.Clone();
 
             PersistNoLock();
             return new SaveSetupResponse
@@ -495,7 +528,7 @@ internal sealed class ManagedEngineState
         }
     }
 
-    public bool DeleteStationProfile(string profileId)
+    public StationProfileDeleteOutcome DeleteStationProfile(string profileId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(profileId);
 
@@ -503,7 +536,7 @@ internal sealed class ManagedEngineState
         {
             if (string.Equals(_activeProfileId, profileId.Trim(), StringComparison.Ordinal))
             {
-                return false;
+                return StationProfileDeleteOutcome.ActiveProfile;
             }
 
             var removed = _stationProfiles.RemoveAll(entry => string.Equals(entry.ProfileId, profileId.Trim(), StringComparison.Ordinal));
@@ -511,10 +544,10 @@ internal sealed class ManagedEngineState
             {
                 SyncPersistedProfilesNoLock();
                 PersistNoLock();
-                return true;
+                return StationProfileDeleteOutcome.Deleted;
             }
 
-            return false;
+            return StationProfileDeleteOutcome.NotFound;
         }
     }
 
@@ -532,7 +565,7 @@ internal sealed class ManagedEngineState
 
         lock (_gate)
         {
-            _sessionOverrideProfile = profile.Clone();
+            _sessionOverrideProfile = NormalizeStationProfile(profile);
             return BuildActiveStationContextNoLock();
         }
     }
@@ -553,18 +586,38 @@ internal sealed class ManagedEngineState
         lock (_gate)
         {
             var qso = request.Qso?.Clone() ?? throw new InvalidOperationException("qso is required.");
+            if (GetEffectiveActiveProfileNoLock() is null)
+            {
+                throw new NoActiveStationProfileException();
+            }
+
+            // Identity, station context, timestamps, and QRZ state belong to
+            // the engine. A LogQso caller cannot import or spoof them.
+            qso.LocalId = Guid.NewGuid().ToString();
+            qso.StationCallsign = string.Empty;
+            qso.StationSnapshot = null;
+            qso.SyncStatus = SyncStatus.LocalOnly;
+            qso.ClearQrzLogid();
+            qso.ClearQrzBookid();
+            qso.CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
+            qso.UpdatedAt = qso.CreatedAt.Clone();
+
             ApplyStationContextNoLock(qso);
             ManagedQsoParity.NormalizeQsoForPersistence(qso);
             ValidateQsoNoLock(qso);
-            FinalizeQsoForWrite(qso, isNew: true);
 
             var response = new LogQsoResponse
             {
                 LocalId = qso.LocalId,
             };
 
-            ApplySyncFlagsNoLock(qso, request.SyncToQrz, response);
             Sync(_storage.Logbook.InsertQsoAsync(qso));
+            ApplySyncFlagsNoLock(qso, request.SyncToQrz, response);
+            if (response.SyncSuccess)
+            {
+                Sync(_storage.Logbook.UpdateQsoAsync(qso));
+            }
+
             return response;
         }
     }
@@ -579,59 +632,60 @@ internal sealed class ManagedEngineState
             var requestedLocalId = qso.LocalId?.Trim();
             if (string.IsNullOrWhiteSpace(requestedLocalId))
             {
-                return new UpdateQsoResponse { Success = false, Error = "local_id is required." };
+                throw new ArgumentException("local_id is required.", nameof(request));
             }
             qso.LocalId = requestedLocalId;
 
             var existing = Sync(_storage.Logbook.GetQsoAsync(requestedLocalId));
             if (existing is null)
             {
-                if (!string.IsNullOrWhiteSpace(qso.QrzLogid))
-                {
-                    var matches = Sync(_storage.Logbook.ListQsosAsync(new QsoListQuery
-                    {
-                        DeletedFilter = Storage.DeletedRecordsFilter.All,
-                    }))
-                    .Where(candidate =>
-                        string.Equals(candidate.QrzLogid, qso.QrzLogid, StringComparison.OrdinalIgnoreCase))
-                    .ToArray();
-
-                    if (matches.Length == 1)
-                    {
-                        existing = matches[0];
-                        qso.LocalId = existing.LocalId;
-                    }
-                    else if (matches.Length > 1)
-                    {
-                        return new UpdateQsoResponse
-                        {
-                            Success = false,
-                            Error = $"QSO '{requestedLocalId}' was not found and QRZ logid '{qso.QrzLogid}' matched multiple local QSOs.",
-                        };
-                    }
-                }
-            }
-
-            if (existing is null)
-            {
-                return new UpdateQsoResponse { Success = false, Error = $"QSO '{requestedLocalId}' was not found." };
+                throw new KeyNotFoundException($"QSO '{requestedLocalId}' was not found.");
             }
             if (existing.DeletedAt is not null)
             {
                 throw new QsoSoftDeletedException(qso.LocalId);
             }
 
-            // Merge incoming partial record into existing so unspecified fields are preserved.
-            var merged = ManagedQsoParity.MergeQsoForUpdate(existing, qso);
+            // UpdateQso is a full replacement of caller-owned fields. Preserve
+            // only metadata whose source of truth is the engine.
+            qso.LocalId = existing.LocalId;
+            qso.StationCallsign = existing.StationCallsign;
+            qso.StationSnapshot = existing.StationSnapshot?.Clone();
+            qso.CreatedAt = existing.CreatedAt?.Clone();
+            if (existing.HasQrzLogid)
+            {
+                qso.QrzLogid = existing.QrzLogid;
+            }
+            else
+            {
+                qso.ClearQrzLogid();
+            }
+            if (existing.HasQrzBookid)
+            {
+                qso.QrzBookid = existing.QrzBookid;
+            }
+            else
+            {
+                qso.ClearQrzBookid();
+            }
+            qso.DeletedAt = existing.DeletedAt?.Clone();
+            qso.PendingRemoteDelete = existing.PendingRemoteDelete;
+            qso.SyncStatus = existing.SyncStatus == SyncStatus.Synced
+                ? SyncStatus.Modified
+                : existing.SyncStatus;
 
-            ApplyStationContextNoLock(merged, existing);
-            ManagedQsoParity.NormalizeQsoForPersistence(merged);
-            ValidateQsoNoLock(merged);
-            FinalizeQsoForWrite(merged, isNew: false);
+            ManagedQsoParity.NormalizeQsoForPersistence(qso);
+            ValidateQsoNoLock(qso);
+            FinalizeQsoForWrite(qso, isNew: false);
 
             var response = new UpdateQsoResponse { Success = true };
-            ApplySyncFlagsNoLock(merged, request.SyncToQrz, response);
-            Sync(_storage.Logbook.UpdateQsoAsync(merged));
+            Sync(_storage.Logbook.UpdateQsoAsync(qso));
+            ApplySyncFlagsNoLock(qso, request.SyncToQrz, response);
+            if (response.SyncSuccess)
+            {
+                Sync(_storage.Logbook.UpdateQsoAsync(qso));
+            }
+
             return response;
         }
     }
@@ -701,11 +755,71 @@ internal sealed class ManagedEngineState
         }
     }
 
-    public int PurgeDeletedQsos(IReadOnlyList<string>? localIds, DateTimeOffset? olderThan)
+    public PurgeDeletedQsosOutcome PurgeDeletedQsos(
+        IReadOnlyList<string>? localIds,
+        DateTimeOffset? olderThan,
+        bool includePendingRemoteDeletes)
     {
         lock (_gate)
         {
-            return Sync(_storage.Logbook.PurgeDeletedQsosAsync(localIds, olderThan));
+            if (!includePendingRemoteDeletes)
+            {
+                var purged = Sync(_storage.Logbook.PurgeDeletedQsosAsync(localIds, olderThan));
+                return new PurgeDeletedQsosOutcome(purged, 0, 0, null);
+            }
+
+            var requestedIds = localIds is { Count: > 0 }
+                ? new HashSet<string>(localIds.Select(static value => value.Trim()), StringComparer.Ordinal)
+                : null;
+            var candidates = Sync(_storage.Logbook.ListQsosAsync(new QsoListQuery
+            {
+                DeletedFilter = Storage.DeletedRecordsFilter.DeletedOnly,
+            }))
+            .Where(qso => requestedIds is null || requestedIds.Contains(qso.LocalId))
+            .Where(qso => olderThan is null || qso.DeletedAt?.ToDateTimeOffset() <= olderThan)
+            .ToArray();
+
+            var purgeIds = new List<string>(candidates.Length);
+            var errors = new List<string>();
+            var pushed = 0;
+            var failed = 0;
+
+            foreach (var candidate in candidates)
+            {
+                if (!candidate.PendingRemoteDelete || string.IsNullOrWhiteSpace(candidate.QrzLogid))
+                {
+                    purgeIds.Add(candidate.LocalId);
+                    continue;
+                }
+
+                if (!_hasQrzLogbookApiKey || _syncEngine is null)
+                {
+                    failed++;
+                    errors.Add($"QRZ delete was not attempted for QSO '{candidate.LocalId}' because QRZ Logbook is not configured.");
+                    continue;
+                }
+
+                try
+                {
+                    Sync(_syncEngine.DeleteRemoteQsoAsync(candidate.QrzLogid));
+                    pushed++;
+                    purgeIds.Add(candidate.LocalId);
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    failed++;
+                    errors.Add($"QRZ delete failed for QSO '{candidate.LocalId}': {ex.Message}");
+                }
+            }
+
+            var purgedCount = purgeIds.Count == 0
+                ? 0
+                : Sync(_storage.Logbook.PurgeDeletedQsosAsync(purgeIds, olderThan));
+            return new PurgeDeletedQsosOutcome(
+                purgedCount,
+                pushed,
+                failed,
+                errors.Count == 0 ? null : string.Join(" ", errors));
         }
     }
 
@@ -722,6 +836,22 @@ internal sealed class ManagedEngineState
     public IReadOnlyList<QsoRecord> ListQsos(ListQsosRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (request.HasBandFilter && !System.Enum.IsDefined(request.BandFilter))
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Invalid band_filter value.");
+        }
+        if (request.HasModeFilter && !System.Enum.IsDefined(request.ModeFilter))
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Invalid mode_filter value.");
+        }
+        if (!System.Enum.IsDefined(request.Sort))
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Invalid sort order.");
+        }
+        if (!System.Enum.IsDefined(request.DeletedFilter))
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Invalid deleted_filter value.");
+        }
 
         lock (_gate)
         {
@@ -752,53 +882,108 @@ internal sealed class ManagedEngineState
 
     public SyncWithQrzResponse SyncWithQrz(bool fullSync = false)
     {
+        QrzSyncEngine syncEngine;
+        ConflictPolicy conflictPolicy;
         lock (_gate)
         {
             if (_syncEngine is null)
             {
-                return new SyncWithQrzResponse
-                {
-                    Complete = true,
-                    Error = "QRZ logbook is not configured.",
-                };
+                throw new QrzSyncUnavailableException("QRZ logbook is not configured.");
+            }
+            if (_isSyncing)
+            {
+                throw new QrzSyncUnavailableException("A QRZ sync is already in progress.");
             }
 
-            try
+            _isSyncing = true;
+            _lastSyncError = null;
+            syncEngine = _syncEngine;
+            conflictPolicy = _syncConfig.ConflictPolicy;
+        }
+
+        try
+        {
+            var result = Sync(syncEngine.ExecuteSyncAsync(_storage.Logbook, fullSync, conflictPolicy));
+
+            var syncResponse = new SyncWithQrzResponse
             {
-                var conflictPolicy = _syncConfig?.ConflictPolicy ?? ConflictPolicy.Unspecified;
-                var result = Sync(_syncEngine.ExecuteSyncAsync(_storage.Logbook, fullSync, conflictPolicy));
+                DownloadedRecords = result.DownloadedCount,
+                UploadedRecords = result.UploadedCount,
+                ConflictRecords = result.ConflictCount,
+                TotalRecords = result.DownloadedCount + result.UploadedCount,
+                ProcessedRecords = result.DownloadedCount + result.UploadedCount,
+                CurrentAction = "Sync completed.",
+                Complete = true,
+                RemoteDeletesPushed = result.RemoteDeletesPushed,
+                DeletesSkippedRemote = result.DeletesSkippedRemote,
+                DuplicateReplaces = result.DuplicateReplaceCount,
+            };
 
-                var syncResponse = new SyncWithQrzResponse
+            if (result.ErrorSummary is not null)
+            {
+                syncResponse.Error = result.ErrorSummary;
+                lock (_gate)
                 {
-                    DownloadedRecords = result.DownloadedCount,
-                    UploadedRecords = result.UploadedCount,
-                    ConflictRecords = result.ConflictCount,
-                    TotalRecords = result.DownloadedCount + result.UploadedCount,
-                    ProcessedRecords = result.DownloadedCount + result.UploadedCount,
-                    CurrentAction = "Sync completed.",
-                    Complete = true,
-                    RemoteDeletesPushed = result.RemoteDeletesPushed,
-                    DeletesSkippedRemote = result.DeletesSkippedRemote,
-                    DuplicateReplaces = result.DuplicateReplaceCount,
-                };
-
-                if (result.ErrorSummary is not null)
-                {
-                    syncResponse.Error = result.ErrorSummary;
+                    _lastSyncError = result.ErrorSummary;
                 }
+            }
 
-                return syncResponse;
-            }
+            return syncResponse;
+        }
 #pragma warning disable CA1031 // Do not catch general exception types — sync must not crash the engine
-            catch (Exception ex)
+        catch (Exception ex)
 #pragma warning restore CA1031
+        {
+            lock (_gate)
             {
-                return new SyncWithQrzResponse
-                {
-                    Complete = true,
-                    Error = ex.Message,
-                };
+                _lastSyncError = ex.Message;
             }
+
+            return new SyncWithQrzResponse
+            {
+                Complete = true,
+                Error = ex.Message,
+            };
+        }
+        finally
+        {
+            lock (_gate)
+            {
+                _isSyncing = false;
+            }
+        }
+    }
+
+    public void EnsureQrzSyncAvailable()
+    {
+        lock (_gate)
+        {
+            if (_syncEngine is null)
+            {
+                throw new QrzSyncUnavailableException("QRZ logbook is not configured.");
+            }
+            if (_isSyncing)
+            {
+                throw new QrzSyncUnavailableException("A QRZ sync is already in progress.");
+            }
+        }
+    }
+
+    public void SetNextAutomaticSync(DateTimeOffset? nextSync)
+    {
+        lock (_gate)
+        {
+            _nextSync = nextSync;
+        }
+    }
+
+    public (bool Enabled, TimeSpan Interval) GetAutomaticSyncSettings()
+    {
+        lock (_gate)
+        {
+            return (
+                _syncConfig.AutoSyncEnabled && _hasQrzLogbookApiKey,
+                TimeSpan.FromSeconds(Math.Max(1, _syncConfig.SyncIntervalSeconds)));
         }
     }
 
@@ -812,15 +997,9 @@ internal sealed class ManagedEngineState
             var response = new GetSyncStatusResponse
             {
                 LocalQsoCount = (uint)counts.LocalQsoCount,
-                // Prefer the authoritative remote count persisted by Phase 3 of sync.
-                // Fall back to (local - pending) only if no successful sync has run.
-                QrzQsoCount = _hasQrzLogbookApiKey
-                    ? (syncMeta.LastSync is null
-                        ? (uint)Math.Max(0, counts.LocalQsoCount - counts.PendingUploadCount)
-                        : (uint)Math.Max(0, syncMeta.QrzQsoCount))
-                    : 0,
+                QrzQsoCount = (uint)Math.Max(0, syncMeta.QrzQsoCount),
                 PendingUpload = (uint)counts.PendingUploadCount,
-                IsSyncing = false,
+                IsSyncing = _isSyncing,
                 AutoSyncEnabled = _syncConfig.AutoSyncEnabled && _hasQrzLogbookApiKey,
             };
 
@@ -829,22 +1008,19 @@ internal sealed class ManagedEngineState
                 response.LastSync = Timestamp.FromDateTimeOffset(lastSyncUtc);
             }
 
-            // Prefer the QRZ-reported owner from Phase 3 STATUS; fall back to the
-            // active station's callsign when sync hasn't populated metadata yet.
-            if (_hasQrzLogbookApiKey)
+            if (!string.IsNullOrWhiteSpace(syncMeta.QrzLogbookOwner))
             {
-                if (!string.IsNullOrWhiteSpace(syncMeta.QrzLogbookOwner))
-                {
-                    response.QrzLogbookOwner = syncMeta.QrzLogbookOwner;
-                }
-                else
-                {
-                    var active = GetEffectiveActiveProfileNoLock();
-                    if (!string.IsNullOrWhiteSpace(active?.StationCallsign))
-                    {
-                        response.QrzLogbookOwner = active.StationCallsign;
-                    }
-                }
+                response.QrzLogbookOwner = syncMeta.QrzLogbookOwner;
+            }
+
+            if (_nextSync is { } nextSync)
+            {
+                response.NextSync = Timestamp.FromDateTimeOffset(nextSync);
+            }
+
+            if (!string.IsNullOrWhiteSpace(_lastSyncError))
+            {
+                response.LastSyncError = _lastSyncError;
             }
 
             return response;
@@ -978,11 +1154,8 @@ internal sealed class ManagedEngineState
     }
 
     /// <summary>
-    /// Applies managed QRZ logbook sync flags to the supplied imported QSOs, mirroring
-    /// LogQso(sync_to_qrz=true) semantics: when an API key is configured each QSO is marked
-    /// <see cref="SyncStatus.Synced"/> with a synthetic QRZ logid, otherwise it stays
-    /// <see cref="SyncStatus.LocalOnly"/> with a "QRZ logbook is not configured." error. Returns a
-    /// per-QSO outcome list for the supervisor to fold into live status.
+    /// Uploads the supplied imported QSOs through the same QRZ API path used by
+    /// LogQso(sync_to_qrz=true), then persists the QRZ-assigned logid.
     /// </summary>
     public IReadOnlyList<WsjtxQrzSyncOutcome> SyncImportedQsosToQrz(IEnumerable<string> localIds)
     {
@@ -1014,10 +1187,21 @@ internal sealed class ManagedEngineState
                     continue;
                 }
 
-                existing.SyncStatus = SyncStatus.Synced;
-                existing.QrzLogid = $"managed-{Guid.NewGuid():N}";
-                Sync(_storage.Logbook.UpdateQsoAsync(existing));
-                outcomes.Add(new WsjtxQrzSyncOutcome(localId, existing.WorkedCallsign, Success: true, Error: null));
+                try
+                {
+                    var logid = Sync((_syncEngine ?? throw new InvalidOperationException("QRZ logbook sync is unavailable."))
+                        .UploadSingleQsoAsync(_storage.Logbook, existing));
+                    existing.SyncStatus = SyncStatus.Synced;
+                    existing.QrzLogid = logid;
+                    Sync(_storage.Logbook.UpdateQsoAsync(existing));
+                    outcomes.Add(new WsjtxQrzSyncOutcome(localId, existing.WorkedCallsign, Success: true, Error: null));
+                }
+                catch (Exception ex) when (ex is not OutOfMemoryException)
+                {
+                    existing.SyncStatus = SyncStatus.LocalOnly;
+                    Sync(_storage.Logbook.UpdateQsoAsync(existing));
+                    outcomes.Add(new WsjtxQrzSyncOutcome(localId, existing.WorkedCallsign, Success: false, ex.Message));
+                }
             }
         }
 
@@ -1047,23 +1231,58 @@ internal sealed class ManagedEngineState
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callsign);
 
+        ILookupCoordinator coordinator;
+        lock (_gate)
+        {
+            coordinator = _lookupCoordinator;
+        }
+
         if (cacheOnly)
         {
-            var cached = _lookupCoordinator.GetCachedAsync(callsign).GetAwaiter().GetResult();
+            var cached = coordinator.GetCachedAsync(callsign).GetAwaiter().GetResult();
             return new LookupResponse { Result = cached };
         }
 
-        var result = _lookupCoordinator.LookupAsync(callsign, skipCache).GetAwaiter().GetResult();
+        var result = coordinator.LookupAsync(callsign, skipCache).GetAwaiter().GetResult();
 
         return new LookupResponse { Result = result };
     }
 
-    public StreamLookupResponse[] StreamLookup(string callsign)
+    public async IAsyncEnumerable<StreamLookupResponse> StreamLookup(
+        string callsign,
+        bool skipCache,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(callsign);
 
-        var results = _lookupCoordinator.StreamLookupAsync(callsign).GetAwaiter().GetResult();
-        return results.Select(r => new StreamLookupResponse { Result = r }).ToArray();
+        ILookupCoordinator coordinator;
+        lock (_gate)
+        {
+            coordinator = _lookupCoordinator;
+        }
+
+        await foreach (var result in coordinator
+            .StreamLookupIncrementallyAsync(callsign, skipCache, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            yield return new StreamLookupResponse { Result = result };
+        }
+    }
+
+    public async Task<LookupResult[]> BatchLookupAsync(
+        IReadOnlyList<string> callsigns,
+        CancellationToken cancellationToken)
+    {
+        ILookupCoordinator coordinator;
+        lock (_gate)
+        {
+            coordinator = _lookupCoordinator;
+        }
+
+        return await BatchLookupOrchestrator.ExecuteAsync(
+            coordinator,
+            callsigns,
+            ct: cancellationToken).ConfigureAwait(false);
     }
 
     public GetRigStatusResponse CreateRigStatusResponse()
@@ -1127,48 +1346,45 @@ internal sealed class ManagedEngineState
         return BuildRigSnapshot(CreateRigStatusResponse());
     }
 
-    public TestRigConnectionResponse TestRigConnection()
+    public TestRigConnectionResponse TestRigConnection(TestRigConnectionRequest request)
     {
+        ArgumentNullException.ThrowIfNull(request);
+
+        RigControlSettings? configured;
         lock (_gate)
         {
-            if (_rigControl is not null)
-            {
-                if (!_rigControl.Enabled)
-                {
-                    return new TestRigConnectionResponse
-                    {
-                        Success = false,
-                        ErrorMessage = "Rig control is disabled in the managed engine.",
-                    };
-                }
-
-                var refreshed = BuildConfiguredRigSnapshotNoLock(_rigControl);
-                return BuildTestRigConnectionResponse(refreshed);
-            }
+            configured = _rigControl?.Clone();
         }
 
-        if (_rigControlMonitor is not null)
+        if (!request.HasHost && !request.HasPort && configured is null && _rigControlMonitor is not null)
         {
             var refreshed = _rigControlMonitor.RefreshSnapshot();
             return BuildTestRigConnectionResponse(refreshed);
         }
 
-        var snapshot = BuildRigSnapshot();
-        var fallbackResponse = new TestRigConnectionResponse
+        var host = request.HasHost && !string.IsNullOrWhiteSpace(request.Host)
+            ? request.Host.Trim()
+            : configured is { HasHost: true } && !string.IsNullOrWhiteSpace(configured.Host)
+                ? configured.Host.Trim()
+                : RigctldProvider.DefaultHost;
+        var requestedPort = request.HasPort
+            ? request.Port
+            : configured is { HasPort: true }
+                ? configured.Port
+                : (uint)RigctldProvider.DefaultPort;
+        if (requestedPort is 0 or > 65535)
         {
-            Success = snapshot.Status == RigConnectionStatus.Connected,
-        };
-
-        if (snapshot.Status == RigConnectionStatus.Connected)
-        {
-            fallbackResponse.Snapshot = snapshot;
+            throw new ArgumentOutOfRangeException(nameof(request), "Rig control port must be between 1 and 65535.");
         }
-        else
-        {
-            fallbackResponse.ErrorMessage = "Rig control is disabled in the managed engine.";
-        }
+        var port = (int)requestedPort;
 
-        return fallbackResponse;
+        var readTimeoutMs = configured is { HasReadTimeoutMs: true } && configured.ReadTimeoutMs > 0
+            ? checked((int)configured.ReadTimeoutMs)
+            : RigctldProvider.DefaultReadTimeoutMs;
+        var monitor = new RigControlMonitor(
+            new RigctldProvider(host, port, TimeSpan.FromMilliseconds(readTimeoutMs)),
+            TimeSpan.FromMilliseconds(RigControlMonitor.DefaultStaleThresholdMs));
+        return BuildTestRigConnectionResponse(monitor.RefreshSnapshot());
     }
 
     private static RigSnapshot BuildRigSnapshot(GetRigStatusResponse status)
@@ -1298,16 +1514,6 @@ internal sealed class ManagedEngineState
             {
                 switch (mutation.Key)
                 {
-                    case StorageBackendKey:
-                        if (mutation.Kind == RuntimeConfigMutationKind.Set
-                            && !string.Equals(mutation.Value, _storage.BackendName, StringComparison.OrdinalIgnoreCase))
-                        {
-                            throw new InvalidOperationException(
-                                $"The managed .NET engine storage backend is fixed at startup. Restart the engine to use '{mutation.Value}'.");
-                        }
-
-                        _runtimeOverrides.Remove(StorageBackendKey);
-                        break;
                     case QrzXmlUsernameKey:
                         ApplyStringOverrideNoLock(QrzXmlUsernameKey, mutation, value => _qrzXmlUsername = NormalizeOptional(value));
                         RebuildLookupCoordinatorNoLock();
@@ -1391,12 +1597,12 @@ internal sealed class ManagedEngineState
             if (normalizedKeys.Length == 0)
             {
                 _runtimeOverrides.Clear();
-                _qrzXmlUsername = NormalizeOptional(_persistedSetup.QrzXmlUsername);
-                _qrzXmlPassword = NormalizeOptional(_persistedSetup.QrzXmlPassword);
+                _qrzXmlUsername = _baseQrzXmlUsername;
+                _qrzXmlPassword = _baseQrzXmlPassword;
                 _hasQrzXmlPassword = _qrzXmlPassword is not null;
-                _qrzLogbookApiKey = NormalizeOptional(_persistedSetup.QrzLogbookApiKey);
+                _qrzLogbookApiKey = _baseQrzLogbookApiKey;
                 _hasQrzLogbookApiKey = _qrzLogbookApiKey is not null;
-                _rigControl = _persistedSetup.RigControl?.Clone();
+                _rigControl = _baseRigControl?.Clone();
                 RebuildLookupCoordinatorNoLock();
                 if (_ownsSyncEngine)
                 {
@@ -1409,22 +1615,19 @@ internal sealed class ManagedEngineState
                 {
                     switch (key)
                     {
-                        case StorageBackendKey:
-                            _runtimeOverrides.Remove(StorageBackendKey);
-                            break;
                         case QrzXmlUsernameKey:
-                            _qrzXmlUsername = NormalizeOptional(_persistedSetup.QrzXmlUsername);
+                            _qrzXmlUsername = _baseQrzXmlUsername;
                             _runtimeOverrides.Remove(QrzXmlUsernameKey);
                             RebuildLookupCoordinatorNoLock();
                             break;
                         case QrzXmlPasswordKey:
-                            _qrzXmlPassword = NormalizeOptional(_persistedSetup.QrzXmlPassword);
+                            _qrzXmlPassword = _baseQrzXmlPassword;
                             _hasQrzXmlPassword = _qrzXmlPassword is not null;
                             _runtimeOverrides.Remove(QrzXmlPasswordKey);
                             RebuildLookupCoordinatorNoLock();
                             break;
                         case QrzLogbookApiKeyKey:
-                            _qrzLogbookApiKey = NormalizeOptional(_persistedSetup.QrzLogbookApiKey);
+                            _qrzLogbookApiKey = _baseQrzLogbookApiKey;
                             _hasQrzLogbookApiKey = _qrzLogbookApiKey is not null;
                             _runtimeOverrides.Remove(QrzLogbookApiKeyKey);
                             if (_ownsSyncEngine)
@@ -1433,7 +1636,7 @@ internal sealed class ManagedEngineState
                             }
                             break;
                         case RigEnabledKey:
-                            _rigControl = _persistedSetup.RigControl?.Clone();
+                            _rigControl = _baseRigControl?.Clone();
                             _runtimeOverrides.Remove(RigEnabledKey);
                             break;
                         default:
@@ -1472,8 +1675,8 @@ internal sealed class ManagedEngineState
             StationProfile = persistedProfile,
             StationProfileCount = (uint)_stationProfiles.Count,
             IsFirstRun = !File.Exists(_configPath),
-            HasQrzXmlPassword = !string.IsNullOrWhiteSpace(_persistedSetup.QrzXmlPassword),
-            HasQrzLogbookApiKey = !string.IsNullOrWhiteSpace(_persistedSetup.QrzLogbookApiKey),
+            HasQrzXmlPassword = _hasQrzXmlPassword,
+            HasQrzLogbookApiKey = _hasQrzLogbookApiKey,
             PersistenceDescription = isSqlite ? PersistenceStepDescriptionSqlite : PersistenceStepDescription,
             PersistenceLabel = PersistenceStepLabel,
             PersistenceContractExplicit = true,
@@ -1484,9 +1687,9 @@ internal sealed class ManagedEngineState
 #pragma warning restore CS0612
         status.PersistenceStepEnabled = isSqlite;
 
-        if (!string.IsNullOrWhiteSpace(_persistedSetup.QrzXmlUsername))
+        if (!string.IsNullOrWhiteSpace(_qrzXmlUsername))
         {
-            status.QrzXmlUsername = _persistedSetup.QrzXmlUsername;
+            status.QrzXmlUsername = _qrzXmlUsername;
         }
 
         if (!string.IsNullOrWhiteSpace(_persistedSetup.ActiveProfileId))
@@ -1565,8 +1768,8 @@ internal sealed class ManagedEngineState
             new SetupWizardStepStatus
             {
                 Step = SetupWizardStep.QrzIntegration,
-                Complete = !string.IsNullOrWhiteSpace(_persistedSetup.QrzXmlUsername)
-                    && !string.IsNullOrWhiteSpace(_persistedSetup.QrzXmlPassword),
+                Complete = !string.IsNullOrWhiteSpace(_qrzXmlUsername)
+                    && _hasQrzXmlPassword,
             },
             new SetupWizardStepStatus
             {
@@ -1627,8 +1830,9 @@ internal sealed class ManagedEngineState
 
     private StationProfileRecord SaveStationProfileNoLock(string profileId, StationProfile profile, bool makeActive)
     {
-        var normalizedId = NormalizeProfileIdOrDefault(profileId, profile.ProfileName, profile.StationCallsign);
-        var serialized = ProtoJsonFormatter.Format(profile.Clone());
+        var normalizedProfile = NormalizeStationProfile(profile);
+        var normalizedId = NormalizeProfileIdOrDefault(profileId, normalizedProfile.ProfileName, normalizedProfile.StationCallsign);
+        var serialized = ProtoJsonFormatter.Format(normalizedProfile);
         var existing = _stationProfiles.FirstOrDefault(entry => string.Equals(entry.ProfileId, normalizedId, StringComparison.Ordinal));
         if (existing is null)
         {
@@ -1755,7 +1959,6 @@ internal sealed class ManagedEngineState
         {
             qso.SyncStatus = SyncStatus.LocalOnly;
             response.SyncSuccess = false;
-            response.SyncError = "Managed engine queued the QSO locally only.";
             return;
         }
 
@@ -1767,10 +1970,21 @@ internal sealed class ManagedEngineState
             return;
         }
 
-        qso.SyncStatus = SyncStatus.Synced;
-        qso.QrzLogid = $"managed-{Guid.NewGuid():N}";
-        response.QrzLogid = qso.QrzLogid;
-        response.SyncSuccess = true;
+        try
+        {
+            var logid = Sync((_syncEngine ?? throw new InvalidOperationException("QRZ logbook sync is unavailable."))
+                .UploadSingleQsoAsync(_storage.Logbook, qso));
+            qso.SyncStatus = SyncStatus.Synced;
+            qso.QrzLogid = logid;
+            response.QrzLogid = logid;
+            response.SyncSuccess = true;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            qso.SyncStatus = SyncStatus.LocalOnly;
+            response.SyncSuccess = false;
+            response.SyncError = ex.Message;
+        }
     }
 
     private void ApplySyncFlagsNoLock(QsoRecord qso, bool syncToQrz, UpdateQsoResponse response)
@@ -1783,25 +1997,29 @@ internal sealed class ManagedEngineState
             }
 
             response.SyncSuccess = false;
-            response.SyncError = "Managed engine updated the QSO locally only.";
             return;
         }
 
         if (!_hasQrzLogbookApiKey)
         {
-            qso.SyncStatus = SyncStatus.Modified;
             response.SyncSuccess = false;
             response.SyncError = "QRZ logbook is not configured.";
             return;
         }
 
-        qso.SyncStatus = SyncStatus.Synced;
-        if (!qso.HasQrzLogid)
+        try
         {
-            qso.QrzLogid = $"managed-{Guid.NewGuid():N}";
+            var logid = Sync((_syncEngine ?? throw new InvalidOperationException("QRZ logbook sync is unavailable."))
+                .UploadSingleQsoAsync(_storage.Logbook, qso));
+            qso.SyncStatus = SyncStatus.Synced;
+            qso.QrzLogid = logid;
+            response.SyncSuccess = true;
         }
-
-        response.SyncSuccess = true;
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            response.SyncSuccess = false;
+            response.SyncError = ex.Message;
+        }
     }
 
     private void RebuildLookupCoordinatorNoLock()
@@ -1898,14 +2116,6 @@ internal sealed class ManagedEngineState
         [
             new RuntimeConfigDefinition
             {
-                Key = StorageBackendKey,
-                Label = "Storage backend",
-                Description = "Active storage backend for this engine process. Change it through startup configuration rather than runtime mutations.",
-                Kind = RuntimeConfigValueKind.String,
-                AllowedValues = { "memory", "sqlite" },
-            },
-            new RuntimeConfigDefinition
-            {
                 Key = QrzXmlUsernameKey,
                 Label = "QRZ XML username",
                 Description = "Managed-engine sample QRZ XML username.",
@@ -1934,6 +2144,7 @@ internal sealed class ManagedEngineState
                 Description = "Enable the managed sample rig-control status responses.",
                 Kind = RuntimeConfigValueKind.Boolean,
                 AllowedValues = { "true", "false" },
+                DefaultValue = "false",
             }
         ];
     }
@@ -1972,15 +2183,20 @@ internal sealed class ManagedEngineState
     {
         return
         [
-            BuildRuntimeValue(StorageBackendKey, _storage.BackendName, overridden: _runtimeOverrides.ContainsKey(StorageBackendKey), secret: false, redacted: false),
-            BuildRuntimeValue(QrzXmlUsernameKey, _qrzXmlUsername, overridden: _runtimeOverrides.ContainsKey(QrzXmlUsernameKey), secret: false, redacted: false),
-            BuildRuntimeValue(QrzXmlPasswordKey, _hasQrzXmlPassword ? "***" : null, overridden: _runtimeOverrides.ContainsKey(QrzXmlPasswordKey), secret: true, redacted: _hasQrzXmlPassword),
-            BuildRuntimeValue(QrzLogbookApiKeyKey, _hasQrzLogbookApiKey ? "***" : null, overridden: _runtimeOverrides.ContainsKey(QrzLogbookApiKeyKey), secret: true, redacted: _hasQrzLogbookApiKey),
-            BuildRuntimeValue(RigEnabledKey, (_rigControl?.Enabled ?? false) ? "TRUE" : "FALSE", overridden: _runtimeOverrides.ContainsKey(RigEnabledKey), secret: false, redacted: false),
+            BuildRuntimeValue(QrzXmlUsernameKey, _qrzXmlUsername, _runtimeOverrides.ContainsKey(QrzXmlUsernameKey), secret: false, redacted: false, hasDefault: false),
+            BuildRuntimeValue(QrzXmlPasswordKey, _hasQrzXmlPassword ? "***" : null, _runtimeOverrides.ContainsKey(QrzXmlPasswordKey), secret: true, redacted: _hasQrzXmlPassword, hasDefault: false),
+            BuildRuntimeValue(QrzLogbookApiKeyKey, _hasQrzLogbookApiKey ? "***" : null, _runtimeOverrides.ContainsKey(QrzLogbookApiKeyKey), secret: true, redacted: _hasQrzLogbookApiKey, hasDefault: false),
+            BuildRuntimeValue(RigEnabledKey, (_rigControl?.Enabled ?? false) ? "TRUE" : "FALSE", _runtimeOverrides.ContainsKey(RigEnabledKey), secret: false, redacted: false, hasDefault: _rigControl is null),
         ];
     }
 
-    private static RuntimeConfigValue BuildRuntimeValue(string key, string? value, bool overridden, bool secret, bool redacted)
+    private static RuntimeConfigValue BuildRuntimeValue(
+        string key,
+        string? value,
+        bool overridden,
+        bool secret,
+        bool redacted,
+        bool hasDefault)
     {
         return new RuntimeConfigValue
         {
@@ -1990,6 +2206,13 @@ internal sealed class ManagedEngineState
             Overridden = overridden,
             Secret = secret,
             Redacted = redacted,
+            Source = overridden
+                ? RuntimeConfigValueSource.RuntimeOverride
+                : hasDefault
+                    ? RuntimeConfigValueSource.Default
+                    : string.IsNullOrWhiteSpace(value)
+                        ? RuntimeConfigValueSource.Unspecified
+                        : RuntimeConfigValueSource.BaseConfig,
         };
     }
 
@@ -2030,6 +2253,111 @@ internal sealed class ManagedEngineState
         });
     }
 
+    private void RepairLegacyQrzLogids()
+    {
+        var qsos = Sync(_storage.Logbook.ListQsosAsync(new QsoListQuery
+        {
+            DeletedFilter = QsoRipper.Engine.Storage.DeletedRecordsFilter.All,
+        })).Select(static qso => qso.Clone()).ToList();
+
+        foreach (var qso in qsos)
+        {
+            if (!string.IsNullOrWhiteSpace(qso.QrzLogid))
+            {
+                continue;
+            }
+
+            var legacyLogid = GetLegacyQrzLogid(qso);
+            if (legacyLogid is null)
+            {
+                continue;
+            }
+
+            qso.QrzLogid = legacyLogid;
+            qso.ExtraFields.Remove("APP_QRZLOG_LOGID");
+            qso.ExtraFields.Remove("APP_QRZ_LOGID");
+            Sync(_storage.Logbook.UpdateQsoAsync(qso));
+        }
+
+        foreach (var group in qsos
+                     .Where(static qso => !string.IsNullOrWhiteSpace(qso.QrzLogid))
+                     .GroupBy(static qso => qso.QrzLogid, StringComparer.Ordinal)
+                     .Where(static group => group.Count() > 1))
+        {
+            var rows = group
+                .OrderBy(static qso => qso.CreatedAt?.Seconds ?? long.MaxValue)
+                .ThenBy(static qso => qso.LocalId, StringComparer.Ordinal)
+                .ToList();
+            var keeper = rows[0].Clone();
+            foreach (var victim in rows.Skip(1))
+            {
+                MergeRepairFields(keeper, victim);
+                Sync(_storage.Logbook.DeleteQsoAsync(victim.LocalId));
+            }
+
+            Sync(_storage.Logbook.UpdateQsoAsync(keeper));
+        }
+    }
+
+    private static string? GetLegacyQrzLogid(QsoRecord qso)
+    {
+        foreach (var key in new[] { "APP_QRZLOG_LOGID", "APP_QRZ_LOGID" })
+        {
+            if (qso.ExtraFields.TryGetValue(key, out var value) && NormalizeOptional(value) is { } logid)
+            {
+                return logid;
+            }
+        }
+
+        return null;
+    }
+
+    private static void MergeRepairFields(QsoRecord keeper, QsoRecord victim)
+    {
+        if (string.IsNullOrWhiteSpace(keeper.QrzBookid) && NormalizeOptional(victim.QrzBookid) is { } bookid)
+        {
+            keeper.QrzBookid = bookid;
+        }
+
+        if (string.IsNullOrWhiteSpace(keeper.Notes) && NormalizeOptional(victim.Notes) is { } notes)
+        {
+            keeper.Notes = notes;
+        }
+
+        if (string.IsNullOrWhiteSpace(keeper.Comment) && NormalizeOptional(victim.Comment) is { } comment)
+        {
+            keeper.Comment = comment;
+        }
+
+        if (string.IsNullOrWhiteSpace(keeper.Submode) && NormalizeOptional(victim.Submode) is { } submode)
+        {
+            keeper.Submode = submode;
+        }
+
+        if (string.IsNullOrWhiteSpace(keeper.WorkedGrid) && NormalizeOptional(victim.WorkedGrid) is { } grid)
+        {
+            keeper.WorkedGrid = grid;
+        }
+
+        if (string.IsNullOrWhiteSpace(keeper.WorkedOperatorName) && NormalizeOptional(victim.WorkedOperatorName) is { } name)
+        {
+            keeper.WorkedOperatorName = name;
+        }
+
+        keeper.RstSent ??= victim.RstSent?.Clone();
+        keeper.RstReceived ??= victim.RstReceived?.Clone();
+        foreach (var pair in victim.ExtraFields)
+        {
+            if (!pair.Key.Equals("APP_QRZLOG_LOGID", StringComparison.Ordinal)
+                && !pair.Key.Equals("APP_QRZ_LOGID", StringComparison.Ordinal)
+                && !string.IsNullOrEmpty(pair.Value)
+                && !keeper.ExtraFields.ContainsKey(pair.Key))
+            {
+                keeper.ExtraFields[pair.Key] = pair.Value;
+            }
+        }
+    }
+
     private static bool IsStationProfileComplete(StationProfile profile)
     {
         return !string.IsNullOrWhiteSpace(profile.ProfileName)
@@ -2038,11 +2366,24 @@ internal sealed class ManagedEngineState
             && !string.IsNullOrWhiteSpace(profile.Grid);
     }
 
-    private static bool LooksRejected(string value)
+    private static StationProfile NormalizeStationProfile(StationProfile profile)
     {
-        return value.Contains("bad", StringComparison.OrdinalIgnoreCase)
-            || value.Contains("fail", StringComparison.OrdinalIgnoreCase)
-            || value.Contains("reject", StringComparison.OrdinalIgnoreCase);
+        var normalized = profile.Clone();
+        normalized.ProfileName = NormalizeOptional(normalized.ProfileName)
+            ?? throw new InvalidOperationException("Station profile name is required.");
+        normalized.StationCallsign = NormalizeOptional(normalized.StationCallsign)?.ToUpperInvariant()
+            ?? throw new InvalidOperationException("Station callsign is required.");
+        if (!string.IsNullOrWhiteSpace(normalized.OperatorCallsign))
+        {
+            normalized.OperatorCallsign = normalized.OperatorCallsign.Trim().ToUpperInvariant();
+        }
+
+        if (!string.IsNullOrWhiteSpace(normalized.Grid))
+        {
+            normalized.Grid = normalized.Grid.Trim().ToUpperInvariant();
+        }
+
+        return normalized;
     }
 
     private static string? NormalizeOptional(string? value)
@@ -2172,4 +2513,7 @@ internal sealed class ManagedEngineState
 
     /// <summary>Synchronously extracts the result of a <see cref="Task{T}"/>.</summary>
     private static T Sync<T>(Task<T> task) => task.GetAwaiter().GetResult();
+
+    /// <summary>Synchronously awaits a <see cref="Task"/>.</summary>
+    private static void Sync(Task task) => task.GetAwaiter().GetResult();
 }

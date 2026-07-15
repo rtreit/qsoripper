@@ -43,6 +43,200 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
+    public async Task Startup_repairs_legacy_qrz_logids_and_collapses_duplicates()
+    {
+        var storage = new MemoryStorage();
+        var older = new QsoRecord
+        {
+            LocalId = "older",
+            StationCallsign = "K7RND",
+            WorkedCallsign = "W1AW",
+            Band = Band._20M,
+            Mode = Mode.Ft8,
+            UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture)),
+            CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture)),
+        };
+        older.ExtraFields["APP_QRZLOG_LOGID"] = "12345";
+        var newer = older.Clone();
+        newer.LocalId = "newer";
+        newer.CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-02T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        newer.QrzLogid = "12345";
+        newer.Notes = "preserve me";
+
+        await storage.Logbook.InsertQsoAsync(older);
+        await storage.Logbook.InsertQsoAsync(newer);
+
+        _ = new ManagedEngineState(Path.Combine(_tempDirectory, "config.toml"), storage);
+
+        var saved = Assert.Single(await storage.Logbook.ListQsosAsync(new QsoRipper.Engine.Storage.QsoListQuery
+        {
+            DeletedFilter = QsoRipper.Engine.Storage.DeletedRecordsFilter.All,
+        }));
+        Assert.Equal("older", saved.LocalId);
+        Assert.Equal("12345", saved.QrzLogid);
+        Assert.Equal("preserve me", saved.Notes);
+        Assert.DoesNotContain("APP_QRZLOG_LOGID", saved.ExtraFields.Keys);
+    }
+
+    [Fact]
+    public async Task Station_profile_service_validates_profiles_and_distinguishes_delete_failures()
+    {
+        var state = CreateState();
+        var service = new ManagedStationProfileGrpcService(state);
+        var context = new TestServerCallContext();
+
+        var invalid = await Assert.ThrowsAsync<RpcException>(() => service.SaveStationProfile(
+            new SaveStationProfileRequest { Profile = new StationProfile { StationCallsign = "K7RND" } },
+            context));
+        Assert.Equal(StatusCode.InvalidArgument, invalid.StatusCode);
+
+        var missing = await Assert.ThrowsAsync<RpcException>(() => service.DeleteStationProfile(
+            new DeleteStationProfileRequest { ProfileId = "missing" },
+            context));
+        Assert.Equal(StatusCode.NotFound, missing.StatusCode);
+
+        var saved = await service.SaveStationProfile(
+            new SaveStationProfileRequest
+            {
+                MakeActive = true,
+                Profile = new StationProfile
+                {
+                    ProfileName = " Home ",
+                    StationCallsign = " k7rnd ",
+                },
+            },
+            context);
+        Assert.Equal("Home", saved.Profile.Profile.ProfileName);
+        Assert.Equal("K7RND", saved.Profile.Profile.StationCallsign);
+
+        var active = await Assert.ThrowsAsync<RpcException>(() => service.DeleteStationProfile(
+            new DeleteStationProfileRequest { ProfileId = saved.Profile.ProfileId },
+            context));
+        Assert.Equal(StatusCode.FailedPrecondition, active.StatusCode);
+    }
+
+    [Fact]
+    public async Task Setup_service_rejects_unknown_wizard_steps()
+    {
+        var service = new ManagedSetupGrpcService(CreateState());
+
+        var exception = await Assert.ThrowsAsync<RpcException>(() => service.ValidateSetupStep(
+            new ValidateSetupStepRequest { Step = (SetupWizardStep)999 },
+            new TestServerCallContext()));
+
+        Assert.Equal(StatusCode.InvalidArgument, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task Setup_credential_tests_use_the_live_test_adapter()
+    {
+        var tester = new FakeQrzCredentialTester();
+        var state = new ManagedEngineState(
+            Path.Combine(_tempDirectory, "config.toml"),
+            new MemoryStorage(),
+            lookupCoordinator: null,
+            contestCalendarMonitor: null,
+            rigControlMonitor: null,
+            spaceWeatherMonitor: null,
+            syncEngine: null,
+            currentPersistenceLocation: null,
+            loadedPersistedSetup: null,
+            qrzCredentialTester: tester);
+        var service = new ManagedSetupGrpcService(state);
+        var context = new TestServerCallContext();
+
+        var xml = await service.TestQrzCredentials(
+            new TestQrzCredentialsRequest { QrzXmlUsername = "K7RND", QrzXmlPassword = "secret" },
+            context);
+        var logbook = await service.TestQrzLogbookCredentials(
+            new TestQrzLogbookCredentialsRequest { ApiKey = "key" },
+            context);
+
+        Assert.True(xml.Success);
+        Assert.True(logbook.Success);
+        Assert.Equal("K7RND", logbook.LogbookOwner);
+        Assert.Equal(42U, logbook.QsoCount);
+        Assert.Equal(1, tester.XmlCalls);
+        Assert.Equal(1, tester.LogbookCalls);
+    }
+
+    [Fact]
+    public async Task Rig_connection_test_rejects_an_invalid_request_port()
+    {
+        var service = new ManagedRigControlGrpcService(CreateState());
+
+        var exception = await Assert.ThrowsAsync<RpcException>(() => service.TestRigConnection(
+            new TestRigConnectionRequest { Host = "example.invalid", Port = 70_000 },
+            new TestServerCallContext()));
+
+        Assert.Equal(StatusCode.InvalidArgument, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task Services_reject_unknown_enum_filters_and_report_missing_delete()
+    {
+        var state = CreateState();
+        var context = new TestServerCallContext();
+        var logbook = new ManagedLogbookGrpcService(state);
+
+        var missingDelete = await Assert.ThrowsAsync<RpcException>(() => logbook.DeleteQso(
+            new DeleteQsoRequest { LocalId = "missing" },
+            context));
+        Assert.Equal(StatusCode.NotFound, missingDelete.StatusCode);
+
+        var invalidList = await Assert.ThrowsAsync<RpcException>(() => logbook.ListQsos(
+            new ListQsosRequest { BandFilter = (Band)999 },
+            new TestServerStreamWriter<ListQsosResponse>(),
+            context));
+        Assert.Equal(StatusCode.InvalidArgument, invalidList.StatusCode);
+
+        var contests = new ManagedContestCalendarGrpcService(state);
+        var invalidContest = await Assert.ThrowsAsync<RpcException>(() => contests.GetActiveContests(
+            new GetActiveContestsRequest { Band = (Band)999 },
+            context));
+        Assert.Equal(StatusCode.InvalidArgument, invalidContest.StatusCode);
+    }
+
+    [Fact]
+    public async Task Sync_preflight_fails_before_streaming_when_qrz_is_unconfigured()
+    {
+        var writer = new TestServerStreamWriter<SyncWithQrzResponse>();
+        var service = new ManagedLogbookGrpcService(CreateState());
+
+        var exception = await Assert.ThrowsAsync<RpcException>(() => service.SyncWithQrz(
+            new SyncWithQrzRequest(),
+            writer,
+            new TestServerCallContext()));
+
+        Assert.Equal(StatusCode.FailedPrecondition, exception.StatusCode);
+        Assert.Empty(writer.Messages);
+    }
+
+    [Fact]
+    public async Task Sync_stream_emits_initial_and_terminal_lifecycle_messages()
+    {
+        var state = new ManagedEngineState(
+            Path.Combine(_tempDirectory, "config.toml"),
+            new MemoryStorage(),
+            lookupCoordinator: null,
+            rigControlMonitor: null,
+            spaceWeatherMonitor: null,
+            syncEngine: new QrzSyncEngine(new FakeQrzLogbookApi()));
+        state.SaveSetup(new SaveSetupRequest { QrzLogbookApiKey = "api-key" });
+        var writer = new TestServerStreamWriter<SyncWithQrzResponse>();
+        var service = new ManagedLogbookGrpcService(state);
+
+        await service.SyncWithQrz(
+            new SyncWithQrzRequest(),
+            writer,
+            new TestServerCallContext());
+
+        Assert.Equal(2, writer.Messages.Count);
+        Assert.False(writer.Messages[0].Complete);
+        Assert.True(writer.Messages[1].Complete);
+    }
+
+    [Fact]
     public void Save_setup_ignores_persistence_paths_and_redacts_runtime_values()
     {
         var state = CreateState();
@@ -84,16 +278,23 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.NotEmpty(profiles.ActiveProfileId);
         Assert.Contains(response.Status.Warnings, warning => warning.Contains("in-memory logbook", StringComparison.Ordinal));
 
-        var storageValue = runtime.Values.Single(value => value.Key == "QSORIPPER_STORAGE_BACKEND");
         var passwordValue = runtime.Values.Single(value => value.Key == "QSORIPPER_QRZ_XML_PASSWORD");
-        Assert.Equal("memory", storageValue.DisplayValue);
+        var rigDefinition = runtime.Definitions.Single(value => value.Key == "QSORIPPER_RIGCTLD_ENABLED");
+        var rigValue = runtime.Values.Single(value => value.Key == "QSORIPPER_RIGCTLD_ENABLED");
+        Assert.DoesNotContain(runtime.Definitions, value => value.Key == "QSORIPPER_STORAGE_BACKEND");
+        Assert.DoesNotContain(runtime.Values, value => value.Key == "QSORIPPER_STORAGE_BACKEND");
         Assert.Equal("In-memory logbook", runtime.PersistenceSummary);
         Assert.True(string.IsNullOrWhiteSpace(runtime.PersistenceLocation));
         Assert.DoesNotContain(runtime.Values, value => value.Key == "QSORIPPER_SQLITE_PATH");
         Assert.Equal("***", passwordValue.DisplayValue);
         Assert.True(passwordValue.Secret);
         Assert.True(passwordValue.Redacted);
+        Assert.Equal(RuntimeConfigValueSource.BaseConfig, passwordValue.Source);
+        Assert.Equal("false", rigDefinition.DefaultValue);
+        Assert.Equal(RuntimeConfigValueSource.Default, rigValue.Source);
         Assert.DoesNotContain("log_file_path", persistedConfig, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("secret", persistedConfig, StringComparison.Ordinal);
+        Assert.DoesNotContain("api-key", persistedConfig, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -235,6 +436,113 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
+    public void Per_operation_qrz_sync_uses_the_qrz_api_and_persists_its_logid()
+    {
+        var storage = new MemoryStorage();
+        var fakeApi = new FakeQrzLogbookApi
+        {
+            UploadValidator = async qso =>
+                await storage.GetQsoAsync(qso.LocalId).ConfigureAwait(false) is not null,
+        };
+        var state = new ManagedEngineState(
+            Path.Combine(_tempDirectory, "config.toml"),
+            storage,
+            lookupCoordinator: null,
+            rigControlMonitor: null,
+            spaceWeatherMonitor: null,
+            syncEngine: new QrzSyncEngine(fakeApi));
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzLogbookApiKey = "api-key",
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87",
+            },
+        });
+
+        var response = state.LogQso(new LogQsoRequest
+        {
+            SyncToQrz = true,
+            Qso = new QsoRecord
+            {
+                WorkedCallsign = "W1AW",
+                Band = Band._20M,
+                Mode = Mode.Cw,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+
+        var stored = state.GetQso(response.LocalId)!;
+        Assert.Equal(1, fakeApi.InsertCalls);
+        Assert.Equal("FAKE-1", response.QrzLogid);
+        Assert.Equal("FAKE-1", stored.QrzLogid);
+        Assert.Equal(SyncStatus.Synced, stored.SyncStatus);
+        Assert.True(fakeApi.UploadValidationPassed);
+    }
+
+    [Fact]
+    public void Per_operation_update_persists_local_edit_before_calling_qrz()
+    {
+        var storage = new MemoryStorage();
+        var fakeApi = new FakeQrzLogbookApi();
+        var state = new ManagedEngineState(
+            Path.Combine(_tempDirectory, "config.toml"),
+            storage,
+            lookupCoordinator: null,
+            rigControlMonitor: null,
+            spaceWeatherMonitor: null,
+            syncEngine: new QrzSyncEngine(fakeApi));
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzLogbookApiKey = "api-key",
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+            },
+        });
+        var logged = state.LogQso(new LogQsoRequest
+        {
+            Qso = new QsoRecord
+            {
+                WorkedCallsign = "W1AW",
+                Band = Band._20M,
+                Mode = Mode.Cw,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+        var edit = state.GetQso(logged.LocalId)!;
+        edit.Comment = "persist before remote";
+        fakeApi.UploadValidator = async qso =>
+            (await storage.GetQsoAsync(qso.LocalId).ConfigureAwait(false))?.Comment == "persist before remote";
+
+        var response = state.UpdateQso(new UpdateQsoRequest { Qso = edit, SyncToQrz = true });
+
+        Assert.True(response.SyncSuccess);
+        Assert.True(fakeApi.UploadValidationPassed);
+        Assert.Equal("persist before remote", state.GetQso(logged.LocalId)!.Comment);
+    }
+
+    [Fact]
+    public void Update_without_qrz_configuration_preserves_local_only_status()
+    {
+        var state = CreateState();
+        EnsureStationConfigured(state);
+        var logged = LogSampleQso(state, "W1AW");
+        var edit = state.GetQso(logged.LocalId)!;
+        edit.Comment = "offline edit";
+
+        var response = state.UpdateQso(new UpdateQsoRequest { Qso = edit, SyncToQrz = true });
+
+        Assert.False(response.SyncSuccess);
+        Assert.True(response.HasSyncError);
+        Assert.Equal(SyncStatus.LocalOnly, state.GetQso(logged.LocalId)!.SyncStatus);
+    }
+
+    [Fact]
     public void Save_setup_normalizes_unspecified_conflict_policy_to_flag_for_review()
     {
         var state = CreateState();
@@ -286,7 +594,7 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
-    public void Apply_runtime_config_rejects_non_memory_storage()
+    public void Apply_runtime_config_rejects_unadvertised_storage_key()
     {
         var state = CreateState();
 
@@ -300,7 +608,7 @@ public sealed class ManagedEngineStateTests : IDisposable
             }
         ]));
 
-        Assert.Equal("The managed .NET engine storage backend is fixed at startup. Restart the engine to use 'sqlite'.", exception.Message);
+        Assert.Equal("Unsupported runtime config key: QSORIPPER_STORAGE_BACKEND", exception.Message);
     }
 
     [Fact]
@@ -356,14 +664,14 @@ public sealed class ManagedEngineStateTests : IDisposable
         var context = restarted.GetActiveStationContext();
 
         Assert.Equal("k7rnd", status.QrzXmlUsername);
-        Assert.True(status.HasQrzXmlPassword);
-        Assert.True(status.HasQrzLogbookApiKey);
+        Assert.False(status.HasQrzXmlPassword);
+        Assert.False(status.HasQrzLogbookApiKey);
         Assert.False(context.HasSessionOverride);
         Assert.Equal("K7RND", context.EffectiveActiveProfile.StationCallsign);
         Assert.Equal(
             "k7rnd",
             runtime.Values.Single(value => value.Key == "QSORIPPER_QRZ_XML_USERNAME").DisplayValue);
-        Assert.True(
+        Assert.False(
             runtime.Values.Single(value => value.Key == "QSORIPPER_QRZ_LOGBOOK_API_KEY").HasValue);
     }
 
@@ -424,6 +732,7 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Contains("station_callsign = \"K7RND\"", persistedConfig, StringComparison.Ordinal);
         Assert.DoesNotContain("runtimeOverrides", persistedConfig, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("sessionOverrideProfileJson", persistedConfig, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("secret", persistedConfig, StringComparison.Ordinal);
         Assert.Equal("k7rnd", status.QrzXmlUsername);
         Assert.True(status.HasQrzXmlPassword);
         Assert.Equal("K7RND", status.StationProfile.StationCallsign);
@@ -481,7 +790,7 @@ public sealed class ManagedEngineStateTests : IDisposable
             Mode = Mode.Ft8
         });
 
-        var response = state.TestRigConnection();
+        var response = state.TestRigConnection(new TestRigConnectionRequest());
 
         Assert.True(response.Success);
         Assert.True(string.IsNullOrEmpty(response.ErrorMessage));
@@ -562,6 +871,22 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Contains(second.Warnings, warning => warning.Contains("duplicate skipped", StringComparison.Ordinal));
         Assert.Equal("K7RND", stored.StationCallsign);
         Assert.Equal("CN87", stored.StationSnapshot.Grid);
+    }
+
+    [Fact]
+    public void Import_adif_treats_empty_rst_fields_as_absent()
+    {
+        var state = CreateState();
+        var payload = Utf8(
+            "<CALL:4>W1AW<STATION_CALLSIGN:5>K7RND<QSO_DATE:8>20260115<TIME_ON:4>1523<BAND:3>20M<MODE:2>CW" +
+            "<RST_SENT:0><RST_RCVD:0><EOR>\n");
+
+        var response = state.ImportAdif(payload, refresh: false);
+        var stored = state.ListQsos(new ListQsosRequest()).Single();
+
+        Assert.Equal(1u, response.RecordsImported);
+        Assert.Null(stored.RstSent);
+        Assert.Null(stored.RstReceived);
     }
 
     [Fact]
@@ -833,7 +1158,7 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
-    public void Update_qso_preserves_fields_not_present_in_partial_update()
+    public void Update_qso_replaces_caller_owned_fields_and_can_clear_values()
     {
         var state = CreateState();
         state.SaveSetup(new SaveSetupRequest
@@ -863,7 +1188,8 @@ public sealed class ManagedEngineStateTests : IDisposable
             }
         });
 
-        // Update with only Comment changed — all other fields should be preserved.
+        // Update is a full replacement of caller-owned fields. Engine-owned
+        // identity, QRZ linkage, timestamps, and station snapshot are preserved.
         var updateResponse = state.UpdateQso(new UpdateQsoRequest
         {
             SyncToQrz = false,
@@ -875,6 +1201,13 @@ public sealed class ManagedEngineStateTests : IDisposable
                 Mode = Mode.Ft8,
                 UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-06-01T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture)),
                 Comment = "Updated comment",
+                WorkedLatitude = 47.5,
+                WorkedLongitude = -122.3,
+                FrequencyRxHz = 14_075_000,
+                OwnerCallsign = "K7RND",
+                QsoComplete = QsoCompletion.Yes,
+                CwDecodeRxWpm = 24,
+                CwDecodeTranscript = "CQ TEST",
             }
         });
 
@@ -883,10 +1216,62 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.True(updateResponse.Success);
         Assert.NotNull(stored);
         Assert.Equal("Updated comment", stored!.Comment);
-        Assert.Equal("59", stored.RstSent?.Raw);
-        Assert.Equal("57", stored.RstReceived?.Raw);
-        Assert.Equal("Initial notes", stored.Notes);
-        Assert.Equal(14_074_000UL, stored.FrequencyHz);
+        Assert.Null(stored.RstSent);
+        Assert.Null(stored.RstReceived);
+        Assert.False(stored.HasNotes);
+        Assert.False(stored.HasFrequencyHz);
+        Assert.Equal(47.5, stored.WorkedLatitude);
+        Assert.Equal(-122.3, stored.WorkedLongitude);
+        Assert.Equal(14_075_000UL, stored.FrequencyRxHz);
+        Assert.Equal("K7RND", stored.OwnerCallsign);
+        Assert.Equal(QsoCompletion.Yes, stored.QsoComplete);
+        Assert.Equal(24u, stored.CwDecodeRxWpm);
+        Assert.Equal("CQ TEST", stored.CwDecodeTranscript);
+    }
+
+    [Fact]
+    public void Log_qso_replaces_caller_owned_identity_and_sync_metadata()
+    {
+        var state = CreateState();
+        state.SaveSetup(new SaveSetupRequest
+        {
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "N7OP",
+                Grid = "CN87",
+            },
+        });
+        var callerCreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2000-01-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
+
+        var response = state.LogQso(new LogQsoRequest
+        {
+            Qso = new QsoRecord
+            {
+                LocalId = "caller-owned-id",
+                StationCallsign = "N0FAKE",
+                WorkedCallsign = " w1aw ",
+                Band = Band._20M,
+                Mode = Mode.Cw,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                CreatedAt = callerCreatedAt,
+                SyncStatus = SyncStatus.Synced,
+                QrzLogid = "caller-logid",
+                QrzBookid = "caller-bookid",
+            },
+        });
+
+        var stored = state.GetQso(response.LocalId)!;
+        Assert.NotEqual("caller-owned-id", stored.LocalId);
+        Assert.Equal("W1AW", stored.WorkedCallsign);
+        Assert.Equal("K7RND", stored.StationCallsign);
+        Assert.Equal("K7RND", stored.StationSnapshot!.StationCallsign);
+        Assert.Equal("N7OP", stored.StationSnapshot.OperatorCallsign);
+        Assert.NotEqual(callerCreatedAt, stored.CreatedAt);
+        Assert.Equal(SyncStatus.LocalOnly, stored.SyncStatus);
+        Assert.False(stored.HasQrzLogid);
+        Assert.False(stored.HasQrzBookid);
     }
 
     [Fact]
@@ -935,7 +1320,7 @@ public sealed class ManagedEngineStateTests : IDisposable
     [Fact]
     public void Soft_delete_with_qrz_logid_queues_remote_delete()
     {
-        var state = CreateState();
+        var state = CreateStateWithSync();
         state.SaveSetup(new SaveSetupRequest
         {
             QrzLogbookApiKey = "test-api-key",
@@ -1010,7 +1395,7 @@ public sealed class ManagedEngineStateTests : IDisposable
         // (with its qrz_logid intact) so the next bulk sync issues REPLACE
         // instead of stranding the local correction. See
         // docs/architecture/engine-specification.md §UpdateQso step 4.
-        var state = CreateState();
+        var state = CreateStateWithSync();
         state.SaveSetup(new SaveSetupRequest
         {
             QrzLogbookApiKey = "test-api-key",
@@ -1072,9 +1457,9 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
-    public void Update_qso_falls_back_to_unique_qrz_logid_when_local_id_misses()
+    public void Update_qso_does_not_fall_back_to_qrz_logid_when_local_id_misses()
     {
-        var state = CreateState();
+        var state = CreateStateWithSync();
         state.SaveSetup(new SaveSetupRequest
         {
             QrzLogbookApiKey = "test-api-key",
@@ -1100,26 +1485,26 @@ public sealed class ManagedEngineStateTests : IDisposable
         var logged = state.GetQso(loggedResp.LocalId)!;
         Assert.False(string.IsNullOrWhiteSpace(logged.QrzLogid));
 
-        var updateResponse = state.UpdateQso(new UpdateQsoRequest
+        var exception = Assert.Throws<KeyNotFoundException>(() => state.UpdateQso(new UpdateQsoRequest
         {
             SyncToQrz = false,
             Qso = new QsoRecord(logged)
             {
                 LocalId = "missing-local-id",
-                Comment = "Recovered via QRZ logid",
+                Comment = "Must not recover via QRZ logid",
             },
-        });
+        }));
 
-        Assert.True(updateResponse.Success);
+        Assert.Contains("missing-local-id", exception.Message, StringComparison.Ordinal);
         var stored = state.GetQso(logged.LocalId);
         Assert.NotNull(stored);
-        Assert.Equal("Recovered via QRZ logid", stored!.Comment);
+        Assert.NotEqual("Must not recover via QRZ logid", stored!.Comment);
     }
 
     [Fact]
     public void Restore_clears_tombstone_and_pending_flag()
     {
-        var state = CreateState();
+        var state = CreateStateWithSync();
         state.SaveSetup(new SaveSetupRequest
         {
             QrzLogbookApiKey = "test-api-key",
@@ -1303,6 +1688,109 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.True(secondSync.Complete);
         Assert.Equal(1u, secondSync.RemoteDeletesPushed);
         Assert.Equal(0u, secondSync.DeletesSkippedRemote);
+    }
+
+    [Fact]
+    public async Task Purge_deleted_qsos_pushes_remote_delete_before_local_hard_delete()
+    {
+        var storage = new MemoryStorage();
+        var fakeApi = new FakeQrzLogbookApi();
+        var state = new ManagedEngineState(
+            Path.Combine(_tempDirectory, "config.toml"),
+            storage,
+            lookupCoordinator: null,
+            rigControlMonitor: null,
+            spaceWeatherMonitor: null,
+            syncEngine: new QrzSyncEngine(fakeApi));
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzLogbookApiKey = "api-key",
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87",
+            },
+        });
+        var logged = state.LogQso(new LogQsoRequest
+        {
+            SyncToQrz = true,
+            Qso = new QsoRecord
+            {
+                WorkedCallsign = "W1AW",
+                Band = Band._20M,
+                Mode = Mode.Cw,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+        state.DeleteQso(logged.LocalId, queueRemoteDelete: true);
+
+        var response = await new ManagedLogbookGrpcService(state).PurgeDeletedQsos(
+            new PurgeDeletedQsosRequest
+            {
+                Confirm = true,
+                IncludePendingRemoteDeletes = true,
+                LocalIds = { logged.LocalId },
+            },
+            null!);
+
+        Assert.Equal(1u, response.RemoteDeletesPushed);
+        Assert.Equal(0u, response.RemoteDeletesFailed);
+        Assert.Equal(1u, response.PurgedCount);
+        Assert.Equal(1, fakeApi.DeleteCalls);
+        Assert.Null(state.GetQso(logged.LocalId));
+    }
+
+    [Fact]
+    public async Task Purge_deleted_qsos_preserves_local_row_when_remote_delete_fails()
+    {
+        var storage = new MemoryStorage();
+        var fakeApi = new FakeQrzLogbookApi { FailDeletes = true };
+        var state = new ManagedEngineState(
+            Path.Combine(_tempDirectory, "config.toml"),
+            storage,
+            lookupCoordinator: null,
+            rigControlMonitor: null,
+            spaceWeatherMonitor: null,
+            syncEngine: new QrzSyncEngine(fakeApi));
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzLogbookApiKey = "api-key",
+            StationProfile = new StationProfile
+            {
+                ProfileName = "Home",
+                StationCallsign = "K7RND",
+                OperatorCallsign = "K7RND",
+                Grid = "CN87",
+            },
+        });
+        var logged = state.LogQso(new LogQsoRequest
+        {
+            SyncToQrz = true,
+            Qso = new QsoRecord
+            {
+                WorkedCallsign = "W1AW",
+                Band = Band._20M,
+                Mode = Mode.Cw,
+                UtcTimestamp = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            },
+        });
+        state.DeleteQso(logged.LocalId, queueRemoteDelete: true);
+
+        var response = await new ManagedLogbookGrpcService(state).PurgeDeletedQsos(
+            new PurgeDeletedQsosRequest
+            {
+                Confirm = true,
+                IncludePendingRemoteDeletes = true,
+                LocalIds = { logged.LocalId },
+            },
+            null!);
+
+        Assert.Equal(0u, response.RemoteDeletesPushed);
+        Assert.Equal(1u, response.RemoteDeletesFailed);
+        Assert.Equal(0u, response.PurgedCount);
+        Assert.NotNull(state.GetQso(logged.LocalId));
     }
 
     private static void EnsureStationConfigured(ManagedEngineState state)
@@ -1897,6 +2385,35 @@ public sealed class ManagedEngineStateTests : IDisposable
         public RigSnapshot GetSnapshot() => factory();
     }
 
+    private sealed class FakeQrzCredentialTester : IQrzCredentialTester
+    {
+        public int XmlCalls { get; private set; }
+
+        public int LogbookCalls { get; private set; }
+
+        public Task<TestQrzCredentialsResponse> TestXmlCredentialsAsync(
+            string username,
+            string password,
+            CancellationToken cancellationToken)
+        {
+            XmlCalls++;
+            return Task.FromResult(new TestQrzCredentialsResponse { Success = true });
+        }
+
+        public Task<TestQrzLogbookCredentialsResponse> TestLogbookCredentialsAsync(
+            string apiKey,
+            CancellationToken cancellationToken)
+        {
+            LogbookCalls++;
+            return Task.FromResult(new TestQrzLogbookCredentialsResponse
+            {
+                Success = true,
+                LogbookOwner = "K7RND",
+                QsoCount = 42,
+            });
+        }
+    }
+
     private sealed class TestAsyncStreamReader<T>(IReadOnlyList<T> items)
         : IAsyncStreamReader<T>
     {
@@ -1909,6 +2426,19 @@ public sealed class ManagedEngineStateTests : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             _index++;
             return Task.FromResult(_index < items.Count);
+        }
+    }
+
+    private sealed class TestServerStreamWriter<T> : IServerStreamWriter<T>
+    {
+        public List<T> Messages { get; } = [];
+
+        public WriteOptions? WriteOptions { get; set; }
+
+        public Task WriteAsync(T message)
+        {
+            Messages.Add(message);
+            return Task.CompletedTask;
         }
     }
 
@@ -1945,31 +2475,69 @@ public sealed class ManagedEngineStateTests : IDisposable
     {
         private int _logIdCounter;
 
+        public int InsertCalls { get; private set; }
+
+        public int ReplaceCalls { get; private set; }
+
+        public int UpdateCalls { get; private set; }
+
+        public int DeleteCalls { get; private set; }
+
+        public bool FailDeletes { get; init; }
+
+        public Func<QsoRecord, Task<bool>>? UploadValidator { get; set; }
+
+        public bool UploadValidationPassed { get; private set; }
+
         public Task<List<QsoRecord>> FetchQsosAsync(string? sinceDateYmd) =>
             Task.FromResult(new List<QsoRecord>());
 
-        public Task<string> UploadQsoAsync(QsoRecord qso, string? bookOwner = null)
+        public async Task<string> UploadQsoAsync(QsoRecord qso, string? bookOwner = null)
         {
+            InsertCalls++;
+            if (UploadValidator is not null)
+            {
+                UploadValidationPassed = await UploadValidator(qso).ConfigureAwait(false);
+            }
+
             var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
-            return Task.FromResult(logId);
+            return logId;
         }
 
-        public Task<string> UploadQsoWithReplaceAsync(QsoRecord qso, string? bookOwner = null)
+        public async Task<string> UploadQsoWithReplaceAsync(QsoRecord qso, string? bookOwner = null)
         {
+            ReplaceCalls++;
+            if (UploadValidator is not null)
+            {
+                UploadValidationPassed = await UploadValidator(qso).ConfigureAwait(false);
+            }
+
             var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
-            return Task.FromResult(logId);
+            return logId;
         }
 
-        public Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null)
+        public async Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null)
         {
+            UpdateCalls++;
+            if (UploadValidator is not null)
+            {
+                UploadValidationPassed = await UploadValidator(qso).ConfigureAwait(false);
+            }
+
             var logId = $"FAKE-{Interlocked.Increment(ref _logIdCounter)}";
-            return Task.FromResult(logId);
+            return logId;
         }
 
         public Task<QrzLogbookStatus> GetStatusAsync() =>
             Task.FromResult(new QrzLogbookStatus("K7RND", (uint)_logIdCounter));
 
-        public Task DeleteQsoAsync(string logid) => Task.CompletedTask;
+        public Task DeleteQsoAsync(string logid)
+        {
+            DeleteCalls++;
+            return FailDeletes
+                ? Task.FromException(new QrzLogbookException("remote delete failed"))
+                : Task.CompletedTask;
+        }
     }
 
     private sealed class FakeMalformedQrzLogbookApi : IQrzLogbookApi

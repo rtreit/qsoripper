@@ -976,9 +976,14 @@ internal static class ManagedAdifCodec
         return false;
     }
 
-    private static RstReport ParseRstReport(string raw)
+    private static RstReport? ParseRstReport(string raw)
     {
         var trimmed = raw.Trim();
+        if (trimmed.Length == 0)
+        {
+            return null;
+        }
+
         return new RstReport
         {
             Readability = ParseRstDigit(trimmed, 0, 1, 5),

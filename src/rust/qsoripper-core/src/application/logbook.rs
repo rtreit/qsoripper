@@ -2,8 +2,7 @@
 
 use crate::domain::qso::new_local_id;
 use crate::domain::station::{
-    materialize_station_snapshot_for_create, materialize_station_snapshot_for_update,
-    station_snapshot_has_values,
+    materialize_station_snapshot_for_create, station_snapshot_has_values,
 };
 use crate::proto::qsoripper::domain::{Band, Mode, QsoRecord, StationProfile, SyncStatus};
 use crate::storage::{
@@ -83,18 +82,26 @@ impl LogbookEngine {
         mut qso: QsoRecord,
         active_station_profile: Option<&crate::proto::qsoripper::domain::StationProfile>,
     ) -> Result<QsoRecord, LogbookError> {
-        materialize_station_snapshot_for_create(&mut qso, active_station_profile);
+        let active_station_profile =
+            active_station_profile.ok_or(LogbookError::NoActiveStationProfile)?;
+
+        // Identity, station context, timestamps, deletion state, and QRZ
+        // linkage are engine-owned on the public LogQso path.
+        qso.local_id = new_local_id();
+        qso.station_callsign.clear();
+        qso.station_snapshot = None;
+        qso.sync_status = SyncStatus::LocalOnly as i32;
+        qso.qrz_logid = None;
+        qso.qrz_bookid = None;
+        qso.deleted_at = None;
+        qso.pending_remote_delete = false;
+
+        materialize_station_snapshot_for_create(&mut qso, Some(active_station_profile));
         normalize_qso_for_persistence(&mut qso);
         validate_qso_for_persistence(&qso)?;
 
-        if qso.local_id.trim().is_empty() {
-            qso.local_id = new_local_id();
-        }
-
         let now = now_timestamp();
-        if qso.created_at.is_none() {
-            qso.created_at = Some(now);
-        }
+        qso.created_at = Some(now);
         qso.updated_at = Some(now);
 
         self.storage.logbook().insert_qso(&qso).await?;
@@ -110,18 +117,24 @@ impl LogbookEngine {
     /// [`LogbookError::AlreadyDeleted`] when the existing record is soft-deleted,
     /// and [`LogbookError::Storage`] when the backend write fails.
     pub async fn update_qso(&self, mut qso: QsoRecord) -> Result<QsoRecord, LogbookError> {
-        if qso.local_id.trim().is_empty() {
+        let local_id = qso.local_id.trim().to_string();
+        if local_id.is_empty() {
             return Err(LogbookError::Validation(
                 "local_id is required when updating a QSO.".into(),
             ));
         }
+        qso.local_id.clone_from(&local_id);
 
-        let existing = self.storage.logbook().get_qso(&qso.local_id).await?;
+        let existing = self.storage.logbook().get_qso(&local_id).await?;
         let existing = existing.ok_or_else(|| LogbookError::NotFound(qso.local_id.clone()))?;
         if existing.deleted_at.is_some() {
             return Err(LogbookError::AlreadyDeleted(qso.local_id));
         }
-        materialize_station_snapshot_for_update(&mut qso, Some(&existing));
+        qso.local_id.clone_from(&existing.local_id);
+        qso.station_callsign.clone_from(&existing.station_callsign);
+        qso.station_snapshot.clone_from(&existing.station_snapshot);
+        qso.deleted_at.clone_from(&existing.deleted_at);
+        qso.pending_remote_delete = existing.pending_remote_delete;
         normalize_qso_for_persistence(&mut qso);
         validate_qso_for_persistence(&qso)?;
 
@@ -226,7 +239,10 @@ impl LogbookEngine {
 
         // If the row was never synced (no qrz_logid), restoring should mark it
         // for upload again so a future sync picks it up.
-        if was_deleted && existing.qrz_logid.as_deref().unwrap_or("").is_empty() {
+        if was_deleted
+            && existing.sync_status == SyncStatus::Synced as i32
+            && existing.qrz_logid.as_deref().unwrap_or("").is_empty()
+        {
             existing.sync_status = SyncStatus::LocalOnly as i32;
         }
         existing.updated_at = Some(now_timestamp());
@@ -553,6 +569,9 @@ impl LogbookSyncStatus {
 /// Errors returned by logbook workflows before they are translated to transport status codes.
 #[derive(Debug, Error)]
 pub enum LogbookError {
+    /// The public logging surface requires an active station profile.
+    #[error("An active station profile is required before logging a QSO.")]
+    NoActiveStationProfile,
     /// The incoming request is missing required fields or contains invalid values.
     #[error("Validation failed: {0}")]
     Validation(String),
@@ -592,8 +611,8 @@ impl AdifImportOutcome {
 }
 
 fn normalize_qso_for_persistence(qso: &mut QsoRecord) {
-    qso.station_callsign = qso.station_callsign.trim().to_string();
-    qso.worked_callsign = qso.worked_callsign.trim().to_string();
+    qso.station_callsign = qso.station_callsign.trim().to_uppercase();
+    qso.worked_callsign = qso.worked_callsign.trim().to_uppercase();
 }
 
 fn validate_qso_for_persistence(qso: &QsoRecord) -> Result<(), LogbookError> {

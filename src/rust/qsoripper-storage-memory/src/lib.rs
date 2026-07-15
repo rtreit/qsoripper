@@ -666,6 +666,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn logbook_restore_preserves_conflict_status() {
+        let storage = Arc::new(MemoryStorage::new());
+        let engine = LogbookEngine::new(storage.clone());
+        let mut qso = QsoRecordBuilder::new("W1AW", "K7ABC")
+            .band(Band::Band20m)
+            .mode(Mode::Ft8)
+            .timestamp(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            })
+            .build();
+        qso.sync_status = SyncStatus::Conflict as i32;
+        let local_id = qso.local_id.clone();
+        storage.insert_qso(&qso).await.unwrap();
+
+        engine.delete_qso(&local_id, false).await.unwrap();
+        let restored = engine.restore_qso(&local_id).await.unwrap();
+
+        assert_eq!(restored.sync_status, SyncStatus::Conflict as i32);
+    }
+
+    #[tokio::test]
     async fn memory_storage_qrz_metadata_patch_on_deleted_row_queues_remote_delete() {
         let storage = MemoryStorage::new();
         let mut qso = QsoRecordBuilder::new("W1AW", "K7DEL")

@@ -514,6 +514,12 @@ internal static class AdifCodec
                 case "IOTA":
                     qso.WorkedIota = value;
                     break;
+                case "ARRL_SECT":
+                    qso.WorkedArrlSection = value;
+                    break;
+                case "SKCC":
+                    qso.Skcc = value;
+                    break;
                 case "MY_NAME":
                     (stationSnapshot ??= new StationSnapshot()).OperatorName = value;
                     break;
@@ -554,6 +560,93 @@ internal static class AdifCodec
                         qso.ExtraFields[key] = value;
                     }
 
+                    break;
+                case "MY_CQ_ZONE":
+                    if (uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var myCqZone))
+                    {
+                        (stationSnapshot ??= new StationSnapshot()).CqZone = myCqZone;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "MY_ITU_ZONE":
+                    if (uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var myItuZone))
+                    {
+                        (stationSnapshot ??= new StationSnapshot()).ItuZone = myItuZone;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "MY_LAT":
+                    if (TryParseAdifLocation(value, latitude: true, out var myLatitude))
+                    {
+                        (stationSnapshot ??= new StationSnapshot()).Latitude = myLatitude;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "MY_LON":
+                    if (TryParseAdifLocation(value, latitude: false, out var myLongitude))
+                    {
+                        (stationSnapshot ??= new StationSnapshot()).Longitude = myLongitude;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "MY_ARRL_SECT":
+                    (stationSnapshot ??= new StationSnapshot()).ArrlSection = value;
+                    break;
+                case "QSL_SENT":
+                    qso.QslSentStatus = ParseQslStatus(value);
+                    break;
+                case "QSL_RCVD":
+                    qso.QslReceivedStatus = ParseQslStatus(value);
+                    break;
+                case "QSLSDATE":
+                    if (TryParseAdifDateTime(value, null, out var sentDate))
+                    {
+                        qso.QslSentDate = sentDate;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "QSLRDATE":
+                    if (TryParseAdifDateTime(value, null, out var receivedDate))
+                    {
+                        qso.QslReceivedDate = receivedDate;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "LOTW_QSL_SENT":
+                    MapConfirmationField(value, key, qso.ExtraFields, confirmed => qso.LotwSent = confirmed);
+                    break;
+                case "LOTW_QSL_RCVD":
+                    MapConfirmationField(value, key, qso.ExtraFields, confirmed => qso.LotwReceived = confirmed);
+                    break;
+                case "EQSL_QSL_SENT":
+                    MapConfirmationField(value, key, qso.ExtraFields, confirmed => qso.EqslSent = confirmed);
+                    break;
+                case "EQSL_QSL_RCVD":
+                    MapConfirmationField(value, key, qso.ExtraFields, confirmed => qso.EqslReceived = confirmed);
                     break;
                 case "CONTEST_ID":
                     qso.ContestId = value;
@@ -765,6 +858,30 @@ internal static class AdifCodec
         }
 
         AppendOptional(sb, "IOTA", qso.WorkedIota);
+        AppendOptional(sb, "ARRL_SECT", qso.WorkedArrlSection);
+        AppendOptional(sb, "SKCC", qso.Skcc);
+
+        if (TryFormatQslStatus(qso.QslSentStatus, out var qslSent))
+        {
+            AppendField(sb, "QSL_SENT", qslSent);
+        }
+        if (TryFormatQslStatus(qso.QslReceivedStatus, out var qslReceived))
+        {
+            AppendField(sb, "QSL_RCVD", qslReceived);
+        }
+        if (qso.QslSentDate is not null && TryFormatAdifDateTime(qso.QslSentDate, out var qslSentDate, out _))
+        {
+            AppendField(sb, "QSLSDATE", qslSentDate);
+        }
+        if (qso.QslReceivedDate is not null && TryFormatAdifDateTime(qso.QslReceivedDate, out var qslReceivedDate, out _))
+        {
+            AppendField(sb, "QSLRDATE", qslReceivedDate);
+        }
+        AppendConfirmation(sb, "LOTW_QSL_SENT", qso.HasLotwSent, qso.LotwSent);
+        AppendConfirmation(sb, "LOTW_QSL_RCVD", qso.HasLotwReceived, qso.LotwReceived);
+        AppendConfirmation(sb, "EQSL_QSL_SENT", qso.HasEqslSent, qso.EqslSent);
+        AppendConfirmation(sb, "EQSL_QSL_RCVD", qso.HasEqslReceived, qso.EqslReceived);
+
         AppendOptional(sb, "CONTEST_ID", qso.ContestId);
         AppendOptional(sb, "STX", qso.SerialSent);
         AppendOptional(sb, "SRX", qso.SerialReceived);
@@ -790,6 +907,27 @@ internal static class AdifCodec
             AppendOptional(sb, "MY_CNTY", snap.County);
             AppendOptional(sb, "MY_STATE", snap.State);
             AppendOptional(sb, "MY_COUNTRY", snap.Country);
+            if (snap.HasDxcc)
+            {
+                AppendField(sb, "MY_DXCC", snap.Dxcc.ToString(CultureInfo.InvariantCulture));
+            }
+            if (snap.HasCqZone)
+            {
+                AppendField(sb, "MY_CQ_ZONE", snap.CqZone.ToString(CultureInfo.InvariantCulture));
+            }
+            if (snap.HasItuZone)
+            {
+                AppendField(sb, "MY_ITU_ZONE", snap.ItuZone.ToString(CultureInfo.InvariantCulture));
+            }
+            if (snap.HasLatitude && TryFormatAdifLocation(snap.Latitude, latitude: true, out var myLatitude))
+            {
+                AppendField(sb, "MY_LAT", myLatitude);
+            }
+            if (snap.HasLongitude && TryFormatAdifLocation(snap.Longitude, latitude: false, out var myLongitude))
+            {
+                AppendField(sb, "MY_LON", myLongitude);
+            }
+            AppendOptional(sb, "MY_ARRL_SECT", snap.ArrlSection);
         }
 
         // QRZ-specific round-trip fields. Without these the returned-logid
@@ -803,7 +941,7 @@ internal static class AdifCodec
         {
             // Skip keys we emitted via the dedicated proto fields so we
             // never emit the same ADIF key twice.
-            if (IsQrzAppExtraKey(extra.Key))
+            if (IsDedicatedAdifKey(extra.Key))
             {
                 continue;
             }
@@ -812,7 +950,7 @@ internal static class AdifCodec
         }
     }
 
-    private static bool IsQrzAppExtraKey(string key) =>
+    private static bool IsDedicatedAdifKey(string key) =>
         string.Equals(key, "APP_QRZLOG_LOGID", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(key, "APP_QRZ_LOGID", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(key, "APP_QRZLOG_QSO_ID", StringComparison.OrdinalIgnoreCase) ||
@@ -821,7 +959,22 @@ internal static class AdifCodec
         // fields above; never re-emit them from ExtraFields, even if a
         // caller seeded a stale value there.
         string.Equals(key, "APP_QSORIPPER_RX_WPM", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(key, "APP_QSORIPPER_CW_TRANSCRIPT", StringComparison.OrdinalIgnoreCase);
+        string.Equals(key, "APP_QSORIPPER_CW_TRANSCRIPT", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("ARRL_SECT", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("SKCC", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("MY_LAT", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("MY_LON", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("MY_ARRL_SECT", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("MY_CQ_ZONE", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("MY_ITU_ZONE", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("QSL_SENT", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("QSL_RCVD", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("QSLSDATE", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("QSLRDATE", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("LOTW_QSL_SENT", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("LOTW_QSL_RCVD", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("EQSL_QSL_SENT", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("EQSL_QSL_RCVD", StringComparison.OrdinalIgnoreCase);
 
     // -- Helpers -------------------------------------------------------------
 
@@ -841,6 +994,58 @@ internal static class AdifCodec
         if (!string.IsNullOrWhiteSpace(value))
         {
             AppendField(sb, key, value);
+        }
+    }
+
+    private static QslStatus ParseQslStatus(string value) => value.Trim().ToUpperInvariant() switch
+    {
+        "N" => QslStatus.No,
+        "Y" => QslStatus.Yes,
+        "R" => QslStatus.Requested,
+        "Q" => QslStatus.Queued,
+        "I" => QslStatus.Ignore,
+        _ => QslStatus.Unspecified,
+    };
+
+    private static bool TryFormatQslStatus(QslStatus status, out string value)
+    {
+        value = status switch
+        {
+            QslStatus.No => "N",
+            QslStatus.Yes => "Y",
+            QslStatus.Requested => "R",
+            QslStatus.Queued => "Q",
+            QslStatus.Ignore => "I",
+            _ => string.Empty,
+        };
+        return value.Length > 0;
+    }
+
+    private static void MapConfirmationField(
+        string value,
+        string key,
+        Google.Protobuf.Collections.MapField<string, string> extraFields,
+        Action<bool> setter)
+    {
+        if (value.Equals("Y", StringComparison.OrdinalIgnoreCase))
+        {
+            setter(true);
+        }
+        else if (value.Equals("N", StringComparison.OrdinalIgnoreCase))
+        {
+            setter(false);
+        }
+        else
+        {
+            extraFields[key] = value;
+        }
+    }
+
+    private static void AppendConfirmation(StringBuilder sb, string key, bool hasValue, bool value)
+    {
+        if (hasValue)
+        {
+            AppendField(sb, key, value ? "Y" : "N");
         }
     }
 
@@ -1070,9 +1275,14 @@ internal static class AdifCodec
         return full[..end];
     }
 
-    private static RstReport ParseRstReport(string raw)
+    private static RstReport? ParseRstReport(string raw)
     {
         var trimmed = raw.Trim();
+        if (trimmed.Length == 0)
+        {
+            return null;
+        }
+
         return new RstReport
         {
             Readability = ParseRstDigit(trimmed, 0, 1, 5),

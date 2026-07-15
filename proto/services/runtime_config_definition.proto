@@ -14,4 +14,5 @@ message RuntimeConfigDefinition {
   bool secret = 5;
   repeated string allowed_values = 6;
   bool required = 7;
+  optional string default_value = 8;  // Canonical textual default when one exists
 }

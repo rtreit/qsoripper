@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using QsoRipper.Domain;
 
 namespace QsoRipper.Engine.Lookup;
@@ -15,4 +16,17 @@ public interface ILookupCoordinator
 
     /// <summary>Perform a streaming lookup: Loading → (Stale?) → Found/NotFound/Error.</summary>
     Task<LookupResult[]> StreamLookupAsync(string callsign, CancellationToken ct = default);
+
+    /// <summary>Yield lookup states as soon as each state is available.</summary>
+    async IAsyncEnumerable<LookupResult> StreamLookupIncrementallyAsync(
+        string callsign,
+        bool skipCache = false,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        foreach (var result in await StreamLookupAsync(callsign, ct).ConfigureAwait(false))
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return result;
+        }
+    }
 }

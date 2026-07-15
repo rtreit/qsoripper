@@ -136,6 +136,110 @@ impl QrzLogbookApi for QrzLogbookClient {
     }
 }
 
+/// Outcome of a destructive local purge that may first delete QRZ rows.
+pub(crate) struct PurgeDeletedOutcome {
+    pub(crate) purged_count: u32,
+    pub(crate) remote_deletes_pushed: u32,
+    pub(crate) remote_deletes_failed: u32,
+    pub(crate) errors: Vec<String>,
+}
+
+/// Purge eligible soft-deleted rows, retaining any row whose requested QRZ
+/// delete fails so the operator can retry without losing the local copy.
+pub(crate) async fn purge_deleted_qsos(
+    client: Option<&dyn QrzLogbookApi>,
+    store: &dyn LogbookStore,
+    local_ids: &[String],
+    older_than_ms: Option<i64>,
+    include_pending_remote_deletes: bool,
+) -> Result<PurgeDeletedOutcome, qsoripper_core::storage::StorageError> {
+    if !include_pending_remote_deletes {
+        let purged_count = store.purge_deleted_qsos(local_ids, older_than_ms).await?;
+        return Ok(PurgeDeletedOutcome {
+            purged_count,
+            remote_deletes_pushed: 0,
+            remote_deletes_failed: 0,
+            errors: Vec::new(),
+        });
+    }
+
+    let requested_ids = (!local_ids.is_empty())
+        .then(|| local_ids.iter().map(String::as_str).collect::<HashSet<_>>());
+    let candidates = store
+        .list_qsos(&QsoListQuery {
+            deleted_filter: DeletedRecordsFilter::DeletedOnly,
+            ..QsoListQuery::default()
+        })
+        .await?;
+    let candidates = candidates.into_iter().filter(|qso| {
+        let id_matches = requested_ids
+            .as_ref()
+            .is_none_or(|ids| ids.contains(qso.local_id.as_str()));
+        let time_matches = older_than_ms.is_none_or(|cutoff| {
+            qso.deleted_at
+                .as_ref()
+                .is_some_and(|timestamp| timestamp_to_millis(timestamp) <= cutoff)
+        });
+        id_matches && time_matches
+    });
+
+    let mut purge_ids = Vec::new();
+    let mut remote_deletes_pushed = 0;
+    let mut remote_deletes_failed = 0;
+    let mut errors = Vec::new();
+
+    for qso in candidates {
+        let logid = qso.qrz_logid.as_deref().unwrap_or("").trim();
+        if !qso.pending_remote_delete || logid.is_empty() {
+            purge_ids.push(qso.local_id);
+            continue;
+        }
+
+        let Some(client) = client else {
+            remote_deletes_failed += 1;
+            errors.push(format!(
+                "QRZ delete was not attempted for QSO '{}' because QRZ Logbook is not configured.",
+                qso.local_id
+            ));
+            continue;
+        };
+
+        match client.delete_qso(logid).await {
+            Ok(()) => {
+                remote_deletes_pushed += 1;
+                purge_ids.push(qso.local_id);
+            }
+            Err(error) => {
+                remote_deletes_failed += 1;
+                errors.push(format!(
+                    "QRZ delete failed for QSO '{}': {error}",
+                    qso.local_id
+                ));
+            }
+        }
+    }
+
+    let purged_count = if purge_ids.is_empty() {
+        0
+    } else {
+        store.purge_deleted_qsos(&purge_ids, older_than_ms).await?
+    };
+
+    Ok(PurgeDeletedOutcome {
+        purged_count,
+        remote_deletes_pushed,
+        remote_deletes_failed,
+        errors,
+    })
+}
+
+fn timestamp_to_millis(timestamp: &prost_types::Timestamp) -> i64 {
+    timestamp
+        .seconds
+        .saturating_mul(1_000)
+        .saturating_add(i64::from(timestamp.nanos) / 1_000_000)
+}
+
 // ---------------------------------------------------------------------------
 // Accumulated sync counters
 // ---------------------------------------------------------------------------
@@ -1332,7 +1436,10 @@ mod tests {
     use qsoripper_storage_memory::MemoryStorage;
     use tokio::sync::mpsc;
 
-    use super::{execute_sync, sync_single_qso, sync_single_qso_metadata_only, QrzLogbookApi};
+    use super::{
+        execute_sync, purge_deleted_qsos, sync_single_qso, sync_single_qso_metadata_only,
+        QrzLogbookApi,
+    };
 
     struct EditAfterReadStorage {
         inner: MemoryStorage,
@@ -3415,6 +3522,60 @@ mod tests {
             "pending flag must remain set so the next sync retries"
         );
         assert_eq!(after[0].qrz_logid.as_deref(), Some("LOG-FAIL"));
+    }
+
+    #[tokio::test]
+    async fn purge_pushes_remote_delete_before_hard_deleting_local_row() {
+        let store = MemoryStorage::new();
+        let mut qso = make_qso("W1AW", "DL1ABC", Band::Band20m, Mode::Cw, 1_700_000_000);
+        qso.qrz_logid = Some("LOG-PURGE".into());
+        store.insert_qso(&qso).await.unwrap();
+        store
+            .soft_delete_qso(&qso.local_id, 1_700_000_500_000, true)
+            .await
+            .unwrap();
+        let api = MockQrzApi::new(Ok(Vec::new()), Vec::new());
+
+        let outcome = purge_deleted_qsos(Some(&api), &store, &[], None, true)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.remote_deletes_pushed, 1);
+        assert_eq!(outcome.remote_deletes_failed, 0);
+        assert_eq!(outcome.purged_count, 1);
+        assert_eq!(
+            api.delete_calls.lock().unwrap().as_slice(),
+            &["LOG-PURGE".to_string()]
+        );
+        assert!(store.get_qso(&qso.local_id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn purge_preserves_local_row_when_remote_delete_fails() {
+        let store = MemoryStorage::new();
+        let mut qso = make_qso("W1AW", "DL1ABC", Band::Band20m, Mode::Cw, 1_700_000_000);
+        qso.qrz_logid = Some("LOG-PURGE-FAIL".into());
+        store.insert_qso(&qso).await.unwrap();
+        store
+            .soft_delete_qso(&qso.local_id, 1_700_000_500_000, true)
+            .await
+            .unwrap();
+        let api = MockQrzApi::new(Ok(Vec::new()), Vec::new());
+        api.delete_results
+            .lock()
+            .unwrap()
+            .push(Err(QrzLogbookError::ApiError(
+                "remote delete failed".into(),
+            )));
+
+        let outcome = purge_deleted_qsos(Some(&api), &store, &[], None, true)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.remote_deletes_pushed, 0);
+        assert_eq!(outcome.remote_deletes_failed, 1);
+        assert_eq!(outcome.purged_count, 0);
+        assert!(store.get_qso(&qso.local_id).await.unwrap().is_some());
     }
 
     #[tokio::test]

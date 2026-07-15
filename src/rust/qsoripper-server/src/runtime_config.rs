@@ -24,7 +24,7 @@ use qsoripper_core::proto::qsoripper::domain::StationProfile;
 use qsoripper_core::proto::qsoripper::services::{
     ApplyRuntimeConfigRequest, ResetRuntimeConfigRequest, RuntimeConfigDefinition,
     RuntimeConfigMutation, RuntimeConfigMutationKind, RuntimeConfigSnapshot, RuntimeConfigValue,
-    RuntimeConfigValueKind,
+    RuntimeConfigValueKind, RuntimeConfigValueSource,
 };
 use qsoripper_core::rig_control::{
     DisabledRigControlProvider, RigControlMonitor, RigControlProvider, RigctldConfig,
@@ -1053,7 +1053,28 @@ fn build_effective_values(
     overrides: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let session_values = station_profile_override_values(session_station_profile_override);
-    let with_session_override = merge_values(base_values, &session_values);
+    let mut with_session_override = base_values.clone();
+    if session_station_profile_override.is_some() {
+        for key in [
+            STATION_PROFILE_NAME_ENV_VAR,
+            STATION_CALLSIGN_ENV_VAR,
+            STATION_OPERATOR_CALLSIGN_ENV_VAR,
+            STATION_OPERATOR_NAME_ENV_VAR,
+            STATION_GRID_ENV_VAR,
+            STATION_COUNTY_ENV_VAR,
+            STATION_STATE_ENV_VAR,
+            STATION_COUNTRY_ENV_VAR,
+            STATION_ARRL_SECTION_ENV_VAR,
+            STATION_DXCC_ENV_VAR,
+            STATION_CQ_ZONE_ENV_VAR,
+            STATION_ITU_ZONE_ENV_VAR,
+            STATION_LATITUDE_ENV_VAR,
+            STATION_LONGITUDE_ENV_VAR,
+        ] {
+            with_session_override.remove(key);
+        }
+    }
+    with_session_override.extend(session_values);
     merge_values(&with_session_override, overrides)
 }
 
@@ -1333,6 +1354,7 @@ fn build_snapshot(
     bindings: &RuntimeBindings,
 ) -> RuntimeConfigSnapshot {
     let merged = build_effective_values(base_values, session_station_profile_override, overrides);
+    let session_values = station_profile_override_values(session_station_profile_override);
     let definitions = SUPPORTED_FIELDS
         .iter()
         .map(|field| RuntimeConfigDefinition {
@@ -1347,11 +1369,19 @@ fn build_snapshot(
                 .map(|value| (*value).to_string())
                 .collect(),
             required: false,
+            default_value: field.default_value.map(str::to_string),
         })
         .collect();
     let values = SUPPORTED_FIELDS
         .iter()
-        .map(|field| build_value(field, &merged, overrides))
+        .map(|field| {
+            build_value(
+                field,
+                &merged,
+                overrides,
+                session_values.contains_key(field.key),
+            )
+        })
         .collect();
     let mut warnings = Vec::new();
 
@@ -1411,6 +1441,7 @@ fn build_value(
     field: &ConfigFieldSpec,
     merged: &BTreeMap<String, String>,
     overrides: &BTreeMap<String, String>,
+    session_override: bool,
 ) -> RuntimeConfigValue {
     let effective_value = merged
         .get(field.key)
@@ -1430,6 +1461,17 @@ fn build_value(
         overridden: overrides.contains_key(field.key),
         secret: field.secret,
         redacted: field.secret && has_value,
+        source: if overrides.contains_key(field.key) {
+            RuntimeConfigValueSource::RuntimeOverride as i32
+        } else if session_override {
+            RuntimeConfigValueSource::SessionOverride as i32
+        } else if merged.contains_key(field.key) {
+            RuntimeConfigValueSource::BaseConfig as i32
+        } else if field.default_value.is_some() {
+            RuntimeConfigValueSource::Default as i32
+        } else {
+            RuntimeConfigValueSource::Unspecified as i32
+        },
     }
 }
 
@@ -1440,6 +1482,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use qsoripper_core::proto::qsoripper::domain::{Band, Mode, QsoRecord, StationProfile};
+    use qsoripper_core::proto::qsoripper::services::RuntimeConfigValueSource;
 
     use super::{
         ApplyRuntimeConfigRequest, ResetRuntimeConfigRequest, RuntimeConfigManager,
@@ -1477,6 +1520,49 @@ mod tests {
             ))
             .display()
             .to_string()
+    }
+
+    #[tokio::test]
+    async fn runtime_snapshot_reports_defaults_and_value_sources() {
+        let manager = RuntimeConfigManager::new(BTreeMap::new()).expect("manager");
+        let snapshot = manager.snapshot().await;
+        let storage_definition = snapshot
+            .definitions
+            .iter()
+            .find(|definition| definition.key == STORAGE_BACKEND_ENV_VAR)
+            .expect("storage definition");
+        let storage_value = snapshot
+            .values
+            .iter()
+            .find(|value| value.key == STORAGE_BACKEND_ENV_VAR)
+            .expect("storage value");
+
+        assert_eq!(Some("memory"), storage_definition.default_value.as_deref());
+        assert_eq!("memory", storage_value.display_value);
+        assert_eq!(
+            RuntimeConfigValueSource::Default as i32,
+            storage_value.source
+        );
+
+        let overridden = manager
+            .apply_request(ApplyRuntimeConfigRequest {
+                mutations: vec![RuntimeConfigMutation {
+                    key: STORAGE_BACKEND_ENV_VAR.to_string(),
+                    kind: RuntimeConfigMutationKind::Set as i32,
+                    value: Some("memory".to_string()),
+                }],
+            })
+            .await
+            .expect("runtime override");
+        let overridden_value = overridden
+            .values
+            .iter()
+            .find(|value| value.key == STORAGE_BACKEND_ENV_VAR)
+            .expect("overridden storage value");
+        assert_eq!(
+            RuntimeConfigValueSource::RuntimeOverride as i32,
+            overridden_value.source
+        );
     }
 
     #[tokio::test]
@@ -1722,6 +1808,7 @@ mod tests {
         let mut config_values = BTreeMap::new();
         config_values.insert(STATION_CALLSIGN_ENV_VAR.to_string(), "K7RND".to_string());
         config_values.insert(STATION_GRID_ENV_VAR.to_string(), "CN87".to_string());
+        config_values.insert(STATION_ARRL_SECTION_ENV_VAR.to_string(), "WWA".to_string());
         let manager =
             RuntimeConfigManager::new_with_config_file_values(BTreeMap::new(), config_values)
                 .expect("manager");
@@ -1745,6 +1832,14 @@ mod tests {
                 .active_station_profile
                 .as_ref()
                 .map(|profile| profile.station_callsign.as_str())
+        );
+        assert_eq!(
+            None,
+            snapshot
+                .active_station_profile
+                .as_ref()
+                .and_then(|profile| profile.arrl_section.as_deref()),
+            "a session profile is a full replacement, not a partial overlay"
         );
         assert!(snapshot
             .warnings

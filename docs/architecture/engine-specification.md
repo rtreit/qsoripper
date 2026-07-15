@@ -60,7 +60,7 @@ The engine does **not** own any UI rendering, keyboard handling, or display logi
           └────────────────────────────┘
 ```
 
-Clients connect to the engine via a single gRPC endpoint (default `http://[::1]:50051`). Clients may also connect through a gRPC-Web proxy for browser-based surfaces.
+Clients connect to the engine through a single configured gRPC endpoint. The built-in local profiles use `http://127.0.0.1:50051` for Rust and `http://127.0.0.1:50052` for .NET so both engines can run concurrently. Clients may also connect through a gRPC-Web proxy for browser-based surfaces.
 
 ### 2.3 Protocol Buffers as Contract Core
 
@@ -79,7 +79,7 @@ The 1-1-1 rule applies: one top-level message, enum, or service per `.proto` fil
 
 - Native gRPC clients (CLI, TUI, GUI) connect directly over HTTP/2.
 - Browser clients (DebugHost) connect through a gRPC-Web proxy that translates between gRPC-Web and native gRPC.
-- The engine listens on a configurable address (default `[::1]:50051`, controlled by `QSORIPPER_SERVER_ADDR`).
+- The engine listens on a configurable address controlled by `QSORIPPER_SERVER_ADDR` or the launcher. Standalone defaults are `127.0.0.1:50051` for Rust and `127.0.0.1:50052` for .NET.
 - TLS is not required for local development. Production deployments should use TLS or a reverse proxy.
 
 ---
@@ -110,9 +110,9 @@ Returns metadata about the running engine.
 - Must always succeed if the engine is running.
 - Returns the engine's identity (`engine_id`, `display_name`), version string, and a list of supported capability strings.
 - The response is an `EngineInfo` message (see `proto/services/engine_info.proto`) containing:
-  - `engine_id` — stable identifier (e.g., `"rust-tonic"`, `"dotnet-managed"`)
+  - `engine_id` — stable identifier (for example, `"rust-tonic"` or `"dotnet-aspnet"`)
   - `display_name` — human-readable label
-  - `version` — semver string
+  - `version` — implementation version. Rust reports SemVer. .NET may report the four-component assembly version form.
   - `capabilities` — repeated list of capability names (see §8)
 
 **Error semantics:**
@@ -133,6 +133,7 @@ The primary QSO CRUD and sync surface. This is the most critical service in the 
 | `UpdateQso` | `UpdateQsoRequest` | `UpdateQsoResponse` | Unary |
 | `DeleteQso` | `DeleteQsoRequest` | `DeleteQsoResponse` | Unary |
 | `RestoreQso` | `RestoreQsoRequest` | `RestoreQsoResponse` | Unary |
+| `PurgeDeletedQsos` | `PurgeDeletedQsosRequest` | `PurgeDeletedQsosResponse` | Unary |
 | `GetQso` | `GetQsoRequest` | `GetQsoResponse` | Unary |
 | `ListQsos` | `ListQsosRequest` | `stream ListQsosResponse` | Server-streaming |
 | `SyncWithQrz` | `SyncWithQrzRequest` | `stream SyncWithQrzResponse` | Server-streaming |
@@ -151,10 +152,10 @@ Creates a new QSO record in the local logbook.
 4. Stamp `station_callsign` from the active station profile.
 5. Capture a `StationSnapshot` from the active station context and attach it to the QSO.
 6. Set `created_at` and `updated_at` to the current UTC time.
-7. Set `sync_status` to `SYNC_STATUS_NOT_SYNCED`.
+7. Set `sync_status` to `SYNC_STATUS_LOCAL_ONLY`, clear QRZ linkage, and clear soft-delete state. These fields are engine-owned and caller values are ignored.
 8. Persist the record via the storage backend.
-9. If `sync_to_qrz=true`, immediately push the new record to QRZ Logbook (per-operation sync; see §7.3 below). On success, adopt the QRZ-assigned `qrz_logid`, set `sync_status=SYNC_STATUS_SYNCED`, and write the row back to storage. Populate `LogQsoResponse.sync_success=true`. On failure (no API key, network error, QRZ rejection), leave `sync_status=SYNC_STATUS_NOT_SYNCED`, set `sync_success=false`, and put a human-readable message in `sync_error`. The local persist MUST succeed regardless — per-op sync failure is reported, not raised.
-10. Return the persisted `QsoRecord` in the response.
+9. If `sync_to_qrz=true`, immediately push the new record to QRZ Logbook (per-operation sync; see §7.3 below). On success, adopt the QRZ-assigned `qrz_logid`, set `sync_status=SYNC_STATUS_SYNCED`, and write the row back to storage. Populate `LogQsoResponse.sync_success=true`. On failure (no API key, network error, QRZ rejection), leave `sync_status=SYNC_STATUS_LOCAL_ONLY`, set `sync_success=false`, and put a human-readable message in `sync_error`. The local persist MUST succeed regardless. If sync was not requested, `sync_success=false` and `sync_error` is absent.
+10. Return the generated `local_id` and any successful QRZ `qrz_logid`. The response envelope does not carry a `QsoRecord`; clients that need the stored row call `GetQso`.
 
 **Error semantics:**
 - `INVALID_ARGUMENT` — missing or invalid required fields.
@@ -167,12 +168,14 @@ Updates an existing QSO record by `local_id`.
 
 **Behavior:**
 1. Look up the existing record by `local_id`.
-2. Apply provided field updates. Fields not included in the request are not modified.
+2. Treat `request.qso` as a full replacement of all caller-owned QSO fields. Proto3 default values clear scalar fields, absent optional fields clear those fields, and `extra_fields` replaces the existing map. This RPC is not a patch operation because the request has no `FieldMask`.
 3. Set `updated_at` to the current UTC time.
 4. If the QSO was previously synced, set `sync_status` to `SYNC_STATUS_MODIFIED`. The engine — not the client — is the source of truth for `sync_status` and `qrz_logid` on update: round-tripping the existing values from a client request MUST NOT change them, and a client MUST NOT be able to advance a `LOCAL_ONLY` row to `SYNCED` (or claim a `qrz_logid`) via `UpdateQso`. The only state transitions the engine performs here are `SYNCED → MODIFIED` on edit, and (in step 6) `MODIFIED → SYNCED` on a successful per-op sync.
 5. Persist the updated record.
-6. If `sync_to_qrz=true`, immediately push the updated record to QRZ Logbook (per-operation sync; see §7.3 below). If the row already has a `qrz_logid`, use REPLACE so the same remote row is updated in place; otherwise INSERT. On success, write back the QRZ-assigned `qrz_logid` and `sync_status=SYNC_STATUS_SYNCED`, and set `UpdateQsoResponse.sync_success=true`. On failure, leave the local row in its current state (`SYNC_STATUS_MODIFIED` or `SYNC_STATUS_NOT_SYNCED`), set `sync_success=false`, and put a human-readable message in `sync_error`. The local persist MUST succeed regardless.
-7. Return the updated `QsoRecord`.
+6. If `sync_to_qrz=true`, immediately push the updated record to QRZ Logbook (per-operation sync; see §7.3 below). If the row already has a `qrz_logid`, use REPLACE so the same remote row is updated in place; otherwise INSERT. On success, write back the QRZ-assigned `qrz_logid` and `sync_status=SYNC_STATUS_SYNCED`, and set `UpdateQsoResponse.sync_success=true`. On failure, leave the local row in its current state (`SYNC_STATUS_MODIFIED` or `SYNC_STATUS_LOCAL_ONLY`), set `sync_success=false`, and put a human-readable message in `sync_error`. If sync was not requested, `sync_success=false` and `sync_error` is absent. The local persist MUST succeed regardless.
+7. Return `success=true`. The response envelope does not carry a `QsoRecord`; clients that need the stored row call `GetQso`.
+
+The engine preserves all engine-owned fields from the existing row: `local_id`, `station_snapshot`, `created_at`, `qrz_logid`, `qrz_bookid`, sync state, delete state, and QRZ linkage held in optional fields. Resolution is by `local_id` only. A missing ID is `INVALID_ARGUMENT`; an unknown ID is `NOT_FOUND`.
 
 Clients that round-trip a complete `QsoRecord` while editing MUST preserve `RstReport.raw`.
 Signed digital reports such as `+11` and `-10` are not legacy RST digit fields and MUST
@@ -185,12 +188,12 @@ round-trip exactly when an unrelated field, including QRZ enrichment, is changed
 
 #### DeleteQso
 
-Deletes a QSO record by `local_id`.
+Soft-deletes a QSO record by `local_id`. See §7.8 for the complete state-transition contract.
 
 **Behavior:**
 1. Look up the existing record by `local_id`.
-2. Remove the record from storage.
-3. Return success with the deleted `local_id`.
+2. Set its tombstone and, when requested and possible, queue a remote QRZ delete.
+3. Return success without physically removing the row.
 
 **Error semantics:**
 - `NOT_FOUND` — no QSO with the given `local_id`.
@@ -227,15 +230,19 @@ Initiates a bidirectional sync with the QRZ logbook API.
 
 **Behavior:**
 
-The sync follows a three-phase lifecycle:
+The sync follows the ordered lifecycle in §7.3:
 
-1. **Download phase** — Fetch all QSOs from the QRZ logbook API via ADIF. Parse the ADIF response. For each remote QSO, attempt to match it against local records using fuzzy matching on callsign + timestamp + band + mode. Filter out ghost/duplicate records. Insert new remote-only records and update local records that have newer remote data (per the configured `ConflictPolicy`).
+1. Resolve QRZ `STATUS` and the logbook owner before downloading.
+2. Under the review-safe conflict policy, pre-upload locally modified QRZ-linked rows before downloading so stale remote data cannot overwrite local corrections.
+3. Download and reconcile remote QSOs.
+4. Upload local-only and remaining modified rows, then push pending remote deletes.
+5. Persist sync metadata from the `STATUS` result.
 
-2. **Upload phase** — Find all local QSOs with `sync_status` of `SYNC_STATUS_NOT_SYNCED` or `SYNC_STATUS_MODIFIED`. For each, serialize to ADIF and upload via the QRZ logbook API. New records use a normal INSERT. Modified records use the documented `OPTION=REPLACE` value exactly; engines must not append a `LOGID` selector to that option. QRZ matches the duplicate from the ADIF identity fields and returns the affected `qrz_logid`. On success, update `sync_status` to `SYNC_STATUS_SYNCED` and record that returned value.
+New records use a normal INSERT. Modified records use the documented `OPTION=REPLACE` value exactly; engines must not append a `LOGID` selector to that option. QRZ matches the duplicate from the ADIF identity fields and returns the affected `qrz_logid`. On success, update `sync_status` to `SYNC_STATUS_SYNCED` and record that returned value.
 
    **Previous-callsign rewrite (issue #337).** QRZ logbooks are bound to a single callsign and reject ADIF whose `STATION_CALLSIGN` does not match the logbook owner. Operators who have changed callsigns (e.g. KB7QOP → AE7XI) keep historical QSOs locally with the old call. To avoid those rejections, engines MUST:
 
-   - Fetch the QRZ logbook owner callsign once per sync via QRZ `STATUS` immediately after the download phase. Reuse the same result for the metadata phase below — do not call `STATUS` twice.
+   - Fetch the QRZ logbook owner callsign once per sync via QRZ `STATUS` before the download phase. Reuse the same result for the metadata phase. Do not call `STATUS` twice.
    - If `STATUS` fails or returns an empty owner, fall back to the cached `sync_metadata.qrz_logbook_owner`.
    - Per upload, when the resolved owner is non-empty and differs (case-insensitive, trimmed) from the QSO's `station_callsign`, rewrite the upload payload only:
      - Set the payload's `station_callsign` (and `station_snapshot.station_callsign`) to the owner.
@@ -244,9 +251,9 @@ The sync follows a three-phase lifecycle:
 
    *Known caveat:* on the next download, the merge logic for `SYNC_STATUS_SYNCED` rows is remote-wins, so the local `station_callsign` may drift to the book owner. The historical operator survives in `station_snapshot.operator_callsign`. Round-tripping the original via an `APP_QSORIPPER_ORIG_STATION_CALLSIGN` ADIF field on download is planned future work.
 
-3. **Metadata phase** — Update the `sync_metadata` record with the QRZ QSO count, last sync timestamp, and logbook owner callsign reported by the `STATUS` call already fetched in step 2. Because that `STATUS` is taken before the upload phase, the persisted `qrz_qso_count` reflects the pre-upload count; the next `SyncWithQrz` cycle naturally observes the post-upload count.
+The metadata phase updates `sync_metadata` with the QRZ QSO count, last sync timestamp, and logbook owner callsign from the initial `STATUS` call. Because `STATUS` precedes upload, the persisted `qrz_qso_count` reflects the pre-upload count; the next cycle observes the post-upload count.
 
-Stream progress messages throughout all phases so clients can display real-time sync state.
+The server stream MUST contain a terminal response with `complete=true`. Engines SHOULD emit intermediate phase/progress responses as work is produced; intermediate granularity is implementation-defined.
 
 **Response fields (`SyncWithQrzResponse`):**
 
@@ -262,20 +269,22 @@ Stream progress messages throughout all phases so clients can display real-time 
 | `error` | `string` (optional) | Accumulated error summary if any phase encountered failures. |
 | `remote_deletes_pushed` | `uint32` | Number of pending remote deletes successfully pushed to QRZ (Phase 2.5). |
 | `deletes_skipped_remote` | `uint32` | Number of download records skipped because they matched a soft-deleted local row (Phase 1). |
+| `duplicate_replaces` | `uint32` | INSERT uploads retried successfully as REPLACE after QRZ reported a duplicate. |
 
 **Error semantics:**
-- `FAILED_PRECONDITION` — QRZ logbook credentials not configured.
-- `UNAVAILABLE` — QRZ API unreachable.
-- `INTERNAL` — storage or parsing failure.
-- Partial failures during sync should not abort the entire operation. Report per-QSO errors in the stream and continue.
+- `FAILED_PRECONDITION` — QRZ logbook credentials are not configured. This is returned before the first stream message.
+- Failures discovered before the first stream message use the appropriate gRPC status (`UNAVAILABLE` or `INTERNAL`).
+- After any stream message has been emitted, later integration, storage, parsing, and partial per-QSO failures are reported in a terminal response with `complete=true` and `error` populated. They do not change the transport status.
 
 #### GetSyncStatus
 
 Returns the current sync metadata state.
 
 **Behavior:**
-- Return the current `sync_metadata` values: QRZ QSO count, last sync timestamp, logbook owner callsign.
-- If no sync has ever occurred, return zero counts and no timestamp.
+- Return live local and pending-upload counts plus `sync_metadata` values: QRZ QSO count, last sync timestamp, and logbook owner callsign.
+- Report `is_syncing`, `next_sync`, `auto_sync_enabled`, and `last_sync_error` from the live scheduler/sync lifecycle.
+- `auto_sync_enabled` is true only when periodic sync is enabled and a non-empty QRZ Logbook API key is available.
+- If no sync has ever occurred, return zero remote count and no last-sync timestamp.
 
 **Error semantics:**
 - `INTERNAL` — storage read failure.
@@ -289,7 +298,7 @@ Imports QSO records from a client-streamed ADIF payload.
 2. Concatenate all chunks into a complete ADIF document.
 3. Parse the ADIF document into individual QSO records.
 4. For each parsed QSO, generate a `local_id`, normalize fields, and insert into storage.
-5. Return a summary: total records parsed, records imported, records skipped (duplicates or validation failures), and any error messages.
+5. Return `records_imported`, `records_skipped`, `records_updated`, and sanitized warning strings. The response has no separate total or error fields.
 
 **Duplicate handling:** The engine should detect duplicates by matching on station callsign + worked callsign + band + mode + compatible submode/frequency + compatible UTC timestamp and skip them rather than creating duplicate entries. Timestamp matching must handle minute-precision ADIF sources (for example N1MM contest exports) by matching an existing second-precision QSO in the same displayed minute when either side is minute-precision. Small frequency drift between ADIF sources and QRZ-enriched rows should not create a duplicate when the contact identity otherwise matches.
 
@@ -307,7 +316,7 @@ Streams the logbook as an ADIF document.
 1. Query all QSO records (optionally filtered by the request parameters).
 2. Serialize each QSO to ADIF format.
 3. Stream `ExportAdifResponse` messages, each containing an `AdifChunk`.
-4. The first chunk should contain the ADIF header. Subsequent chunks contain QSO records.
+4. When `include_header=true`, the first chunk contains the ADIF header. When false, no header is emitted.
 5. Preserve `extra_fields` from imported QSOs for lossless round-trip.
 
 **Error semantics:**
@@ -344,7 +353,7 @@ Performs a single callsign lookup.
 
 Desktop clients may use this RPC for both fast-entry and advanced QSO-card workflows. Those clients should debounce user typing and cancel stale in-flight UI requests, but they must still route callsign enrichment through this shared lookup service rather than duplicating QRZ XML logic in the UI layer.
 
-When setup saves QRZ XML credentials, engines must restore those credentials on restart so `LookupService` availability does not depend on a one-time in-memory secret surviving process restarts.
+Credentials supplied through setup remain process-session secrets and are never serialized. For restart availability, operators provide secrets through the documented environment variables or a secure configuration provider. See §6.3.
 
 **Slash-call fallback:** If the callsign contains a `/` modifier (e.g., `W1AW/7`), and the full lookup fails, strip the modifier and retry with the base callsign. Populate `base_callsign`, `modifier_text`, and `modifier_kind` on the result.
 
@@ -353,7 +362,7 @@ When setup saves QRZ XML credentials, engines must restore those credentials on 
 **Error semantics:**
 - `NOT_FOUND` — callsign not found in QRZ (this is a valid result state, not a gRPC error; return `LookupState.LOOKUP_STATE_NOT_FOUND`).
 - `UNAVAILABLE` — QRZ API unreachable (return `LookupState.LOOKUP_STATE_ERROR` in the result).
-- `FAILED_PRECONDITION` — QRZ credentials not configured (return `LookupState.LOOKUP_STATE_ERROR`).
+- Missing QRZ credentials are represented as `LookupState.LOOKUP_STATE_ERROR` with a sanitized authentication/configuration message, not a transport error.
 
 #### StreamLookup
 
@@ -361,6 +370,7 @@ Performs a callsign lookup with streaming progress updates.
 
 **Behavior:**
 - Emits a `Loading` `LookupResult` immediately, **before** any cache or provider work, so clients get instant feedback that the request is in flight.
+- When `skip_cache=true`, bypass fresh and stale cache reads and proceed directly from `Loading` to provider work.
 - If a fresh cache entry exists, emits a `Found` (or `NotFound`) update and closes the stream.
 - If a stale cache entry exists, emits a `Stale` update with the cached record, then continues to the provider.
 - After the provider call completes, emits the final `Found`, `NotFound`, or `Error` update and closes the stream.
@@ -477,12 +487,14 @@ Returns the most recent normalized logging snapshot from the rig.
 
 #### TestRigConnection
 
-Tests TCP connectivity to the configured rigctld instance.
+Tests TCP connectivity to a rigctld instance, including unpersisted setup values.
 
 **Behavior:**
-1. Attempt a TCP connection to `QSORIPPER_RIGCTLD_HOST`:`QSORIPPER_RIGCTLD_PORT`.
-2. If the connection succeeds, send a basic command (e.g., `f\n`) and verify a response.
-3. Return success/failure with diagnostics.
+1. Resolve host and port independently from request overrides, then configured values, then the engine defaults.
+2. Reject an explicitly supplied blank host or port outside `1..=65535` with `INVALID_ARGUMENT`. Do not silently fall back from an invalid override.
+3. Attempt a TCP connection to the resolved endpoint.
+4. If the connection succeeds, send a basic command (for example, `f\n`) and verify a response.
+5. Return success/failure with diagnostics.
 
 **Error semantics:**
 - Connection and protocol errors are reported in the response, not as gRPC errors.
@@ -599,7 +611,7 @@ warning) but never fails engine load. A conformant engine must keep this read pa
 daemon's section can never break engine startup, and must only rewrite `[cat_hub]` when an explicit
 replacement is supplied.
 
-
+### 3.5 SpaceWeatherService
 
 **Proto file:** `proto/services/space_weather_service.proto`
 
@@ -618,8 +630,9 @@ Returns the most recently cached space weather snapshot.
 
 **Behavior:**
 - Return a `SpaceWeatherSnapshot` with K-index, A-index, solar flux, sunspot number, geomagnetic storm scale, and fetch timestamps.
-- If space weather is disabled or no data has been fetched, return a snapshot with `SpaceWeatherStatus.SPACE_WEATHER_STATUS_ERROR` or `SPACE_WEATHER_STATUS_DISABLED`.
-- Do not trigger a remote fetch. Return whatever is cached.
+- If space weather is disabled, return a snapshot with `SpaceWeatherStatus.SPACE_WEATHER_STATUS_ERROR` and a sanitized explanatory error. The protobuf enum has no disabled value.
+- When enabled, refresh before returning if there is no cache or the cache is past the configured refresh interval. Otherwise return the cached snapshot.
+- If refresh fails after a previous successful fetch, return the cached values with `SPACE_WEATHER_STATUS_STALE`. Without usable cached data, return `SPACE_WEATHER_STATUS_ERROR`.
 
 **Error semantics:**
 - This RPC should always succeed. Data unavailability is reported in the snapshot status.
@@ -634,8 +647,7 @@ Forces an immediate refresh from the NOAA APIs.
 3. Return the new snapshot.
 
 **Error semantics:**
-- `UNAVAILABLE` — NOAA endpoints unreachable.
-- `FAILED_PRECONDITION` — space weather integration is disabled.
+- This RPC succeeds at the transport layer. Disabled configuration and NOAA failures are represented by an `ERROR` or `STALE` snapshot with a sanitized error message.
 
 ### 3.6 SetupService
 
@@ -669,7 +681,7 @@ Persists setup configuration and station profile.
 
 **Behavior:**
 1. Validate all provided fields.
-2. Persist configuration (QRZ credentials, station profile, storage settings) to the config path.
+2. Persist non-secret configuration and station/storage settings to the config path. QRZ passwords and API keys supplied by the request are installed only in process memory and are never serialized.
 3. Apply the configuration to the running engine (activate the station profile, enable integrations).
 4. Mark setup as complete.
 
@@ -758,7 +770,7 @@ Returns the current state of the setup wizard for multi-step UIs.
 
 **Behavior:**
 - Return the list of `SetupWizardStep` values with their completion status (`SetupWizardStepStatus`).
-- Steps include: station profile, QRZ XML credentials, QRZ logbook credentials, storage backend, rig control, CAT hub, space weather.
+- The ordered enum surface is `LOG_FILE`, `STATION_PROFILES`, `QRZ_INTEGRATION`, `CAT_HUB`, and `REVIEW`.
 - The CAT hub step (`SETUP_WIZARD_STEP_CAT_HUB`) is optional and always reported complete; it
   exposes the current `[cat_hub]` projection for display and editing.
 
@@ -770,22 +782,22 @@ Validates a single step of the setup wizard without persisting.
 - Accept a `SetupWizardStep` identifier and field values.
 - Validate the fields for that step.
 - Return validation results per field (`SetupFieldValidation`).
+- The station-profile wizard step requires profile name, station callsign, operator callsign, and grid because setup-completion guidance needs a complete operating identity. This is stricter than `SaveStationProfile`, which requires only profile name and station callsign.
 
 **Error semantics:**
 - `INVALID_ARGUMENT` — unknown step identifier.
 
 #### TestQrzCredentials
 
-Tests QRZ XML API credentials by attempting a login.
+Tests QRZ XML API credentials by performing a real lookup request.
 
 **Behavior:**
-1. Send a login request to the QRZ XML API with the provided username and password.
-2. Return success if a session key is obtained.
+1. Send an authenticated QRZ XML lookup for the stable test callsign `W1AW` with the provided username and password.
+2. Return success if authentication succeeds and the response is valid.
 3. Return failure with a descriptive message if authentication fails.
 
 **Error semantics:**
-- Authentication failures are reported in the response, not as gRPC errors.
-- `UNAVAILABLE` — QRZ API unreachable.
+- Authentication, rejection, and network failures are reported as `success=false` with a sanitized response message. Malformed requests use `INVALID_ARGUMENT`.
 
 #### TestQrzLogbookCredentials
 
@@ -797,7 +809,7 @@ Tests QRZ logbook API credentials.
 3. Return failure with a descriptive message otherwise.
 
 **Error semantics:**
-- Same pattern as `TestQrzCredentials`.
+- Authentication, rejection, and network failures are reported as `success=false` with a sanitized response message. Malformed requests use `INVALID_ARGUMENT`.
 
 ### 3.7 StationProfileService
 
@@ -876,8 +888,8 @@ Returns the currently active station context.
 Temporarily overrides the active station profile for the current session.
 
 **Behavior:**
-- Accept individual field overrides (e.g., operator callsign, grid square).
-- The override is applied on top of the active profile; it does not replace it.
+- Accept a complete, valid `StationProfile` replacement. The current protobuf message is not a patch and has no field-presence model for individual scalar overrides.
+- Resolve the active context from the session profile as a full replacement of the saved active profile. Omitted optional sections and values are cleared for the session.
 - The override persists until explicitly cleared or the engine restarts.
 
 #### ClearSessionStationProfileOverride
@@ -916,7 +928,7 @@ The engine loads a reviewed JSON catalog from `QSORIPPER_CONTEST_CALENDAR_DETAIL
 
 **Error semantics:**
 - This RPC should usually succeed. Data unavailability is reported through `ContestCalendarStatus` and `error_message`.
-- Invalid band or mode enum values are rejected by protobuf validation before service logic.
+- Proto3 accepts unknown numeric enum values. The service MUST explicitly reject unknown band or mode values with `INVALID_ARGUMENT`.
 
 #### RefreshContestCalendar
 
@@ -1058,8 +1070,12 @@ Developer-only live configuration overrides. Not intended for end-user UIs.
 Returns the full runtime configuration snapshot.
 
 **Behavior:**
-- Return a `RuntimeConfigSnapshot` containing all configuration fields with their current values, defaults, descriptions, types, and whether they are secret.
-- Secret values (e.g., API keys) must be redacted in the response.
+- Return a discovery-driven `RuntimeConfigSnapshot` containing fields the engine guarantees it can validate and hot-apply. Engines are not required to advertise every startup-only setting.
+- Each `RuntimeConfigDefinition` supplies type, description, allowed values, secret metadata, and `default_value` when a canonical default exists.
+- Each `RuntimeConfigValue` reports a redacted display value and its `RuntimeConfigValueSource`: `DEFAULT`, `BASE_CONFIG`, `SESSION_OVERRIDE`, or `RUNTIME_OVERRIDE`.
+- Secret values are never returned. A configured secret sets `has_value=true`, `redacted=true`, and a redacted `display_value`.
+- Engines supporting QRZ lookup, QRZ Logbook, and rig control MUST advertise the common hot-apply keys `QSORIPPER_QRZ_XML_USERNAME`, `QSORIPPER_QRZ_XML_PASSWORD`, `QSORIPPER_QRZ_LOGBOOK_API_KEY`, and `QSORIPPER_RIGCTLD_ENABLED`. Other definitions may be implementation-specific.
+- Startup-only settings such as the active storage backend are reported elsewhere and MUST NOT be advertised here unless the engine can safely hot-apply them.
 
 #### ApplyRuntimeConfig
 
@@ -1068,7 +1084,7 @@ Applies one or more runtime configuration mutations.
 **Behavior:**
 1. Accept a list of `RuntimeConfigMutation` entries (field name + new value + mutation kind).
 2. Validate each mutation against the field's allowed values and type.
-3. Apply the mutations to the running engine state.
+3. Apply the mutations to the running engine state. A successful response guarantees the active integration observes the new value without restart.
 4. Return the updated configuration snapshot.
 
 **Error semantics:**
@@ -1076,11 +1092,11 @@ Applies one or more runtime configuration mutations.
 
 #### ResetRuntimeConfig
 
-Resets all runtime configuration to environment/default values.
+Resets all runtime configuration overrides to the startup/base configuration.
 
 **Behavior:**
-- Discard all applied mutations.
-- Reload configuration from environment variables and defaults.
+- Discard all runtime mutations.
+- Reveal the current base value established from persisted non-secret configuration, environment variables, process-session setup secrets, and defaults. Reset does not reread files or the process environment.
 - Return the reset configuration snapshot.
 
 ### 3.12 StressControlService (Optional)
@@ -1373,7 +1389,7 @@ All configuration is driven by environment variables prefixed with `QSORIPPER_`.
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `QSORIPPER_SERVER_ADDR` | String | `[::1]:50051` | gRPC listen address |
+| `QSORIPPER_SERVER_ADDR` | String | Engine profile dependent | gRPC listen address (`127.0.0.1:50051` for Rust, `127.0.0.1:50052` for .NET) |
 | `QSORIPPER_CONFIG_PATH` | Path | Platform-dependent | Configuration file directory |
 
 #### Storage
@@ -1432,7 +1448,7 @@ The same keys may be persisted under `[cw_keying]` in the shared `config.toml`: 
 |---|---|---|---|
 | `QSORIPPER_SYNC_AUTO_ENABLED` | Bool | `false` | Enable automatic background sync |
 | `QSORIPPER_SYNC_INTERVAL_SECONDS` | Integer | `300` | Auto-sync interval in seconds |
-| `QSORIPPER_SYNC_CONFLICT_POLICY` | Enum | `local_wins` | `local_wins`, `remote_wins`, or `newest_wins` |
+| `QSORIPPER_SYNC_CONFLICT_POLICY` | Enum | `last_write_wins` | `last_write_wins` or `flag_for_review` |
 
 #### Rig Control
 
@@ -1467,10 +1483,10 @@ The engine must start and function even when external integrations are unavailab
 
 | Missing Configuration | Behavior |
 |---|---|
-| QRZ XML credentials | QRZ lookups disabled. `Lookup` returns `LookupState.LOOKUP_STATE_NOT_FOUND`. |
+| QRZ XML credentials | QRZ lookups disabled. Lookup entry points return `LookupState.LOOKUP_STATE_ERROR` with a sanitized configuration message. |
 | QRZ logbook API key | Logbook sync disabled. `SyncWithQrz` returns `FAILED_PRECONDITION`. |
 | rigctld host/port | Rig control disabled. `GetRigStatus` returns `RIG_CONNECTION_STATUS_DISABLED`. |
-| NOAA weather disabled | Space weather disabled. `GetCurrentSpaceWeather` returns `SPACE_WEATHER_STATUS_DISABLED`. |
+| NOAA weather disabled | Space weather disabled. Weather RPCs return a snapshot with `SPACE_WEATHER_STATUS_ERROR`. |
 | Contest calendar disabled | Contest lookup disabled. `GetActiveContests` returns `CONTEST_CALENDAR_STATUS_DISABLED`. |
 | No station profile | QSO logging requires a profile. `LogQso` returns `FAILED_PRECONDITION` until a profile is set. |
 
@@ -1479,10 +1495,17 @@ The engine must start and function even when external integrations are unavailab
 ### 6.3 Configuration Persistence
 
 - Configuration is persisted as a shared TOML file in `QSORIPPER_CONFIG_PATH`.
-- The `SaveSetup` RPC writes configuration to this path.
+- The `SaveSetup` RPC writes only non-secret configuration to this path.
 - On startup, the engine loads persisted configuration and overlays environment variable overrides (env vars take precedence).
 - Runtime config mutations (via `DeveloperControlService`) are ephemeral and do not persist across restarts unless explicitly saved.
-- `ConflictPolicy` uses an explicit zero default: `CONFLICT_POLICY_UNSPECIFIED = 0`. Engines must treat this as a safe/non-destructive policy (`FLAG_FOR_REVIEW`) unless the caller explicitly sets `LAST_WRITE_WINS`.
+- The persisted/default conflict policy is `LAST_WRITE_WINS`. When a present setup request explicitly supplies the proto zero value, engines normalize it to the safe `FLAG_FOR_REVIEW` policy before persistence.
+
+#### Secret handling
+
+- QRZ XML passwords, QRZ Logbook API keys, provider session keys, and future integration credentials MUST NOT be serialized to the shared TOML file.
+- Secrets supplied by `SaveSetup` or `DeveloperControlService` are process-session values. Restart-persistent secrets come from environment variables or a platform secure configuration provider.
+- Status and runtime configuration responses expose only configured/unconfigured state and redacted display text. Logs and error details never contain secret values or sensitive request payloads.
+- On loading a legacy config that contains plaintext QRZ secrets, an engine MAY use those values for the current process so logging remains available, but it MUST immediately rewrite the owned config tables without the plaintext fields. That migration is idempotent.
 
 ---
 
@@ -1494,13 +1517,11 @@ Every logged QSO must carry station identity data. The station context system wo
 
 1. **Station profiles** are named, persisted sets of station defaults: callsign, operator callsign, grid square, county, state, country, DXCC, CQ/ITU zones, latitude/longitude, and ARRL section.
 
-2. **Active profile** — exactly one profile is active at any time. The engine resolves the active profile from (highest priority first):
-   - Session override fields (set via `SetSessionStationProfileOverride`)
-   - Active profile (set via `SetActiveStationProfile`)
+2. **Active profile** — exactly one saved profile is active at any time. A session profile set through `SetSessionStationProfileOverride` fully replaces that saved profile for runtime station context until cleared. It is not a field overlay because the current protobuf request carries a complete `StationProfile` without patch presence semantics.
 
 3. **Station snapshot** — when a QSO is logged, the engine captures the current station context as an immutable `StationSnapshot` and attaches it to the `QsoRecord`. This snapshot is never retroactively updated if the profile changes.
 
-4. **Materialization** — the engine must implement a `station_snapshot_from_profile` function that converts a `StationProfile` (plus any session overrides) into a `StationSnapshot` suitable for embedding in a QSO.
+4. **Materialization** — the engine must implement a `station_snapshot_from_profile` function that converts the effective `StationProfile` into a `StationSnapshot` suitable for embedding in a QSO.
 
 ### 7.2 QSO Lifecycle
 
@@ -1511,16 +1532,16 @@ Every logged QSO must carry station identity data. The station context system wo
 3. Engine normalizes `worked_callsign`: `trim().to_uppercase()`.
 4. Engine validates required fields: `worked_callsign` must be non-empty, `band` must be non-default, `mode` must be non-default, `utc_timestamp` must be present.
 5. Engine stamps `station_callsign` and `station_snapshot` from the active station context.
-6. Engine sets `created_at` = `updated_at` = now (UTC), `sync_status` = `NOT_SYNCED`.
+6. Engine sets `created_at` = `updated_at` = now (UTC), `sync_status` = `LOCAL_ONLY`, clears QRZ linkage, and clears delete state regardless of caller-supplied values.
 7. Engine persists the `QsoRecord` via the storage backend.
-8. Engine returns the persisted record to the client.
+8. Engine returns its generated ID and per-operation sync result. The client uses `GetQso` to retrieve the persisted record.
 
 #### Updating a QSO
 
-1. Client calls `UpdateQso` with `local_id` and changed fields.
-2. Engine loads existing record, applies changes, sets `updated_at` = now.
+1. Client calls `UpdateQso` with a complete replacement record containing `local_id`.
+2. Engine loads the existing record, replaces all caller-owned fields, preserves engine-owned fields, and sets `updated_at` = now.
 3. If previously synced, engine sets `sync_status` = `MODIFIED`.
-4. Engine persists and returns updated record.
+4. Engine persists and returns success. The client uses `GetQso` to retrieve the updated record.
 
 #### Deleting a QSO
 
@@ -1533,6 +1554,10 @@ Every logged QSO must carry station identity data. The station context system wo
 ### 7.3 Sync Lifecycle
 
 The QRZ logbook sync is a multi-phase operation:
+
+#### Phase 0: Status and owner resolution
+
+Call QRZ `STATUS` once before download. Use its owner callsign for upload rewriting and its count for the eventual metadata update. If `STATUS` fails transiently, use cached owner metadata and continue where safe.
 
 #### Phase 0.5: Push local corrections before download
 
@@ -1559,9 +1584,9 @@ This pre-download upload prevents a stale QRZ copy from being downloaded first a
 
 #### Phase 2: Upload
 
-1. Query local QSOs with `sync_status` in (`NOT_SYNCED`, `MODIFIED`). Soft-deleted rows MUST NOT be uploaded as inserts/updates regardless of `sync_status`; they are handled by Phase 2.5.
+1. Query local QSOs with `sync_status` in (`LOCAL_ONLY`, `MODIFIED`). Soft-deleted rows MUST NOT be uploaded as inserts/updates regardless of `sync_status`; they are handled by Phase 2.5.
 2. For each QSO, serialize to ADIF and call the QRZ logbook API:
-   - If `sync_status = NOT_SYNCED` (new record, no `qrz_logid`), use `ACTION=INSERT`.
+   - If `sync_status = LOCAL_ONLY` (new record, no `qrz_logid`), use `ACTION=INSERT`.
    - If `sync_status = MODIFIED` and the record has a `qrz_logid`, use the documented replace form `ACTION=INSERT&OPTION=REPLACE`. QRZ identifies the existing record from the ADIF identity fields. Engines MUST NOT append a `LOGID` selector to `OPTION` or use the undocumented `ACTION=REPLACE` form.
    - If `sync_status = MODIFIED` but no `qrz_logid` is available (e.g., first sync after upgrading from an engine that didn't persist the logid), fall back to `ACTION=INSERT`. Engines SHOULD additionally run the repair pass described in §7.7 before the first sync so modified-without-logid rows are rare.
 3. Accept both `RESULT=OK` (insert) and `RESULT=REPLACE` (update) as success indicators when parsing the QRZ response.
@@ -1582,8 +1607,8 @@ This pre-download upload prevents a stale QRZ copy from being downloaded first a
 
 #### Phase 3: Metadata
 
-1. Call QRZ logbook API `STATUS` to get the current logbook QSO count and owner callsign.
-2. Update `sync_metadata` with the count, timestamp, and owner. If `STATUS` fails, engines SHOULD fall back to locally-computed counts rather than leaving metadata stale.
+1. Reuse the Phase 0 QRZ `STATUS` result. Do not make a second status call.
+2. Update `sync_metadata` with the count, timestamp, and owner. If Phase 0 `STATUS` failed, engines SHOULD fall back to cached owner metadata and locally computed counts rather than inventing a remote count.
 
 **Resilience:** A failure in any phase should not prevent other phases from executing. The engine should report partial success/failure in the stream. A fatal failure in Phase 1 (e.g., metadata load failure, fetch failure) MUST short-circuit the rest of `execute_sync` so that `last_sync` is NOT advanced — the next attempt re-fetches the same window.
 
@@ -1597,11 +1622,11 @@ When `LogQso.sync_to_qrz=true` or `UpdateQso.sync_to_qrz=true`, engines MUST att
 
 **Success path:** adopt the QRZ-assigned `LOGID`, set `sync_status=SYNC_STATUS_SYNCED`, write the row back to local storage, and populate the response's `sync_success=true` (and `qrz_logid` for `LogQsoResponse`).
 
-**Failure path:** the local persist (step 1) MUST succeed regardless. The QRZ failure is reported, not raised: leave the row's `sync_status` untouched (`NOT_SYNCED` or `MODIFIED`), set `sync_success=false`, and put a human-readable message in `sync_error`. The next bulk `SyncWithQrz` will retry the row via Phase 2.
+**Failure path:** the local persist MUST happen before the remote call and remains successful regardless of remote outcome. The QRZ failure is reported, not raised: leave the row's `sync_status` untouched (`LOCAL_ONLY` or `MODIFIED`), set `sync_success=false`, and put a human-readable message in `sync_error`. The next bulk `SyncWithQrz` will retry the row via Phase 2.
 
 **Configuration not present:** if no QRZ logbook API key is configured, return `sync_success=false` with `sync_error="QRZ Logbook API key is not configured."`. The local row still persists.
 
-**.NET divergence:** the .NET reference engine currently runs all `LogQso`/`UpdateQso` work under a synchronous lock and does not yet issue the per-op QRZ HTTP call from inside that critical section. It returns `sync_success=true` with a placeholder `qrz_logid` when configured, or a `sync_error` indicating the operation is not yet wired. Tracked as a follow-up; see Appendix C.
+**Not requested:** when `sync_to_qrz=false`, return `sync_success=false` and leave `sync_error` absent. The boolean describes a successful remote operation, not local persistence.
 
 ### 7.4 Lookup Lifecycle
 
@@ -1667,11 +1692,16 @@ When DXCC data is available, cascade zone information onto the lookup result if 
    - `MY_GRIDSQUARE_EXT` → `station_snapshot.gridsquare_ext`
    - `APP_QSORIPPER_RX_WPM` → `cw_decode_rx_wpm` (parsed as unsigned integer; non-numeric values fall back to `extra_fields`)
    - `APP_QSORIPPER_CW_TRANSCRIPT` → `cw_decode_transcript` (decoded CW transcript snapshot for the QSO; empty values are dropped)
+   - `ARRL_SECT` and `SKCC` → worked-station `arrl_section` and `skcc_number`
+   - `QSL_SENT`, `QSL_RCVD`, `QSLSDATE`, and `QSLRDATE` → typed QSL status/date fields
+   - `LOTW_QSL_SENT`, `LOTW_QSL_RCVD`, `LOTW_QSLSDATE`, and `LOTW_QSLRDATE` → typed LoTW status/date fields
+   - `EQSL_QSL_SENT`, `EQSL_QSL_RCVD`, `EQSL_QSLSDATE`, and `EQSL_QSLRDATE` → typed eQSL status/date fields
+   - `MY_LAT`, `MY_LON`, `MY_ARRL_SECT`, `MY_CQ_ZONE`, and `MY_ITU_ZONE` → dedicated `station_snapshot` fields
    Unrecognized values (e.g., malformed LAT, unknown `QSO_COMPLETE` literal) fall back to `extra_fields` under the original key.
 5. Preserve any other unrecognized ADIF fields in the `extra_fields` map for lossless round-trip.
 6. Generate a `local_id` for each imported record.
 7. Normalize callsigns and validate required fields.
-8. Insert into storage with `sync_status = NOT_SYNCED`.
+8. Insert into storage with `sync_status = LOCAL_ONLY`.
 
 See `docs/integrations/adif-specification.md` for the authoritative field-name table.
 
@@ -1683,7 +1713,7 @@ See `docs/integrations/adif-specification.md` for the authoritative field-name t
    - `qrz_logid` → `APP_QRZLOG_LOGID`
    - `qrz_bookid` → `APP_QRZLOG_QSO_ID`
    When iterating `extra_fields`, skip keys already covered by these dedicated emissions (`APP_QRZLOG_LOGID`, `APP_QRZ_LOGID`, `APP_QRZLOG_QSO_ID`, `APP_QRZ_BOOKID`) to avoid duplicate ADIF fields.
-4. Emit the normalized ADIF fields from their dedicated proto slots whenever populated (`BAND_RX`, `FREQ_RX`, `LAT`, `LON`, `ALTITUDE`, `GRIDSQUARE_EXT`, `OWNER_CALLSIGN`, `QSO_COMPLETE`, `MY_ALTITUDE`, `MY_GRIDSQUARE_EXT`, `APP_QSORIPPER_RX_WPM`, `APP_QSORIPPER_CW_TRANSCRIPT`). When iterating `extra_fields`, skip these same keys so the dedicated proto value always wins and the ADIF output never contains the same field twice. Engines MUST sanitize `cw_decode_transcript` to printable ASCII (plus CR/LF/tab) before emitting `APP_QSORIPPER_CW_TRANSCRIPT` so the .NET char-count length and Rust byte-count length agree across runtimes.
+4. Emit normalized ADIF fields from their dedicated proto slots whenever populated, including the worked/station, QSL, LoTW, eQSL, SKCC, ARRL section, zone, and coordinate mappings listed above. When iterating `extra_fields`, skip every key handled by a dedicated field so the dedicated proto value always wins and the ADIF output never contains the same field twice. Engines MUST sanitize `cw_decode_transcript` to printable ASCII (plus CR/LF/tab) before emitting `APP_QSORIPPER_CW_TRANSCRIPT` so the .NET char-count length and Rust byte-count length agree across runtimes.
 5. Include other `extra_fields` to preserve data from previous imports.
 6. Output records delimited by `<eor>`.
 
@@ -1843,9 +1873,9 @@ Every engine must implement `GetEngineInfo` to report its identity and capabilit
 
 | Proto field | Example (Rust) | Example (.NET) |
 |---|---|---|
-| `engine_id` | `rust-tonic` | `dotnet-managed` |
+| `engine_id` | `rust-tonic` | `dotnet-aspnet` |
 | `display_name` | `QsoRipper Rust Engine` | `QsoRipper .NET Engine` |
-| `version` | `0.1.0` | `0.1.0` |
+| `version` | SemVer package version, for example `0.1.0` | Assembly informational/version string, which may contain four numeric components |
 | `capabilities` | List of supported capability strings | List of supported capability strings |
 
 > **Note:** Earlier drafts of this spec referenced `engine_language` and `storage_backend` fields. These were never added to the `EngineInfo` proto message. Use `engine_id` to infer the implementation language if needed.
@@ -1880,14 +1910,14 @@ Engines currently report a static set of capabilities. Configuration-gated capab
 
 ### 9.1 Conformance Harness
 
-The conformance harness lives at `tests/Run-EngineConformance.ps1`. It is a PowerShell script that:
+The black-box conformance harness lives at `tests/Run-EngineConformance.ps1`. It is a PowerShell script that:
 
-1. Starts an engine process (configurable: Rust with SQLite, .NET with memory, etc.).
-2. Runs the QsoRipper CLI against the engine to exercise the full RPC surface.
-3. Compares results across engine implementations for field-level parity.
+1. Starts each reference engine with both memory and SQLite storage.
+2. Runs the QsoRipper CLI against each engine to exercise client-visible setup, status, CW, CRUD, restore, purge, filtering, ADIF export, and ADIF import workflows.
+3. Compares normalized results across engine implementations and storage backends for field-level parity.
 4. Writes a structured JSON summary to `artifacts/conformance/<run-id>/`.
 
-The harness is the authoritative definition of "conformant." If the spec and the harness disagree, update the spec.
+The protobuf files and this specification define conformance. The black-box harness is a required executable acceptance layer, but it is not the only test layer. Network-dependent QRZ behavior, precise gRPC status codes, streaming cancellation/timing, scheduler state, startup repair, runtime configuration, rig, weather, contest, station-profile, and Great Circle contracts are also covered by the reference engines' service-level integration and unit suites. A new engine must provide equivalent automated coverage for required services it cannot exercise through the CLI.
 
 ### 9.2 Required Test Scenarios
 
@@ -1906,30 +1936,34 @@ A conformant engine must pass all of the following scenarios:
 6. `ListQsos` returns exactly the expected QSOs with correct ordering.
 7. `UpdateQso` modifies the specified fields and updates `updated_at`.
 8. `DeleteQso` soft-deletes the QSO; default `ListQsos` hides it, and `GetQso` returns it with `deleted_at` set.
-9. Unary success and failure responses with optional scalar fields serialize cleanly at the service boundary without handler exceptions.
+9. `RestoreQso` clears the tombstone and returns the row to the default list.
+10. `PurgeDeletedQsos(confirm=true)` physically removes a re-deleted row, after which `GetQso` returns `NOT_FOUND`.
+11. Inclusive time boundaries and case-insensitive station/worked callsign filters produce identical results on memory and SQLite.
+12. Unary success and failure responses with optional scalar fields serialize cleanly at the service boundary without handler exceptions.
 
 #### ADIF Round-Trip
 
-10. `ExportAdif` produces valid ADIF output containing all logged QSOs.
-11. `ImportAdif` with previously exported ADIF creates equivalent records.
-12. `extra_fields` survive a full import → export → import round-trip.
+13. `ExportAdif` produces valid ADIF output containing all logged QSOs.
+14. `ImportAdif` with previously exported ADIF creates equivalent records.
+15. Typed QRZ/QSL fields and `extra_fields` survive a full import → export → import round-trip.
 
 #### Cross-Engine Parity
 
-13. Given the same sequence of operations, the Rust and .NET engines produce field-identical `GetQso`, `ListQsos`, and `ExportAdif` results.
-14. Both engines report `localQsoCount == 1` after logging one QSO.
+16. Given the same sequence of operations, the Rust and .NET engines produce field-identical `GetQso`, `ListQsos`, `ExportAdif`, and re-import results.
+17. Each engine's memory and SQLite backends produce the same normalized results.
+18. Both engines report `localQsoCount == 1` after logging one QSO.
 
 #### Lookup (if credentials available)
 
-15. `Lookup` for a known callsign returns a populated `CallsignRecord`.
-16. `GetCachedCallsign` returns the cached result after a successful lookup.
-17. `Lookup` for an unknown callsign returns `LOOKUP_STATE_NOT_FOUND`.
+19. `Lookup` for a known callsign returns a populated `CallsignRecord`.
+20. `GetCachedCallsign` returns the cached result after a successful lookup.
+21. `Lookup` for an unknown callsign returns `LOOKUP_STATE_NOT_FOUND`.
 
 #### Degradation
 
-18. Engine starts successfully with no QRZ credentials configured.
-19. Engine starts successfully with no rigctld configured.
-20. `LogQso` works when external integrations are unavailable.
+22. Engine starts successfully with no QRZ credentials configured.
+23. Engine starts successfully with no rigctld configured.
+24. `LogQso` works when external integrations are unavailable.
 
 ---
 
@@ -2012,11 +2046,6 @@ A conformant engine must pass all of the following scenarios:
 
 See `docs/architecture/data-model.md` for the complete proto conventions and field-addition guide.
 
-## Appendix C: Known Follow-Up Work
+## Appendix C: Contract Evolution
 
-The following gaps are documented tracking items. They do not affect the normative behaviour above; they identify places where individual reference engines do not yet fully meet this spec and are being closed in follow-up PRs.
-
-- **.NET engine — `SyncWithQrz` streaming granularity.** The .NET engine currently produces a single terminal `SyncWithQrzResponse` instead of per-phase progress messages. Matches the spec's RPC signature but loses UI progress fidelity vs. the Rust engine.
-- **.NET engine — QRZ ADIF field coverage.** The .NET `AdifCodec` does not yet parse/emit every QRZ-specific field the Rust mapper covers (e.g., `ARRL_SECT`, SKCC, QSL/LOTW/EQSL date and flag variants, `MY_LAT`/`MY_LON`, `MY_ARRL_SECT`, `MY_CQ_ZONE`/`MY_ITU_ZONE`). Missing fields round-trip via `extra_fields` today, but should graduate to dedicated domain columns.
-- **.NET engine — per-operation `sync_to_qrz=true` on `LogQso`/`UpdateQso`.** `ManagedEngineState.LogQso`/`UpdateQso` run inside a synchronous lock and do not yet issue the per-op QRZ HTTP call. Currently returns either a placeholder logid (when configured) or a `sync_error`. Reaching parity requires moving the HTTP call out of the lock (likely making the handlers async). The Rust engine implements this fully via `sync::sync_single_qso`. See §7.3 "Per-Operation Sync".
-- **Both engines — `PurgeDeletedQsos` remote-delete-first flow.** When `include_pending_remote_deletes = true`, the purge handler should push QRZ `ACTION=DELETE` for qualifying rows before the local hard-delete. The initial implementation purges locally without the remote-delete pass. See §7.9.
+Known reference-engine divergences must be tracked as issues and must not be presented here as accepted exceptions to normative behavior. Any future behavior change updates protobuf, this specification, both reference implementations, and conformance coverage in the same change.

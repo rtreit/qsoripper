@@ -4,6 +4,7 @@ using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Engine.DotNet;
 using QsoRipper.Engine.DotNet.Wsjtx;
+using QsoRipper.Engine.QrzLogbook;
 using QsoRipper.Engine.Storage.Memory;
 using QsoRipper.Services;
 
@@ -324,7 +325,15 @@ public sealed class WsjtxIngestTests : IDisposable
 
     private ManagedEngineState CreateStateWithProfile(string? apiKey = null)
     {
-        var state = new ManagedEngineState(Path.Combine(_tempDirectory, "config.toml"), new MemoryStorage());
+        var storage = new MemoryStorage();
+        var syncEngine = apiKey is null ? null : new QrzSyncEngine(new SuccessfulQrzLogbookApi());
+        var state = new ManagedEngineState(
+            Path.Combine(_tempDirectory, "config.toml"),
+            storage,
+            lookupCoordinator: null,
+            rigControlMonitor: null,
+            spaceWeatherMonitor: null,
+            syncEngine: syncEngine);
         var request = new SaveSetupRequest
         {
             StationProfile = new StationProfile
@@ -343,6 +352,21 @@ public sealed class WsjtxIngestTests : IDisposable
 
         state.SaveSetup(request);
         return state;
+    }
+
+    private sealed class SuccessfulQrzLogbookApi : IQrzLogbookApi
+    {
+        public Task<List<QsoRecord>> FetchQsosAsync(string? sinceDateYmd) => Task.FromResult(new List<QsoRecord>());
+
+        public Task<string> UploadQsoAsync(QsoRecord qso, string? bookOwner = null) => Task.FromResult("WSJTX-1");
+
+        public Task<string> UploadQsoWithReplaceAsync(QsoRecord qso, string? bookOwner = null) => Task.FromResult("WSJTX-1");
+
+        public Task<string> UpdateQsoAsync(QsoRecord qso, string? bookOwner = null) => Task.FromResult("WSJTX-1");
+
+        public Task<QrzLogbookStatus> GetStatusAsync() => Task.FromResult(new QrzLogbookStatus("K7RND", 0));
+
+        public Task DeleteQsoAsync(string logid) => Task.CompletedTask;
     }
 
     private static byte[] BuildLoggedAdifDatagram(string id, string adif)
@@ -375,4 +399,3 @@ public sealed class WsjtxIngestTests : IDisposable
         stream.Write(bytes);
     }
 }
-
