@@ -26,9 +26,11 @@ if ($missing.Count -gt 0) {
 
 $different = foreach ($file in $expected) {
     $qsoRipperFile = Join-Path $qsoRipperProto $file.Name
-    $catHubHash = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
-    $qsoRipperHash = (Get-FileHash -LiteralPath $qsoRipperFile -Algorithm SHA256).Hash
-    if ($catHubHash -ne $qsoRipperHash) {
+    # Git intentionally preserves LF for CatHub's protocol fixtures while a Windows
+    # QsoRipper checkout may use CRLF. Compare contract text, not checkout line endings.
+    $catHubText = (Get-Content -LiteralPath $file.FullName -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+    $qsoRipperText = (Get-Content -LiteralPath $qsoRipperFile -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+    if ($catHubText -cne $qsoRipperText) {
         $file.Name
     }
 }

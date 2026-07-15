@@ -1,7 +1,7 @@
 {
   "repository": "https://github.com/treitforge/cathub",
-  "version": "0.1.0",
-  "protocolVersion": "0.1.0",
+  "version": "0.1.1",
+  "protocolVersion": "0.1.1",
   "supportedVersion": ">=0.1.0 <0.2.0",
   "wirePackage": "qsoripper.services",
   "rustPackage": "cathub-protocol",

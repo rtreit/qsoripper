@@ -8,17 +8,43 @@ QsoRipper does not require CatHub. Without it, QsoRipper can use an ordinary ext
 `rigctld`, a directly connected WinKeyer, or no rig and keyer integration at all. Logging
 continues normally when CatHub is stopped or unavailable.
 
-## Install CatHub
+## Install the CatHub daemon
 
-Build or install CatHub from its standalone repository. QsoRipper resolves its executable in
-this order:
+QsoRipper needs the CatHub executable, not the `cathub-protocol` Rust crate or the
+`CatHub.Protocol` NuGet package. Those packages are for applications that develop against
+CatHub's typed WinKeyer API.
+
+Download the CatHub 0.1.1 Windows or Linux archive and adjacent SHA-256 checksum from the
+[GitHub release](https://github.com/treitforge/cathub/releases/tag/v0.1.1). Verify the
+checksum, extract the executable, and either add its directory to `PATH` or set
+`CATHUB_EXECUTABLE`.
+
+If Rust 1.88 or newer is installed, install the same release from crates.io:
+
+```powershell
+cargo install cathub --version 0.1.1
+```
+
+Cargo downloads `cathub-protocol` automatically while building the daemon. The protocol
+crate is not a separate runtime installation step for the operator.
+
+To build from source instead:
+
+```powershell
+git clone https://github.com/treitforge/cathub.git
+Set-Location cathub
+cargo build --release -p cathub
+$env:CATHUB_EXECUTABLE = (Resolve-Path .\target\release\cathub.exe)
+```
+
+QsoRipper resolves the executable in this order:
 
 1. The path in `CATHUB_EXECUTABLE`.
 2. A binary bundled at `artifacts\publish\cathub\Release\cathub.exe` on Windows, or the
    equivalent platform path.
 3. `cathub` on `PATH`.
 
-QsoRipper never downloads or updates CatHub during startup.
+QsoRipper never downloads, installs, or updates CatHub during startup.
 The current supported executable range is `>=0.1.0 <0.2.0`; the launcher checks
 `cathub --version` and reports an incompatible version separately from a spawn failure.
 
@@ -54,8 +80,8 @@ QsoRipper does not rewrite the external CatHub file.
 CatHub owns its configuration parser and semantic validation:
 
 ```powershell
-cathub config validate --config "$env:APPDATA\qsoripper\config.toml"
-cathub config print-effective --config "$env:APPDATA\qsoripper\config.toml"
+cathub --section cat_hub config validate --config "$env:APPDATA\qsoripper\config.toml"
+cathub --section cat_hub config print-effective --config "$env:APPDATA\qsoripper\config.toml"
 ```
 
 Extract `[cat_hub]` into a standalone file without modifying the source:
@@ -118,10 +144,16 @@ keyer and broker. Enable transmission only during an attended hardware test.
 
 ## Protocol compatibility
 
-The first standalone CatHub release preserves the existing `qsoripper.services` WinKeyer
-broker wire package. The authoritative contract now lives in the CatHub repository. The
-QsoRipper contract copy remains temporarily pinned for the initial compatibility release and
-must track the supported CatHub protocol version exactly.
+CatHub 0.1 retains the existing `qsoripper.services` WinKeyer broker wire-package identifier.
+The identifier is part of the wire contract and does not make CatHub part of QsoRipper. The
+authoritative contract lives in the CatHub repository.
+
+QsoRipper currently carries a pinned protocol snapshot so its shared Rust and .NET protocol
+generation remains integrated with the rest of QsoRipper's contract build. The snapshot must
+track the supported CatHub protocol version exactly. Installing QsoRipper or running CatHub
+does not require the published `cathub-protocol` Rust crate or `CatHub.Protocol` NuGet
+package. Those packages are for independent applications that develop against CatHub's typed
+API.
 
 The dependency pin is recorded in `config\cathub-dependency.json`. When both repositories are
 checked out as siblings, verify the temporary QsoRipper protocol snapshot with:
@@ -131,4 +163,4 @@ checked out as siblings, verify the temporary QsoRipper protocol snapshot with:
 ```
 
 See the CatHub repository for the complete radio topology, virtual serial setup, permissions,
-safety behavior, WinKeyer maintenance rules, and troubleshooting guide.
+safety behavior, WinKeyer maintenance rules, releases, and troubleshooting guide.
