@@ -5012,7 +5012,7 @@ tcp_port = 99999
             saved.contains("[[cat_hub.serial_endpoint]]"),
             "endpoint: {saved}"
         );
-        // CatHub owns semantic validation after the repository extraction. This test
+        // CatHub owns semantic validation. This test
         // verifies QsoRipper's managed-mode projection and preservation behavior; CatHub's
         // standalone suite validates the same document shape against the daemon parser.
 
