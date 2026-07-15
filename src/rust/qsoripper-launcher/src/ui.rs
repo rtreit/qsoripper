@@ -102,7 +102,6 @@ pub(crate) struct AppState {
     pub selection: Selection,
     pub config_path: PathBuf,
     pub artifact_root: ArtifactRoot,
-    _repo_root: PathBuf,
     column: Column,
     cursor: BTreeMap<Column, usize>,
     statuses: BTreeMap<ComponentId, Status>,
@@ -118,7 +117,6 @@ impl AppState {
         selection: Selection,
         config_path: PathBuf,
         artifact_root: ArtifactRoot,
-        repo_root: PathBuf,
     ) -> Self {
         let mut cursor = BTreeMap::new();
         cursor.insert(Column::Engines, 0);
@@ -128,7 +126,6 @@ impl AppState {
             selection,
             config_path,
             artifact_root,
-            _repo_root: repo_root,
             column: Column::Engines,
             cursor,
             statuses: BTreeMap::new(),

@@ -17,6 +17,11 @@ pub(crate) struct LaunchPlan {
     pub readiness_port: Option<u16>,
 }
 
+enum CatHubReadiness {
+    ConfigUnreadable,
+    Configured(Option<u16>),
+}
+
 const QSORIPPER_ENGINE_ENV: &str = "QSORIPPER_ENGINE";
 const QSORIPPER_ENDPOINT_ENV: &str = "QSORIPPER_ENDPOINT";
 
@@ -88,7 +93,9 @@ pub(crate) fn daemon_plan(
     if daemon_id == DAEMON_CATHUB {
         let (config, managed) =
             resolve_cathub_config(unified_config_path, standalone_config_override);
-        readiness_port = cathub_readiness_port(&config).or(readiness_port);
+        if let CatHubReadiness::Configured(configured_port) = cathub_readiness_port(&config) {
+            readiness_port = configured_port;
+        }
         if managed {
             args.push("--section".into());
             args.push("cat_hub".into());
@@ -104,10 +111,9 @@ pub(crate) fn daemon_plan(
     })
 }
 
-/// Choose the cathub config path. Uses the unified config only when it parses
+/// Choose the `CatHub` config path. Uses the unified config only when it parses
 /// and exposes a top-level `cat_hub` table; any read/parse failure or a missing
-/// table falls back to the repo sample so a malformed unified file never makes
-/// the hub silently mis-parse it as a standalone cathub config.
+/// table falls back to `CatHub`'s standalone configuration path.
 fn resolve_cathub_config(
     unified_config_path: &Path,
     standalone_config_override: Option<&Path>,
@@ -144,17 +150,36 @@ fn default_cathub_config_path() -> PathBuf {
     PathBuf::from("cathub.toml")
 }
 
-fn cathub_readiness_port(config_path: &Path) -> Option<u16> {
-    let text = std::fs::read_to_string(config_path).ok()?;
-    let document = text.parse::<toml_edit::DocumentMut>().ok()?;
+fn cathub_readiness_port(config_path: &Path) -> CatHubReadiness {
+    let Ok(text) = std::fs::read_to_string(config_path) else {
+        return CatHubReadiness::ConfigUnreadable;
+    };
+    let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
+        return CatHubReadiness::ConfigUnreadable;
+    };
     let root = document.get("cat_hub").unwrap_or(document.as_item());
-    let endpoints = root.get("hamlib_net")?.as_array_of_tables()?;
-    let port = endpoints.iter().find_map(|endpoint| {
-        let bind = endpoint.get("bind")?.as_str()?;
-        bind.rsplit_once(':')
-            .and_then(|(_, port)| port.parse::<u16>().ok())
-    });
-    port
+    let hamlib_port = root
+        .get("hamlib_net")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .and_then(|endpoints| {
+            endpoints.iter().find_map(|endpoint| {
+                endpoint
+                    .get("bind")
+                    .and_then(toml_edit::Item::as_str)
+                    .and_then(socket_port)
+            })
+        });
+    let winkeyer_port = root
+        .get("winkeyer")
+        .and_then(|winkeyer| winkeyer.get("api_bind"))
+        .and_then(toml_edit::Item::as_str)
+        .and_then(socket_port);
+    CatHubReadiness::Configured(hamlib_port.or(winkeyer_port))
+}
+
+fn socket_port(bind: &str) -> Option<u16> {
+    bind.rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
 }
 
 fn unified_has_cat_hub(unified_config_path: &Path) -> bool {
@@ -299,5 +324,31 @@ mod tests {
         .unwrap();
         let plan = daemon_plan(DAEMON_CATHUB, &unified, None).expect("plan");
         assert_eq!(plan.readiness_port, Some(4632));
+    }
+
+    #[test]
+    fn daemon_plan_uses_winkeyer_readiness_without_hamlib() {
+        let dir = tempfile::tempdir().unwrap();
+        let unified = dir.path().join("config.toml");
+        std::fs::write(
+            &unified,
+            "[cat_hub.radio]\nbackend = \"loopback\"\n[cat_hub.winkeyer]\napi_bind = \"127.0.0.1:51071\"\n",
+        )
+        .unwrap();
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, None).expect("plan");
+        assert_eq!(plan.readiness_port, Some(51071));
+    }
+
+    #[test]
+    fn daemon_plan_has_no_readiness_port_for_serial_only_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let unified = dir.path().join("config.toml");
+        std::fs::write(
+            &unified,
+            "[cat_hub.radio]\nbackend = \"loopback\"\n[[cat_hub.serial_endpoint]]\nname = \"logger\"\ntransport = \"COM10\"\n",
+        )
+        .unwrap();
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, None).expect("plan");
+        assert_eq!(plan.readiness_port, None);
     }
 }

@@ -323,14 +323,17 @@ pub(crate) fn verify_cathub_version(exe: &Path) -> Result<String> {
     let reported = String::from_utf8_lossy(&output.stdout);
     let version = parse_cathub_version(&reported)
         .context("CatHub returned an unrecognized version response")?;
-    if version != SUPPORTED_CATHUB_SERIES
-        && !version.starts_with(&format!("{SUPPORTED_CATHUB_SERIES}."))
-    {
+    if !is_supported_cathub_version(version) {
         bail!(
             "incompatible CatHub version {version}; QsoRipper supports {SUPPORTED_CATHUB_SERIES}.x"
         );
     }
     Ok(version.to_owned())
+}
+
+fn is_supported_cathub_version(version: &str) -> bool {
+    version == SUPPORTED_CATHUB_SERIES
+        || version.starts_with(&format!("{SUPPORTED_CATHUB_SERIES}."))
 }
 
 fn parse_cathub_version(reported: &str) -> Option<&str> {
@@ -539,6 +542,16 @@ mod tests {
         assert_eq!(parse_cathub_version("cathub 0.1.0\n"), Some("0.1.0"));
         assert_eq!(parse_cathub_version("other 0.1.0"), None);
         assert_eq!(parse_cathub_version("cathub"), None);
+    }
+
+    #[test]
+    fn accepts_only_supported_cathub_version_series() {
+        assert!(is_supported_cathub_version("0.1"));
+        assert!(is_supported_cathub_version("0.1.0"));
+        assert!(is_supported_cathub_version("0.1.12"));
+        assert!(!is_supported_cathub_version("0.0.9"));
+        assert!(!is_supported_cathub_version("0.2.0"));
+        assert!(!is_supported_cathub_version("0.10.0"));
     }
 
     #[test]
