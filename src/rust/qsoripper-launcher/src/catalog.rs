@@ -47,11 +47,21 @@ pub(crate) struct ArtifactSpec {
     /// File name of the executable on the current platform (without `.exe`;
     /// platform suffix is appended in [`ArtifactSpec::executable_path`]).
     pub executable_stem: &'static str,
+    /// Optional environment variable containing an explicitly installed executable.
+    /// When present, resolution falls back to a bundled artifact and then `PATH`.
+    pub external_executable_env: Option<&'static str>,
 }
 
 impl ArtifactSpec {
     /// Resolve the full executable path under the published artifact root.
     pub(crate) fn executable_path(&self, root: &ArtifactRoot) -> PathBuf {
+        if let Some(variable) = self.external_executable_env {
+            if let Some(path) = std::env::var_os(variable).map(PathBuf::from) {
+                if path.is_file() {
+                    return path;
+                }
+            }
+        }
         let mut p = root
             .path()
             .join(self.publish_subdir)
@@ -61,7 +71,30 @@ impl ArtifactSpec {
             name.push_str(".exe");
         }
         p.push(name);
+        if self.external_executable_env.is_some() && !p.is_file() {
+            if let Some(installed) = find_on_path(p.file_name().unwrap_or_default()) {
+                return installed;
+            }
+        }
         p
+    }
+}
+
+fn find_on_path(file_name: &std::ffi::OsStr) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(file_name))
+        .find(|candidate| candidate.is_file())
+}
+
+const fn bundled_artifact(
+    publish_subdir: &'static str,
+    executable_stem: &'static str,
+) -> ArtifactSpec {
+    ArtifactSpec {
+        publish_subdir,
+        executable_stem,
+        external_executable_env: None,
     }
 }
 
@@ -79,14 +112,15 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
     vec![
         ComponentSpec {
             id: DAEMON_CATHUB,
-            display_name: "CAT hub daemon (rigctld :4532)",
+            display_name: "CatHub standalone service",
             kind: ComponentKind::Daemon,
             engine_port: Some(4532),
             engine_bindable: false,
             wants_console: false,
             artifact: ArtifactSpec {
-                publish_subdir: "qsoripper-cathub",
-                executable_stem: "qsoripper-cathub",
+                publish_subdir: "cathub",
+                executable_stem: "cathub",
+                external_executable_env: Some("CATHUB_EXECUTABLE"),
             },
         },
         ComponentSpec {
@@ -96,10 +130,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
             engine_port: Some(50051),
             engine_bindable: false,
             wants_console: false,
-            artifact: ArtifactSpec {
-                publish_subdir: "qsoripper-server",
-                executable_stem: "qsoripper-server",
-            },
+            artifact: bundled_artifact("qsoripper-server", "qsoripper-server"),
         },
         ComponentSpec {
             id: ENGINE_DOTNET,
@@ -108,10 +139,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
             engine_port: Some(50052),
             engine_bindable: false,
             wants_console: false,
-            artifact: ArtifactSpec {
-                publish_subdir: "qsoripper-engine-dotnet",
-                executable_stem: "QsoRipper.Engine.DotNet",
-            },
+            artifact: bundled_artifact("qsoripper-engine-dotnet", "QsoRipper.Engine.DotNet"),
         },
         ComponentSpec {
             id: UI_GUI,
@@ -120,10 +148,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
             engine_port: None,
             engine_bindable: true,
             wants_console: false,
-            artifact: ArtifactSpec {
-                publish_subdir: "qsoripper-gui",
-                executable_stem: "QsoRipper.Gui",
-            },
+            artifact: bundled_artifact("qsoripper-gui", "QsoRipper.Gui"),
         },
         ComponentSpec {
             id: UI_DEBUGHOST,
@@ -132,10 +157,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
             engine_port: None,
             engine_bindable: true,
             wants_console: false,
-            artifact: ArtifactSpec {
-                publish_subdir: "qsoripper-debughost",
-                executable_stem: "QsoRipper.DebugHost",
-            },
+            artifact: bundled_artifact("qsoripper-debughost", "QsoRipper.DebugHost"),
         },
         ComponentSpec {
             id: UI_TUI,
@@ -144,10 +166,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
             engine_port: None,
             engine_bindable: true,
             wants_console: true,
-            artifact: ArtifactSpec {
-                publish_subdir: "qsoripper-tui",
-                executable_stem: "qsoripper-tui",
-            },
+            artifact: bundled_artifact("qsoripper-tui", "qsoripper-tui"),
         },
         ComponentSpec {
             id: UI_CWSCOPE,
@@ -156,10 +175,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
             engine_port: None,
             engine_bindable: false,
             wants_console: false,
-            artifact: ArtifactSpec {
-                publish_subdir: "cw-decoder-gui",
-                executable_stem: "CwDecoderGui",
-            },
+            artifact: bundled_artifact("cw-decoder-gui", "CwDecoderGui"),
         },
         ComponentSpec {
             id: UI_WIN32,
@@ -170,10 +186,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
             // QSORIPPER_ENDPOINT; engine selection is its own follow-up.
             engine_bindable: false,
             wants_console: false,
-            artifact: ArtifactSpec {
-                publish_subdir: "qsoripper-win32",
-                executable_stem: "qsoripper-win32",
-            },
+            artifact: bundled_artifact("qsoripper-win32", "qsoripper-win32"),
         },
     ]
 }
@@ -222,8 +235,12 @@ mod tests {
         assert_eq!(spec.engine_port, Some(4532));
         assert!(!spec.engine_bindable);
         assert!(!spec.wants_console);
-        assert_eq!(spec.artifact.publish_subdir, "qsoripper-cathub");
-        assert_eq!(spec.artifact.executable_stem, "qsoripper-cathub");
+        assert_eq!(spec.artifact.publish_subdir, "cathub");
+        assert_eq!(spec.artifact.executable_stem, "cathub");
+        assert_eq!(
+            spec.artifact.external_executable_env,
+            Some("CATHUB_EXECUTABLE")
+        );
     }
 
     #[test]

@@ -95,7 +95,7 @@ pub enum CwBackendKind {
     Winkeyer,
     /// Reserved future UDP cwdaemon backend.
     Cwdaemon,
-    /// Multi-client `WinKeyer` broker hosted by `qsoripper-cathub`.
+    /// Multi-client `WinKeyer` broker hosted by the standalone `CatHub` service.
     Cathub,
 }
 

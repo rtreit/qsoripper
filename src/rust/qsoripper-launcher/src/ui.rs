@@ -22,7 +22,9 @@ use crate::discovery::ArtifactRoot;
 use crate::model::Selection;
 use crate::plan::{daemon_plan, engine_plan, ui_plan};
 use crate::ports::{is_port_listening, wait_for_port, wait_for_port_release};
-use crate::process::{open_url, reap_stale_published_copies, spawn, stop_pid, ProcessRegistry};
+use crate::process::{
+    open_url, reap_stale_published_copies, spawn, stop_pid, verify_cathub_version, ProcessRegistry,
+};
 use crate::sync::{diff_rows, DialogState, DiffRow, Side, SyncDialog};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -100,7 +102,7 @@ pub(crate) struct AppState {
     pub selection: Selection,
     pub config_path: PathBuf,
     pub artifact_root: ArtifactRoot,
-    repo_root: PathBuf,
+    _repo_root: PathBuf,
     column: Column,
     cursor: BTreeMap<Column, usize>,
     statuses: BTreeMap<ComponentId, Status>,
@@ -126,7 +128,7 @@ impl AppState {
             selection,
             config_path,
             artifact_root,
-            repo_root,
+            _repo_root: repo_root,
             column: Column::Engines,
             cursor,
             statuses: BTreeMap::new(),
@@ -283,11 +285,13 @@ impl AppState {
     /// the rest of the launch.
     fn launch_daemons(&mut self) -> bool {
         for daemon_id in self.selection.daemons.clone() {
-            let Some(plan) = daemon_plan(daemon_id, &self.config_path, &self.repo_root) else {
+            let external_config = std::env::var_os("CATHUB_CONFIG_PATH").map(PathBuf::from);
+            let Some(plan) = daemon_plan(daemon_id, &self.config_path, external_config.as_deref())
+            else {
                 continue;
             };
             let exe = plan.spec.artifact.executable_path(&self.artifact_root);
-            let port = plan.spec.engine_port.unwrap_or(0);
+            let port = plan.readiness_port.unwrap_or(0);
             if port != 0 && is_port_listening(port, Duration::from_millis(200)) {
                 // Something owns the port. If it is a stale copy of our own
                 // published binary left by an earlier session/rebuild, reclaim
@@ -301,6 +305,12 @@ impl AppState {
                         .insert(daemon_id, Status::listening_external());
                     continue;
                 }
+            }
+            if let Err(error) = verify_cathub_version(&exe) {
+                self.statuses
+                    .insert(daemon_id, Status::failed(&error.to_string()));
+                self.last_message = format!("Aborted launch: {error}");
+                return false;
             }
             self.statuses.insert(daemon_id, Status::starting());
             let arg_refs: Vec<&std::ffi::OsStr> = plan.args.iter().map(AsRef::as_ref).collect();

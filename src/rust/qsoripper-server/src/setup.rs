@@ -5012,8 +5012,9 @@ tcp_port = 99999
             saved.contains("[[cat_hub.serial_endpoint]]"),
             "endpoint: {saved}"
         );
-        // The written section must satisfy the real cathub daemon validator.
-        qsoripper_cathub::validate_cat_hub_toml(&saved).expect("daemon-valid cat_hub");
+        // CatHub owns semantic validation after the repository extraction. This test
+        // verifies QsoRipper's managed-mode projection and preservation behavior; CatHub's
+        // standalone suite validates the same document shape against the daemon parser.
 
         // Second write WITHOUT a CAT hub update must leave the section untouched.
         write_persisted_config(&config_path, &engine_config, None, None).expect("second write");
