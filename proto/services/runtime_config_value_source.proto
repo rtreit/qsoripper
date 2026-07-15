@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+// Source that supplied a runtime configuration value.
+enum RuntimeConfigValueSource {
+  RUNTIME_CONFIG_VALUE_SOURCE_UNSPECIFIED = 0;
+  RUNTIME_CONFIG_VALUE_SOURCE_DEFAULT = 1;
+  RUNTIME_CONFIG_VALUE_SOURCE_BASE_CONFIG = 2;
+  RUNTIME_CONFIG_VALUE_SOURCE_SESSION_OVERRIDE = 3;
+  RUNTIME_CONFIG_VALUE_SOURCE_RUNTIME_OVERRIDE = 4;
+}

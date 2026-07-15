@@ -47,6 +47,11 @@ internal sealed class ManagedSetupGrpcService(ManagedEngineState state)
         ValidateSetupStepRequest request,
         ServerCallContext context)
     {
+        if (!Enum.IsDefined(request.Step))
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, $"Unknown setup wizard step value {(int)request.Step}."));
+        }
+
         return Task.FromResult(ManagedEngineState.ValidateSetupStep(request));
     }
 
@@ -54,14 +59,14 @@ internal sealed class ManagedSetupGrpcService(ManagedEngineState state)
         TestQrzCredentialsRequest request,
         ServerCallContext context)
     {
-        return Task.FromResult(ManagedEngineState.TestQrzCredentials(request.QrzXmlUsername, request.QrzXmlPassword));
+        return state.TestQrzCredentialsAsync(request.QrzXmlUsername, request.QrzXmlPassword, context.CancellationToken);
     }
 
     public override Task<TestQrzLogbookCredentialsResponse> TestQrzLogbookCredentials(
         TestQrzLogbookCredentialsRequest request,
         ServerCallContext context)
     {
-        return Task.FromResult(state.TestQrzLogbookCredentials(request.ApiKey));
+        return state.TestQrzLogbookCredentialsAsync(request.ApiKey, context.CancellationToken);
     }
 
     public override Task<SaveSetupResponse> SaveSetup(
@@ -121,10 +126,12 @@ internal sealed class ManagedStationProfileGrpcService(ManagedEngineState state)
         DeleteStationProfileRequest request,
         ServerCallContext context)
     {
-        var deleted = state.DeleteStationProfile(request.ProfileId);
-        if (!deleted)
+        switch (state.DeleteStationProfile(request.ProfileId))
         {
-            throw new RpcException(new Status(StatusCode.InvalidArgument, $"Station profile '{request.ProfileId}' could not be deleted."));
+            case StationProfileDeleteOutcome.NotFound:
+                throw new RpcException(new Status(StatusCode.NotFound, $"Station profile '{request.ProfileId}' was not found."));
+            case StationProfileDeleteOutcome.ActiveProfile:
+                throw new RpcException(new Status(StatusCode.FailedPrecondition, $"Station profile '{request.ProfileId}' is active and cannot be deleted."));
         }
 
         var response = new DeleteStationProfileResponse();
@@ -245,6 +252,10 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
         {
             return Task.FromResult(state.LogQso(request));
         }
+        catch (NoActiveStationProfileException ex)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
         catch (InvalidOperationException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
@@ -261,6 +272,14 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
         {
             throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
         }
+        catch (KeyNotFoundException ex)
+        {
+            throw new RpcException(new Status(StatusCode.NotFound, ex.Message));
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
         catch (InvalidOperationException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
@@ -269,7 +288,20 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
 
     public override Task<DeleteQsoResponse> DeleteQso(DeleteQsoRequest request, ServerCallContext context)
     {
-        var outcome = state.DeleteQso(request.LocalId, request.DeleteFromQrz);
+        DeleteQsoOutcome outcome;
+        try
+        {
+            outcome = state.DeleteQso(request.LocalId, request.DeleteFromQrz);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+        if (!outcome.Found)
+        {
+            throw new RpcException(new Status(StatusCode.NotFound, $"QSO '{request.LocalId}' was not found."));
+        }
+
         var response = new DeleteQsoResponse
         {
             Success = outcome.Found,
@@ -278,11 +310,7 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
             RemoteDeleteQueued = outcome.RemoteDeleteQueued,
         };
 
-        if (!outcome.Found)
-        {
-            response.Error = $"QSO '{request.LocalId}' was not found.";
-        }
-        else if (outcome.MissingQrzLogid)
+        if (outcome.MissingQrzLogid)
         {
             response.QrzDeleteError = "QSO has no QRZ logid — it may not have been synced yet.";
         }
@@ -319,8 +347,6 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
             throw new RpcException(new Status(StatusCode.InvalidArgument, "PurgeDeletedQsos requires confirm = true."));
         }
 
-        // TODO: IsSyncing is currently hardcoded false in ManagedEngineState.
-        // This guard will become effective when sync state tracking is implemented.
         var syncStatus = state.GetSyncStatus();
         if (syncStatus.IsSyncing)
         {
@@ -330,11 +356,17 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
         var localIds = request.LocalIds.Count > 0 ? (IReadOnlyList<string>)request.LocalIds : null;
         var olderThan = request.OlderThan is not null ? request.OlderThan.ToDateTimeOffset() : (DateTimeOffset?)null;
 
-        var purgedCount = state.PurgeDeletedQsos(localIds, olderThan);
+        var outcome = state.PurgeDeletedQsos(
+            localIds,
+            olderThan,
+            request.IncludePendingRemoteDeletes);
 
         return Task.FromResult(new PurgeDeletedQsosResponse
         {
-            PurgedCount = (uint)purgedCount,
+            PurgedCount = (uint)outcome.PurgedCount,
+            RemoteDeletesPushed = (uint)outcome.RemoteDeletesPushed,
+            RemoteDeletesFailed = (uint)outcome.RemoteDeletesFailed,
+            ErrorSummary = outcome.ErrorSummary ?? string.Empty,
         });
     }
 
@@ -354,7 +386,17 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
         IServerStreamWriter<ListQsosResponse> responseStream,
         ServerCallContext context)
     {
-        foreach (var qso in state.ListQsos(request))
+        IReadOnlyList<QsoRecord> qsos;
+        try
+        {
+            qsos = state.ListQsos(request);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+
+        foreach (var qso in qsos)
         {
             await responseStream.WriteAsync(new ListQsosResponse { Qso = qso });
         }
@@ -365,7 +407,20 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
         IServerStreamWriter<SyncWithQrzResponse> responseStream,
         ServerCallContext context)
     {
-        await responseStream.WriteAsync(state.SyncWithQrz(request.FullSync));
+        try
+        {
+            state.EnsureQrzSyncAvailable();
+            await responseStream.WriteAsync(new SyncWithQrzResponse
+            {
+                CurrentAction = "Starting QRZ sync.",
+                Complete = false,
+            });
+            await responseStream.WriteAsync(state.SyncWithQrz(request.FullSync));
+        }
+        catch (QrzSyncUnavailableException ex)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
     }
 
     public override Task<GetSyncStatusResponse> GetSyncStatus(
@@ -442,7 +497,7 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
 }
 
 [SuppressMessage("Performance", "CA1812:Avoid uninstantiated internal classes", Justification = "Activated by ASP.NET Core gRPC.")]
-internal sealed class ManagedLookupGrpcService(ManagedEngineState state, ILookupCoordinator coordinator)
+internal sealed class ManagedLookupGrpcService(ManagedEngineState state)
     : LookupService.LookupServiceBase
 {
     public override Task<LookupResponse> Lookup(LookupRequest request, ServerCallContext context)
@@ -455,7 +510,10 @@ internal sealed class ManagedLookupGrpcService(ManagedEngineState state, ILookup
         IServerStreamWriter<StreamLookupResponse> responseStream,
         ServerCallContext context)
     {
-        foreach (var response in state.StreamLookup(request.Callsign))
+        await foreach (var response in state.StreamLookup(
+            request.Callsign,
+            request.SkipCache,
+            context.CancellationToken))
         {
             await responseStream.WriteAsync(response);
         }
@@ -493,10 +551,9 @@ internal sealed class ManagedLookupGrpcService(ManagedEngineState state, ILookup
         BatchLookupRequest request,
         ServerCallContext context)
     {
-        var results = await BatchLookupOrchestrator.ExecuteAsync(
-            coordinator,
+        var results = await state.BatchLookupAsync(
             (IReadOnlyList<string>)request.Callsigns,
-            ct: context.CancellationToken);
+            context.CancellationToken);
 
         var response = new BatchLookupResponse();
         response.Results.AddRange(results);
@@ -529,7 +586,14 @@ internal sealed class ManagedRigControlGrpcService(ManagedEngineState state)
         TestRigConnectionRequest request,
         ServerCallContext context)
     {
-        return Task.FromResult(state.TestRigConnection());
+        try
+        {
+            return Task.FromResult(state.TestRigConnection(request));
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
     }
 }
 
@@ -566,6 +630,15 @@ internal sealed class ManagedContestCalendarGrpcService(ManagedEngineState state
         GetActiveContestsRequest request,
         ServerCallContext context)
     {
+        if (request.HasBand && !Enum.IsDefined(request.Band))
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Invalid band filter value."));
+        }
+        if (request.HasMode && !Enum.IsDefined(request.Mode))
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Invalid mode filter value."));
+        }
+
         var snapshot = state.BuildContestCalendarSnapshot(refreshed: false);
         var response = new GetActiveContestsResponse
         {

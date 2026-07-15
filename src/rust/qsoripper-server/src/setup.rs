@@ -25,14 +25,14 @@ use qsoripper_core::proto::qsoripper::services::{
     GetSetupStatusRequest, GetSetupStatusResponse, GetSetupWizardStateRequest,
     GetSetupWizardStateResponse, GetStationProfileRequest, GetStationProfileResponse,
     ListStationProfilesRequest, ListStationProfilesResponse, RigControlSettings,
-    RuntimeConfigDefinition, RuntimeConfigValue, SaveSetupRequest, SaveSetupResponse,
-    SaveStationProfileRequest, SaveStationProfileResponse, SetActiveStationProfileRequest,
-    SetActiveStationProfileResponse, SetSessionStationProfileOverrideRequest,
-    SetSessionStationProfileOverrideResponse, SetupFieldValidation, SetupStatus, SetupWizardStep,
-    SetupWizardStepStatus, StationProfileRecord, StorageBackend, TestQrzCredentialsRequest,
-    TestQrzCredentialsResponse, TestQrzLogbookCredentialsRequest,
-    TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest, ValidateSetupStepResponse,
-    WinkeyerFacePermission, WsjtxIngestSettings, WsjtxIngestStatus,
+    RuntimeConfigDefinition, RuntimeConfigValue, RuntimeConfigValueSource, SaveSetupRequest,
+    SaveSetupResponse, SaveStationProfileRequest, SaveStationProfileResponse,
+    SetActiveStationProfileRequest, SetActiveStationProfileResponse,
+    SetSessionStationProfileOverrideRequest, SetSessionStationProfileOverrideResponse,
+    SetupFieldValidation, SetupStatus, SetupWizardStep, SetupWizardStepStatus,
+    StationProfileRecord, StorageBackend, TestQrzCredentialsRequest, TestQrzCredentialsResponse,
+    TestQrzLogbookCredentialsRequest, TestQrzLogbookCredentialsResponse, ValidateSetupStepRequest,
+    ValidateSetupStepResponse, WinkeyerFacePermission, WsjtxIngestSettings, WsjtxIngestStatus,
 };
 use qsoripper_core::qrz_logbook::{QrzLogbookClient, QrzLogbookConfig};
 use qsoripper_core::rig_control::{
@@ -151,7 +151,9 @@ impl SetupService for SetupControlSurface {
         request: Request<ValidateSetupStepRequest>,
     ) -> Result<Response<ValidateSetupStepResponse>, Status> {
         let inner = request.into_inner();
-        let step = SetupWizardStep::try_from(inner.step).unwrap_or(SetupWizardStep::Unspecified);
+        let step = SetupWizardStep::try_from(inner.step).map_err(|_| {
+            Status::invalid_argument(format!("Unknown setup wizard step value {}.", inner.step))
+        })?;
         Ok(Response::new(validate_step(step, &inner)))
     }
 
@@ -220,7 +222,7 @@ impl StationProfileService for StationProfileControlSurface {
             .state
             .delete_station_profile(request.into_inner(), &self.runtime_config)
             .await
-            .map_err(Status::invalid_argument)?;
+            .map_err(map_station_profile_error)?;
         Ok(Response::new(response))
     }
 
@@ -232,7 +234,7 @@ impl StationProfileService for StationProfileControlSurface {
             .state
             .set_active_station_profile(request.into_inner(), &self.runtime_config)
             .await
-            .map_err(Status::invalid_argument)?;
+            .map_err(map_station_profile_error)?;
         Ok(Response::new(response))
     }
 
@@ -275,6 +277,16 @@ impl StationProfileService for StationProfileControlSurface {
         Ok(Response::new(ClearSessionStationProfileOverrideResponse {
             context: Some(context),
         }))
+    }
+}
+
+fn map_station_profile_error(message: String) -> Status {
+    if message.contains("was not found") {
+        Status::not_found(message)
+    } else if message.contains("active station profile cannot be deleted") {
+        Status::failed_precondition(message)
+    } else {
+        Status::invalid_argument(message)
     }
 }
 
@@ -1178,15 +1190,16 @@ impl PersistedStationProfile {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct PersistedQrzXmlConfig {
     username: Option<String>,
-    /// QRZ XML password is persisted with the saved setup config so engine
-    /// restarts can continue serving live lookups without requiring a
-    /// separate process-level environment variable injection step.
+    /// Legacy plaintext values are read for migration and session use, but
+    /// never written back. Restarts obtain secrets from the environment.
+    #[serde(default, skip_serializing)]
     password: Option<String>,
     user_agent: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct PersistedQrzLogbookConfig {
+    #[serde(default, skip_serializing)]
     api_key: Option<String>,
     base_url: Option<String>,
 }
@@ -2218,11 +2231,16 @@ fn load_persisted_config(config_path: &Path) -> Result<Option<PersistedSetupConf
             config_path.display()
         )
     })?;
+    let had_plaintext_secrets =
+        config.qrz_xml.password.is_some() || config.qrz_logbook.api_key.is_some();
     let legacy_station_profile = config.station_profile.clone();
     config
         .station_profiles
         .bootstrap_from_legacy(&legacy_station_profile);
     config.sync_active_station_profile();
+    if had_plaintext_secrets {
+        write_persisted_config(config_path, &config, None, None)?;
+    }
     Ok(Some(config))
 }
 
@@ -2437,6 +2455,7 @@ fn build_status(
             secret: false,
             allowed_values: Vec::new(),
             required: true,
+            default_value: None,
         }],
         persistence_values: vec![RuntimeConfigValue {
             key: PERSISTENCE_PATH_KEY.to_string(),
@@ -2445,6 +2464,11 @@ fn build_status(
             overridden: false,
             secret: false,
             redacted: false,
+            source: if persistence_has_value {
+                RuntimeConfigValueSource::BaseConfig as i32
+            } else {
+                RuntimeConfigValueSource::Unspecified as i32
+            },
         }],
         persistence_contract_explicit: true,
     }
@@ -3810,7 +3834,7 @@ station_callsign = "K7RND"
     // ── QRZ logbook API key and sync config tests ───────────────────────────
 
     #[tokio::test]
-    async fn save_setup_persists_logbook_api_key_and_reports_in_status() {
+    async fn save_setup_keeps_logbook_api_key_in_session_but_not_on_disk() {
         let config_path = unique_config_path();
         let log_file_path = absolute_log_file_path(&config_path, "logbook-key.db");
         let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
@@ -3837,14 +3861,12 @@ station_callsign = "K7RND"
         let status = response.status.expect("status payload");
         assert!(status.has_qrz_logbook_api_key);
 
-        // Verify it round-trips through persisted config on disk
+        // Secrets are process-session values and are never written in plaintext.
         let saved_toml = fs::read_to_string(&config_path).expect("read config");
         let parsed =
             toml::from_str::<PersistedSetupConfig>(&saved_toml).expect("parse saved config");
-        assert_eq!(
-            Some("abc-123-logbook-key"),
-            parsed.qrz_logbook.api_key.as_deref()
-        );
+        assert_eq!(None, parsed.qrz_logbook.api_key.as_deref());
+        assert!(!saved_toml.contains("abc-123-logbook-key"));
 
         // Verify runtime values include the key
         let runtime_values = setup_state.runtime_config_values().await;
@@ -4486,7 +4508,7 @@ file_path = "{}"
     }
 
     #[test]
-    fn password_round_trips_through_serialized_config() {
+    fn password_is_redacted_from_serialized_config() {
         let mut config = PersistedSetupConfig::default();
         config.qrz_xml.username = Some("K7RND".to_string());
         config.qrz_xml.password = Some("super_secret_password".to_string());
@@ -4497,18 +4519,12 @@ file_path = "{}"
             toml_output.contains("K7RND"),
             "username should be present in TOML"
         );
-        assert!(
-            toml_output.contains("super_secret_password"),
-            "password should be serialized so restarts preserve lookup auth"
-        );
-        assert!(
-            toml_output.contains("password"),
-            "password key should be present in serialized TOML"
-        );
+        assert!(!toml_output.contains("super_secret_password"));
+        assert!(!toml_output.contains("password"));
     }
 
     #[test]
-    fn config_with_password_deserializes_and_reserializes_password() {
+    fn config_with_legacy_password_deserializes_and_scrubs_on_reserialize() {
         let toml_input = r#"
 [qrz_xml]
 username = "K7RND"
@@ -4524,14 +4540,12 @@ password = "legacy_secret"
         );
 
         let reserialized = toml::to_string_pretty(&config).expect("reserialize");
-        assert!(
-            reserialized.contains("legacy_secret"),
-            "password should survive reserialization: {reserialized}"
-        );
+        assert!(!reserialized.contains("legacy_secret"));
+        assert!(!reserialized.contains("password"));
     }
 
     #[tokio::test]
-    async fn save_setup_persists_password_to_disk() {
+    async fn save_setup_does_not_persist_password_to_disk() {
         let config_path = unique_config_path();
         let log_file_path = absolute_log_file_path(&config_path, "no_pw.db");
         let setup_state = Arc::new(SetupState::load(config_path.clone()).expect("setup state"));
@@ -4557,10 +4571,8 @@ password = "legacy_secret"
         .expect("save setup");
 
         let saved = fs::read_to_string(&config_path).expect("read saved config");
-        assert!(
-            saved.contains("should_persist"),
-            "password should be written to disk so restarts preserve lookup auth: {saved}"
-        );
+        assert!(!saved.contains("should_persist"));
+        assert!(!saved.contains("password"));
         assert!(
             saved.contains("K7RND") || saved.contains("k7rnd"),
             "username should be in saved config"

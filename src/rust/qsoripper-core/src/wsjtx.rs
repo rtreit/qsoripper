@@ -238,6 +238,7 @@ async fn ingest_adif_payload(
 
 fn format_wsjtx_error(error: LogbookError) -> String {
     match error {
+        LogbookError::NoActiveStationProfile => error.to_string(),
         LogbookError::Validation(message) => format!("WSJT-X import validation failed: {message}"),
         LogbookError::NotFound(message) => format!("WSJT-X import failed to find QSO: {message}"),
         LogbookError::AlreadyDeleted(message) => {

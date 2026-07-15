@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using QsoRipper.Domain;
 using QsoRipper.Engine.Storage;
 
@@ -93,34 +94,46 @@ public sealed class LookupCoordinator : ILookupCoordinator
     /// <inheritdoc/>
     public async Task<LookupResult[]> StreamLookupAsync(string callsign, CancellationToken ct = default)
     {
-        var normalized = NormalizeCallsign(callsign);
-        var updates = new List<LookupResult>
+        var updates = new List<LookupResult>();
+        await foreach (var update in StreamLookupIncrementallyAsync(callsign, ct: ct).ConfigureAwait(false))
         {
-            new()
-            {
-                State = LookupState.Loading,
-                CacheHit = false,
-                LookupLatencyMs = 0,
-                QueriedCallsign = normalized,
-            },
+            updates.Add(update);
+        }
+
+        return [.. updates];
+    }
+
+    /// <inheritdoc/>
+    public async IAsyncEnumerable<LookupResult> StreamLookupIncrementallyAsync(
+        string callsign,
+        bool skipCache = false,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        var normalized = NormalizeCallsign(callsign);
+        yield return new LookupResult
+        {
+            State = LookupState.Loading,
+            CacheHit = false,
+            LookupLatencyMs = 0,
+            QueriedCallsign = normalized,
         };
 
-        var cached = GetCacheEntry(normalized);
+        var cached = skipCache ? null : GetCacheEntry(normalized);
         if (cached is not null)
         {
             if (IsFresh(cached))
             {
                 var freshResult = CacheEntryToResult(cached, normalized, cacheHit: true);
                 await PopulateHistoryAsync(freshResult, normalized).ConfigureAwait(false);
-                updates.Add(freshResult);
-                return [.. updates];
+                yield return freshResult;
+                yield break;
             }
 
             if (cached.Record is not null)
             {
                 var staleResult = CacheEntryToResult(cached, normalized, cacheHit: true, stateOverride: LookupState.Stale);
                 await PopulateHistoryAsync(staleResult, normalized).ConfigureAwait(false);
-                updates.Add(staleResult);
+                yield return staleResult;
             }
         }
 
@@ -133,8 +146,7 @@ public sealed class LookupCoordinator : ILookupCoordinator
 
         var finalResult = await ProviderResultToLookup(providerResult, normalized, latencyMs, ct).ConfigureAwait(false);
         await PopulateHistoryAsync(finalResult, normalized).ConfigureAwait(false);
-        updates.Add(finalResult);
-        return [.. updates];
+        yield return finalResult;
     }
 
     private async Task<ProviderLookupResult> RunProviderLookupWithFallback(

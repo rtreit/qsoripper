@@ -44,6 +44,8 @@ $grid = 'CN87'
 $workedCallsign = 'W1AW'
 $qsoComment = 'Engine conformance smoke'
 $qsoNotes = 'Shared CLI scenario'
+$updatedComment = 'Engine conformance updated'
+$updatedGrid = 'FN31'
 $qsoTime = '2026-04-15T12:00:00Z'
 
 function Write-Step([string]$Message) {
@@ -178,8 +180,8 @@ function Normalize-QsoRecord($Qso) {
         utcTimestamp = [string](Get-ObjectPropertyValue -Object $Qso -Name 'utcTimestamp')
         comment = [string](Get-ObjectPropertyValue -Object $Qso -Name 'comment')
         notes = [string](Get-ObjectPropertyValue -Object $Qso -Name 'notes')
-        rstSent = Get-RstDisplay $rstSent
-        rstReceived = Get-RstDisplay $rstReceived
+        rstSent = [string](Get-RstDisplay $rstSent)
+        rstReceived = [string](Get-RstDisplay $rstReceived)
         stationSnapshotCallsign = [string](Get-ObjectPropertyValue -Object $stationSnapshot -Name 'stationCallsign')
         stationSnapshotGrid = [string](Get-ObjectPropertyValue -Object $stationSnapshot -Name 'grid')
     }
@@ -406,9 +408,65 @@ function Invoke-ConformanceScenario {
 
     $getResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'get', $localId, '--json')
     Assert-CommandSucceeded -Result $getResult -Description "$EngineProfile get --json"
-    $getJson = $getResult.StdOut | ConvertFrom-Json
+    $initialGetJson = $getResult.StdOut | ConvertFrom-Json
 
-    $exportPath = Join-Path $runDirectory "$EngineProfile-export.adi"
+    if ([string](Get-ObjectPropertyValue -Object $initialGetJson.qso -Name 'localId') -ne $localId) {
+        throw "$EngineProfile GetQso did not return the generated local id."
+    }
+
+    Write-Step "Checking inclusive and station/worked callsign filters against $EngineProfile ($Storage)"
+    $boundaryListResult = Invoke-Cli -Arguments @(
+        '--engine', $EngineProfile,
+        'list', '--json',
+        '--after', $qsoTime,
+        '--before', $qsoTime,
+        '--limit', '5'
+    )
+    Assert-CommandSucceeded -Result $boundaryListResult -Description "$EngineProfile inclusive boundary list"
+    if (@(ConvertFrom-JsonArray $boundaryListResult.StdOut).Count -ne 1) {
+        throw "$EngineProfile $Storage did not include a QSO exactly on both time boundaries."
+    }
+
+    foreach ($callsignFilter in @($stationCallsign.ToLowerInvariant(), $workedCallsign.ToLowerInvariant())) {
+        $callsignListResult = Invoke-Cli -Arguments @(
+            '--engine', $EngineProfile,
+            'list', '--json',
+            '--callsign', $callsignFilter,
+            '--limit', '5'
+        )
+        Assert-CommandSucceeded -Result $callsignListResult -Description "$EngineProfile callsign filter $callsignFilter"
+        if (@(ConvertFrom-JsonArray $callsignListResult.StdOut).Count -ne 1) {
+            throw "$EngineProfile $Storage did not match callsign filter '$callsignFilter' against station or worked callsign."
+        }
+    }
+
+    Write-Step "Updating QSO through CLI against $EngineProfile ($Storage)"
+    $updateResult = Invoke-Cli -Arguments @(
+        '--engine', $EngineProfile,
+        'update', $localId,
+        '--comment', $updatedComment,
+        '--grid', $updatedGrid
+    )
+    Assert-CommandSucceeded -Result $updateResult -Description "$EngineProfile update"
+
+    $getUpdatedResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'get', $localId, '--json')
+    Assert-CommandSucceeded -Result $getUpdatedResult -Description "$EngineProfile get after update --json"
+    $getJson = $getUpdatedResult.StdOut | ConvertFrom-Json
+    if ($getJson.qso.comment -ne $updatedComment -or $getJson.qso.workedGrid -ne $updatedGrid) {
+        throw "$EngineProfile did not persist the requested full-record update."
+    }
+    if ($getJson.qso.notes -ne $qsoNotes -or $getJson.qso.stationCallsign -ne $stationCallsign) {
+        throw "$EngineProfile update did not preserve round-tripped caller data and engine-owned station data."
+    }
+
+    $listUpdatedResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'list', '--json', '--limit', '5')
+    Assert-CommandSucceeded -Result $listUpdatedResult -Description "$EngineProfile list after update --json"
+    $listUpdatedJson = @(ConvertFrom-JsonArray $listUpdatedResult.StdOut)
+    if ($listUpdatedJson.Count -ne 1 -or $listUpdatedJson[0].comment -ne $updatedComment) {
+        throw "$EngineProfile list did not reflect the updated record."
+    }
+
+    $exportPath = Join-Path $runDirectory "$EngineProfile-$Storage-export.adi"
     $exportResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'export', '--file', $exportPath)
     Assert-CommandSucceeded -Result $exportResult -Description "$EngineProfile export"
     $exportText = Get-Content -LiteralPath $exportPath -Raw
@@ -440,15 +498,54 @@ function Invoke-ConformanceScenario {
         throw "$EngineProfile get after delete did not return a soft-deleted QSO for local id '$localId'."
     }
 
+    Write-Step "Restoring, deleting, and purging QSO against $EngineProfile ($Storage)"
+    $restoreResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'restore', $localId)
+    Assert-CommandSucceeded -Result $restoreResult -Description "$EngineProfile restore"
+
+    $listAfterRestoreResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'list', '--json', '--limit', '5')
+    Assert-CommandSucceeded -Result $listAfterRestoreResult -Description "$EngineProfile list after restore --json"
+    if (@(ConvertFrom-JsonArray $listAfterRestoreResult.StdOut).Count -ne 1) {
+        throw "$EngineProfile restore did not return the QSO to the active list."
+    }
+
+    $deleteAgainResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'delete', $localId)
+    Assert-CommandSucceeded -Result $deleteAgainResult -Description "$EngineProfile second delete"
+    $purgeResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'purge', '--ids', $localId, '--confirm')
+    Assert-CommandSucceeded -Result $purgeResult -Description "$EngineProfile purge"
+    if ($purgeResult.StdOut -notmatch 'Purged 1 QSOs') {
+        throw "$EngineProfile purge did not permanently remove exactly one soft-deleted QSO.`n$($purgeResult.StdOut)"
+    }
+
+    $getAfterPurgeResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'get', $localId, '--json')
+    if ($getAfterPurgeResult.ExitCode -eq 0) {
+        throw "$EngineProfile GetQso unexpectedly found a permanently purged QSO."
+    }
+
+    Write-Step "Re-importing exported ADIF against $EngineProfile ($Storage)"
+    $importResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'import', $exportPath)
+    Assert-CommandSucceeded -Result $importResult -Description "$EngineProfile import"
+    if ($importResult.StdOut -notmatch 'Imported:\s+1') {
+        throw "$EngineProfile import did not create exactly one QSO.`n$($importResult.StdOut)"
+    }
+
+    $listAfterImportResult = Invoke-Cli -Arguments @('--engine', $EngineProfile, 'list', '--json', '--limit', '5')
+    Assert-CommandSucceeded -Result $listAfterImportResult -Description "$EngineProfile list after import --json"
+    $listAfterImportJson = @(ConvertFrom-JsonArray $listAfterImportResult.StdOut)
+    if ($listAfterImportJson.Count -ne 1) {
+        throw "$EngineProfile expected exactly one active QSO after ADIF import but saw $($listAfterImportJson.Count)."
+    }
+
     return [pscustomobject]@{
         EngineProfile = $EngineProfile
+        Storage = $Storage
         EngineId = $expectedEngineId
         SetupStatus = $setupStatusJson.status
         SyncStatus = $statusJson
         CwStatus = $cwSpeed
         Qso = Normalize-QsoRecord $getJson.qso
-        ListQso = Normalize-QsoRecord $listJson[0]
+        ListQso = Normalize-QsoRecord $listUpdatedJson[0]
         ExportQso = Normalize-AdifRecord $exportRecords[0]
+        ImportedQso = Normalize-QsoRecord $listAfterImportJson[0]
     }
 }
 
@@ -572,59 +669,82 @@ try {
         }
     }
 
-    $sharedConfigPath = Join-Path $runDirectory 'config.toml'
-    $persistencePath = Join-Path $runDirectory 'conformance-log.db'
-    @'
+    $scenarioResults = @{}
+    foreach ($engineProfile in @('rust', 'dotnet')) {
+        foreach ($storage in @('memory', 'sqlite')) {
+            $scenarioId = "$engineProfile-$storage"
+            $scenarioDirectory = Join-Path $runDirectory $scenarioId
+            $null = New-Item -ItemType Directory -Path $scenarioDirectory -Force
+            $configPath = Join-Path $scenarioDirectory 'config.toml'
+            $persistencePath = Join-Path $scenarioDirectory 'conformance-log.db'
+            @'
 [cw_keying]
 backend = "null"
 speed_wpm = 29
 transmit_enabled = false
 max_tx_ms = 45000
 future_key = "preserve-me"
-'@ | Set-Content -LiteralPath $sharedConfigPath
+'@ | Set-Content -LiteralPath $configPath
 
-    $rustScenarioOutput = @(Invoke-ConformanceScenario -EngineProfile 'rust' -ConfigPath $sharedConfigPath -PersistencePath $persistencePath -Storage 'sqlite')
-    $rustResult = Select-ScenarioResult -Results $rustScenarioOutput -EngineProfile 'rust'
-    Stop-TestEngine
+            $scenarioOutput = @(Invoke-ConformanceScenario -EngineProfile $engineProfile -ConfigPath $configPath -PersistencePath $persistencePath -Storage $storage)
+            $scenarioResults[$scenarioId] = Select-ScenarioResult -Results $scenarioOutput -EngineProfile $engineProfile
+            Stop-TestEngine
 
-    $dotnetScenarioOutput = @(Invoke-ConformanceScenario -EngineProfile 'dotnet' -ConfigPath $sharedConfigPath -PersistencePath $persistencePath -Storage 'sqlite')
-    $dotnetResult = Select-ScenarioResult -Results $dotnetScenarioOutput -EngineProfile 'dotnet'
-    Stop-TestEngine
-
-    $sharedConfigContent = Get-Content -LiteralPath $sharedConfigPath -Raw
-    if ($sharedConfigContent -notmatch 'future_key\s*=\s*"preserve-me"') {
-        throw 'An engine setup save did not preserve the shared [cw_keying] table verbatim.'
+            $configContent = Get-Content -LiteralPath $configPath -Raw
+            if ($configContent -notmatch 'future_key\s*=\s*"preserve-me"') {
+                throw "$scenarioId setup save did not preserve the shared [cw_keying] table verbatim."
+            }
+        }
     }
 
     Assert-SharedSetupRoundTrip -FirstEngineProfile 'rust' -SecondEngineProfile 'dotnet' -ScenarioId 'rust-to-dotnet'
     Assert-SharedSetupRoundTrip -FirstEngineProfile 'dotnet' -SecondEngineProfile 'rust' -ScenarioId 'dotnet-to-rust'
 
-    Assert-EquivalentRecords -Left $rustResult.Qso -Right $dotnetResult.Qso -Description 'GetQso'
-    Assert-EquivalentRecords -Left $rustResult.ListQso -Right $dotnetResult.ListQso -Description 'ListQsos'
-    Assert-EquivalentRecords -Left $rustResult.ExportQso -Right $dotnetResult.ExportQso -Description 'ExportAdif'
-
-    if (($rustResult.CwStatus | ConvertTo-Json -Compress) -ne ($dotnetResult.CwStatus | ConvertTo-Json -Compress)) {
-        throw "Rust and .NET CW status responses did not match after the shared null-backend workflow."
+    foreach ($storage in @('memory', 'sqlite')) {
+        $rustResult = $scenarioResults["rust-$storage"]
+        $dotnetResult = $scenarioResults["dotnet-$storage"]
+        Assert-EquivalentRecords -Left $rustResult.Qso -Right $dotnetResult.Qso -Description "$storage GetQso"
+        Assert-EquivalentRecords -Left $rustResult.ListQso -Right $dotnetResult.ListQso -Description "$storage ListQsos"
+        Assert-EquivalentRecords -Left $rustResult.ExportQso -Right $dotnetResult.ExportQso -Description "$storage ExportAdif"
+        Assert-EquivalentRecords -Left $rustResult.ImportedQso -Right $dotnetResult.ImportedQso -Description "$storage ImportAdif"
     }
 
-    if ($rustResult.SyncStatus.localQsoCount -ne 1 -or $dotnetResult.SyncStatus.localQsoCount -ne 1) {
-        throw "Expected both engines to report one local QSO after the shared CLI scenario."
+    foreach ($engineProfile in @('rust', 'dotnet')) {
+        $memoryResult = $scenarioResults["$engineProfile-memory"]
+        $sqliteResult = $scenarioResults["$engineProfile-sqlite"]
+        Assert-EquivalentRecords -Left $memoryResult.Qso -Right $sqliteResult.Qso -Description "$engineProfile storage GetQso"
+        Assert-EquivalentRecords -Left $memoryResult.ImportedQso -Right $sqliteResult.ImportedQso -Description "$engineProfile storage ImportAdif"
+    }
+
+    $baselineCwStatus = $scenarioResults['rust-memory'].CwStatus | ConvertTo-Json -Compress
+    foreach ($result in $scenarioResults.Values) {
+        if (($result.CwStatus | ConvertTo-Json -Compress) -ne $baselineCwStatus) {
+            throw "$($result.EngineProfile) $($result.Storage) CW status did not match the shared null-backend workflow."
+        }
+        if ($result.SyncStatus.localQsoCount -ne 1) {
+            throw "Expected $($result.EngineProfile) $($result.Storage) to report one local QSO after logging."
+        }
     }
 
     $summary = [pscustomobject]@{
-        rust = [pscustomobject]@{
-            engine = $rustResult.EngineProfile
-            localQsoCount = $rustResult.SyncStatus.localQsoCount
-            qso = $rustResult.Qso
-        }
-        dotnet = [pscustomobject]@{
-            engine = $dotnetResult.EngineProfile
-            localQsoCount = $dotnetResult.SyncStatus.localQsoCount
-            qso = $dotnetResult.Qso
-        }
+        scenarios = @(
+            $scenarioResults.Values |
+                Sort-Object EngineProfile, Storage |
+                ForEach-Object {
+                    [pscustomobject]@{
+                        engine = $_.EngineProfile
+                        storage = $_.Storage
+                        localQsoCount = $_.SyncStatus.localQsoCount
+                        qso = $_.Qso
+                        importedQso = $_.ImportedQso
+                    }
+                }
+        )
         exports = [pscustomobject]@{
-            rust = Join-Path $runDirectory 'rust-export.adi'
-            dotnet = Join-Path $runDirectory 'dotnet-export.adi'
+            rustMemory = Join-Path $runDirectory 'rust-memory-export.adi'
+            rustSqlite = Join-Path $runDirectory 'rust-sqlite-export.adi'
+            dotnetMemory = Join-Path $runDirectory 'dotnet-memory-export.adi'
+            dotnetSqlite = Join-Path $runDirectory 'dotnet-sqlite-export.adi'
         }
     }
 

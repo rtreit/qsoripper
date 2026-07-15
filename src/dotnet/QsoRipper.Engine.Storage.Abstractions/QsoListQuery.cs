@@ -4,17 +4,17 @@ namespace QsoRipper.Engine.Storage;
 
 /// <summary>
 /// Describes filters, sorting, and pagination for a QSO list query.
-/// All filter properties are optional — <c>null</c> means no filter for that field.
+/// All filter properties are optional. <c>null</c> means no filter for that field.
 /// </summary>
 public sealed record QsoListQuery
 {
-    /// <summary>Only return QSOs with a timestamp strictly after this value.</summary>
+    /// <summary>Only return QSOs with a timestamp at or after this value.</summary>
     public DateTimeOffset? After { get; init; }
 
-    /// <summary>Only return QSOs with a timestamp strictly before this value.</summary>
+    /// <summary>Only return QSOs with a timestamp at or before this value.</summary>
     public DateTimeOffset? Before { get; init; }
 
-    /// <summary>Substring match on the worked callsign (case-insensitive).</summary>
+    /// <summary>Substring match on the station or worked callsign (case-insensitive).</summary>
     public string? CallsignFilter { get; init; }
 
     /// <summary>Exact match on the QSO band.</summary>

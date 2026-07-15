@@ -473,7 +473,7 @@ impl LogbookService for DeveloperLogbookService {
         let (sync_success, sync_error) = if request.sync_to_qrz {
             self.run_per_op_qrz_sync(&engine, &mut stored).await
         } else {
-            (true, None)
+            (false, None)
         };
 
         Ok(Response::new(LogQsoResponse {
@@ -497,7 +497,7 @@ impl LogbookService for DeveloperLogbookService {
         let (sync_success, sync_error) = if request.sync_to_qrz {
             self.run_per_op_qrz_sync(&engine, &mut stored).await
         } else {
-            (true, None)
+            (false, None)
         };
 
         Ok(Response::new(UpdateQsoResponse {
@@ -586,30 +586,42 @@ impl LogbookService for DeveloperLogbookService {
             ));
         }
 
-        let older_than = request.older_than;
-
-        // When include_pending_remote_deletes is true, we need to push
-        // QRZ deletes first. For the initial implementation, we skip the
-        // remote-delete flow and treat it as a local-only purge. Rows
-        // with pending_remote_delete=true are included in the purge
-        // regardless — the operator chose to purge locally.
-        //
-        // A follow-up can wire up the remote delete flow when QRZ
-        // adapter access is available at this layer.
-
-        let purged = engine
-            .purge_deleted_qsos(&request.local_ids, older_than)
-            .await
-            .map_err(map_logbook_error)?;
+        let older_than_ms = request.older_than.as_ref().map(|timestamp| {
+            timestamp
+                .seconds
+                .saturating_mul(1_000)
+                .saturating_add(i64::from(timestamp.nanos) / 1_000_000)
+        });
+        let client = if request.include_pending_remote_deletes {
+            self.build_qrz_logbook_client().await.ok()
+        } else {
+            None
+        };
+        let _upload_guard = if client.is_some() {
+            Some(self.qrz_upload_lock.lock().await)
+        } else {
+            None
+        };
+        let outcome = sync::purge_deleted_qsos(
+            client
+                .as_ref()
+                .map(|client| client as &dyn sync::QrzLogbookApi),
+            engine.logbook_store(),
+            &request.local_ids,
+            older_than_ms,
+            request.include_pending_remote_deletes,
+        )
+        .await
+        .map_err(|error| Status::internal(error.to_string()))?;
 
         // Release sync guard after purge completes.
         drop(sync_guard);
 
         Ok(Response::new(PurgeDeletedQsosResponse {
-            purged_count: purged,
-            remote_deletes_pushed: 0,
-            remote_deletes_failed: 0,
-            error_summary: String::new(),
+            purged_count: outcome.purged_count,
+            remote_deletes_pushed: outcome.remote_deletes_pushed,
+            remote_deletes_failed: outcome.remote_deletes_failed,
+            error_summary: outcome.errors.join(" "),
         }))
     }
 
@@ -1189,6 +1201,14 @@ impl ContestCalendarService for ContestCalendarControlSurface {
         request: Request<GetActiveContestsRequest>,
     ) -> Result<Response<GetActiveContestsResponse>, Status> {
         let request = request.into_inner();
+        if let Some(value) = request.band {
+            Band::try_from(value)
+                .map_err(|_| Status::invalid_argument("Invalid band filter value."))?;
+        }
+        if let Some(value) = request.mode {
+            Mode::try_from(value)
+                .map_err(|_| Status::invalid_argument("Invalid mode filter value."))?;
+        }
         let snapshot = self
             .runtime_config
             .contest_calendar_monitor()
@@ -1449,15 +1469,18 @@ impl RigControlService for RigControlControlSurface {
                 .unwrap_or_else(|| DEFAULT_RIGCTLD_HOST.to_string())
         });
 
-        let port = inner
-            .port
-            .and_then(|p| u16::try_from(p).ok())
-            .unwrap_or_else(|| {
-                effective_values
-                    .get(qsoripper_core::rig_control::RIGCTLD_PORT_ENV_VAR)
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(DEFAULT_RIGCTLD_PORT)
-            });
+        let port = match inner.port {
+            Some(port) => u16::try_from(port)
+                .ok()
+                .filter(|port| *port > 0)
+                .ok_or_else(|| {
+                    Status::invalid_argument("Rig control port must be between 1 and 65535.")
+                })?,
+            None => effective_values
+                .get(qsoripper_core::rig_control::RIGCTLD_PORT_ENV_VAR)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_RIGCTLD_PORT),
+        };
 
         let read_timeout_ms = effective_values
             .get(qsoripper_core::rig_control::RIGCTLD_READ_TIMEOUT_MS_ENV_VAR)
@@ -1621,6 +1644,7 @@ fn parse_storage_backend(value: &str) -> Result<StorageBackendKind, Box<dyn std:
 
 fn map_logbook_error(error: LogbookError) -> Status {
     match error {
+        LogbookError::NoActiveStationProfile => Status::failed_precondition(error.to_string()),
         LogbookError::Validation(message) => Status::invalid_argument(message),
         LogbookError::NotFound(local_id) => {
             Status::not_found(format!("QSO '{local_id}' was not found."))
@@ -1735,7 +1759,7 @@ mod tests {
     };
     use qsoripper_core::proto::qsoripper::domain::SpaceWeatherStatus;
     use qsoripper_core::proto::qsoripper::domain::{
-        Band, LookupResult, LookupState, Mode, QsoRecord,
+        Band, LookupResult, LookupState, Mode, QsoRecord, StationSnapshot, SyncStatus,
     };
     use qsoripper_core::proto::qsoripper::services::{
         get_dxcc_entity_request,
@@ -1960,7 +1984,7 @@ mod tests {
         .expect("log response")
         .into_inner();
 
-        assert!(log_response.sync_success);
+        assert!(!log_response.sync_success);
         assert!(log_response.sync_error.is_none());
 
         let loaded = LogbookService::get_qso(
@@ -2022,7 +2046,7 @@ mod tests {
         .into_inner();
 
         assert!(update_response.success);
-        assert!(update_response.sync_success);
+        assert!(!update_response.sync_success);
         assert!(update_response.sync_error.is_none());
 
         let reloaded = LogbookService::get_qso(
@@ -2636,6 +2660,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn log_qso_replaces_caller_owned_identity_station_and_sync_metadata() {
+        let service = test_logbook_service(test_runtime_config_with_logbook(
+            StorageBackendKind::Memory,
+            None,
+            true,
+        ));
+        let caller_created_at = Timestamp {
+            seconds: 946_684_800,
+            nanos: 0,
+        };
+
+        let response = LogbookService::log_qso(
+            &service,
+            Request::new(LogQsoRequest {
+                qso: Some(QsoRecord {
+                    local_id: "caller-owned-id".to_string(),
+                    station_callsign: "N0FAKE".to_string(),
+                    worked_callsign: " w1aw ".to_string(),
+                    utc_timestamp: Some(Timestamp {
+                        seconds: 1_731_600_000,
+                        nanos: 0,
+                    }),
+                    band: Band::Band20m as i32,
+                    mode: Mode::Cw as i32,
+                    created_at: Some(caller_created_at),
+                    sync_status: SyncStatus::Synced as i32,
+                    qrz_logid: Some("caller-logid".to_string()),
+                    qrz_bookid: Some("caller-bookid".to_string()),
+                    station_snapshot: Some(StationSnapshot {
+                        station_callsign: "N0FAKE".to_string(),
+                        ..StationSnapshot::default()
+                    }),
+                    ..QsoRecord::default()
+                }),
+                sync_to_qrz: false,
+            }),
+        )
+        .await
+        .expect("log response")
+        .into_inner();
+
+        let stored = LogbookService::get_qso(
+            &service,
+            Request::new(GetQsoRequest {
+                local_id: response.local_id,
+            }),
+        )
+        .await
+        .expect("get response")
+        .into_inner()
+        .qso
+        .expect("stored qso");
+
+        assert_ne!("caller-owned-id", stored.local_id);
+        assert_eq!("W1AW", stored.worked_callsign);
+        assert_eq!("K7RND", stored.station_callsign);
+        assert_eq!(
+            "K7RND",
+            stored
+                .station_snapshot
+                .as_ref()
+                .expect("station snapshot")
+                .station_callsign
+        );
+        assert_ne!(Some(caller_created_at), stored.created_at);
+        assert_eq!(SyncStatus::LocalOnly as i32, stored.sync_status);
+        assert!(stored.qrz_logid.is_none());
+        assert!(stored.qrz_bookid.is_none());
+    }
+
+    #[tokio::test]
     async fn logbook_crud_flow_works_through_sqlite_grpc_surface() {
         let sqlite_path = unique_sqlite_test_path("logbook-grpc");
         let service = test_logbook_service(test_runtime_config_with_logbook(
@@ -2654,7 +2749,11 @@ mod tests {
 
     #[tokio::test]
     async fn logbook_sync_status_reports_live_local_counts() {
-        let service = test_logbook_service(test_runtime_config());
+        let service = test_logbook_service(test_runtime_config_with_logbook(
+            StorageBackendKind::Memory,
+            None,
+            true,
+        ));
 
         let logged = LogbookService::log_qso(
             &service,
@@ -2708,7 +2807,7 @@ mod tests {
 
         assert_eq!(2, response.local_qso_count);
         assert_eq!(0, response.qrz_qso_count);
-        assert_eq!(1, response.pending_upload);
+        assert_eq!(2, response.pending_upload);
         assert!(response.last_sync.is_none());
         assert!(response.qrz_logbook_owner.is_none());
 
@@ -2820,7 +2919,7 @@ mod tests {
             .await
             .expect("log response");
 
-        let payload = b"<CALL:4>W1AW<STATION_CALLSIGN:5>K1ABC<QSO_DATE:8>20250102<TIME_ON:4>0102<BAND:3>15M<MODE:2>CW<FREQ:8>21.02830<EOR>\n";
+        let payload = b"<CALL:4>W1AW<STATION_CALLSIGN:5>K7RND<QSO_DATE:8>20250102<TIME_ON:4>0102<BAND:3>15M<MODE:2>CW<FREQ:8>21.02830<EOR>\n";
         let result = import_adif_payload(&mut client, vec![payload.to_vec()]).await;
 
         assert_eq!(0, result.records_imported);
@@ -3149,7 +3248,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn logbook_requires_station_context_when_station_callsign_is_missing() {
+    async fn logbook_requires_an_active_station_profile() {
         let service = test_logbook_service(test_runtime_config());
 
         let error = LogbookService::log_qso(
@@ -3162,8 +3261,11 @@ mod tests {
         .await
         .expect_err("missing station context should fail");
 
-        assert_eq!(Code::InvalidArgument, error.code());
-        assert_eq!("station_callsign is required.", error.message());
+        assert_eq!(Code::FailedPrecondition, error.code());
+        assert_eq!(
+            "An active station profile is required before logging a QSO.",
+            error.message()
+        );
     }
 
     #[tokio::test]

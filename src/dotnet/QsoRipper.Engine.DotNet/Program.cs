@@ -45,6 +45,8 @@ builder.Services.AddSingleton(provider => new ManagedEngineState(
 
 builder.Services.AddHostedService(provider =>
     new QsoRipper.Engine.DotNet.Wsjtx.WsjtxIngestSupervisor(provider.GetRequiredService<ManagedEngineState>()));
+builder.Services.AddHostedService(provider =>
+    new QrzSyncSupervisor(provider.GetRequiredService<ManagedEngineState>()));
 
 var app = builder.Build();
 app.MapGrpcService<ManagedEngineInfoGrpcService>();

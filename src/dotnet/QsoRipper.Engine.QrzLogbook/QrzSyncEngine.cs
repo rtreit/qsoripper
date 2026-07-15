@@ -38,6 +38,53 @@ public sealed class QrzSyncEngine
     }
 
     /// <summary>
+    /// Upload one QSO for the per-operation LogQso or UpdateQso path.
+    /// The caller persists the returned QRZ logid with its local write.
+    /// </summary>
+    public async Task<string> UploadSingleQsoAsync(ILogbookStore store, QsoRecord qso)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(qso);
+
+        var metadata = await store.GetSyncMetadataAsync().ConfigureAwait(false);
+        string? bookOwner = null;
+        try
+        {
+            var status = await _client.GetStatusAsync().ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(status.Owner))
+            {
+                bookOwner = status.Owner.Trim();
+            }
+        }
+        catch (QrzLogbookException)
+        {
+            bookOwner = metadata.QrzLogbookOwner;
+        }
+
+        var hasExistingLogid = !string.IsNullOrWhiteSpace(qso.QrzLogid);
+        if (qso.SyncStatus == SyncStatus.Modified && hasExistingLogid)
+        {
+            return await _client.UpdateQsoAsync(qso, bookOwner).ConfigureAwait(false);
+        }
+
+        try
+        {
+            return await _client.UploadQsoAsync(qso, bookOwner).ConfigureAwait(false);
+        }
+        catch (QrzLogbookException ex) when (!hasExistingLogid && IsDuplicateError(ex.Message))
+        {
+            return await _client.UploadQsoWithReplaceAsync(qso, bookOwner).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Delete one QRZ row before a destructive local purge.</summary>
+    public Task DeleteRemoteQsoAsync(string logid)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(logid);
+        return _client.DeleteQsoAsync(logid.Trim());
+    }
+
+    /// <summary>
     /// Execute a full sync cycle against the given logbook store.
     /// </summary>
     /// <param name="store">The logbook store to sync.</param>

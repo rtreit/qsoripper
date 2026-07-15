@@ -1,7 +1,7 @@
 namespace QsoRipper.Engine.Lookup.Qrz;
 
 /// <summary>
-/// Returns <see cref="ProviderLookupState.NotFound"/> for every callsign.
+/// Returns an authentication/configuration error for every callsign.
 /// Used when QRZ credentials are not configured.
 /// </summary>
 public sealed class DisabledCallsignProvider : ICallsignProvider
@@ -12,7 +12,7 @@ public sealed class DisabledCallsignProvider : ICallsignProvider
     {
         return Task.FromResult(new ProviderLookupResult
         {
-            State = ProviderLookupState.NotFound,
+            State = ProviderLookupState.AuthenticationError,
             ErrorMessage = "QRZ XML lookup is disabled (no credentials configured).",
         });
     }

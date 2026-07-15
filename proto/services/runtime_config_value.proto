@@ -4,6 +4,8 @@ package qsoripper.services;
 
 option csharp_namespace = "QsoRipper.Services";
 
+import "services/runtime_config_value_source.proto";
+
 message RuntimeConfigValue {
   string key = 1;
   bool has_value = 2;
@@ -11,4 +13,5 @@ message RuntimeConfigValue {
   bool overridden = 4;
   bool secret = 5;
   bool redacted = 6;
+  RuntimeConfigValueSource source = 7;
 }
