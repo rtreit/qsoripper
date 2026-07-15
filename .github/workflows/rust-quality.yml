@@ -52,9 +52,11 @@ jobs:
           protoc --version
 
       - name: Install Buf CLI
-        uses: bufbuild/buf-setup-action@v1
+        uses: bufbuild/buf-action@v1.4.0
         with:
+          version: 1.50.0
           github_token: ${{ github.token }}
+          setup_only: true
 
       - name: Install cargo-deny
         run: |
@@ -141,7 +143,7 @@ jobs:
 
       - name: Upload Rust coverage artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: rust-coverage
           path: |

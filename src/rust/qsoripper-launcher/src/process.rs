@@ -12,6 +12,8 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System, Update
 
 use crate::catalog::{ComponentId, ComponentSpec};
 
+const SUPPORTED_CATHUB_SERIES: &str = "0.1";
+
 /// A child the launcher started, tracked by OS PID so it survives the launcher
 /// exiting and so a later "stop" can find it again.
 #[derive(Debug, Clone)]
@@ -306,6 +308,43 @@ pub(crate) fn spawn(
     Ok(entry)
 }
 
+/// Read and validate the standalone `CatHub` executable version before launch.
+pub(crate) fn verify_cathub_version(exe: &Path) -> Result<String> {
+    if !exe.exists() {
+        bail!("CatHub executable is unavailable: {}", exe.display());
+    }
+    let output = Command::new(exe)
+        .arg("--version")
+        .output()
+        .with_context(|| format!("reading CatHub version from {}", exe.display()))?;
+    if !output.status.success() {
+        bail!("CatHub executable did not report a version");
+    }
+    let reported = String::from_utf8_lossy(&output.stdout);
+    let version = parse_cathub_version(&reported)
+        .context("CatHub returned an unrecognized version response")?;
+    if !is_supported_cathub_version(version) {
+        bail!(
+            "incompatible CatHub version {version}; QsoRipper supports {SUPPORTED_CATHUB_SERIES}.x"
+        );
+    }
+    Ok(version.to_owned())
+}
+
+fn is_supported_cathub_version(version: &str) -> bool {
+    version == SUPPORTED_CATHUB_SERIES
+        || version.starts_with(&format!("{SUPPORTED_CATHUB_SERIES}."))
+}
+
+fn parse_cathub_version(reported: &str) -> Option<&str> {
+    let mut fields = reported.split_whitespace();
+    fields
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("cathub"))
+        .then(|| fields.next())
+        .flatten()
+}
+
 /// Ask the OS to terminate the given PID. Uses SIGTERM-equivalent semantics.
 pub(crate) fn stop_pid(pid: u32) -> bool {
     let mut sys = System::new();
@@ -499,6 +538,23 @@ mod tests {
     }
 
     #[test]
+    fn parses_cathub_version_output() {
+        assert_eq!(parse_cathub_version("cathub 0.1.0\n"), Some("0.1.0"));
+        assert_eq!(parse_cathub_version("other 0.1.0"), None);
+        assert_eq!(parse_cathub_version("cathub"), None);
+    }
+
+    #[test]
+    fn accepts_only_supported_cathub_version_series() {
+        assert!(is_supported_cathub_version("0.1"));
+        assert!(is_supported_cathub_version("0.1.0"));
+        assert!(is_supported_cathub_version("0.1.12"));
+        assert!(!is_supported_cathub_version("0.0.9"));
+        assert!(!is_supported_cathub_version("0.2.0"));
+        assert!(!is_supported_cathub_version("0.10.0"));
+    }
+
+    #[test]
     fn stale_copy_matches_same_exe_started_before_build() {
         let target = PathBuf::from("/publish/Release/qsoripper-server.exe");
         // Started at t=100, binary built at t=200 -> stale.
@@ -525,7 +581,7 @@ mod tests {
     fn different_executable_is_never_stale() {
         let target = PathBuf::from("/publish/Release/qsoripper-server.exe");
         // Different file name in the same directory.
-        let other_name = PathBuf::from("/publish/Release/qsoripper-cathub.exe");
+        let other_name = PathBuf::from("/publish/Release/unrelated-cathub.exe");
         assert!(!is_stale_published_copy(&other_name, 100, &target, 200));
         // Same file name but a different directory (e.g. a dev `cargo run`).
         let other_dir = PathBuf::from("/debug/qsoripper-server.exe");

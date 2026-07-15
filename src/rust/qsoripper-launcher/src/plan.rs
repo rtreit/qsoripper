@@ -14,6 +14,12 @@ pub(crate) struct LaunchPlan {
     pub spec: ComponentSpec,
     pub args: Vec<OsString>,
     pub env: Vec<(String, String)>,
+    pub readiness_port: Option<u16>,
+}
+
+enum CatHubReadiness {
+    ConfigUnreadable,
+    Configured(Option<u16>),
 }
 
 const QSORIPPER_ENGINE_ENV: &str = "QSORIPPER_ENGINE";
@@ -51,33 +57,49 @@ pub(crate) fn ui_plan(ui_id: &str, selection: &Selection) -> Option<LaunchPlan> 
         args.push("http://localhost:5082".into());
     }
 
-    Some(LaunchPlan { spec, args, env })
+    Some(LaunchPlan {
+        spec,
+        args,
+        env,
+        readiness_port: None,
+    })
 }
 
 /// Build the launch plan for an engine component. Engines take no per-process
 /// configuration from the launcher in the first pass.
 pub(crate) fn engine_plan(engine_id: &str) -> Option<LaunchPlan> {
     let spec = find(engine_id)?;
+    let readiness_port = spec.engine_port;
     Some(LaunchPlan {
         spec,
         args: Vec::new(),
         env: Vec::new(),
+        readiness_port,
     })
 }
 
 /// Build the launch plan for a background daemon. The CAT hub is passed an
 /// explicit `--config` so it reads the same file `Start-CatHub.ps1` would: the
 /// unified `config.toml` when it carries a top-level `[cat_hub]` table,
-/// otherwise the repo sample at `<repo_root>/config/cathub.toml`.
+/// otherwise `CatHub`'s standalone configuration path.
 pub(crate) fn daemon_plan(
     daemon_id: &str,
     unified_config_path: &Path,
-    repo_root: &Path,
+    standalone_config_override: Option<&Path>,
 ) -> Option<LaunchPlan> {
     let spec = find(daemon_id)?;
     let mut args: Vec<OsString> = Vec::new();
+    let mut readiness_port = spec.engine_port;
     if daemon_id == DAEMON_CATHUB {
-        let config = resolve_cathub_config(unified_config_path, repo_root);
+        let (config, managed) =
+            resolve_cathub_config(unified_config_path, standalone_config_override);
+        if let CatHubReadiness::Configured(configured_port) = cathub_readiness_port(&config) {
+            readiness_port = configured_port;
+        }
+        if managed {
+            args.push("--section".into());
+            args.push("cat_hub".into());
+        }
         args.push("--config".into());
         args.push(config.into_os_string());
     }
@@ -85,18 +107,79 @@ pub(crate) fn daemon_plan(
         spec,
         args,
         env: Vec::new(),
+        readiness_port,
     })
 }
 
-/// Choose the cathub config path. Uses the unified config only when it parses
+/// Choose the `CatHub` config path. Uses the unified config only when it parses
 /// and exposes a top-level `cat_hub` table; any read/parse failure or a missing
-/// table falls back to the repo sample so a malformed unified file never makes
-/// the hub silently mis-parse it as a standalone cathub config.
-fn resolve_cathub_config(unified_config_path: &Path, repo_root: &Path) -> PathBuf {
+/// table falls back to `CatHub`'s standalone configuration path.
+fn resolve_cathub_config(
+    unified_config_path: &Path,
+    standalone_config_override: Option<&Path>,
+) -> (PathBuf, bool) {
     if unified_has_cat_hub(unified_config_path) {
-        return unified_config_path.to_path_buf();
+        return (unified_config_path.to_path_buf(), true);
     }
-    repo_root.join("config").join("cathub.toml")
+    if let Some(path) = standalone_config_override {
+        return (path.to_path_buf(), false);
+    }
+    (default_cathub_config_path(), false)
+}
+
+fn default_cathub_config_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("CATHUB_CONFIG_PATH") {
+        return PathBuf::from(path);
+    }
+    #[cfg(windows)]
+    if let Some(app_data) = std::env::var_os("APPDATA") {
+        return PathBuf::from(app_data).join("cathub").join("cathub.toml");
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+            return PathBuf::from(xdg).join("cathub").join("cathub.toml");
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home)
+                .join(".config")
+                .join("cathub")
+                .join("cathub.toml");
+        }
+    }
+    PathBuf::from("cathub.toml")
+}
+
+fn cathub_readiness_port(config_path: &Path) -> CatHubReadiness {
+    let Ok(text) = std::fs::read_to_string(config_path) else {
+        return CatHubReadiness::ConfigUnreadable;
+    };
+    let Ok(document) = text.parse::<toml_edit::DocumentMut>() else {
+        return CatHubReadiness::ConfigUnreadable;
+    };
+    let root = document.get("cat_hub").unwrap_or(document.as_item());
+    let hamlib_port = root
+        .get("hamlib_net")
+        .and_then(toml_edit::Item::as_array_of_tables)
+        .and_then(|endpoints| {
+            endpoints.iter().find_map(|endpoint| {
+                endpoint
+                    .get("bind")
+                    .and_then(toml_edit::Item::as_str)
+                    .and_then(socket_port)
+            })
+        });
+    let winkeyer_port = root
+        .get("winkeyer")
+        .and_then(|winkeyer| winkeyer.get("api_bind"))
+        .and_then(toml_edit::Item::as_str)
+        .and_then(socket_port);
+    CatHubReadiness::Configured(hamlib_port.or(winkeyer_port))
+}
+
+fn socket_port(bind: &str) -> Option<u16> {
+    bind.rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
 }
 
 fn unified_has_cat_hub(unified_config_path: &Path) -> bool {
@@ -176,22 +259,18 @@ mod tests {
     }
 
     #[test]
-    fn daemon_plan_falls_back_to_repo_sample_without_cat_hub() {
+    fn daemon_plan_uses_external_config_without_managed_cat_hub() {
         let dir = tempfile::tempdir().unwrap();
         let unified = dir.path().join("config.toml");
         std::fs::write(&unified, "[launcher]\nengines = [\"rust-engine\"]\n").unwrap();
-        let repo_root = dir.path().join("repo");
-        let plan = daemon_plan(DAEMON_CATHUB, &unified, &repo_root).expect("plan");
+        let external = dir.path().join("cathub.toml");
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, Some(&external)).expect("plan");
         let strs: Vec<String> = plan
             .args
             .into_iter()
             .map(|a| a.into_string().unwrap())
             .collect();
-        let expected = repo_root
-            .join("config")
-            .join("cathub.toml")
-            .to_string_lossy()
-            .into_owned();
+        let expected = external.to_string_lossy().into_owned();
         assert_eq!(strs, vec!["--config".to_string(), expected]);
     }
 
@@ -200,15 +279,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let unified = dir.path().join("config.toml");
         std::fs::write(&unified, "[cat_hub]\n[radio]\nport = \"COM3\"\n").unwrap();
-        let repo_root = dir.path().join("repo");
-        let plan = daemon_plan(DAEMON_CATHUB, &unified, &repo_root).expect("plan");
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, None).expect("plan");
         let strs: Vec<String> = plan
             .args
             .into_iter()
             .map(|a| a.into_string().unwrap())
             .collect();
         let expected = unified.to_string_lossy().into_owned();
-        assert_eq!(strs, vec!["--config".to_string(), expected]);
+        assert_eq!(
+            strs,
+            vec![
+                "--section".to_string(),
+                "cat_hub".to_string(),
+                "--config".to_string(),
+                expected
+            ]
+        );
     }
 
     #[test]
@@ -216,18 +302,53 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let unified = dir.path().join("config.toml");
         std::fs::write(&unified, "this is = not valid = toml [[[").unwrap();
-        let repo_root = dir.path().join("repo");
-        let plan = daemon_plan(DAEMON_CATHUB, &unified, &repo_root).expect("plan");
+        let external = dir.path().join("cathub.toml");
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, Some(&external)).expect("plan");
         let strs: Vec<String> = plan
             .args
             .into_iter()
             .map(|a| a.into_string().unwrap())
             .collect();
-        let expected = repo_root
-            .join("config")
-            .join("cathub.toml")
-            .to_string_lossy()
-            .into_owned();
+        let expected = external.to_string_lossy().into_owned();
         assert_eq!(strs, vec!["--config".to_string(), expected]);
+    }
+
+    #[test]
+    fn daemon_plan_reads_configured_hamlib_readiness_port() {
+        let dir = tempfile::tempdir().unwrap();
+        let unified = dir.path().join("config.toml");
+        std::fs::write(
+            &unified,
+            "[cat_hub.radio]\nbackend = \"loopback\"\n[[cat_hub.hamlib_net]]\nname = \"engine\"\nbind = \"127.0.0.1:4632\"\n",
+        )
+        .unwrap();
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, None).expect("plan");
+        assert_eq!(plan.readiness_port, Some(4632));
+    }
+
+    #[test]
+    fn daemon_plan_uses_winkeyer_readiness_without_hamlib() {
+        let dir = tempfile::tempdir().unwrap();
+        let unified = dir.path().join("config.toml");
+        std::fs::write(
+            &unified,
+            "[cat_hub.radio]\nbackend = \"loopback\"\n[cat_hub.winkeyer]\napi_bind = \"127.0.0.1:51071\"\n",
+        )
+        .unwrap();
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, None).expect("plan");
+        assert_eq!(plan.readiness_port, Some(51071));
+    }
+
+    #[test]
+    fn daemon_plan_has_no_readiness_port_for_serial_only_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let unified = dir.path().join("config.toml");
+        std::fs::write(
+            &unified,
+            "[cat_hub.radio]\nbackend = \"loopback\"\n[[cat_hub.serial_endpoint]]\nname = \"logger\"\ntransport = \"COM10\"\n",
+        )
+        .unwrap();
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, None).expect("plan");
+        assert_eq!(plan.readiness_port, None);
     }
 }

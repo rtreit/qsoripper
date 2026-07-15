@@ -499,14 +499,14 @@ Tests TCP connectivity to a rigctld instance, including unpersisted setup values
 **Error semantics:**
 - Connection and protocol errors are reported in the response, not as gRPC errors.
 
-#### Rig-control front door: `qsoripper-cathub`
+#### Optional rig-control front door: standalone CatHub
 
 `RigControlService` consumes rig state from a rigctld-compatible endpoint. On a multi-app
 station the engine must **not** connect directly to the radio's serial port, because many
 applications share one radio and direct contention produces VFO A/B oscillation, frequency
 drift, and PTT conflicts.
 
-The supported topology is a single multi-client CAT hub daemon, `qsoripper-cathub`, that owns
+The supported topology is a single independently installed CatHub daemon that owns
 the radio serial port and fans it out to every client over its native protocol. The engine
 points its `RigctldProvider` at one of the hub's read-only Hamlib NET endpoints
 (`QSORIPPER_RIGCTLD_HOST`:`QSORIPPER_RIGCTLD_PORT`); the hub also serves other applications
@@ -515,7 +515,8 @@ hub enforces the no-VFO-retargeting invariant (baseline polling never emits VFO-
 commands), serializes all writes, owns the radio's native push stream, and arbitrates PTT with
 a single-owner lease and a hard transmit-time ceiling. The engine's behavior contracts above
 are unchanged: it remains a read-mostly NET rigctl client and is agnostic to whether the
-endpoint is the cathub daemon or a bare `rigctld`.
+endpoint is CatHub or a bare `rigctld`. CatHub is not part of either engine and is never
+required for ordinary QsoRipper logging.
 
 The hub's read-only Hamlib NET endpoint implements the engine's optional logging probes:
 `i`/`\get_split_freq`, `x`/`\get_split_mode`, `l RFPOWER`, and `2`/`\power2mW`. CatHub serves
@@ -524,9 +525,8 @@ from `PC;`; the rigctld bridge forwards the optional probes to its private downs
 When a backend cannot expose a value, CatHub returns `RPRT -11`, preserving the provider's
 capability-tolerant behavior.
 
-- Design: `docs/design/cathub-multi-client-cat-hub.md`.
-- Operator setup: `docs/integrations/cathub-setup.md`.
-- Implementation: the `qsoripper-cathub` crate under `src/rust/`.
+- CatHub implementation and design: <https://github.com/treitforge/cathub>.
+- QsoRipper integration setup: `docs/integrations/cathub-setup.md`.
 
 Native `ts590` endpoints support an opt-in, per-endpoint **single-VFO operating-VFO virtualization**
 policy (`single_vfo = true`). When enabled, the endpoint never exposes the physical VFO letter:
@@ -585,13 +585,13 @@ with `RPRT x`. Log4OM-NG relies on ERP exclusively — it handshakes with `;V ?`
 VFOs) and polls with `+\get_vfo_info VFOA` — so a conformant hub must implement ERP framing for
 those shapes, not just the plain protocol, or Log4OM stays offline.
 
-##### Unified configuration
+##### Managed and external configuration
 
-The CAT hub daemon, the engine, and the launcher share one per-user `config.toml`
-(`%APPDATA%\qsoripper\config.toml` on Windows, `$XDG_CONFIG_HOME`/`$HOME/.config` on Unix,
-overridable with `QSORIPPER_CONFIG_PATH`). The daemon reads its settings from a `[cat_hub]`
-table in that file (radio/poll/ptt/events plus `[[cat_hub.serial_endpoint]]` and `[[cat_hub.hamlib_net]]`
-arrays); a standalone file with top-level `[radio]` … tables is still accepted via `--config`.
+CatHub owns its standalone configuration and defaults to `%APPDATA%\cathub\cathub.toml` on
+Windows or `$XDG_CONFIG_HOME/cathub/cathub.toml` on Unix, overridable with
+`CATHUB_CONFIG_PATH`. QsoRipper may instead manage CatHub from its unified per-user
+`config.toml`. In that mode the daemon reads settings from `[cat_hub]` and the launcher passes
+the unified path explicitly. CatHub accepts both layouts.
 
 Because multiple components write the same file, every engine setup save is **merge-preserving**:
 the engine replaces only its own top-level tables (`logbook`, `storage`, `station_profile`,
@@ -602,14 +602,16 @@ supplied; omitted WSJT-X ingest settings are preserved verbatim. A conformant en
 language must implement this merge-preserving behavior rather than rewriting the whole file,
 so it never clobbers another component's configuration.
 
-`[cat_hub]` is **conditionally engine-owned**: it is preserved verbatim on every save *unless*
+`[cat_hub]` is a **managed-mode compatibility surface**: it is preserved verbatim on every save *unless*
 the `SaveSetup` request explicitly carries a `cat_hub` (`CatHubSettings`) message, in which case
 the engine performs a full-replacement rewrite of the section (see SetupService → SaveSetup). For
 status and wizard display, the engine parses `[cat_hub]` **leniently and separately** from its own
 configuration: a malformed or unknown-schema `[cat_hub]` yields an empty projection (and a logged
 warning) but never fails engine load. A conformant engine must keep this read path isolated so the
 daemon's section can never break engine startup, and must only rewrite `[cat_hub]` when an explicit
-replacement is supplied.
+replacement is supplied. When CatHub is externally managed, QsoRipper stores only its rigctld and
+CW broker client endpoints and does not write CatHub's standalone file. CatHub remains the
+authoritative parser and validator for both layouts.
 
 ### 3.5 SpaceWeatherService
 
@@ -690,8 +692,9 @@ Persists setup configuration and station profile.
   opened by the client application. The hub opens only `transport`. Engines preserve and return
   the application-side value for setup guidance and reject an endpoint whose two transports are the
   same.
-- The optional `cat_hub` field (`CatHubSettings`) lets a setup UI manage the standalone
-  `qsoripper-cathub` daemon's `[cat_hub]` section without hand-editing TOML.
+- The optional `cat_hub` field (`CatHubSettings`) is a compatibility adapter for a
+  QsoRipper-managed standalone CatHub process. It writes only the unified file's `[cat_hub]`
+  section. It never writes CatHub's external standalone file.
 - The field is **full-replacement**: when present it is the complete desired `[cat_hub]`
   section. A `radio` (with a `backend`) is required and at least one endpoint (a
   `serial_endpoints` or `hamlib_net` entry) is required; the engine rewrites `[cat_hub]` from it.
@@ -699,7 +702,9 @@ Persists setup configuration and station profile.
   (verbatim, including comments and unknown keys). Only an explicit `cat_hub` triggers a
   rewrite — so a routine save (e.g. updating QRZ credentials) never reserializes the daemon's
   configuration. This mirrors the conditional-ownership rule in the unified-configuration note.
-- Validation enforces the same constraints the daemon accepts: `backend` ∈ {ts590, rigctld,
+- QsoRipper performs bounded input validation for its compatibility projection. CatHub remains
+  authoritative and its `cathub config validate` command must be used for full semantic validation.
+  The compatibility validation covers `backend` ∈ {ts590, rigctld,
   loopback}; radio `transport` ∈ {serial, tcp}; non-loopback serial radios require a `port`;
   endpoint `dialect` ∈ {ts590, ts590-transparent, ts2000}; endpoint names unique across endpoints and hamlib_net; endpoint
   transports distinct; hamlib_net binds distinct and in `host:port` form; an endpoint transport may
