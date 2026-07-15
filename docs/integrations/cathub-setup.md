@@ -14,8 +14,21 @@ QsoRipper needs the CatHub executable, not the `cathub-protocol` Rust crate or t
 `CatHub.Protocol` NuGet package. Those packages are for applications that develop against
 CatHub's typed WinKeyer API.
 
-No public CatHub release has been tagged yet. Until the first release exists, build the
-daemon from its standalone repository with Rust 1.88 or newer:
+Download the CatHub 0.1.1 Windows or Linux archive and adjacent SHA-256 checksum from the
+[GitHub release](https://github.com/treitforge/cathub/releases/tag/v0.1.1). Verify the
+checksum, extract the executable, and either add its directory to `PATH` or set
+`CATHUB_EXECUTABLE`.
+
+If Rust 1.88 or newer is installed, install the same release from crates.io:
+
+```powershell
+cargo install cathub --version 0.1.1
+```
+
+Cargo downloads `cathub-protocol` automatically while building the daemon. The protocol
+crate is not a separate runtime installation step for the operator.
+
+To build from source instead:
 
 ```powershell
 git clone https://github.com/treitforge/cathub.git
@@ -23,15 +36,6 @@ Set-Location cathub
 cargo build --release -p cathub
 $env:CATHUB_EXECUTABLE = (Resolve-Path .\target\release\cathub.exe)
 ```
-
-After a tagged release is available, download the Windows or Linux archive and its checksum
-from <https://github.com/treitforge/cathub/releases>, verify the checksum, extract the
-executable, and either add its directory to `PATH` or set `CATHUB_EXECUTABLE`.
-
-If the `cathub` daemon crate is available on crates.io and Rust is installed, the equivalent
-installation is `cargo install cathub --version <version>`. Release owners must publish
-`cathub-protocol` before `cathub`; Cargo then resolves it automatically. The protocol crate
-is not a separate runtime installation step for the operator.
 
 QsoRipper resolves the executable in this order:
 
@@ -144,10 +148,12 @@ CatHub 0.1 retains the existing `qsoripper.services` WinKeyer broker wire-packag
 The identifier is part of the wire contract and does not make CatHub part of QsoRipper. The
 authoritative contract lives in the CatHub repository.
 
-QsoRipper currently carries a pinned protocol snapshot because neither `cathub-protocol` nor
-`CatHub.Protocol` has been published to a package registry. The snapshot must track the
-supported CatHub protocol version exactly. Installing QsoRipper or running CatHub does not
-require either registry package.
+QsoRipper currently carries a pinned protocol snapshot so its shared Rust and .NET protocol
+generation remains integrated with the rest of QsoRipper's contract build. The snapshot must
+track the supported CatHub protocol version exactly. Installing QsoRipper or running CatHub
+does not require the published `cathub-protocol` Rust crate or `CatHub.Protocol` NuGet
+package. Those packages are for independent applications that develop against CatHub's typed
+API.
 
 The dependency pin is recorded in `config\cathub-dependency.json`. When both repositories are
 checked out as siblings, verify the temporary QsoRipper protocol snapshot with:
@@ -157,4 +163,4 @@ checked out as siblings, verify the temporary QsoRipper protocol snapshot with:
 ```
 
 See the CatHub repository for the complete radio topology, virtual serial setup, permissions,
-safety behavior, WinKeyer maintenance rules, release state, and troubleshooting guide.
+safety behavior, WinKeyer maintenance rules, releases, and troubleshooting guide.
