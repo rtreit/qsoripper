@@ -28,8 +28,10 @@ public sealed class CommandHelperTests
         Assert.Equal((ulong)14_074_000, qso.FrequencyHz);
         Assert.Equal((uint)5, qso.RstSent!.Readability);
         Assert.Equal((uint)9, qso.RstSent.Strength);
+        Assert.Equal("59", qso.RstSent.Raw);
         Assert.Equal((uint)5, qso.RstReceived!.Readability);
         Assert.Equal((uint)7, qso.RstReceived.Strength);
+        Assert.Equal("57", qso.RstReceived.Raw);
         Assert.NotNull(qso.UtcTimestamp);
         Assert.Equal("Strong copy", qso.Comment);
         Assert.Equal("Worked on dipole", qso.Notes);
@@ -90,6 +92,7 @@ public sealed class CommandHelperTests
         Assert.Equal((uint)5, report.Readability);
         Assert.Equal((uint)9, report.Strength);
         Assert.Equal((uint)9, report.Tone);
+        Assert.Equal("599", report.Raw);
     }
 
     [Theory]
@@ -115,6 +118,7 @@ public sealed class CommandHelperTests
         Assert.Equal(readability, rst.Readability);
         Assert.Equal(strength, rst.Strength);
         Assert.Equal(tone, rst.Tone);
+        Assert.Equal(tone == 0 ? "59" : "599", rst.Raw);
     }
 
     [Fact]
@@ -134,6 +138,7 @@ public sealed class CommandHelperTests
         Assert.Equal(5u, qso.RstReceived!.Readability);
         Assert.Equal(9u, qso.RstReceived.Strength);
         Assert.Equal(9u, qso.RstReceived.Tone);
+        Assert.Equal("599", qso.RstReceived.Raw);
     }
 
     [Fact]
@@ -149,9 +154,11 @@ public sealed class CommandHelperTests
         Assert.Equal(5u, qso.RstSent!.Readability);
         Assert.Equal(9u, qso.RstSent.Strength);
         Assert.Equal(0u, qso.RstSent.Tone);
+        Assert.Equal("59", qso.RstSent.Raw);
         Assert.Equal(5u, qso.RstReceived!.Readability);
         Assert.Equal(9u, qso.RstReceived.Strength);
         Assert.Equal(0u, qso.RstReceived.Tone);
+        Assert.Equal("59", qso.RstReceived.Raw);
     }
 
     [Fact]
