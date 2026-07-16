@@ -315,7 +315,7 @@ public sealed class QrzSyncEngine
                         conflicts++;
                     }
 
-                    if (await store.UpdateQsoAsync(merged).ConfigureAwait(false))
+                    if (await store.UpdateQsoIfUnchangedAsync(localMatch, merged).ConfigureAwait(false))
                     {
                         downloaded++;
                     }
@@ -367,16 +367,16 @@ public sealed class QrzSyncEngine
             {
                 await _client.DeleteQsoAsync(qso.QrzLogid).ConfigureAwait(false);
 
-                // Success (including QRZ "not found"): clear local pending
-                // flags but keep the deleted_at tombstone so the row stays
-                // in the trash view.
-                var cleared = qso.Clone();
-                cleared.QrzLogid = string.Empty;
-                cleared.PendingRemoteDelete = false;
                 try
                 {
-                    await store.UpdateQsoAsync(cleared).ConfigureAwait(false);
-                    remoteDeletesPushed++;
+                    if (await CompleteRemoteDeleteAsync(store, qso).ConfigureAwait(false))
+                    {
+                        remoteDeletesPushed++;
+                    }
+                    else
+                    {
+                        errors.Add($"Remote delete cleared for {qso.WorkedCallsign} could not be applied because the local QSO kept changing.");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -491,40 +491,53 @@ public sealed class QrzSyncEngine
         {
             try
             {
-                string logid;
-                var hasExistingLogid = !string.IsNullOrWhiteSpace(qso.QrzLogid);
-
-                if (qso.SyncStatus == SyncStatus.Modified && hasExistingLogid)
+                var current = await store.GetQsoAsync(qso.LocalId).ConfigureAwait(false);
+                if (current is null || current.DeletedAt is not null || !shouldUpload(current))
                 {
-                    logid = await _client.UpdateQsoAsync(qso, bookOwner).ConfigureAwait(false);
+                    continue;
+                }
+
+                string logid;
+                var hasExistingLogid = !string.IsNullOrWhiteSpace(current.QrzLogid);
+
+                if (current.SyncStatus == SyncStatus.Modified && hasExistingLogid)
+                {
+                    logid = await _client.UpdateQsoAsync(current, bookOwner).ConfigureAwait(false);
                 }
                 else
                 {
                     try
                     {
-                        logid = await _client.UploadQsoAsync(qso, bookOwner).ConfigureAwait(false);
+                        logid = await _client.UploadQsoAsync(current, bookOwner).ConfigureAwait(false);
                     }
                     catch (QrzLogbookException ex) when (!hasExistingLogid && IsDuplicateError(ex.Message))
                     {
                         // QSO already exists on QRZ (e.g. uploaded via web UI) but we
                         // don't have the logid locally. Retry with OPTION=REPLACE to
                         // auto-match and adopt the remote logid.
-                        logid = await _client.UploadQsoWithReplaceAsync(qso, bookOwner).ConfigureAwait(false);
+                        logid = await _client.UploadQsoWithReplaceAsync(current, bookOwner).ConfigureAwait(false);
                         duplicateReplaces++;
                     }
                 }
 
-                var synced = qso.Clone();
-                synced.QrzLogid = logid;
-                synced.SyncStatus = SyncStatus.Synced;
                 try
                 {
-                    await store.UpdateQsoAsync(synced).ConfigureAwait(false);
-                    uploadedLogids.Add(logid);
+                    var patched = await store.UpdateQrzSyncMetadataAsync(
+                        current.LocalId,
+                        current.UpdatedAt,
+                        logid).ConfigureAwait(false);
+                    if (patched is null)
+                    {
+                        errors.Add($"Upload succeeded for {current.WorkedCallsign} but the local QSO no longer exists.");
+                    }
+                    else
+                    {
+                        uploadedLogids.Add(logid);
+                    }
                 }
                 catch (Exception ex)
                 {
-                    errors.Add($"Upload succeeded for {qso.WorkedCallsign} but local update failed: {ex.Message}");
+                    errors.Add($"Upload succeeded for {current.WorkedCallsign} but local update failed: {ex.Message}");
                 }
 
                 uploaded++;
@@ -536,6 +549,38 @@ public sealed class QrzSyncEngine
         }
 
         return new UploadPassResult(uploaded, duplicateReplaces, uploadedLogids);
+    }
+
+    private static async Task<bool> CompleteRemoteDeleteAsync(ILogbookStore store, QsoRecord deletedSnapshot)
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var current = await store.GetQsoAsync(deletedSnapshot.LocalId).ConfigureAwait(false);
+            if (current is null)
+            {
+                return false;
+            }
+
+            if (!string.Equals(current.QrzLogid, deletedSnapshot.QrzLogid, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            var cleared = current.Clone();
+            cleared.QrzLogid = string.Empty;
+            cleared.PendingRemoteDelete = false;
+            if (cleared.DeletedAt is null)
+            {
+                cleared.SyncStatus = SyncStatus.LocalOnly;
+            }
+
+            if (await store.UpdateQsoIfUnchangedAsync(current, cleared).ConfigureAwait(false))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // -- Matching helpers ---------------------------------------------------
@@ -675,11 +720,12 @@ public sealed class QrzSyncEngine
 
     private static QsoRecord MergeRemoteAuthoritative(QsoRecord local, QsoRecord remote)
     {
-        var merged = remote.Clone();
-        merged.RstSent ??= local.RstSent?.Clone();
-        merged.RstReceived ??= local.RstReceived?.Clone();
+        var merged = local.Clone();
+        merged.MergeFrom(remote);
         merged.CreatedAt = local.CreatedAt?.Clone();
         merged.UpdatedAt = local.UpdatedAt?.Clone();
+        merged.DeletedAt = local.DeletedAt?.Clone();
+        merged.PendingRemoteDelete = local.PendingRemoteDelete;
         return merged;
     }
 

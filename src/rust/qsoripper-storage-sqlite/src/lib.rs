@@ -94,6 +94,18 @@ impl LogbookStore for SqliteStorage {
         update_qso_record(&connection, qso)
     }
 
+    async fn update_qso_if_unchanged(
+        &self,
+        expected: &QsoRecord,
+        replacement: &QsoRecord,
+    ) -> Result<bool, StorageError> {
+        if expected.local_id != replacement.local_id {
+            return Ok(false);
+        }
+        let connection = self.connection()?;
+        update_qso_record_if_unchanged(&connection, expected, replacement)
+    }
+
     async fn update_qrz_sync_metadata(
         &self,
         local_id: &str,
@@ -153,21 +165,39 @@ impl LogbookStore for SqliteStorage {
         deleted_at_ms: i64,
         pending_remote_delete: bool,
     ) -> Result<bool, StorageError> {
-        let Some(mut record) = self.get_qso(local_id).await? else {
+        let connection = self.connection()?;
+        let payload = query_optional::<Vec<u8>>(
+            &connection,
+            "SELECT record FROM qsos WHERE local_id = ?",
+            &[Value::from(local_id)],
+            0,
+        )
+        .map_err(map_sqlite_error)?;
+        let Some(bytes) = payload else {
             return Ok(false);
         };
+        let mut record = decode_qso(&bytes)?;
         record.deleted_at = millis_to_timestamp(Some(deleted_at_ms));
         record.pending_remote_delete = pending_remote_delete;
-        self.update_qso(&record).await
+        update_qso_record(&connection, &record)
     }
 
     async fn restore_qso(&self, local_id: &str) -> Result<bool, StorageError> {
-        let Some(mut record) = self.get_qso(local_id).await? else {
+        let connection = self.connection()?;
+        let payload = query_optional::<Vec<u8>>(
+            &connection,
+            "SELECT record FROM qsos WHERE local_id = ?",
+            &[Value::from(local_id)],
+            0,
+        )
+        .map_err(map_sqlite_error)?;
+        let Some(bytes) = payload else {
             return Ok(false);
         };
+        let mut record = decode_qso(&bytes)?;
         record.deleted_at = None;
         record.pending_remote_delete = false;
-        self.update_qso(&record).await
+        update_qso_record(&connection, &record)
     }
 
     async fn get_qso(&self, local_id: &str) -> Result<Option<QsoRecord>, StorageError> {
@@ -565,6 +595,55 @@ fn update_qso_record(
     Ok(rows > 0)
 }
 
+fn update_qso_record_if_unchanged(
+    connection: &ConnectionThreadSafe,
+    expected: &QsoRecord,
+    replacement: &QsoRecord,
+) -> Result<bool, StorageError> {
+    let encoded = encode_message(replacement);
+    let expected_encoded = encode_message(expected);
+    let rows = execute_statement(
+        connection,
+        "UPDATE qsos
+         SET qrz_logid = ?,
+             qrz_bookid = ?,
+             station_callsign = ?,
+             worked_callsign = ?,
+             utc_timestamp_ms = ?,
+             band = ?,
+             mode = ?,
+             contest_id = ?,
+             created_at_ms = ?,
+             updated_at_ms = ?,
+             sync_status = ?,
+             record = ?,
+             deleted_at_ms = ?,
+             pending_remote_delete = ?
+         WHERE local_id = ? AND record = ?",
+        &[
+            Value::from(replacement.qrz_logid.as_deref()),
+            Value::from(replacement.qrz_bookid.as_deref()),
+            Value::from(replacement.station_callsign.as_str()),
+            Value::from(replacement.worked_callsign.as_str()),
+            Value::from(timestamp_to_millis(replacement.utc_timestamp.as_ref())),
+            Value::Integer(i64::from(replacement.band)),
+            Value::Integer(i64::from(replacement.mode)),
+            Value::from(replacement.contest_id.as_deref()),
+            Value::from(timestamp_to_millis(replacement.created_at.as_ref())),
+            Value::from(timestamp_to_millis(replacement.updated_at.as_ref())),
+            Value::Integer(i64::from(replacement.sync_status)),
+            Value::Binary(encoded),
+            Value::from(timestamp_to_millis(replacement.deleted_at.as_ref())),
+            Value::Integer(i64::from(replacement.pending_remote_delete)),
+            Value::from(replacement.local_id.as_str()),
+            Value::Binary(expected_encoded),
+        ],
+    )
+    .map_err(map_sqlite_error)?;
+
+    Ok(rows > 0)
+}
+
 fn encode_message<T: Message>(message: &T) -> Vec<u8> {
     message.encode_to_vec()
 }
@@ -733,6 +812,33 @@ mod tests {
         assert_eq!(reloaded.notes.as_deref(), Some("operator edit"));
         assert_eq!(reloaded.qrz_logid.as_deref(), Some("QRZ-PATCH"));
         assert_eq!(reloaded.sync_status, SyncStatus::Modified as i32);
+    }
+
+    #[tokio::test]
+    async fn sqlite_storage_conditional_update_rejects_stale_snapshot() {
+        let storage = SqliteStorageBuilder::new().in_memory().build().unwrap();
+        let original = QsoRecordBuilder::new("W1AW", "K7CAS")
+            .band(Band::Band20m)
+            .mode(Mode::Ft8)
+            .timestamp(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            })
+            .build();
+        let logbook = storage.logbook();
+        logbook.insert_qso(&original).await.unwrap();
+        let mut current = original.clone();
+        current.notes = Some("operator edit".into());
+        logbook.update_qso(&current).await.unwrap();
+
+        let mut stale_replacement = original.clone();
+        stale_replacement.notes = Some("stale sync value".into());
+        assert!(!logbook
+            .update_qso_if_unchanged(&original, &stale_replacement)
+            .await
+            .unwrap());
+        let saved = logbook.get_qso(&original.local_id).await.unwrap().unwrap();
+        assert_eq!(saved.notes.as_deref(), Some("operator edit"));
     }
 
     #[tokio::test]

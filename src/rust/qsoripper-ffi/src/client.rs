@@ -158,14 +158,31 @@ impl QsrClient {
 
     /// Update an existing QSO. Returns 0 on success.
     pub(crate) fn update_qso(&mut self, req: &QsrUpdateQsoRequest) -> i32 {
-        let mut qso = match build_qso_record(&req.qso) {
+        let edited = match build_qso_record(&req.qso) {
             Ok(q) => q,
             Err(e) => {
                 set_error(e);
                 return -1;
             }
         };
-        qso.local_id = buf_to_str(&req.local_id).to_string();
+        let local_id = buf_to_str(&req.local_id).to_string();
+        let existing = match self.runtime.block_on(self.logbook.get_qso(GetQsoRequest {
+            local_id: local_id.clone(),
+        })) {
+            Ok(response) => {
+                let Some(qso) = response.into_inner().qso else {
+                    set_error(format!("QSO not found: {local_id}"));
+                    return -1;
+                };
+                qso
+            }
+            Err(e) => {
+                set_error(format!("GetQso before update failed: {}", e.message()));
+                return -1;
+            }
+        };
+        let mut qso = apply_ffi_edit(existing, edited);
+        qso.local_id = local_id;
 
         match self
             .runtime
@@ -335,6 +352,60 @@ impl QsrClient {
 }
 
 // ── Conversion helpers ──────────────────────────────────────────────────
+
+#[allow(deprecated)]
+fn apply_ffi_edit(mut existing: QsoRecord, edited: QsoRecord) -> QsoRecord {
+    existing.qrz_logid = edited.qrz_logid;
+    existing.qrz_bookid = edited.qrz_bookid;
+    existing.station_callsign = edited.station_callsign;
+    existing.worked_callsign = edited.worked_callsign;
+    existing.utc_timestamp = edited.utc_timestamp;
+    existing.band = edited.band;
+    existing.mode = edited.mode;
+    existing.frequency_khz = edited.frequency_khz;
+    existing.frequency_hz = edited.frequency_hz;
+    existing.submode = edited.submode;
+    existing.station_snapshot = edited.station_snapshot;
+    existing.utc_end_timestamp = edited.utc_end_timestamp;
+    existing.rst_sent = edited.rst_sent;
+    existing.rst_received = edited.rst_received;
+    existing.tx_power = edited.tx_power;
+    existing.qsl_sent_status = edited.qsl_sent_status;
+    existing.qsl_received_status = edited.qsl_received_status;
+    existing.lotw_sent = edited.lotw_sent;
+    existing.lotw_received = edited.lotw_received;
+    existing.eqsl_sent = edited.eqsl_sent;
+    existing.eqsl_received = edited.eqsl_received;
+    existing.qsl_sent_date = edited.qsl_sent_date;
+    existing.qsl_received_date = edited.qsl_received_date;
+    existing.worked_operator_callsign = edited.worked_operator_callsign;
+    existing.worked_operator_name = edited.worked_operator_name;
+    existing.worked_grid = edited.worked_grid;
+    existing.worked_country = edited.worked_country;
+    existing.worked_dxcc = edited.worked_dxcc;
+    existing.worked_state = edited.worked_state;
+    existing.worked_cq_zone = edited.worked_cq_zone;
+    existing.worked_itu_zone = edited.worked_itu_zone;
+    existing.worked_county = edited.worked_county;
+    existing.worked_iota = edited.worked_iota;
+    existing.worked_continent = edited.worked_continent;
+    existing.worked_arrl_section = edited.worked_arrl_section;
+    existing.skcc = edited.skcc;
+    existing.contest_id = edited.contest_id;
+    existing.serial_sent = edited.serial_sent;
+    existing.serial_received = edited.serial_received;
+    existing.exchange_sent = edited.exchange_sent;
+    existing.exchange_received = edited.exchange_received;
+    existing.prop_mode = edited.prop_mode;
+    existing.sat_name = edited.sat_name;
+    existing.sat_mode = edited.sat_mode;
+    existing.notes = edited.notes;
+    existing.comment = edited.comment;
+    existing.extra_fields = edited.extra_fields;
+    existing.cw_decode_rx_wpm = edited.cw_decode_rx_wpm;
+    existing.cw_decode_transcript = edited.cw_decode_transcript;
+    existing
+}
 
 /// Build a `QsoRecord` proto from the FFI request struct.
 fn build_qso_record(req: &QsrLogQsoRequest) -> Result<QsoRecord, String> {
@@ -1257,11 +1328,47 @@ fn populate_rig_status(
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{
-        buf_to_str, build_qso_record, format_freq_mhz, format_freq_radio_style, parse_datetime,
-        qso_to_summary,
+        apply_ffi_edit, buf_to_str, build_qso_record, format_freq_mhz, format_freq_radio_style,
+        parse_datetime, qso_to_summary,
     };
     use crate::types::{str_to_buf, QsrLogQsoRequest, QsrRstReport};
-    use qsoripper_core::proto::qsoripper::domain::{QslStatus, QsoRecord, StationSnapshot};
+    use qsoripper_core::proto::qsoripper::domain::{
+        QslStatus, QsoCompletion, QsoRecord, StationSnapshot,
+    };
+
+    #[test]
+    fn ffi_edit_preserves_fields_not_exposed_by_the_abi() {
+        let mut existing = QsoRecord {
+            local_id: "ffi-edit".into(),
+            notes: Some("clear me".into()),
+            worked_latitude: Some(47.61),
+            worked_longitude: Some(-122.33),
+            worked_altitude_meters: Some(120.0),
+            worked_gridsquare_ext: Some("AB".into()),
+            frequency_rx_hz: Some(14_076_000),
+            owner_callsign: Some("K7OWNER".into()),
+            qso_complete: QsoCompletion::Yes as i32,
+            ..Default::default()
+        };
+        existing.band_rx = qsoripper_core::proto::qsoripper::domain::Band::Band20m as i32;
+        let edited = QsoRecord {
+            comment: Some("updated through FFI".into()),
+            notes: None,
+            ..Default::default()
+        };
+
+        let merged = apply_ffi_edit(existing, edited);
+
+        assert_eq!(merged.comment.as_deref(), Some("updated through FFI"));
+        assert!(merged.notes.is_none());
+        assert_eq!(merged.worked_latitude, Some(47.61));
+        assert_eq!(merged.worked_longitude, Some(-122.33));
+        assert_eq!(merged.worked_altitude_meters, Some(120.0));
+        assert_eq!(merged.worked_gridsquare_ext.as_deref(), Some("AB"));
+        assert_eq!(merged.frequency_rx_hz, Some(14_076_000));
+        assert_eq!(merged.owner_callsign.as_deref(), Some("K7OWNER"));
+        assert_eq!(merged.qso_complete, QsoCompletion::Yes as i32);
+    }
 
     fn baseline_request() -> QsrLogQsoRequest {
         let mut req: QsrLogQsoRequest = unsafe { std::mem::zeroed() };

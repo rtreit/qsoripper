@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use prost::Message;
 use qsoripper_core::domain::qso::new_local_id;
 use qsoripper_core::proto::qsoripper::domain::{ConflictPolicy, QsoRecord, SyncStatus};
 use qsoripper_core::proto::qsoripper::services::SyncWithQrzResponse;
@@ -971,20 +972,16 @@ async fn push_pending_remote_deletes(
         let logid = qso.qrz_logid.as_deref().unwrap_or("").to_string();
         match client.delete_qso(&logid).await {
             Ok(()) => {
-                let mut cleared = qso.clone();
-                cleared.qrz_logid = None;
-                cleared.pending_remote_delete = false;
-                if let Err(err) = store.update_qso(&cleared).await {
-                    eprintln!(
-                        "[sync] Remote delete succeeded for {} but local clear failed: {err}",
+                match complete_remote_delete(store, qso).await {
+                    Ok(true) => counters.remote_deletes_pushed += 1,
+                    Ok(false) => counters.errors.push(format!(
+                        "Remote delete cleared for {} could not be applied because the local QSO kept changing.",
                         qso.worked_callsign
-                    );
-                    counters.errors.push(format!(
+                    )),
+                    Err(err) => counters.errors.push(format!(
                         "Remote delete cleared for {} failed locally: {err}",
                         qso.worked_callsign
-                    ));
-                } else {
-                    counters.remote_deletes_pushed += 1;
+                    )),
                 }
             }
             Err(err) => {
@@ -999,6 +996,32 @@ async fn push_pending_remote_deletes(
             }
         }
     }
+}
+
+async fn complete_remote_delete(
+    store: &dyn LogbookStore,
+    deleted_snapshot: &QsoRecord,
+) -> Result<bool, qsoripper_core::storage::StorageError> {
+    for _ in 0..3 {
+        let Some(current) = store.get_qso(&deleted_snapshot.local_id).await? else {
+            return Ok(false);
+        };
+        if current.qrz_logid != deleted_snapshot.qrz_logid {
+            return Ok(true);
+        }
+
+        let mut cleared = current.clone();
+        cleared.qrz_logid = None;
+        cleared.pending_remote_delete = false;
+        if cleared.deleted_at.is_none() {
+            cleared.sync_status = SyncStatus::LocalOnly as i32;
+        }
+        if store.update_qso_if_unchanged(&current, &cleared).await? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -1085,8 +1108,9 @@ async fn merge_with_local(
                 .map(String::from)
                 .or_else(|| local.qrz_logid.clone());
 
-            match store.update_qso(&updated).await {
-                Ok(_) => counters.downloaded += 1,
+            match store.update_qso_if_unchanged(local, &updated).await {
+                Ok(true) => counters.downloaded += 1,
+                Ok(false) => {}
                 Err(err) => {
                     eprintln!(
                         "[sync] Failed to update QSO {} from remote: {err}",
@@ -1109,8 +1133,9 @@ async fn merge_with_local(
             if let Some(logid) = remote_logid {
                 linked.qrz_logid = Some(logid.to_string());
             }
-            match store.update_qso(&linked).await {
-                Ok(_) => counters.downloaded += 1,
+            match store.update_qso_if_unchanged(local, &linked).await {
+                Ok(true) => counters.downloaded += 1,
+                Ok(false) => {}
                 Err(err) => {
                     eprintln!(
                         "[sync] Failed to link local-only QSO {} to remote: {err}",
@@ -1231,8 +1256,9 @@ async fn resolve_modified_conflict(
                 updated.local_id.clone_from(&local.local_id);
                 updated.sync_status = SyncStatus::Synced as i32;
                 updated.qrz_logid = extract_qrz_logid(remote).or_else(|| local.qrz_logid.clone());
-                match store.update_qso(&updated).await {
-                    Ok(_) => counters.downloaded += 1,
+                match store.update_qso_if_unchanged(local, &updated).await {
+                    Ok(true) => counters.downloaded += 1,
+                    Ok(false) => {}
                     Err(err) => {
                         eprintln!(
                             "[sync] Failed to overwrite QSO {} with newer remote: {err}",
@@ -1255,8 +1281,9 @@ async fn resolve_modified_conflict(
         ConflictPolicy::Unspecified | ConflictPolicy::FlagForReview => {
             let mut conflicted = local.clone();
             conflicted.sync_status = SyncStatus::Conflict as i32;
-            match store.update_qso(&conflicted).await {
-                Ok(_) => counters.conflicts += 1,
+            match store.update_qso_if_unchanged(local, &conflicted).await {
+                Ok(true) => counters.conflicts += 1,
+                Ok(false) => {}
                 Err(err) => {
                     eprintln!(
                         "[sync] Failed to mark QSO {} as conflict: {err}",
@@ -1273,15 +1300,14 @@ async fn resolve_modified_conflict(
 }
 
 fn merge_remote_authoritative(local: &QsoRecord, remote: &QsoRecord) -> QsoRecord {
-    let mut merged = remote.clone();
-    if merged.rst_sent.is_none() {
-        merged.rst_sent.clone_from(&local.rst_sent);
-    }
-    if merged.rst_received.is_none() {
-        merged.rst_received.clone_from(&local.rst_received);
+    let mut merged = local.clone();
+    if merged.merge(remote.encode_to_vec().as_slice()).is_err() {
+        return local.clone();
     }
     merged.created_at.clone_from(&local.created_at);
     merged.updated_at.clone_from(&local.updated_at);
+    merged.deleted_at.clone_from(&local.deleted_at);
+    merged.pending_remote_delete = local.pending_remote_delete;
     merged
 }
 
@@ -1439,7 +1465,8 @@ mod tests {
     use prost_types::Timestamp;
     use qsoripper_core::domain::qso::QsoRecordBuilder;
     use qsoripper_core::proto::qsoripper::domain::{
-        Band, ConflictPolicy, Mode, QsoRecord, RstReport, SyncStatus,
+        Band, ConflictPolicy, Mode, QslStatus, QsoCompletion, QsoRecord, RstReport,
+        StationSnapshot, SyncStatus,
     };
     use qsoripper_core::qrz_logbook::{QrzLogbookError, QrzLogbookStatus, QrzUploadResult};
     use qsoripper_core::storage::{
@@ -1608,6 +1635,8 @@ mod tests {
         status_result: Mutex<Option<Result<QrzLogbookStatus, QrzLogbookError>>>,
         delete_calls: Mutex<Vec<String>>,
         delete_results: Mutex<Vec<Result<(), QrzLogbookError>>>,
+        fetch_edit: Mutex<Option<(Arc<MemoryStorage>, String)>>,
+        delete_restore: Mutex<Option<(Arc<MemoryStorage>, String)>>,
     }
 
     impl MockQrzApi {
@@ -1630,6 +1659,8 @@ mod tests {
                 }))),
                 delete_calls: Mutex::new(Vec::new()),
                 delete_results: Mutex::new(Vec::new()),
+                fetch_edit: Mutex::new(None),
+                delete_restore: Mutex::new(None),
             }
         }
 
@@ -1640,6 +1671,16 @@ mod tests {
 
         fn with_fetch_results(self, fetches: Vec<Result<Vec<QsoRecord>, QrzLogbookError>>) -> Self {
             *self.fetch_results.lock().unwrap() = fetches;
+            self
+        }
+
+        fn with_fetch_edit(self, store: Arc<MemoryStorage>, local_id: String) -> Self {
+            *self.fetch_edit.lock().unwrap() = Some((store, local_id));
+            self
+        }
+
+        fn with_delete_restore(self, store: Arc<MemoryStorage>, local_id: String) -> Self {
+            *self.delete_restore.lock().unwrap() = Some((store, local_id));
             self
         }
 
@@ -1655,6 +1696,22 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(since.map(String::from));
+
+            let fetch_edit = self.fetch_edit.lock().unwrap().take();
+            if let Some((store, local_id)) = fetch_edit {
+                if let Some(mut edited) = store.get_qso(&local_id).await.unwrap() {
+                    edited.notes = Some("operator edit during fetch".into());
+                    edited.updated_at = Some(Timestamp {
+                        seconds: edited
+                            .updated_at
+                            .as_ref()
+                            .map_or(1, |stamp| stamp.seconds + 1),
+                        nanos: 0,
+                    });
+                    edited.sync_status = SyncStatus::Modified as i32;
+                    store.update_qso(&edited).await.unwrap();
+                }
+            }
 
             let mut fetch_results = self.fetch_results.lock().unwrap();
             if fetch_results.is_empty() {
@@ -1738,8 +1795,12 @@ mod tests {
         }
 
         async fn delete_qso(&self, logid: &str) -> Result<(), QrzLogbookError> {
-            let mut results = self.delete_results.lock().unwrap();
             self.delete_calls.lock().unwrap().push(logid.to_string());
+            let delete_restore = self.delete_restore.lock().unwrap().take();
+            if let Some((store, local_id)) = delete_restore {
+                store.restore_qso(&local_id).await.unwrap();
+            }
+            let mut results = self.delete_results.lock().unwrap();
             if results.is_empty() {
                 Ok(())
             } else {
@@ -2685,7 +2746,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn synced_local_preserves_rst_and_local_metadata_when_remote_omits_them() {
+    async fn synced_local_preserves_all_local_fields_when_remote_omits_them() {
         let store = MemoryStorage::new();
 
         let mut local = make_qso("W1AW", "K7RST", Band::Band20m, Mode::Cw, 1_700_000_000);
@@ -2703,6 +2764,28 @@ mod tests {
             tone: Some(9),
             raw: "579".into(),
         });
+        local.frequency_hz = Some(14_025_125);
+        local.submode = Some("CW".into());
+        local.station_snapshot = Some(StationSnapshot {
+            station_callsign: "K7TEST".into(),
+            grid: Some("CN87".into()),
+            ..Default::default()
+        });
+        local.tx_power = Some("100".into());
+        local.qsl_sent_status = QslStatus::Yes as i32;
+        local.lotw_received = Some(true);
+        local.contest_id = Some("ARRL-FIELD-DAY".into());
+        local.exchange_received = Some("1D WWA".into());
+        local.comment = Some("operator correction".into());
+        local.worked_latitude = Some(47.61);
+        local.frequency_rx_hz = Some(14_030_000);
+        local.band_rx = Band::Band20m as i32;
+        local.qso_complete = QsoCompletion::Yes as i32;
+        local.cw_decode_rx_wpm = Some(24);
+        local.cw_decode_transcript = Some("CQ TEST".into());
+        local
+            .extra_fields
+            .insert("APP_LOCAL_ONLY".into(), "preserve-me".into());
         local.created_at = Some(Timestamp {
             seconds: 1_699_999_940,
             nanos: 0,
@@ -2738,8 +2821,71 @@ mod tests {
             saved.rst_received.as_ref().map(|rst| rst.raw.as_str()),
             Some("579")
         );
+        assert_eq!(saved.frequency_hz, Some(14_025_125));
+        assert_eq!(saved.submode.as_deref(), Some("CW"));
+        assert_eq!(
+            saved
+                .station_snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.grid.as_deref()),
+            Some("CN87")
+        );
+        assert_eq!(saved.tx_power.as_deref(), Some("100"));
+        assert_eq!(saved.qsl_sent_status, QslStatus::Yes as i32);
+        assert_eq!(saved.lotw_received, Some(true));
+        assert_eq!(saved.contest_id.as_deref(), Some("ARRL-FIELD-DAY"));
+        assert_eq!(saved.exchange_received.as_deref(), Some("1D WWA"));
+        assert_eq!(saved.comment.as_deref(), Some("operator correction"));
+        assert_eq!(saved.worked_latitude, Some(47.61));
+        assert_eq!(saved.frequency_rx_hz, Some(14_030_000));
+        assert_eq!(saved.band_rx, Band::Band20m as i32);
+        assert_eq!(saved.qso_complete, QsoCompletion::Yes as i32);
+        assert_eq!(saved.cw_decode_rx_wpm, Some(24));
+        assert_eq!(saved.cw_decode_transcript.as_deref(), Some("CQ TEST"));
+        assert_eq!(
+            saved.extra_fields.get("APP_LOCAL_ONLY").map(String::as_str),
+            Some("preserve-me")
+        );
         assert_eq!(saved.created_at, local.created_at);
         assert_eq!(saved.updated_at, local.updated_at);
+    }
+
+    #[tokio::test]
+    async fn download_preserves_operator_edit_made_while_fetch_is_in_flight() {
+        let store = Arc::new(MemoryStorage::new());
+        let mut local = make_qso("W1AW", "K7RACE", Band::Band20m, Mode::Cw, 1_700_000_000);
+        local.sync_status = SyncStatus::Synced as i32;
+        local.qrz_logid = Some("FETCH-RACE".into());
+        local.updated_at = Some(Timestamp {
+            seconds: 1_700_000_000,
+            nanos: 0,
+        });
+        store.insert_qso(&local).await.unwrap();
+
+        let mut remote = make_qso("W1AW", "K7RACE", Band::Band20m, Mode::Cw, 1_700_000_000);
+        remote.qrz_logid = Some("FETCH-RACE".into());
+        remote.notes = Some("remote value".into());
+        let api = MockQrzApi::new(Ok(vec![remote]), vec![])
+            .with_fetch_edit(Arc::clone(&store), local.local_id.clone());
+
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(
+            &api,
+            store.as_ref(),
+            true,
+            ConflictPolicy::FlagForReview,
+            &tx,
+        )
+        .await;
+        drop(tx);
+        drop(collect_final(rx).await);
+
+        let saved = store
+            .get_qso(&local.local_id)
+            .await
+            .unwrap()
+            .expect("saved QSO");
+        assert_eq!(saved.notes.as_deref(), Some("operator edit during fetch"));
     }
 
     #[tokio::test]
@@ -3593,6 +3739,44 @@ mod tests {
             "pending flag must remain set so the next sync retries"
         );
         assert_eq!(after[0].qrz_logid.as_deref(), Some("LOG-FAIL"));
+    }
+
+    #[tokio::test]
+    async fn push_pending_remote_deletes_preserves_concurrent_restore() {
+        let store = Arc::new(MemoryStorage::new());
+        let mut local = make_qso("W1AW", "JA1ZZZ", Band::Band40m, Mode::Cw, 1_700_000_000);
+        local.sync_status = SyncStatus::Synced as i32;
+        local.qrz_logid = Some("LOG-RESTORE-RACE".into());
+        local.deleted_at = Some(Timestamp {
+            seconds: 1_700_000_100,
+            nanos: 0,
+        });
+        local.pending_remote_delete = true;
+        store.insert_qso(&local).await.unwrap();
+
+        let api = MockQrzApi::new(Ok(vec![]), vec![])
+            .with_delete_restore(Arc::clone(&store), local.local_id.clone());
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(
+            &api,
+            store.as_ref(),
+            true,
+            ConflictPolicy::FlagForReview,
+            &tx,
+        )
+        .await;
+        drop(tx);
+        drop(collect_final(rx).await);
+
+        let saved = store
+            .get_qso(&local.local_id)
+            .await
+            .unwrap()
+            .expect("saved QSO");
+        assert!(saved.deleted_at.is_none());
+        assert!(!saved.pending_remote_delete);
+        assert!(saved.qrz_logid.as_deref().is_none_or(str::is_empty));
+        assert_eq!(saved.sync_status, SyncStatus::LocalOnly as i32);
     }
 
     #[tokio::test]

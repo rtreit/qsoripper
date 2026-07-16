@@ -23,6 +23,7 @@
 
 use std::collections::HashMap;
 
+use prost::Message;
 use qsoripper_core::proto::qsoripper::domain::QsoRecord;
 use qsoripper_core::storage::{DeletedRecordsFilter, LogbookStore, QsoListQuery, StorageError};
 
@@ -177,49 +178,23 @@ fn extract_legacy_logid(qso: &QsoRecord) -> Option<String> {
 /// values the keeper already has. Returns `true` when at least one field on
 /// the keeper was filled in from the victim.
 fn merge_in_place(keeper: &mut QsoRecord, victim: &QsoRecord) -> bool {
-    let mut changed = false;
-
-    macro_rules! fill_optional_string {
-        ($field:ident) => {
-            if keeper.$field.as_deref().is_none_or(str::is_empty) {
-                if let Some(v) = victim.$field.as_deref().filter(|s| !s.is_empty()) {
-                    keeper.$field = Some(v.to_owned());
-                    changed = true;
-                }
-            }
-        };
+    let original = keeper.clone();
+    let mut merged = victim.clone();
+    if merged.merge(keeper.encode_to_vec().as_slice()).is_err() {
+        return false;
     }
-
-    fill_optional_string!(qrz_bookid);
-    fill_optional_string!(notes);
-    fill_optional_string!(comment);
-    fill_optional_string!(submode);
-    fill_optional_string!(worked_grid);
-    fill_optional_string!(worked_operator_name);
-
-    if keeper.rst_sent.is_none() {
-        if let Some(v) = victim.rst_sent.clone() {
-            keeper.rst_sent = Some(v);
-            changed = true;
-        }
+    merged.local_id.clone_from(&keeper.local_id);
+    merged.qrz_logid.clone_from(&keeper.qrz_logid);
+    merged.created_at.clone_from(&keeper.created_at);
+    merged.updated_at.clone_from(&keeper.updated_at);
+    merged.sync_status = keeper.sync_status;
+    merged.deleted_at.clone_from(&keeper.deleted_at);
+    merged.pending_remote_delete = keeper.pending_remote_delete;
+    for key in QRZ_LOGID_EXTRA_FIELD_KEYS {
+        merged.extra_fields.remove(*key);
     }
-    if keeper.rst_received.is_none() {
-        if let Some(v) = victim.rst_received.clone() {
-            keeper.rst_received = Some(v);
-            changed = true;
-        }
-    }
-
-    for (k, v) in &victim.extra_fields {
-        if v.is_empty() || QRZ_LOGID_EXTRA_FIELD_KEYS.contains(&k.as_str()) {
-            continue;
-        }
-        if !keeper.extra_fields.contains_key(k) {
-            keeper.extra_fields.insert(k.clone(), v.clone());
-            changed = true;
-        }
-    }
-
+    let changed = merged != original;
+    *keeper = merged;
     changed
 }
 
@@ -228,7 +203,7 @@ fn merge_in_place(keeper: &mut QsoRecord, victim: &QsoRecord) -> bool {
 mod tests {
     use prost_types::Timestamp;
     use qsoripper_core::domain::qso::QsoRecordBuilder;
-    use qsoripper_core::proto::qsoripper::domain::{Band, Mode};
+    use qsoripper_core::proto::qsoripper::domain::{Band, Mode, QsoCompletion};
     use qsoripper_core::storage::{LogbookStore, QsoListQuery};
     use qsoripper_storage_memory::MemoryStorage;
 
@@ -335,6 +310,12 @@ mod tests {
             seconds: 1_700_010_000,
             nanos: 0,
         });
+        b.contest_id = Some("ARRL-FIELD-DAY".into());
+        b.lotw_received = Some(true);
+        b.worked_latitude = Some(47.61);
+        b.frequency_rx_hz = Some(14_076_000);
+        b.qso_complete = QsoCompletion::Yes as i32;
+        b.cw_decode_transcript = Some("CQ TEST".into());
 
         store.insert_qso(&a).await.unwrap();
         store.insert_qso(&b).await.unwrap();
@@ -349,6 +330,12 @@ mod tests {
         assert_eq!(row.local_id, "OLD", "the older row is the canonical one");
         assert_eq!(row.qrz_logid.as_deref(), Some("DUP"));
         assert_eq!(row.notes.as_deref(), Some("operator notes"));
+        assert_eq!(row.contest_id.as_deref(), Some("ARRL-FIELD-DAY"));
+        assert_eq!(row.lotw_received, Some(true));
+        assert_eq!(row.worked_latitude, Some(47.61));
+        assert_eq!(row.frequency_rx_hz, Some(14_076_000));
+        assert_eq!(row.qso_complete, QsoCompletion::Yes as i32);
+        assert_eq!(row.cw_decode_transcript.as_deref(), Some("CQ TEST"));
     }
 
     #[tokio::test]

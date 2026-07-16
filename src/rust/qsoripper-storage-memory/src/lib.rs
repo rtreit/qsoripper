@@ -68,6 +68,29 @@ impl LogbookStore for MemoryStorage {
         Ok(true)
     }
 
+    async fn update_qso_if_unchanged(
+        &self,
+        expected: &QsoRecord,
+        replacement: &QsoRecord,
+    ) -> Result<bool, StorageError> {
+        if expected.local_id != replacement.local_id {
+            return Ok(false);
+        }
+
+        let mut state = self.state.write().await;
+        let Some(current) = state.qsos.get(&expected.local_id) else {
+            return Ok(false);
+        };
+        if current != expected {
+            return Ok(false);
+        }
+
+        state
+            .qsos
+            .insert(expected.local_id.clone(), replacement.clone());
+        Ok(true)
+    }
+
     async fn update_qrz_sync_metadata(
         &self,
         local_id: &str,
@@ -720,6 +743,32 @@ mod tests {
         assert!(patched.pending_remote_delete);
         assert_eq!(patched.qrz_logid.as_deref(), Some("QRZ-DEL"));
         assert_eq!(patched.sync_status, SyncStatus::Modified as i32);
+    }
+
+    #[tokio::test]
+    async fn memory_storage_conditional_update_rejects_stale_snapshot() {
+        let storage = MemoryStorage::new();
+        let original = QsoRecordBuilder::new("W1AW", "K7CAS")
+            .band(Band::Band20m)
+            .mode(Mode::Ft8)
+            .timestamp(Timestamp {
+                seconds: 1_700_000_000,
+                nanos: 0,
+            })
+            .build();
+        storage.insert_qso(&original).await.unwrap();
+        let mut current = original.clone();
+        current.notes = Some("operator edit".into());
+        storage.update_qso(&current).await.unwrap();
+
+        let mut stale_replacement = original.clone();
+        stale_replacement.notes = Some("stale sync value".into());
+        assert!(!storage
+            .update_qso_if_unchanged(&original, &stale_replacement)
+            .await
+            .unwrap());
+        let saved = storage.get_qso(&original.local_id).await.unwrap().unwrap();
+        assert_eq!(saved.notes.as_deref(), Some("operator edit"));
     }
 
     #[tokio::test]
