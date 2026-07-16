@@ -152,8 +152,8 @@ internal static class LogQsoCommand
     internal static RstReport DefaultRst(Mode mode)
     {
         return IsPhoneMode(mode)
-            ? new RstReport { Readability = 5, Strength = 9 }
-            : new RstReport { Readability = 5, Strength = 9, Tone = 9 };
+            ? new RstReport { Readability = 5, Strength = 9, Raw = "59" }
+            : new RstReport { Readability = 5, Strength = 9, Tone = 9, Raw = "599" };
     }
 
     internal static bool IsPhoneMode(Mode mode)
@@ -419,6 +419,7 @@ internal static class LogQsoCommand
 
         report.Readability = (uint)(value[0] - '0');
         report.Strength = (uint)(value[1] - '0');
+        report.Raw = value;
 
         if (value.Length == 3)
         {
