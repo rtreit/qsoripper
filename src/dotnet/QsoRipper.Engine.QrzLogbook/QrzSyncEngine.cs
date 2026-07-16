@@ -628,7 +628,9 @@ public sealed class QrzSyncEngine
         // locally logged contest/contact data but import QRZ's enrichment into blanks.
         if (!localHasUnsyncedEdits)
         {
-            var nonConflict = local.SyncStatus == SyncStatus.Synced ? remote.Clone() : local.Clone();
+            var nonConflict = local.SyncStatus == SyncStatus.Synced
+                ? MergeRemoteAuthoritative(local, remote)
+                : local.Clone();
             if (local.SyncStatus == SyncStatus.LocalOnly)
             {
                 FillMissingRemoteEnrichment(nonConflict, remote);
@@ -650,7 +652,7 @@ public sealed class QrzSyncEngine
             case ConflictPolicy.LastWriteWins:
                 // Remote wins silently — no operator intervention needed, so
                 // this is NOT counted as a conflict in the sync result.
-                merged = remote.Clone();
+                merged = MergeRemoteAuthoritative(local, remote);
                 merged.LocalId = local.LocalId;
                 merged.SyncStatus = SyncStatus.Synced;
                 requiresReview = false;
@@ -669,6 +671,16 @@ public sealed class QrzSyncEngine
 
         merged.QrzLogid = remoteLogid ?? local.QrzLogid;
         return (merged, requiresReview);
+    }
+
+    private static QsoRecord MergeRemoteAuthoritative(QsoRecord local, QsoRecord remote)
+    {
+        var merged = remote.Clone();
+        merged.RstSent ??= local.RstSent?.Clone();
+        merged.RstReceived ??= local.RstReceived?.Clone();
+        merged.CreatedAt = local.CreatedAt?.Clone();
+        merged.UpdatedAt = local.UpdatedAt?.Clone();
+        return merged;
     }
 
     private static void FillMissingRemoteEnrichment(QsoRecord target, QsoRecord remote)

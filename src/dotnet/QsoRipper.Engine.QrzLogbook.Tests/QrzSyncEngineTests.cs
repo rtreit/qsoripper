@@ -728,6 +728,37 @@ public sealed class QrzSyncEngineTests
         Assert.Equal(SyncStatus.Synced, all[0].SyncStatus);
     }
 
+    [Fact]
+    public async Task Merge_synced_local_preserves_rst_and_local_metadata_when_remote_omits_them()
+    {
+        var store = CreateStore();
+        var local = MakeLocalQso("W1AW", BaseTime, Band._20M, Mode.Cw, SyncStatus.Synced);
+        local.QrzLogid = "1001";
+        local.RstSent = new RstReport { Readability = 5, Strength = 9, Tone = 9, Raw = "599" };
+        local.RstReceived = new RstReport { Readability = 5, Strength = 7, Tone = 9, Raw = "579" };
+        local.CreatedAt = Timestamp.FromDateTimeOffset(BaseTime.AddMinutes(-1));
+        local.UpdatedAt = Timestamp.FromDateTimeOffset(BaseTime);
+        await store.Logbook.InsertQsoAsync(local);
+
+        var remote = MakeRemoteQso("W1AW", BaseTime, Band._20M, Mode.Cw, "1001");
+        remote.Notes = "Fresh from QRZ";
+
+        var api = new FakeQrzLogbookApi { FetchResult = [remote] };
+        var engine = new QrzSyncEngine(api);
+
+        await engine.ExecuteSyncAsync(
+            store.Logbook,
+            fullSync: true,
+            ConflictPolicy.FlagForReview);
+
+        var saved = Assert.Single(await store.Logbook.ListQsosAsync(new QsoListQuery()));
+        Assert.Equal("Fresh from QRZ", saved.Notes);
+        Assert.Equal("599", saved.RstSent.Raw);
+        Assert.Equal("579", saved.RstReceived.Raw);
+        Assert.Equal(local.CreatedAt, saved.CreatedAt);
+        Assert.Equal(local.UpdatedAt, saved.UpdatedAt);
+    }
+
     // -- Soft-delete sync integration ---------------------------------------
 
     [Fact]

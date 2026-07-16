@@ -1078,7 +1078,7 @@ async fn merge_with_local(
     match SyncStatus::try_from(local.sync_status) {
         Ok(SyncStatus::Synced) => {
             // Remote wins — update local with remote data.
-            let mut updated = remote.clone();
+            let mut updated = merge_remote_authoritative(local, remote);
             updated.local_id.clone_from(&local.local_id);
             updated.sync_status = SyncStatus::Synced as i32;
             updated.qrz_logid = remote_logid
@@ -1227,7 +1227,7 @@ async fn resolve_modified_conflict(
 
             if remote_ts >= local_ts {
                 // Remote is newer (or equal) — overwrite local.
-                let mut updated = remote.clone();
+                let mut updated = merge_remote_authoritative(local, remote);
                 updated.local_id.clone_from(&local.local_id);
                 updated.sync_status = SyncStatus::Synced as i32;
                 updated.qrz_logid = extract_qrz_logid(remote).or_else(|| local.qrz_logid.clone());
@@ -1270,6 +1270,19 @@ async fn resolve_modified_conflict(
             }
         }
     }
+}
+
+fn merge_remote_authoritative(local: &QsoRecord, remote: &QsoRecord) -> QsoRecord {
+    let mut merged = remote.clone();
+    if merged.rst_sent.is_none() {
+        merged.rst_sent.clone_from(&local.rst_sent);
+    }
+    if merged.rst_received.is_none() {
+        merged.rst_received.clone_from(&local.rst_received);
+    }
+    merged.created_at.clone_from(&local.created_at);
+    merged.updated_at.clone_from(&local.updated_at);
+    merged
 }
 
 // ---------------------------------------------------------------------------
@@ -1426,7 +1439,7 @@ mod tests {
     use prost_types::Timestamp;
     use qsoripper_core::domain::qso::QsoRecordBuilder;
     use qsoripper_core::proto::qsoripper::domain::{
-        Band, ConflictPolicy, Mode, QsoRecord, SyncStatus,
+        Band, ConflictPolicy, Mode, QsoRecord, RstReport, SyncStatus,
     };
     use qsoripper_core::qrz_logbook::{QrzLogbookError, QrzLogbookStatus, QrzUploadResult};
     use qsoripper_core::storage::{
@@ -2669,6 +2682,64 @@ mod tests {
         let all = store.list_qsos(&QsoListQuery::default()).await.unwrap();
         assert_eq!(all.len(), 1, "fuzzy match should not insert a duplicate");
         assert_eq!(all[0].sync_status, SyncStatus::Synced as i32);
+    }
+
+    #[tokio::test]
+    async fn synced_local_preserves_rst_and_local_metadata_when_remote_omits_them() {
+        let store = MemoryStorage::new();
+
+        let mut local = make_qso("W1AW", "K7RST", Band::Band20m, Mode::Cw, 1_700_000_000);
+        local.sync_status = SyncStatus::Synced as i32;
+        local.qrz_logid = Some("QRZ-RST".into());
+        local.rst_sent = Some(RstReport {
+            readability: Some(5),
+            strength: Some(9),
+            tone: Some(9),
+            raw: "599".into(),
+        });
+        local.rst_received = Some(RstReport {
+            readability: Some(5),
+            strength: Some(7),
+            tone: Some(9),
+            raw: "579".into(),
+        });
+        local.created_at = Some(Timestamp {
+            seconds: 1_699_999_940,
+            nanos: 0,
+        });
+        local.updated_at = Some(Timestamp {
+            seconds: 1_700_000_000,
+            nanos: 0,
+        });
+        store.insert_qso(&local).await.unwrap();
+
+        let mut remote = make_qso("W1AW", "K7RST", Band::Band20m, Mode::Cw, 1_700_000_000);
+        remote.qrz_logid = Some("QRZ-RST".into());
+        remote.notes = Some("Fresh from QRZ".into());
+
+        let api = MockQrzApi::new(Ok(vec![remote]), vec![]);
+        let (tx, rx) = mpsc::channel(16);
+        execute_sync(&api, &store, true, ConflictPolicy::FlagForReview, &tx).await;
+        drop(tx);
+        drop(collect_final(rx).await);
+
+        let saved = store
+            .list_qsos(&QsoListQuery::default())
+            .await
+            .unwrap()
+            .pop()
+            .expect("saved QSO");
+        assert_eq!(saved.notes.as_deref(), Some("Fresh from QRZ"));
+        assert_eq!(
+            saved.rst_sent.as_ref().map(|rst| rst.raw.as_str()),
+            Some("599")
+        );
+        assert_eq!(
+            saved.rst_received.as_ref().map(|rst| rst.raw.as_str()),
+            Some("579")
+        );
+        assert_eq!(saved.created_at, local.created_at);
+        assert_eq!(saved.updated_at, local.updated_at);
     }
 
     #[tokio::test]
