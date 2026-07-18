@@ -230,7 +230,7 @@ public sealed class QrzLogbookClient : IQrzLogbookApi, IDisposable
         {
             new("ACTION", "DELETE"),
             new("KEY", _apiKey),
-            new("LOGID", logid),
+            new("LOGIDS", logid),
         };
 
         string body;

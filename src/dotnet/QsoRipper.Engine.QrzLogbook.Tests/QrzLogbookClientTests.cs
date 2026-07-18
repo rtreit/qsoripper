@@ -285,7 +285,7 @@ public sealed class QrzLogbookClientTests
     // -- DELETE --------------------------------------------------------------
 
     [Fact]
-    public async Task Delete_sends_action_delete_with_logid()
+    public async Task Delete_sends_action_delete_with_logids()
     {
         var (client, handler) = CreateClient("RESULT=OK");
 
@@ -295,7 +295,8 @@ public sealed class QrzLogbookClientTests
         }
 
         Assert.Contains("ACTION=DELETE", handler.CapturedBody);
-        Assert.Contains("LOGID=123456", handler.CapturedBody);
+        Assert.Contains("LOGIDS=123456", handler.CapturedBody);
+        Assert.DoesNotContain("LOGID=123456", handler.CapturedBody);
     }
 
     [Fact]
