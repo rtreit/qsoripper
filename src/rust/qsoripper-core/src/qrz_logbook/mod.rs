@@ -788,7 +788,7 @@ impl QrzLogbookClient {
     /// next sync just clears the local pending flag instead of looping forever.
     pub async fn delete_qso(&self, logid: &str) -> Result<(), QrzLogbookError> {
         let body = self
-            .post_form(&[("ACTION", "DELETE"), ("LOGID", logid)])
+            .post_form(&[("ACTION", "DELETE"), ("LOGIDS", logid)])
             .await?;
         let map = parse_kv_response(&body);
         match check_result(map) {
@@ -1774,7 +1774,8 @@ mod tests {
 
         let reqs = requests.lock().expect("requests");
         assert!(reqs[0].contains("ACTION=DELETE"));
-        assert!(reqs[0].contains("LOGID=123456"));
+        assert!(reqs[0].contains("LOGIDS=123456"));
+        assert!(!reqs[0].contains("LOGID=123456"));
     }
 
     #[tokio::test]
