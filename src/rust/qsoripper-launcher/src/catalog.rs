@@ -48,13 +48,20 @@ pub(crate) struct ArtifactSpec {
     /// platform suffix is appended in [`ArtifactSpec::executable_path`]).
     pub executable_stem: &'static str,
     /// Optional environment variable containing an explicitly installed executable.
-    /// When present, resolution falls back to a bundled artifact and then `PATH`.
+    /// When present, resolution may fall back to external development and install locations.
     pub external_executable_env: Option<&'static str>,
+    /// Optional sibling source checkout whose Cargo output can be used during development.
+    pub sibling_source_checkout: Option<&'static str>,
 }
 
 impl ArtifactSpec {
     /// Resolve the full executable path under the published artifact root.
     pub(crate) fn executable_path(&self, root: &ArtifactRoot) -> PathBuf {
+        let mut file_name = self.executable_stem.to_owned();
+        if cfg!(windows) {
+            file_name.push_str(".exe");
+        }
+
         if let Some(variable) = self.external_executable_env {
             if let Some(path) = std::env::var_os(variable).map(PathBuf::from) {
                 if path.is_file() {
@@ -62,21 +69,35 @@ impl ArtifactSpec {
                 }
             }
         }
-        let mut p = root
+        let bundled = root
             .path()
             .join(self.publish_subdir)
-            .join(root.configuration());
-        let mut name = self.executable_stem.to_owned();
-        if cfg!(windows) {
-            name.push_str(".exe");
+            .join(root.configuration())
+            .join(&file_name);
+        if bundled.is_file() || self.external_executable_env.is_none() {
+            return bundled;
         }
-        p.push(name);
-        if self.external_executable_env.is_some() && !p.is_file() {
-            if let Some(installed) = find_on_path(p.file_name().unwrap_or_default()) {
+
+        if let (Some(repo_root), Some(checkout)) = (root.repo_root(), self.sibling_source_checkout)
+        {
+            if let Some(parent) = repo_root.parent() {
+                let source_build = parent
+                    .join(checkout)
+                    .join("target")
+                    .join(root.configuration().to_ascii_lowercase())
+                    .join(&file_name);
+                if source_build.is_file() {
+                    return source_build;
+                }
+            }
+        }
+
+        if self.external_executable_env.is_some() {
+            if let Some(installed) = find_on_path(file_name.as_ref()) {
                 return installed;
             }
         }
-        p
+        bundled
     }
 }
 
@@ -95,6 +116,7 @@ const fn bundled_artifact(
         publish_subdir,
         executable_stem,
         external_executable_env: None,
+        sibling_source_checkout: None,
     }
 }
 
@@ -121,6 +143,7 @@ pub(crate) fn catalog() -> Vec<ComponentSpec> {
                 publish_subdir: "cathub",
                 executable_stem: "cathub",
                 external_executable_env: Some("CATHUB_EXECUTABLE"),
+                sibling_source_checkout: Some("cathub"),
             },
         },
         ComponentSpec {
@@ -241,6 +264,40 @@ mod tests {
             spec.artifact.external_executable_env,
             Some("CATHUB_EXECUTABLE")
         );
+        assert_eq!(spec.artifact.sibling_source_checkout, Some("cathub"));
+    }
+
+    #[test]
+    fn cathub_resolves_from_a_built_sibling_checkout() {
+        let workspace =
+            std::env::temp_dir().join(format!("qsoripper-launcher-cathub-{}", std::process::id()));
+        let repo_root = workspace.join("qsoripper");
+        let executable_name = if cfg!(windows) {
+            "cathub.exe"
+        } else {
+            "cathub"
+        };
+        let sibling_executable = workspace
+            .join("cathub")
+            .join("target")
+            .join("release")
+            .join(executable_name);
+        std::fs::create_dir_all(sibling_executable.parent().expect("executable parent"))
+            .expect("create sibling target directory");
+        std::fs::write(&sibling_executable, []).expect("create sibling executable");
+
+        let root =
+            ArtifactRoot::from_repo_root(&repo_root, crate::discovery::Configuration::Release);
+        let spec = ArtifactSpec {
+            publish_subdir: "cathub",
+            executable_stem: "cathub",
+            external_executable_env: Some("QSORIPPER_TEST_CATHUB_EXECUTABLE"),
+            sibling_source_checkout: Some("cathub"),
+        };
+
+        assert_eq!(spec.executable_path(&root), sibling_executable);
+
+        std::fs::remove_dir_all(workspace).expect("remove sibling checkout fixture");
     }
 
     #[test]
