@@ -10,7 +10,7 @@ This document is a comprehensive development reference for QsoRipper's consumpti
 
 The QRZ XML service provides real-time access to callsign and DXCC data from the QRZ.COM database over standard HTTP. Responses are XML formatted.
 
-**Subscription model:** Any QRZ user can authenticate, but an active QRZ Logbook Data subscription is required to receive full field data. Non-subscriber access returns a limited field set and is intended for testing only.
+**Subscription model:** Any QRZ user can authenticate. Full field data requires an active QRZ Logbook Data subscription. Non-subscriber access returns limited test data.
 
 ---
 
@@ -31,7 +31,7 @@ https://xmldata.qrz.com/xml/<version_identifier>/?<query_parameters>
 | Identifier | Behavior |
 |---|---|
 | _(none)_ | Legacy mode (v1.24) |
-| `1.xx` | Use specific version (e.g. `1.34`; dot may be omitted: `134`) |
+| `1.xx` | Use a specific version, such as `1.34`. You can omit the dot: `134`. |
 | `current` | Use the latest available version |
 
 An invalid version identifier returns an error.
@@ -50,8 +50,8 @@ https://xmldata.qrz.com/xml/current/?username=xx1xxx;password=abcdef  (latest)
 
 ## HTTP protocol notes
 
-- Requests may use either HTTP `GET` or `POST`.
-- Query parameter separators: either `&` or `;` are accepted.
+- Requests can use HTTP `GET` or `POST`.
+- QRZ accepts `&` or `;` as query parameter separators.
 - The interface does not use HTTP cookies, JavaScript, or HTML (except for the biography fetch, which returns HTML).
 
 ---
@@ -72,7 +72,7 @@ https://xmldata.qrz.com/xml/current/?username=xx1xxx;password=abcdef;agent=QsoRi
 |---|---|---|
 | `username` | Yes | A valid QRZ.COM username |
 | `password` | Yes | The correct password for the username |
-| `agent` | Strongly recommended | Product name and version (e.g. `QsoRipper/0.1.0`). Assists QRZ support and troubleshooting. If omitted, QRZ falls back to the HTTP `User-Agent` header. |
+| `agent` | Strongly recommended | Product name and version (for example `QsoRipper/0.1.0`). Assists QRZ support and troubleshooting. If omitted, QRZ falls back to the HTTP `User-Agent` header. |
 
 ### Successful login response
 
@@ -94,10 +94,10 @@ The `<QRZDatabase>` node includes `version` and `xmlns` attributes.
 
 - All post-login requests must include the session key via the `s=` parameter.
 - Session keys have **no guaranteed lifetime**. They are dynamically managed by the server.
-- A key is valid for a single user and may be **immediately invalidated** if the user's IP address or other identifying information changes.
-- Clients should perform **one login per session** and cache/reuse the key for all subsequent requests.
-- When a response **omits the `<Key>` element**, no valid session exists and re-login is required.
-- Monitor every response for session status and be prepared to re-authenticate at any time.
+- A key is valid for one user. QRZ can **immediately invalidate** it when the user's identifying information changes.
+- Clients must perform **one login per session**. They must keep and use the key for all later requests.
+- When a response **omits the `<Key>` element**, no valid session exists. Log in again.
+- Monitor each response for session status. Be ready to authenticate again.
 
 ### Session node fields
 
@@ -107,10 +107,10 @@ The `<QRZDatabase>` node includes `version` and `xmlns` attributes.
 | `Count` | Number of lookups performed by this user in the current 24-hour period |
 | `SubExp` | Subscription expiration date/time, or the string `"non-subscriber"` |
 | `GMTime` | Server timestamp for this response |
-| `Message` | Informational message for the user (e.g. subscription notices) |
-| `Error` | Error message (e.g. "password incorrect", "session timeout", "callsign not found") |
+| `Message` | Informational message for the user (for example subscription notices) |
+| `Error` | Error message (for example "password incorrect", "session timeout", "callsign not found") |
 
-Both `Error` and `Message` should be surfaced to the user when present. `Count`, `SubExp`, and `GMTime` are informational.
+Show `Error` and `Message` to the user when these fields contain values. `Count`, `SubExp`, and `GMTime` contain information.
 
 ---
 
@@ -118,7 +118,7 @@ Both `Error` and `Message` should be surfaced to the user when present. `Count`,
 
 ### Top-level node
 
-All responses are wrapped in `<QRZDatabase>`. Three child node types are defined:
+`<QRZDatabase>` contains all responses. It defines three child node types:
 
 - `<Session>` - always present
 - `<Callsign>` - present on successful callsign lookup
@@ -126,7 +126,7 @@ All responses are wrapped in `<QRZDatabase>`. Three child node types are defined
 
 ### Forward compatibility requirement
 
-QRZ may add new XML nodes or attributes at any time. The parser **must**:
+QRZ can add new XML nodes or attributes at any time. The parser **must**:
 
 - Parse in an "object=attribute" manner
 - Ignore unknown nodes and attributes without error
@@ -204,7 +204,7 @@ https://xmldata.qrz.com/xml/current/?s=<session_key>;callsign=<target>
 
 ### Complete callsign node fields
 
-Not all fields are returned with every request. Field ordering is arbitrary and subject to change.
+QRZ does not return all fields with each request. Field order can change.
 
 | Field | Description |
 |---|---|
@@ -255,7 +255,7 @@ Not all fields are returned with every request. Field ordering is arbitrary and 
 | `lotw` | Will accept LOTW (0/1 or blank if unknown) |
 | `iota` | IOTA designator (blank if unknown) |
 | `geoloc` | Source of lat/long data (see geolocation section) |
-| `attn` | Attention address line; prepend to address (v1.34+) |
+| `attn` | Attention address line. Prepend to address (v1.34+) |
 | `nickname` | A different or shortened name used on the air (v1.34+) |
 | `name_fmt` | Combined full name and nickname in QRZ display format (v1.34+, format subject to change) |
 
@@ -292,7 +292,7 @@ Nearly every callsign will include geographic coordinates, but accuracy varies s
 | `zip` | Derived from the callsign's USA zip code |
 | `state` | Derived from the callsign's USA state |
 | `dxcc` | Derived from the callsign's DXCC entity (country center) |
-| `none` | No value could be determined |
+| `none` | The lookup did not find a value. |
 
 **QsoRipper implementation note:** Surface the `geoloc` value as metadata so the UI or consumer can convey coordinate confidence. Do not treat all coordinates as equally precise.
 
@@ -319,7 +319,7 @@ The `dxcc=` parameter provides three lookup modes:
 | Input | Behavior |
 |---|---|
 | `dxcc=291` (numeric) | Return the DXCC entity record for entity 291 |
-| `dxcc=XX1XX` (callsign) | Reduce to 4, then 3, then 2-letter prefix; return first matching DXCC entity |
+| `dxcc=XX1XX` (callsign) | Reduce to 4, then 3, then 2-letter prefix. Return first matching DXCC entity |
 | `dxcc=all` (keyword) | Return the entire list of 380+ DXCC entities. **Use sparingly.** |
 
 ### Example request
@@ -375,7 +375,7 @@ https://xmldata.qrz.com/xml/current/?s=<session_key>;dxcc=291
 - Entities with IDs greater than 900 are unique to QRZ and not part of the standard DXCC list.
 - Lat/lon values represent the approximate geographic center of the entity.
 - Non-match failures return: `No DXCC information for: xxxx`
-- Cache the `dxcc=all` result locally and refresh infrequently; do not call it on every session.
+- Cache the `dxcc=all` result locally and refresh infrequently. Do not call it on every session.
 
 ---
 
@@ -400,7 +400,7 @@ Typically "item not found" responses. The session remains valid and `<Key>` is s
 
 ### 2) Session errors
 
-The session has expired or been invalidated. The `<Key>` field is **not returned**.
+The session expired, or QRZ invalidated it. The response does **not** contain the `<Key>` field.
 
 ```xml
 <?xml version="1.0" ?>
@@ -414,16 +414,16 @@ The session has expired or been invalidated. The `<Key>` field is **not returned
 
 ### Special error: "Connection refused"
 
-This error indicates service is refused for the user. **Successful login will not be possible for at least 24 hours.** No further details are provided.
+This error means QRZ refuses service for the user. **Login will fail for at least 24 hours.** QRZ supplies no more details.
 
 ### Error handling strategy for QsoRipper
 
 | Error class | Detection | QsoRipper behavior |
 |---|---|---|
-| Session timeout / invalid key | `<Error>` present AND `<Key>` absent | Re-authenticate immediately; retry the original request once |
-| Callsign not found | `<Error>` contains "Not found" AND `<Key>` present | Negative-cache with short TTL; do not retry |
-| Connection refused | `<Error>` is "Connection refused" | Back off for 24 hours; surface to user as config/account issue |
-| Password incorrect | `<Error>` contains auth failure text | Stop retries; surface as credential error |
+| Session timeout / invalid key | `<Error>` present AND `<Key>` absent | Re-authenticate immediately. Retry the original request once |
+| Callsign not found | `<Error>` contains "Not found" AND `<Key>` present | Negative-cache with short TTL. Do not retry |
+| Connection refused | `<Error>` is "Connection refused" | Back off for 24 hours. Surface to user as config/account issue |
+| Password incorrect | `<Error>` contains auth failure text | Stop retries. Surface as credential error |
 | Network / HTTP failure | No XML response at all | Bounded retries with timeout and jitter |
 
 In all cases, **never block the local QSO logging path** on lookup availability.
@@ -474,7 +474,7 @@ Use these environment variables (see `.env.example`):
 | `QSORIPPER_QRZ_XML_BASE_URL` | XML service base URL (default: `https://xmldata.qrz.com/xml/current/`) |
 | `QSORIPPER_QRZ_XML_USERNAME` | QRZ username for XML API login |
 | `QSORIPPER_QRZ_XML_PASSWORD` | QRZ password for XML API login |
-| `QSORIPPER_QRZ_USER_AGENT` | Agent string sent with requests (e.g. `QsoRipper/0.1.0`) |
+| `QSORIPPER_QRZ_USER_AGENT` | Agent string sent with requests (for example `QsoRipper/0.1.0`) |
 | `QSORIPPER_QRZ_HTTP_TIMEOUT_SECONDS` | HTTP request timeout |
 | `QSORIPPER_QRZ_MAX_RETRIES` | Maximum retry count for transient failures |
 

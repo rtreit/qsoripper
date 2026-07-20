@@ -20,14 +20,14 @@ Historical QSOs remain stable because saved records already carry their own `sta
 
 | RPC | Status | Notes |
 |---|---|---|
-| `ListStationProfiles` | ✅ Implemented | Returns every persisted profile plus the active id |
-| `GetStationProfile` | ✅ Implemented | Reads a single profile by id |
-| `SaveStationProfile` | ✅ Implemented | Creates or updates a profile and optionally makes it active |
-| `DeleteStationProfile` | ✅ Implemented | Deletes an inactive profile |
-| `SetActiveStationProfile` | ✅ Implemented | Switches the persisted active profile |
-| `GetActiveStationContext` | ✅ Implemented | Returns persisted active, effective active, and session override state |
-| `SetSessionStationProfileOverride` | ✅ Implemented | Applies a process-session override for new QSO saves |
-| `ClearSessionStationProfileOverride` | ✅ Implemented | Clears the process-session override |
+| `ListStationProfiles` | Implemented | Returns every persisted profile plus the active id |
+| `GetStationProfile` | Implemented | Reads a single profile by id |
+| `SaveStationProfile` | Implemented | Creates or updates a profile and optionally makes it active |
+| `DeleteStationProfile` | Implemented | Deletes an inactive profile |
+| `SetActiveStationProfile` | Implemented | Switches the persisted active profile |
+| `GetActiveStationContext` | Implemented | Returns persisted active, effective active, and session override state |
+| `SetSessionStationProfileOverride` | Implemented | Applies a process-session override for new QSO saves |
+| `ClearSessionStationProfileOverride` | Implemented | Clears the process-session override |
 
 ## Contract shape
 
@@ -35,7 +35,7 @@ This service follows the same protobuf 1-1-1 rule as the rest of the engine surf
 
 - every RPC has a unique request/response envelope
 - shared payloads such as `StationProfileRecord` and `ActiveStationContext` live in their own support files under `proto/services/`
-- response envelopes wrap those payloads instead of being reused as nested models elsewhere
+- Response envelopes contain those payloads. Do not reuse an envelope as a nested model.
 
 ### Reusable payloads
 
@@ -60,6 +60,6 @@ This service follows the same protobuf 1-1-1 rule as the rest of the engine surf
 ## Notes
 
 - `SaveStationProfile`, `DeleteStationProfile`, and `SetActiveStationProfile` require persisted setup to already exist. Run `SetupService.SaveSetup` first.
-- When `profile_id` is omitted on save, the server generates one from the profile metadata.
-- The active profile cannot be deleted; activate another profile first.
+- When a save request omits `profile_id`, the server generates it from profile metadata.
+- Do not delete the active profile. Activate another profile first.
 - Session overrides are process-local and in-memory only. Restarting the engine clears them.

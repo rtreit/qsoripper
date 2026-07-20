@@ -1,774 +1,529 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Region-Isolated Streaming for Real-World CW Copy &mdash; QsoRipper Technical Report</title>
-<style>
-  :root {
-    --navy: #102a54;
-    --rule: #102a54;
-    --accent: #b21f1f;
-    --muted: #555;
-    --bg: #faf8f3;
-    --code-bg: #f1ede4;
-  }
-  html, body {
-    margin: 0;
-    padding: 0;
-    background: var(--bg);
-    color: #111;
-    font-family: "Georgia", "Times New Roman", serif;
-    font-size: 15px;
-    line-height: 1.5;
-  }
-  .page {
-    max-width: 980px;
-    margin: 24px auto 64px;
-    padding: 0 28px;
-  }
-  .masthead {
-    border-top: 6px double var(--navy);
-    border-bottom: 1px solid var(--navy);
-    padding: 14px 0 10px;
-    margin-bottom: 18px;
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    font-variant: small-caps;
-    letter-spacing: 0.05em;
-    color: var(--navy);
-  }
-  .masthead .pub { font-weight: bold; font-size: 1.1em; }
-  .masthead .meta { font-size: 0.85em; color: var(--muted); letter-spacing: 0.04em; }
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Region-Isolated Streaming for Real-World CW Copy</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #172033;
+      --muted: #596273;
+      --paper: #ffffff;
+      --page: #edf1f7;
+      --line: #c9d1df;
+      --blue: #163d72;
+      --red: #9f2929;
+      --green: #1f6b42;
+      --soft-blue: #eef5ff;
+      --soft-green: #edf8f1;
+    }
 
-  h1.title {
-    font-size: 1.85em;
-    color: var(--navy);
-    margin: 0 0 4px;
-    line-height: 1.2;
-    font-weight: bold;
-  }
-  .subtitle {
-    font-style: italic;
-    color: var(--muted);
-    margin: 0 0 8px;
-    font-size: 1.05em;
-  }
-  .byline {
-    font-size: 0.95em;
-    margin: 0 0 4px;
-  }
-  .affiliation {
-    font-size: 0.85em;
-    color: var(--muted);
-    font-style: italic;
-    margin: 0 0 18px;
-  }
+    * { box-sizing: border-box; }
 
-  .abstract {
-    border-left: 4px solid var(--navy);
-    background: #fff;
-    padding: 12px 16px;
-    margin: 0 0 24px;
-    font-size: 0.97em;
-  }
-  .abstract .label {
-    font-variant: small-caps;
-    letter-spacing: 0.06em;
-    color: var(--navy);
-    font-weight: bold;
-    margin-right: 6px;
-  }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--page);
+      font-family: "Segoe UI", Arial, sans-serif;
+      line-height: 1.55;
+    }
 
-  .columns {
-    column-count: 2;
-    column-gap: 28px;
-    column-rule: 1px solid #ddd;
-    text-align: justify;
-    hyphens: auto;
-  }
-  /* Some elements look poor when split across columns. */
-  figure, pre, table, .callout, h2, h3 {
-    break-inside: avoid;
-  }
+    main {
+      max-width: 1040px;
+      margin: 32px auto;
+      padding: 56px 64px;
+      background: var(--paper);
+      box-shadow: 0 12px 34px rgba(23, 32, 51, 0.12);
+    }
 
-  h2 {
-    font-size: 1.15em;
-    color: var(--navy);
-    border-bottom: 1px solid var(--navy);
-    padding-bottom: 2px;
-    margin: 22px 0 8px;
-    font-variant: small-caps;
-    letter-spacing: 0.04em;
-  }
-  h3 {
-    font-size: 1.0em;
-    color: #222;
-    margin: 16px 0 6px;
-    font-style: italic;
-  }
-  p { margin: 0 0 10px; }
+    header {
+      padding-bottom: 28px;
+      border-bottom: 3px solid var(--blue);
+    }
 
-  pre, code {
-    font-family: "Consolas", "Menlo", monospace;
-    font-size: 0.85em;
-  }
-  pre {
-    background: var(--code-bg);
-    padding: 10px 12px;
-    border-left: 3px solid var(--navy);
-    overflow-x: auto;
-    line-height: 1.4;
-    margin: 8px 0 14px;
-  }
-  code {
-    background: var(--code-bg);
-    padding: 0 3px;
-    border-radius: 2px;
-  }
-  pre code {
-    background: transparent;
-    padding: 0;
-  }
+    .kicker {
+      margin: 0 0 10px;
+      color: var(--blue);
+      font-size: 0.82rem;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
 
-  figure {
-    margin: 12px 0;
-    background: #fff;
-    border: 1px solid #ccc;
-    padding: 10px;
-    text-align: center;
-  }
-  figure svg { max-width: 100%; height: auto; }
-  figcaption {
-    font-size: 0.83em;
-    color: var(--muted);
-    margin-top: 6px;
-    text-align: left;
-    font-style: italic;
-  }
-  figcaption strong { font-style: normal; color: var(--navy); }
+    h1 {
+      max-width: 850px;
+      margin: 0;
+      font-family: Georgia, serif;
+      font-size: clamp(2.2rem, 5vw, 4rem);
+      line-height: 1.05;
+    }
 
-  table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 8px 0 14px;
-    font-size: 0.9em;
-  }
-  th, td {
-    border-bottom: 1px solid #bbb;
-    padding: 5px 8px;
-    text-align: left;
-    vertical-align: top;
-  }
-  th {
-    border-bottom: 2px solid var(--navy);
-    color: var(--navy);
-    font-variant: small-caps;
-    letter-spacing: 0.04em;
-  }
-  tr.match td:first-child { color: #1b6b1b; font-weight: bold; }
+    .subtitle {
+      max-width: 780px;
+      margin: 20px 0 0;
+      color: var(--muted);
+      font-size: 1.18rem;
+    }
 
-  .callout {
-    background: #fff;
-    border: 1px solid var(--navy);
-    border-left: 6px solid var(--navy);
-    padding: 10px 14px;
-    margin: 12px 0;
-    font-size: 0.93em;
-  }
-  .callout .label {
-    font-variant: small-caps;
-    color: var(--navy);
-    font-weight: bold;
-    letter-spacing: 0.06em;
-    margin-right: 6px;
-  }
+    .byline {
+      margin: 18px 0 0;
+      font-weight: 600;
+    }
 
-  .refs ol { padding-left: 22px; }
-  .refs li { margin-bottom: 5px; font-size: 0.9em; }
+    nav {
+      margin: 30px 0;
+      padding: 18px 22px;
+      background: var(--soft-blue);
+      border-left: 4px solid var(--blue);
+    }
 
-  .footer {
-    border-top: 6px double var(--navy);
-    margin-top: 28px;
-    padding-top: 10px;
-    font-size: 0.82em;
-    color: var(--muted);
-    text-align: center;
-  }
+    nav strong { display: block; margin-bottom: 8px; }
+    nav a { margin-right: 16px; color: var(--blue); }
 
-  .key { color: var(--accent); font-weight: bold; }
-  .small-caps { font-variant: small-caps; letter-spacing: 0.04em; }
+    h2 {
+      margin: 42px 0 16px;
+      padding-bottom: 7px;
+      border-bottom: 1px solid var(--line);
+      color: var(--blue);
+      font-family: Georgia, serif;
+      font-size: 1.8rem;
+    }
 
-  ul, ol { padding-left: 22px; }
-  li { margin-bottom: 4px; }
+    h3 {
+      margin: 28px 0 10px;
+      color: var(--ink);
+      font-size: 1.2rem;
+    }
 
-  @media (max-width: 720px) {
-    .columns { column-count: 1; }
-  }
-</style>
+    p, li { max-width: 82ch; }
+    li + li { margin-top: 8px; }
+
+    code {
+      padding: 0.08em 0.3em;
+      border-radius: 3px;
+      background: #f1f3f7;
+      font-family: Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow-x: auto;
+      padding: 18px;
+      color: #e7edf8;
+      background: #101827;
+      border-radius: 6px;
+    }
+
+    pre code {
+      padding: 0;
+      color: inherit;
+      background: transparent;
+    }
+
+    .abstract, .callout {
+      margin: 28px 0;
+      padding: 20px 24px;
+      border: 1px solid var(--line);
+      background: #fafbfd;
+    }
+
+    .callout.success {
+      border-left: 5px solid var(--green);
+      background: var(--soft-green);
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin: 24px 0;
+    }
+
+    .flow div {
+      min-height: 110px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-top: 4px solid var(--blue);
+      background: #fff;
+    }
+
+    .flow strong { display: block; margin-bottom: 7px; }
+
+    table {
+      width: 100%;
+      margin: 22px 0;
+      border-collapse: collapse;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: #fff;
+      background: var(--blue);
+    }
+
+    .pass { color: var(--green); font-weight: 700; }
+    .exact { white-space: nowrap; }
+
+    footer {
+      margin-top: 48px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    @media (max-width: 760px) {
+      main { margin: 0; padding: 32px 22px; }
+      .flow { grid-template-columns: 1fr; }
+      table { display: block; overflow-x: auto; }
+    }
+
+    @media print {
+      body { background: #fff; }
+      main { margin: 0; padding: 0; box-shadow: none; }
+      a { color: inherit; text-decoration: none; }
+    }
+  </style>
 </head>
 <body>
-<div class="page">
-
-  <div class="masthead">
-    <span class="pub">QsoRipper Technical Report</span>
-    <span class="meta">A Forum for Communications Experimenters &middot; May 2026</span>
-  </div>
-
-  <h1 class="title">Region-Isolated Streaming for Real-World CW Copy</h1>
-  <p class="subtitle">A practical decoder architecture that holds 100% copy on multi-burst, mixed-speed off-air audio with operator pauses</p>
-  <p class="byline">Randy Treit, KC7AVA &mdash; with collaboration from the QsoRipper agent toolchain</p>
-  <p class="affiliation">QsoRipper Project &middot; <code>experiments/cw-decoder</code></p>
+<main>
+  <header>
+    <p class="kicker">QsoRipper technical report | May 2026</p>
+    <h1>Region-Isolated Streaming for Real-World CW Copy</h1>
+    <p class="subtitle">
+      This decoder architecture isolates each CW burst before it adds text to the transcript.
+    </p>
+    <p class="byline">Randy Treit, KC7AVA, with the QsoRipper agent toolchain</p>
+  </header>
 
   <div class="abstract">
-    <p><span class="label">Abstract.</span>
-      Off-air CW audio rarely behaves like a textbook practice file. An operator
-      sends a short burst at 13 WPM, pauses through 1&ndash;3 seconds of band hiss,
-      then sends another burst at 30 WPM, then pauses again. Most streaming
-      decoders &mdash; including our own earlier &ldquo;V3 envelope&rdquo; foundation &mdash;
-      handle the first burst well, but smear the second through residual lock
-      state, mis-classify dits and dahs at the new speed, or hallucinate
-      &ldquo;ghost&rdquo; characters from the static between bursts. This report describes
-      a region-isolated streaming architecture that detects each active CW burst
-      as a discrete region, decodes each region independently with its own
-      pitch and speed lock, and only commits the region&rsquo;s text to the
-      transcript once a trailing-static window confirms the burst has ended.
-      The architecture preserves the rich visualizer event stream of the
-      previous foundation, runs in true real-time on a stock laptop, and
-      delivers a 100% character-exact transcript on the target multi-burst
-      reference recording.
+    <p>
+      <strong>Abstract.</strong>
+      Off-air CW contains speed changes, receiver noise, and long operator pauses.
+      The earlier V3 envelope decoder kept state between CW bursts.
+      That state caused incorrect characters after some speed changes and noise intervals.
+      The new architecture detects each CW burst as a separate region.
+      It decodes each region with an independent pitch and speed estimate.
+      It adds text only after a stable noise interval confirms the end of the region.
+      The target recording produces an exact transcript with this method.
     </p>
   </div>
 
-  <div class="columns">
+  <nav aria-label="Report contents">
+    <strong>Contents</strong>
+    <a href="#problem">Problem</a>
+    <a href="#design">Design</a>
+    <a href="#integration">Integration</a>
+    <a href="#results">Results</a>
+    <a href="#limits">Limits</a>
+    <a href="#reproduce">Reproduction</a>
+  </nav>
 
-  <h2>1. The Problem</h2>
+  <section id="problem">
+    <h2>1. Problem</h2>
 
-  <p>
-    QsoRipper is a keyboard-first ham-radio logging system whose CW
-    subsystem must do two things at once: paint a visualization of what
-    the radio is hearing right now (waveform, lock state, classified
-    elements, current and historical WPM) and append a clean text
-    transcript of every Morse character that actually came through. The
-    visualizer is forgiving &mdash; it is fine to show a flicker when the
-    band changes &mdash; but the transcript is not. Operators rely on it for
-    contest exchanges, callsign capture, and post-QSO reconstruction.
-    A single ghost word at the start of a transmission is worse than no
-    decode at all.
-  </p>
+    <p>
+      QsoRipper shows live CW data and records a clean transcript.
+      Operators use the transcript for callsigns, contest exchanges, and QSO review.
+      A false word can be worse than an empty result.
+    </p>
 
-  <p>
-    The reference test case for this work is
-    <code>radio-20260502-105714.mp3</code>, an off-air capture from the
-    author&rsquo;s Kenwood TS-590SG. The file contains four CW bursts at
-    visibly different speeds, separated by background hiss:
-  </p>
+    <p>
+      The reference recording is <code>radio-20260502-105714.mp3</code>.
+      It contains four off-air CW bursts from a Kenwood TS-590SG.
+      Noise intervals separate the bursts.
+      The approximate speeds are 13, 8, 30, and 30 WPM.
+    </p>
 
-  <ol>
-    <li><code>IHU</code> &mdash; ~13 WPM</li>
-    <li><code>NVCHU</code> &mdash; ~8 WPM</li>
-    <li><code>7QP W7N</code> &mdash; ~30 WPM</li>
-    <li><code>7QP W7N</code> &mdash; ~30 WPM (repeat)</li>
-  </ol>
+    <table>
+      <thead>
+        <tr><th>Region</th><th>Expected text</th><th>Approximate speed</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td><code>IHU</code></td><td>13 WPM</td></tr>
+        <tr><td>2</td><td><code>NVCHU</code></td><td>8 WPM</td></tr>
+        <tr><td>3</td><td><code>7QP W7N</code></td><td>30 WPM</td></tr>
+        <tr><td>4</td><td><code>7QP W7N</code></td><td>30 WPM</td></tr>
+      </tbody>
+    </table>
 
-  <p>
-    The ground-truth file
-    <code>radio-20260502-105714.truth.txt</code> is the operator&rsquo;s
-    canonical copy: <code>IHU NVCHU 7QP W7N 7QP W7N</code>. The success
-    criterion was simple: produce that string, character for character,
-    when the same audio is streamed through the production logger&rsquo;s
-    F7 live-mic capture path. Anything less &mdash; a missing letter, a
-    ghost letter, a merged word &mdash; was treated as failure.
-  </p>
+    <p>
+      The truth file contains <code>IHU NVCHU 7QP W7N 7QP W7N</code>.
+      The success criterion requires an exact character match through the production live-audio path.
+    </p>
 
-  <h2>2. Why the Previous Foundation Came Up Short</h2>
+    <h3>1.1 Earlier V3 envelope decoder</h3>
 
-  <p>
-    The pre-existing &ldquo;V3 envelope&rdquo; decoder
-    (<code>stream-live-v3</code>) is built around a single
-    <code>LiveEnvelopeStreamer</code> that ingests audio continuously,
-    estimates a Goertzel envelope at the locked pitch, runs a
-    percentile-based hysteresis state machine to classify on/off
-    intervals, and feeds a k-means dot/dah classifier with a
-    sample-indexed commit cursor. It is excellent at painting the
-    visualizer and at producing a stable transcript on long, single-speed
-    transmissions. It powers the <code>cw_decode_rx_wpm</code> field that
-    the production logger writes to ADIF as
-    <code>APP_QSORIPPER_RX_WPM</code>.
-  </p>
+    <p>
+      <code>LiveEnvelopeStreamer</code> processes one continuous audio stream.
+      It estimates a Goertzel envelope at the selected pitch.
+      A hysteresis state machine classifies signal intervals.
+      A k-means classifier identifies dits and dahs.
+    </p>
 
-  <p>
-    On <code>radio-20260502-105714.mp3</code>, however, V3 produced a
-    transcript that drifted progressively further from truth as it moved
-    from burst to burst. The root causes were structural:
-  </p>
+    <p>
+      This path gives useful visual data and stable results for long transmissions at one speed.
+      It also supplies <code>cw_decode_rx_wpm</code> for <code>APP_QSORIPPER_RX_WPM</code>.
+    </p>
 
-  <ul>
-    <li>
-      <span class="key">Sticky speed lock.</span> The locked WPM from
-      burst&nbsp;1 (13 WPM) is still the working hypothesis when burst&nbsp;2
-      starts at 8 WPM. The k-means classifier mis-labels dahs from the
-      slower burst as dits, dits as inter-element gaps.
-    </li>
-    <li>
-      <span class="key">Stale noise floor.</span> The percentile-based
-      noise/signal floors are estimated over a sliding window. When
-      static between bursts dominates the window, the threshold drifts
-      and trailing dits of the previous burst can re-fire as ghost
-      elements.
-    </li>
-    <li>
-      <span class="key">Append-cursor smearing.</span> The
-      sample-indexed commit cursor advances monotonically. If a region
-      decodes wrong on the first pass, that wrong decode is locked into
-      the transcript &mdash; later cycles cannot undo it without producing
-      a worse artifact (the &ldquo;TSA USA EE TSA USA EE&rdquo;
-      ghost-repeat pattern).
-    </li>
-  </ul>
+    <p>The reference recording exposed three structural problems:</p>
 
-  <p>
-    A natural fix was to add more tuning knobs to V3: tighter relock
-    thresholds, more aggressive noise-floor decay, content-stability
-    gates on the commit cursor. Each of those helped a little and broke
-    something else. After several rounds of this, we stepped back and
-    considered a different decomposition.
-  </p>
+    <ul>
+      <li><strong>Speed lock:</strong> A speed estimate from one burst affected the next burst.</li>
+      <li><strong>Noise floor:</strong> Noise between bursts changed the signal threshold.</li>
+      <li><strong>Commit cursor:</strong> The append-only cursor kept incorrect text from an early decode cycle.</li>
+    </ul>
+  </section>
 
-  <h2>3. Region-Isolated Decoding</h2>
+  <section id="design">
+    <h2>2. Region-isolated design</h2>
 
-  <p>
-    The insight is that real-world QSO audio is naturally segmented by
-    the operator. A burst is a discrete unit of intent: the operator
-    keys, sends some elements, releases. Between bursts, the receiver
-    sits in band noise. If we could detect those bursts as
-    <em>regions</em> and decode each region independently &mdash; with its
-    own fresh pitch lock, its own k-means classifier, its own WPM
-    estimate &mdash; the cross-burst contamination disappears by
-    construction. There is nothing to leak.
-  </p>
+    <p>
+      An operator burst is a discrete unit.
+      The operator keys the transmitter, sends CW, and releases the key.
+      Receiver noise occurs between bursts.
+      The decoder uses these noise intervals as region boundaries.
+    </p>
 
-  <figure>
-    <svg viewBox="0 0 760 200" xmlns="http://www.w3.org/2000/svg">
-      <!-- Time axis -->
-      <line x1="20" y1="120" x2="740" y2="120" stroke="#222" stroke-width="1"/>
-      <text x="20" y="138" font-size="11" fill="#555">t = 0</text>
-      <text x="710" y="138" font-size="11" fill="#555">end</text>
+    <div class="flow" aria-label="Region decode flow">
+      <div>
+        <strong>1. Detect</strong>
+        Find active CW regions in the audio envelope.
+      </div>
+      <div>
+        <strong>2. Isolate</strong>
+        Give each region an independent audio window.
+      </div>
+      <div>
+        <strong>3. Decode</strong>
+        Estimate pitch, speed, dits, and dahs for that region.
+      </div>
+      <div>
+        <strong>4. Commit</strong>
+        Add stable region text to the transcript.
+      </div>
+    </div>
 
-      <!-- Noise floor band -->
-      <rect x="20" y="115" width="720" height="10" fill="#ddd" opacity="0.6"/>
+    <h3>2.1 Region detection</h3>
 
-      <!-- Bursts -->
-      <rect x="60"  y="60" width="80"  height="60" fill="#102a54" opacity="0.85"/>
-      <text x="100" y="55" font-size="11" text-anchor="middle" fill="#102a54">IHU</text>
-      <text x="100" y="142" font-size="9" text-anchor="middle" fill="#555">~13 WPM</text>
+    <p>
+      <code>decode_region_stream</code> implements region detection in <code>region_stream.rs</code>.
+      It performs a coarse Goertzel pitch scan.
+      Then it calculates a frame energy envelope at the strongest pitch.
+    </p>
 
-      <rect x="200" y="40" width="120" height="80" fill="#102a54" opacity="0.85"/>
-      <text x="260" y="35" font-size="11" text-anchor="middle" fill="#102a54">NVCHU</text>
-      <text x="260" y="142" font-size="9" text-anchor="middle" fill="#555">~8 WPM</text>
-
-      <rect x="380" y="70" width="140" height="50" fill="#102a54" opacity="0.85"/>
-      <text x="450" y="65" font-size="11" text-anchor="middle" fill="#102a54">7QP W7N</text>
-      <text x="450" y="142" font-size="9" text-anchor="middle" fill="#555">~30 WPM</text>
-
-      <rect x="570" y="70" width="140" height="50" fill="#102a54" opacity="0.85"/>
-      <text x="640" y="65" font-size="11" text-anchor="middle" fill="#102a54">7QP W7N</text>
-      <text x="640" y="142" font-size="9" text-anchor="middle" fill="#555">~30 WPM</text>
-
-      <!-- Region brackets -->
-      <g stroke="#b21f1f" stroke-width="1.5" fill="none">
-        <path d="M55 165 L55 175 L145 175 L145 165"/>
-        <path d="M195 165 L195 175 L325 175 L325 165"/>
-        <path d="M375 165 L375 175 L525 175 L525 165"/>
-        <path d="M565 165 L565 175 L715 175 L715 165"/>
-      </g>
-      <text x="100" y="190" font-size="10" text-anchor="middle" fill="#b21f1f">Region&nbsp;1</text>
-      <text x="260" y="190" font-size="10" text-anchor="middle" fill="#b21f1f">Region&nbsp;2</text>
-      <text x="450" y="190" font-size="10" text-anchor="middle" fill="#b21f1f">Region&nbsp;3</text>
-      <text x="640" y="190" font-size="10" text-anchor="middle" fill="#b21f1f">Region&nbsp;4</text>
-    </svg>
-    <figcaption>
-      <strong>Figure 1.</strong> Schematic envelope of
-      <code>radio-20260502-105714.mp3</code>. Four CW bursts (dark
-      bars) at three distinct speeds are separated by background hiss
-      (gray band). Each burst becomes one decode region (red brackets);
-      the inter-burst static is never decoded.
-    </figcaption>
-  </figure>
-
-  <h3>3.1 Detection</h3>
-
-  <p>
-    Region detection is implemented in
-    <code>region_stream.rs</code>::<code>decode_region_stream</code>. The
-    function performs a coarse Goertzel pitch sweep over the entire
-    buffer, picks the dominant tone, and computes a frame-level energy
-    envelope at that pitch. From the envelope it derives two robust
-    floors via percentiles:
-  </p>
-
-  <pre><code>noise_floor  = quantile(env, 0.30)
+    <pre><code>noise_floor  = quantile(env, 0.30)
 signal_floor = quantile(env, 0.95)
 threshold    = noise_floor
-             + threshold_factor &times; (signal_floor - noise_floor)</code></pre>
+             + threshold_factor * (signal_floor - noise_floor)</code></pre>
 
-  <p>
-    With <code>threshold_factor = 0.30</code>, the decision boundary
-    sits 30% of the way up the dynamic range &mdash; well clear of band
-    noise, well below saturation. Frames above threshold are marked
-    &ldquo;active&rdquo;. Active runs are merged across short gaps
-    (<code>merge_gap_s = 0.5 s</code> by default), and runs shorter
-    than <code>min_region_s = 0.3 s</code> are rejected as transient
-    static spikes. Each surviving run is padded symmetrically by
-    <code>pad_s = 0.15 s</code> so leading and trailing dits are not
-    clipped.
-  </p>
+    <p>
+      The default <code>threshold_factor</code> is <code>0.30</code>.
+      Active frames form candidate regions.
+      The detector merges gaps shorter than <code>0.5 s</code>.
+      It rejects regions shorter than <code>0.3 s</code>.
+      It adds <code>0.15 s</code> of padding at each region boundary.
+    </p>
 
-  <p>
-    A later synthetic impairment sweep added one more guard that belongs
-    in the baseline: before a detected run is decoded, it must show
-    narrowband CW-like prominence. The implementation compares Goertzel
-    power at the selected pitch against the run&rsquo;s broadband frame
-    energy and rejects runs below
-    <code>min_tonal_prominence_ratio = 8.0</code>. This prevents pure
-    background static from being promoted into fake regions simply
-    because a percentile threshold can always split random noise into
-    &ldquo;above&rdquo; and &ldquo;below&rdquo; frames.
-  </p>
+    <p>
+      A tonal-prominence test rejects broadband noise.
+      It compares Goertzel power at the selected pitch with broadband frame energy.
+      The default <code>min_tonal_prominence_ratio</code> is <code>8.0</code>.
+    </p>
 
-  <h3>3.2 Per-region decode</h3>
+    <h3>2.2 Region decode</h3>
 
-  <p>
-    For each detected region, the audio slice is handed to the
-    <code>ditdah</code> baseline decoder with no carry-over state. The
-    decoder estimates pitch and dot length fresh, runs its own k-means
-    classification, and emits a transcript fragment. Because each
-    region is short and homogeneous (one operator, one burst, one
-    speed), the baseline decoder &mdash; which was always strong on
-    short clean clips &mdash; performs near-perfectly.
-  </p>
+    <p>
+      The decoder sends each region to the <code>ditdah</code> baseline decoder.
+      Each decode operation starts without state from an earlier region.
+      It calculates a new pitch, dot length, classification, and transcript fragment.
+    </p>
 
-  <h3>3.3 The streaming wrapper</h3>
+    <h3>2.3 Streaming wrapper</h3>
 
-  <p>
-    <code>region_streamer.rs</code> wraps the batch detector for true
-    streaming use. It maintains a rolling sample buffer; on every
-    <code>try_commit()</code> call it re-runs detection over the
-    current buffer and reports any region whose end time is followed
-    by at least <code>stable_latency_s = 0.6 s</code> of trailing
-    static. That trailing-static window is the commit gate &mdash; it
-    guarantees that no further morse from the same burst can still be
-    arriving when we lock in the region&rsquo;s text.
-  </p>
+    <p>
+      <code>RegionStreamer</code> in <code>region_streamer.rs</code> keeps a rolling sample buffer.
+      Each <code>try_commit()</code> call runs region detection on that buffer.
+      The decoder commits a region after the stable noise interval.
+      The default <code>stable_latency_s</code> is <code>0.6 s</code>.
+    </p>
 
-  <pre><code>// Append-only commit, deduplicated across decode cycles.
-for region in detected:
-    if region.start &le; last_committed_end:
-        continue                    // already committed
+    <pre><code>for region in detected:
+    if region.start &lt;= last_committed_end:
+        continue
     if region.end &gt; head - stable_latency:
-        break                       // not stable yet
+        break
     transcript.append(region.text)
     last_committed_end = region.end</code></pre>
 
-  <p>
-    For long-running live capture, <code>trim_committed()</code> drops
-    the buffer back to a configurable lookback (default 6 s past the
-    last committed region), and <code>reset()</code> clears all state
-    in response to the operator&rsquo;s <code>Ctrl+Alt+W</code> relock
-    request, all without restarting the decoder process.
-  </p>
-
-  <h2>4. Integration with the V3 Visualizer</h2>
-
-  <p>
-    A key design constraint was that the visualizer must keep working.
-    Operators rely on the live waveform, the lock indicator, the
-    pitch readout, and the rolling WPM gauge to know whether the
-    decoder is healthy. The V3 envelope path produces all of those as a
-    side effect of its frame-level processing; the region streamer
-    produces none of them.
-  </p>
-
-  <p>
-    The integration therefore runs both decoders in parallel. The new
-    <code>--region-transcript</code> flag on
-    <code>stream-live-v3</code> instantiates a <code>RegionStreamer</code>
-    alongside the existing <code>LiveEnvelopeStreamer</code>. Audio
-    chunks are fed to both. The envelope streamer continues to emit
-    NDJSON <code>viz</code> frames on every decode cycle, exactly as
-    before. The region streamer&rsquo;s
-    <code>try_commit()</code> result overrides only one field on the
-    emitted <code>text</code> / <code>appended</code> / <code>end</code>
-    events: the cumulative <code>transcript</code> string.
-  </p>
-
-  <figure>
-    <svg viewBox="0 0 760 240" xmlns="http://www.w3.org/2000/svg">
-      <!-- Audio source -->
-      <rect x="20" y="100" width="120" height="40" fill="#fff" stroke="#102a54" stroke-width="1.5"/>
-      <text x="80" y="125" font-size="12" text-anchor="middle" fill="#102a54">Audio chunks</text>
-      <text x="80" y="155" font-size="10" text-anchor="middle" fill="#555">(mic / file replay)</text>
-
-      <!-- Fanout -->
-      <line x1="140" y1="120" x2="220" y2="60"  stroke="#102a54" stroke-width="1.5"/>
-      <line x1="140" y1="120" x2="220" y2="180" stroke="#102a54" stroke-width="1.5"/>
-
-      <!-- Envelope path -->
-      <rect x="220" y="40" width="200" height="60" fill="#fff" stroke="#102a54" stroke-width="1.5"/>
-      <text x="320" y="60" font-size="12" text-anchor="middle" fill="#102a54">LiveEnvelopeStreamer</text>
-      <text x="320" y="78" font-size="10" text-anchor="middle" fill="#555">Goertzel + hysteresis</text>
-      <text x="320" y="92" font-size="10" text-anchor="middle" fill="#555">k-means dot/dah, viz frames</text>
-
-      <!-- Region path -->
-      <rect x="220" y="160" width="200" height="60" fill="#fff" stroke="#b21f1f" stroke-width="1.5"/>
-      <text x="320" y="180" font-size="12" text-anchor="middle" fill="#b21f1f">RegionStreamer</text>
-      <text x="320" y="198" font-size="10" text-anchor="middle" fill="#555">burst detection +</text>
-      <text x="320" y="212" font-size="10" text-anchor="middle" fill="#555">per-region ditdah decode</text>
-
-      <!-- Merge -->
-      <line x1="420" y1="70"  x2="500" y2="120" stroke="#102a54" stroke-width="1.5"/>
-      <line x1="420" y1="190" x2="500" y2="120" stroke="#b21f1f" stroke-width="1.5"/>
-
-      <!-- Output -->
-      <rect x="500" y="80" width="240" height="80" fill="#fff" stroke="#102a54" stroke-width="1.5"/>
-      <text x="620" y="105" font-size="12" text-anchor="middle" fill="#102a54">NDJSON event stream</text>
-      <text x="620" y="125" font-size="10" text-anchor="middle" fill="#555">viz frames &larr; envelope</text>
-      <text x="620" y="142" font-size="10" text-anchor="middle" fill="#b21f1f">transcript &larr; region</text>
-    </svg>
-    <figcaption>
-      <strong>Figure 2.</strong> Dual-path integration. Audio is fanned
-      out to both decoders. The envelope path retains full ownership
-      of the visualizer&rsquo;s real-time frames; the region path owns
-      only the cumulative transcript field. Both UIs (production
-      logger F7 capture and the experimental visualizer) consume the
-      merged NDJSON stream unchanged.
-    </figcaption>
-  </figure>
-
-  <p>
-    Both UI surfaces &mdash; the production logger&rsquo;s
-    <code>CwDecoderProcessSampleSource</code> and the experimental
-    visualizer&rsquo;s <code>CwDecoderProcess</code> &mdash; spawn the
-    decoder with <code>--region-transcript</code> by default. Operators
-    do not see a new mode switch; they simply get a transcript that
-    matches what they actually heard.
-  </p>
-
-  <h2>5. Results</h2>
-
-  <p>
-    On the target reference recording, the architecture meets the
-    success criterion exactly:
-  </p>
-
-  <table>
-    <thead>
-      <tr><th>Path</th><th>Output transcript</th><th>vs. truth</th></tr>
-    </thead>
-    <tbody>
-      <tr class="match">
-        <td>truth.txt</td>
-        <td><code>IHU NVCHU 7QP W7N 7QP W7N</code></td>
-        <td>&mdash;</td>
-      </tr>
-      <tr class="match">
-        <td><code>stream-region</code> (batch)</td>
-        <td><code>IHU NVCHU 7QP W7N 7QP W7N</code></td>
-        <td>0 char diff</td>
-      </tr>
-      <tr class="match">
-        <td><code>stream-live-v3 --region-transcript</code></td>
-        <td><code>IHU NVCHU 7QP W7N 7QP W7N</code></td>
-        <td>0 char diff</td>
-      </tr>
-    </tbody>
-  </table>
-
-  <p>
-    A cross-validation run over additional samples confirms that the
-    streaming wrapper reproduces the batch reference on real CW audio:
-  </p>
-
-  <table>
-    <thead>
-      <tr><th>Sample</th><th>Description</th><th>Match</th></tr>
-    </thead>
-    <tbody>
-      <tr class="match">
-        <td><code>radio-20260502-105714.mp3</code></td>
-        <td>4 bursts, mixed WPM, real radio</td>
-        <td>yes</td>
-      </tr>
-      <tr class="match">
-        <td><code>cw_30wpm_abbrev_clean.wav</code></td>
-        <td>continuous, clean 30 WPM</td>
-        <td>yes</td>
-      </tr>
-      <tr class="match">
-        <td><code>cw_30wpm_abbrev_weak.wav</code></td>
-        <td>continuous, weak 30 WPM</td>
-        <td>yes</td>
-      </tr>
-    </tbody>
-  </table>
-
-  <p>
-    A synthetic impairment suite now exercises the baseline beyond the
-    reference MP3. It generates deterministic CW with quiet static gaps,
-    additive white noise, QSB amplitude fading, an offset continuous-tone
-    QRM carrier, and a combined noise/QSB/QRM exchange. The suite also
-    includes a noise-only stream that previously produced ghost text;
-    after the tonal-prominence guard, it remains empty.
-  </p>
-
-  <table>
-    <thead>
-      <tr><th>Synthetic condition</th><th>Expected behavior</th><th>Result</th></tr>
-    </thead>
-    <tbody>
-      <tr class="match">
-        <td>clean four-burst reference shape</td>
-        <td><code>IHU NVCHU 7QP W7N 7QP W7N</code>, four regions</td>
-        <td>pass</td>
-      </tr>
-      <tr class="match">
-        <td>quiet static between bursts</td>
-        <td>same exact copy, no extra regions</td>
-        <td>pass</td>
-      </tr>
-      <tr class="match">
-        <td>noise-only static stream</td>
-        <td>empty transcript</td>
-        <td>pass</td>
-      </tr>
-      <tr class="match">
-        <td>moderate white noise + QSB + offset QRM</td>
-        <td><code>CQ TEST KC7AVA 73</code></td>
-        <td>pass</td>
-      </tr>
-    </tbody>
-  </table>
-
-  <div class="callout">
-    <p><span class="label">Validation gates.</span>
-      The change clears <code>cargo&nbsp;fmt</code>,
-      <code>cargo&nbsp;clippy&nbsp;-D&nbsp;warnings</code>, the full
-      <code>cargo&nbsp;test</code> suite (129 passing, one pre-existing
-      environmental skip unrelated to this work),
-      <code>dotnet&nbsp;publish&nbsp;CwDecoderGui&nbsp;-c&nbsp;Release</code>,
-      and <code>dotnet&nbsp;build&nbsp;QsoRipper.Gui&nbsp;-c&nbsp;Release</code>.
+    <p>
+      <code>trim_committed()</code> limits memory use during long sessions.
+      It keeps six seconds of audio after the last committed region by default.
+      <code>reset()</code> clears the state after the operator requests a relock.
     </p>
-  </div>
+  </section>
 
-  <h2>6. Discussion</h2>
+  <section id="integration">
+    <h2>3. V3 visualizer integration</h2>
 
-  <h3>6.1 Latency</h3>
+    <p>
+      The V3 envelope path continues to supply waveform, lock, pitch, WPM, and classified-element data.
+      The region path supplies only transcript text.
+      Both paths process the same audio chunks.
+    </p>
 
-  <p>
-    The trailing-static commit gate trades latency for correctness. With
-    <code>stable_latency_s = 0.6 s</code>, a region&rsquo;s text appears
-    in the transcript roughly 0.6 s after the operator releases the key
-    at the end of a burst. For logging and post-QSO copy this is
-    negligible. For real-time pile-up triage it would be perceptible;
-    the parameter is exposed as <code>--region-stable-latency-s</code>
-    and can be reduced at the cost of occasional re-decode churn.
-  </p>
+    <div class="flow" aria-label="Dual decoder integration">
+      <div>
+        <strong>Audio source</strong>
+        Microphone input or file replay supplies audio chunks.
+      </div>
+      <div>
+        <strong>Envelope path</strong>
+        <code>LiveEnvelopeStreamer</code> supplies visual events.
+      </div>
+      <div>
+        <strong>Region path</strong>
+        <code>RegionStreamer</code> supplies committed text.
+      </div>
+      <div>
+        <strong>NDJSON output</strong>
+        The merged stream keeps the existing client contract.
+      </div>
+    </div>
 
-  <h3>6.2 Why batch and stream agree on real CW</h3>
+    <p>
+      The <code>--region-transcript</code> option enables the dual path in <code>stream-live-v3</code>.
+      The envelope path continues to emit <code>viz</code> events.
+      The region path controls the cumulative <code>transcript</code> field.
+    </p>
 
-  <p>
-    The streaming wrapper and the batch reference call the same
-    <code>decode_region_stream</code> over the same audio. The only
-    difference is that the streaming wrapper invokes it incrementally
-    on a growing buffer. As long as the noise-floor percentiles are
-    stable across cycles &mdash; which they are once a real CW signal is
-    present &mdash; the detected regions are identical and the per-region
-    decoder is deterministic. On clips with no real signal, the
-    percentiles drift with the buffer length and incremental commits
-    can capture transient noise spikes that the batch reference
-    smooths out.
-  </p>
+    <p>
+      <code>CwDecoderProcessSampleSource</code> uses this option in the production logger.
+      <code>CwDecoderProcess</code> uses it in the experimental visualizer.
+      The client event contract does not change.
+    </p>
+  </section>
 
-  <h3>6.3 Relation to the append-only event-stream foundation</h3>
+  <section id="results">
+    <h2>4. Results</h2>
 
-  <p>
-    The append-only event-stream decoder in
-    <code>append_decode.rs</code> is not deprecated. It remains the
-    source of truth for the visualizer&rsquo;s bar painting and for
-    the time-weighted <code>cw_decode_rx_wpm</code> aggregator that
-    feeds ADIF. The region-isolated path supplements that foundation
-    for the transcript field; the two are now both &ldquo;line in the
-    sand&rdquo; baselines, each governing its own concern.
-  </p>
+    <p>The batch path and live path match the reference transcript.</p>
 
-  <h2 id="future">7. Future Directions</h2>
+    <table>
+      <thead>
+        <tr><th>Path</th><th>Output transcript</th><th>Result</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Truth file</td>
+          <td class="exact"><code>IHU NVCHU 7QP W7N 7QP W7N</code></td>
+          <td>Reference</td>
+        </tr>
+        <tr>
+          <td><code>stream-region</code></td>
+          <td class="exact"><code>IHU NVCHU 7QP W7N 7QP W7N</code></td>
+          <td class="pass">Exact</td>
+        </tr>
+        <tr>
+          <td><code>stream-live-v3 --region-transcript</code></td>
+          <td class="exact"><code>IHU NVCHU 7QP W7N 7QP W7N</code></td>
+          <td class="pass">Exact</td>
+        </tr>
+      </tbody>
+    </table>
 
-  <p>
-    Several extensions are natural next steps:
-  </p>
+    <p>Additional real CW samples gave the same batch and stream results.</p>
 
-  <ul>
-    <li>
-      <span class="key">Content-stability gate.</span> Require a
-      candidate region to produce identical decoded text across
-      <i>N</i> consecutive <code>try_commit</code> cycles before
-      committing. This would converge the streaming and batch outputs
-      on noisy non-CW clips at the cost of one decode period of
-      additional latency. A prototype was implemented and reverted to
-      keep the current behavior surgical and faithful to the batch
-      reference; it is the obvious next iteration.
-    </li>
-    <li>
-      <span class="key">Adaptive trailing-static window.</span>
-      Slow CW (5&ndash;8 WPM) has intra-character gaps approaching the
-      current 0.6 s commit gate. An adaptive
-      <code>stable_latency_s = max(0.6, 4 &times; estimated_dot_period)</code>
-      would let the gate scale with the operator&rsquo;s speed without
-      manual tuning.
-    </li>
-    <li>
-      <span class="key">Multi-pitch region routing.</span> When two
-      stations share the passband at different pitches, the existing
-      <code>LiveMultiPitchStreamer</code> already separates them at the
-      envelope level. Routing per-pitch envelopes into per-pitch
-      <code>RegionStreamer</code> instances would let us produce two
-      simultaneous transcripts &mdash; useful for SO2R and contest
-      monitoring.
-    </li>
-    <li>
-      <span class="key">Confidence and provisional text.</span>
-      The current commit gate is binary: a region is either committed
-      or invisible. A provisional-text channel that surfaces in-flight
-      regions with a confidence band would let the GUI render copy as
-      it forms, without disturbing the committed transcript.
-    </li>
-    <li>
-      <span class="key">Integration into the engine-side
-      <code>CwDecodeService</code>.</span> The decoder presently runs
-      as a subprocess of each UI. Promoting it to a gRPC service in
-      <code>src/rust/qsoripper-server</code> would let multiple clients
-      (Avalonia GUI, web dashboard, future TUI) share a single decoder
-      instance and a single set of region commits.
-    </li>
-    <li>
-      <span class="key">Larger labeled corpus.</span> The strongest
-      protection against regression is a broad, real-world test set.
-      Expanding the existing <code>training-set-a</code> /
-      <code>training-set-b</code> with more multi-burst, mixed-speed,
-      mixed-conditions captures &mdash; each with an operator-supplied
-      truth file &mdash; is the cheapest way to keep raising the bar.
-    </li>
-  </ul>
+    <table>
+      <thead>
+        <tr><th>Sample</th><th>Condition</th><th>Match</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>radio-20260502-105714.mp3</code></td><td>Four mixed-speed bursts</td><td class="pass">Yes</td></tr>
+        <tr><td><code>cw_30wpm_abbrev_clean.wav</code></td><td>Clean continuous 30 WPM</td><td class="pass">Yes</td></tr>
+        <tr><td><code>cw_30wpm_abbrev_weak.wav</code></td><td>Weak continuous 30 WPM</td><td class="pass">Yes</td></tr>
+      </tbody>
+    </table>
 
-  <h2>8. Reproducing the Result</h2>
+    <p>
+      Deterministic synthetic tests cover static gaps, white noise, QSB, offset QRM, and combined impairments.
+      A noise-only stream produces an empty transcript after the tonal-prominence test.
+    </p>
 
-  <p>
-    The complete cross-validation can be reproduced from a clean
-    checkout in a few minutes:
-  </p>
+    <table>
+      <thead>
+        <tr><th>Condition</th><th>Expected result</th><th>Test</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Clean four-burst signal</td><td>Exact transcript and four regions</td><td class="pass">Pass</td></tr>
+        <tr><td>Static between bursts</td><td>Exact transcript without extra regions</td><td class="pass">Pass</td></tr>
+        <tr><td>Noise-only stream</td><td>Empty transcript</td><td class="pass">Pass</td></tr>
+        <tr><td>Noise, QSB, and offset QRM</td><td><code>CQ TEST KC7AVA 73</code></td><td class="pass">Pass</td></tr>
+      </tbody>
+    </table>
 
-  <pre><code>cd C:\Users\randy\Git\qsoripper
+    <div class="callout success">
+      <p>
+        <strong>Validation record.</strong>
+        The change passed Cargo formatting, Clippy, Rust tests, the CW GUI publish, and the QsoRipper GUI build.
+        The Rust test run had 129 passes and one unrelated environmental skip.
+      </p>
+    </div>
+  </section>
+
+  <section id="limits">
+    <h2>5. Limits and future work</h2>
+
+    <h3>5.1 Commit latency</h3>
+
+    <p>
+      The stable noise interval adds approximately <code>0.6 s</code> after the key release.
+      This delay is acceptable for logging and QSO review.
+      Fast pileup work can make the delay visible.
+      Operators can change it with <code>--region-stable-latency-s</code>.
+    </p>
+
+    <h3>5.2 Batch and stream differences</h3>
+
+    <p>
+      Batch and stream paths call the same <code>decode_region_stream</code> function.
+      The stream path calls it many times on a growing buffer.
+      Noise-only audio can change percentile values as the buffer grows.
+      The tonal-prominence test reduces this risk.
+    </p>
+
+    <h3>5.3 Future changes</h3>
+
+    <ul>
+      <li>Require stable candidate text across multiple decode cycles.</li>
+      <li>Adjust the stable noise interval from the estimated dot period.</li>
+      <li>Route separate pitch tracks to separate region decoders.</li>
+      <li>Supply provisional text without a change to the committed transcript.</li>
+      <li>Move decoding to the engine-side <code>CwDecodeService</code>.</li>
+      <li>Add more labeled recordings with mixed speeds and signal conditions.</li>
+    </ul>
+  </section>
+
+  <section id="reproduce">
+    <h2>6. Reproduce the result</h2>
+
+    <ol>
+      <li>Open PowerShell in the QsoRipper repository.</li>
+      <li>Build the CW decoder in release configuration.</li>
+      <li>Set the sample and truth-file paths.</li>
+      <li>Run the batch command.</li>
+      <li>Run the live-stream command.</li>
+      <li>Compare both transcript fields with <code>$truth</code>.</li>
+    </ol>
+
+    <pre><code>cd C:\Users\randy\Git\qsoripper
 cargo build --manifest-path experiments\cw-decoder\Cargo.toml --release
 
 $exe   = "experiments\cw-decoder\target\release\cw-decoder.exe"
@@ -781,85 +536,44 @@ $truth = (Get-Content "$base\radio-20260502-105714.truth.txt" -Raw).Trim()
     --decode-every-ms 250 |
     Select-String '"type":"end"' | Select-Object -Last 1
 
-# Live streaming path used by both UIs.
+# Live path used by both user interfaces.
 &amp; $exe stream-live-v3 --file $f --json --region-transcript `
     --decode-every-ms 250 |
     Select-String '"type":"end"' | Select-Object -Last 1
 
-# Both transcript fields should equal $truth:
-#   IHU NVCHU 7QP W7N 7QP W7N</code></pre>
+# Both transcript fields must equal $truth.
+# IHU NVCHU 7QP W7N 7QP W7N</code></pre>
+  </section>
 
-  <h2>9. Conclusion</h2>
+  <section>
+    <h2>7. Conclusion</h2>
 
-  <p>
-    Multi-burst, mixed-speed off-air CW is a different problem from
-    long single-speed practice files, and it benefits from a different
-    decomposition. By detecting each operator burst as a region,
-    decoding each region independently, and committing only after a
-    trailing-static window, we achieve 100% character-exact transcripts
-    on real-world QSO audio that previously defeated our envelope-only
-    foundation. The architecture preserves the rich visualizer event
-    stream, integrates cleanly into both UI surfaces, and is now the
-    documented baseline against which future CW decoding experiments
-    will be measured. Future work will refine the commit gate, extend
-    to multi-pitch and provisional output, and grow the labeled corpus
-    that protects this baseline from regression.
-  </p>
+    <p>
+      Mixed-speed CW needs isolation between operator bursts.
+      The region architecture removes state transfer between these bursts.
+      It preserves the existing visualizer path and client contract.
+      It gives an exact transcript for the reference recording.
+      Future tests must compare all changes with this baseline.
+    </p>
+  </section>
 
-  <h2>Acknowledgments</h2>
+  <section>
+    <h2>References</h2>
 
-  <p>
-    Thanks to the upstream <code>ditdah</code> baseline decoder for the
-    short-clip Morse decoding that each region relies on, and to the
-    QsoRipper agent toolchain (Claude, GitHub Copilot CLI) for
-    rubber-ducking the architecture and helping cross-validate it
-    against the labeled corpus.
-  </p>
-
-  <h2 class="refs-h">References</h2>
-
-  <div class="refs">
     <ol>
-      <li>
-        QsoRipper repository,
-        <code>experiments/cw-decoder/</code> &mdash; primary source for
-        the implementation discussed in this report.
-      </li>
-      <li>
-        QsoRipper PR&nbsp;#375, &ldquo;cw-decoder: region-based streaming
-        decoder (100% match on real-world QSO sample)&rdquo;, batch
-        path.
-      </li>
-      <li>
-        QsoRipper PR&nbsp;#376, &ldquo;cw-decoder: wire region-isolated
-        transcript into live streaming + GUIs&rdquo;.
-      </li>
-      <li>
-        ARRL, <i>The ARRL Handbook for Radio Communications</i>,
-        chapter on Morse code timing and PARIS-derived WPM.
-      </li>
-      <li>
-        Goertzel, G., &ldquo;An Algorithm for the Evaluation of Finite
-        Trigonometric Series&rdquo;, <i>American Mathematical Monthly</i>,
-        Vol.&nbsp;65, No.&nbsp;1, 1958, pp.&nbsp;34&ndash;35.
-      </li>
-      <li>
-        Lloyd, S. P., &ldquo;Least Squares Quantization in PCM&rdquo;,
-        <i>IEEE Transactions on Information Theory</i>,
-        Vol.&nbsp;28, No.&nbsp;2, 1982, pp.&nbsp;129&ndash;137 (the
-        k-means classifier underlying the dot/dah decision).
-      </li>
+      <li>QsoRipper source: <code>experiments/cw-decoder/</code>.</li>
+      <li>QsoRipper pull request 375: region-based batch decode.</li>
+      <li>QsoRipper pull request 376: live region transcript integration.</li>
+      <li>ARRL Handbook for Radio Communications: Morse timing and WPM.</li>
+      <li>G. Goertzel, “An Algorithm for the Evaluation of Finite Trigonometric Series,” 1958.</li>
+      <li>S. P. Lloyd, “Least Squares Quantization in PCM,” 1982.</li>
     </ol>
-  </div>
+  </section>
 
-  </div><!-- /columns -->
-
-  <div class="footer">
-    QsoRipper Technical Report &middot; <i>Region-Isolated Streaming for
-    Real-World CW Copy</i> &middot; rev. May 2026.
+  <footer>
+    QsoRipper technical report.
     Source: <code>experiments/cw-decoder/docs/cw-decoder-architecture.html</code>.
-  </div>
-
-</div>
+  </footer>
+</main>
 </body>
 </html>

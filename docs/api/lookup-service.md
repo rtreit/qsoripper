@@ -18,19 +18,19 @@ All RPCs use unique request/response envelopes. Shared domain payloads stay nest
 
 | RPC | Status | Notes |
 |---|---|---|
-| `Lookup` | ✅ Implemented | Unary callsign lookup via coordinator |
-| `StreamLookup` | ✅ Implemented | Server-streaming with `Loading → Found/Error` state transitions |
-| `GetCachedCallsign` | ✅ Implemented | L1 in-memory cache check only, no network call |
-| `GetDxccEntity` (by `dxcc_code`) | ✅ Implemented | Returns the entity for a numeric DXCC code, or `NOT_FOUND` |
-| `GetDxccEntity` (by `prefix`) | ⚠️ Unimplemented | Returns `UNIMPLEMENTED` in both hosts |
-| `BatchLookup` | ✅ Implemented | Bounded-concurrency parallel lookup over the coordinator (max 5 in-flight) |
+| `Lookup` | Implemented | Unary callsign lookup via coordinator |
+| `StreamLookup` | Implemented | Server-streaming with `Loading → Found/Error` state transitions |
+| `GetCachedCallsign` | Implemented | L1 in-memory cache check only, no network call |
+| `GetDxccEntity` (by `dxcc_code`) | Implemented | Returns the entity for a numeric DXCC code, or `NOT_FOUND` |
+| `GetDxccEntity` (by `prefix`) | Unimplemented | Returns `UNIMPLEMENTED` in both hosts |
+| `BatchLookup` | Implemented | Bounded-concurrency parallel lookup over the coordinator (max 5 in-flight) |
 
 Source-of-truth references for parity checks:
 
 - Rust: [`src/rust/qsoripper-server/src/main.rs`](../../src/rust/qsoripper-server/src/main.rs) (`get_dxcc_entity`, `batch_lookup`)
 - .NET: [`src/dotnet/QsoRipper.Engine.DotNet/GrpcServices.cs`](../../src/dotnet/QsoRipper.Engine.DotNet/GrpcServices.cs) (`GetDxccEntity`, `BatchLookup`)
 
-When changing or adding RPCs, update this table and the matching capability list in the engine specification in the same change. A lightweight parity test lives at [`tests/Docs.LookupParity.Tests.ps1`](../../tests/Docs.LookupParity.Tests.ps1); run `Invoke-Pester -Path tests/Docs.LookupParity.Tests.ps1` to confirm the docs above still match both the Rust and .NET hosts.
+When changing or adding RPCs, update this table and the matching capability list in the engine specification in the same change. A lightweight parity test lives at [`tests/Docs.LookupParity.Tests.ps1`](../../tests/Docs.LookupParity.Tests.ps1). Run `Invoke-Pester -Path tests/Docs.LookupParity.Tests.ps1` to confirm the docs above still match both the Rust and .NET hosts.
 
 ## RPCs
 
@@ -46,7 +46,7 @@ rpc Lookup(LookupRequest) returns (LookupResponse)
 
 | Field | Type | Description |
 |---|---|---|
-| `callsign` | `string` | Callsign to look up (e.g., `"W1AW"`) |
+| `callsign` | `string` | Callsign to look up (for example, `"W1AW"`) |
 | `skip_cache` | `bool` | If `true`, bypasses the L1 in-memory cache and forces a fresh provider fetch |
 
 **Response:** `LookupResponse`
@@ -59,7 +59,7 @@ rpc Lookup(LookupRequest) returns (LookupResponse)
 - Always returns a single `LookupResponse` envelope whose `result` field carries the lookup outcome.
 - If the provider is not configured (no QRZ credentials), returns `state == ERROR` with a configuration error message.
 - If the callsign is in the L1 cache and `skip_cache` is false, serves the cached result with `cache_hit == true`.
-- Provider-backed results may include redacted `debug_http_exchanges` entries for login and lookup HTTP calls. Cache-only responses leave this list empty.
+- Provider results can include redacted `debug_http_exchanges` entries for login and lookup HTTP calls. Cache-only responses leave this list empty.
 
 **Debug capture payload:**
 
@@ -79,11 +79,11 @@ Each `DebugHttpExchange` is an additive, provider-agnostic transport capture wit
 - `response_body` (optional)
 - `error_message` (optional)
 
-Sensitive values are redacted before the exchange is returned to clients. For QRZ XML this includes session keys, passwords, tokens, and auth/cookie-style headers.
+The engine redacts sensitive values before it returns the exchange to clients. For QRZ XML, it redacts keys, passwords, tokens, and authentication headers.
 
 **Notable status codes:**
-- `OK` — returned in all cases (including not-found); the `state` field carries the semantic outcome.
-- `INTERNAL` — unexpected server-side error (rare; most errors are expressed in `LookupResult.state`).
+- `OK` - returned in all cases (including not-found). The `state` field carries the semantic outcome.
+- `INTERNAL` - unexpected server error. The engine reports most errors in `LookupResult.state`.
 
 ---
 
@@ -99,7 +99,7 @@ rpc StreamLookup(StreamLookupRequest) returns (stream StreamLookupResponse)
 
 | Field | Type | Description |
 |---|---|---|
-| `callsign` | `string` | Callsign to look up (e.g., `"W1AW"`) |
+| `callsign` | `string` | Callsign to look up (for example, `"W1AW"`) |
 | `skip_cache` | `bool` | If `true`, bypasses the L1 in-memory cache and forces a fresh provider fetch |
 
 **Response stream:** One or more `StreamLookupResponse` messages, terminated by the server.
@@ -113,7 +113,8 @@ LOADING → (STALE)? → FOUND | NOT_FOUND | ERROR
 ```
 
 1. The server always emits a `LOADING` result first, so the client can show an in-progress indicator immediately.
-2. If a stale cached entry exists while a fresh fetch is in progress, the server may emit a `STALE` result with the cached `record` before the final result arrives.
+2. A stale cached entry can exist while the server gets fresh data.
+   The server can send the cached `record` in a `STALE` result.
 3. The stream closes after the terminal result (`FOUND`, `NOT_FOUND`, or `ERROR`).
 
 **Typical stream for a fresh lookup (no cache):**
@@ -131,8 +132,8 @@ LOADING → (STALE)? → FOUND | NOT_FOUND | ERROR
 **Use case:** TUI/GUI clients that want to show an in-progress spinner while the lookup is running. Subscribe to the stream and update the UI on each received `LookupResult`.
 
 **Notable status codes:**
-- `OK` — stream completed normally.
-- `CANCELLED` — client cancelled the stream (expected for type-ahead debounce scenarios).
+- `OK` - stream completed normally.
+- `CANCELLED` - client cancelled the stream (expected for type-ahead debounce scenarios).
 
 ---
 
@@ -158,10 +159,10 @@ rpc GetCachedCallsign(GetCachedCallsignRequest) returns (GetCachedCallsignRespon
 
 **No network calls are made.** This RPC is safe to call speculatively and at high frequency.
 
-**Use case:** Type-ahead display that first tries the cache for a zero-latency response, then optionally falls through to `StreamLookup` for a fresh result.
+**Use case:** A type-ahead display first checks the cache. It can then call `StreamLookup` for a current result.
 
 **Notable status codes:**
-- `OK` — always returned; outcome is in `LookupResult.state`.
+- `OK` - always returned. Outcome is in `LookupResult.state`.
 
 ---
 
@@ -173,14 +174,14 @@ Look up a DXCC (DX Century Club) entity by numeric code or callsign prefix.
 rpc GetDxccEntity(GetDxccEntityRequest) returns (GetDxccEntityResponse)
 ```
 
-> ✅ **Status:** Implemented for the `dxcc_code` query case. The `prefix` query case still returns `UNIMPLEMENTED` in both built-in hosts.
+> **Status:** Implemented for the `dxcc_code` query case. The `prefix` query case still returns `UNIMPLEMENTED` in both built-in hosts.
 
 **Request:** `GetDxccEntityRequest` (oneof)
 
 | Field | Type | Description |
 |---|---|---|
 | `dxcc_code` | `uint32` | Numeric DXCC entity code |
-| `prefix` | `string` | Callsign prefix — reserved for future QRZ-style 4→3→2 letter reduction; currently `UNIMPLEMENTED` |
+| `prefix` | `string` | Callsign prefix - reserved for future QRZ-style 4→3→2 letter reduction. Currently `UNIMPLEMENTED` |
 
 **Response:** `GetDxccEntityResponse`
 
@@ -189,9 +190,9 @@ rpc GetDxccEntity(GetDxccEntityRequest) returns (GetDxccEntityResponse)
 | `entity` | `DxccEntity` | The matched DXCC payload |
 
 **Notable status codes:**
-- `NOT_FOUND` — `dxcc_code` does not match any known DXCC entity.
-- `UNIMPLEMENTED` — `prefix` query case is not yet supported.
-- `INVALID_ARGUMENT` — neither `dxcc_code` nor `prefix` was supplied.
+- `NOT_FOUND` - `dxcc_code` does not match any known DXCC entity.
+- `UNIMPLEMENTED` - `prefix` query case is not yet supported.
+- `INVALID_ARGUMENT` - the request supplies neither `dxcc_code` nor `prefix`.
 
 ---
 
@@ -203,7 +204,7 @@ Look up multiple callsigns in a single request. Intended for contest prefetch sc
 rpc BatchLookup(BatchLookupRequest) returns (BatchLookupResponse)
 ```
 
-> ✅ **Status:** Implemented in both built-in hosts. Runs the supplied callsigns through the lookup coordinator in parallel with a bounded concurrency cap (currently 5 in-flight).
+> **Status:** Implemented in both built-in hosts. Runs the supplied callsigns through the lookup coordinator in parallel with a bounded concurrency cap (currently 5 in-flight).
 
 **Request:** `BatchLookupRequest`
 
@@ -217,11 +218,11 @@ rpc BatchLookup(BatchLookupRequest) returns (BatchLookupResponse)
 |---|---|---|
 | `results` | `repeated LookupResult` | One result per requested callsign, in request order |
 
-**Use case:** Pre-populate the cache before a contest session begins by looking up a list of expected callsigns in one call.
+**Use case:** Populate the cache before a contest session. Look up the expected callsigns in one call.
 
 **Notable status codes:**
-- `OK` — normal response, including the empty-input case (returns an empty `results` list).
-- `INTERNAL` — surfaced if a per-callsign worker task fails unexpectedly.
+- `OK` - normal response, including the empty-input case (returns an empty `results` list).
+- `INTERNAL` - surfaced if a per-callsign worker task fails unexpectedly.
 
 ---
 
@@ -229,17 +230,17 @@ rpc BatchLookup(BatchLookupRequest) returns (BatchLookupResponse)
 
 | Value | Meaning |
 |---|---|
-| `LOOKUP_STATE_UNSPECIFIED` | Default/zero value — should not appear in normal responses |
-| `LOOKUP_STATE_LOADING` | Request is in flight; used as the initial `StreamLookup` emission |
-| `LOOKUP_STATE_FOUND` | Callsign resolved successfully; `record` field is populated |
+| `LOOKUP_STATE_UNSPECIFIED` | Default or zero value. Normal responses do not contain this value. |
+| `LOOKUP_STATE_LOADING` | Request is in flight. Used as the initial `StreamLookup` emission |
+| `LOOKUP_STATE_FOUND` | The lookup found the callsign. The response contains `record`. |
 | `LOOKUP_STATE_NOT_FOUND` | Callsign does not exist in the provider |
 | `LOOKUP_STATE_ERROR` | Provider error (network failure, auth failure, rate limit) |
 | `LOOKUP_STATE_STALE` | Returning cached data while a background refresh is pending |
-| `LOOKUP_STATE_CANCELLED` | Lookup was superseded by a newer request |
+| `LOOKUP_STATE_CANCELLED` | A newer request replaced the lookup. |
 
 ## Error Handling Notes
 
-- `LookupService` returns gRPC `OK` for most responses; the semantic outcome is always in `LookupResult.state`.
-- Treat `LOOKUP_STATE_ERROR` as a soft error — log the `error_message`, show feedback to the user, but do not crash. The provider may recover on the next request.
-- `LOOKUP_STATE_STALE` means stale data is being returned while the cache refreshes. Display the stale data and update when the next result arrives.
-- Clients should handle `CANCELLED` responses gracefully — they are expected during type-ahead debounce scenarios where older requests are abandoned.
+- `LookupService` returns gRPC `OK` for most responses. The semantic outcome is always in `LookupResult.state`.
+- Treat `LOOKUP_STATE_ERROR` as a soft error. Record the `error_message` and show user feedback. The provider can recover on the next request.
+- `LOOKUP_STATE_STALE` means the engine returns old data during a cache refresh. Display the old data. Update it after the next result.
+- Clients must accept `CANCELLED` responses. These responses occur when a type-ahead request replaces an older request.
