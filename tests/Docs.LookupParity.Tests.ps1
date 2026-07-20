@@ -54,15 +54,15 @@ Describe 'LookupService doc/implementation parity' {
 
     Context 'docs/api/lookup-service.md status table reflects implementation' {
         It 'marks BatchLookup as Implemented' {
-            Assert-DocsLookupMatches $global:DocsLookupLookupDocContent '\|\s*`BatchLookup`\s*\|\s*✅\s*Implemented'
+            Assert-DocsLookupMatches $global:DocsLookupLookupDocContent '\|\s*`BatchLookup`\s*\|\s*Implemented'
         }
 
         It 'marks GetDxccEntity by dxcc_code as Implemented' {
-            Assert-DocsLookupMatches $global:DocsLookupLookupDocContent '\|\s*`GetDxccEntity`\s*\(by\s*`dxcc_code`\)\s*\|\s*✅\s*Implemented'
+            Assert-DocsLookupMatches $global:DocsLookupLookupDocContent '\|\s*`GetDxccEntity`\s*\(by\s*`dxcc_code`\)\s*\|\s*Implemented'
         }
 
         It 'marks GetDxccEntity by prefix as Unimplemented' {
-            Assert-DocsLookupMatches $global:DocsLookupLookupDocContent '\|\s*`GetDxccEntity`\s*\(by\s*`prefix`\)\s*\|\s*⚠️\s*Unimplemented'
+            Assert-DocsLookupMatches $global:DocsLookupLookupDocContent '\|\s*`GetDxccEntity`\s*\(by\s*`prefix`\)\s*\|\s*Unimplemented'
         }
     }
 
