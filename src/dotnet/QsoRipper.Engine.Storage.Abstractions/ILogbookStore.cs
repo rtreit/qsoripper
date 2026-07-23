@@ -14,6 +14,22 @@ public interface ILogbookStore
     /// <returns><c>true</c> if the record was found and updated; <c>false</c> if not found.</returns>
     ValueTask<bool> UpdateQsoAsync(QsoRecord qso);
 
+    /// <summary>
+    /// Replaces a QSO only when its persisted protobuf payload still matches
+    /// <paramref name="expected"/>.
+    /// </summary>
+    /// <returns><c>true</c> when the unchanged row was replaced; otherwise <c>false</c>.</returns>
+    ValueTask<bool> UpdateQsoIfUnchangedAsync(QsoRecord expected, QsoRecord replacement);
+
+    /// <summary>
+    /// Atomically records QRZ upload metadata without replacing operator-owned fields.
+    /// A row edited after <paramref name="expectedUpdatedAt"/> remains modified.
+    /// </summary>
+    ValueTask<QsoRecord?> UpdateQrzSyncMetadataAsync(
+        string localId,
+        Google.Protobuf.WellKnownTypes.Timestamp? expectedUpdatedAt,
+        string qrzLogid);
+
     /// <summary>Deletes a QSO record by its local identifier.</summary>
     /// <returns><c>true</c> if the record was found and deleted; <c>false</c> if not found.</returns>
     ValueTask<bool> DeleteQsoAsync(string localId);

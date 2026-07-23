@@ -615,7 +615,7 @@ internal sealed class ManagedEngineState
             ApplySyncFlagsNoLock(qso, request.SyncToQrz, response);
             if (response.SyncSuccess)
             {
-                Sync(_storage.Logbook.UpdateQsoAsync(qso));
+                Sync(_storage.Logbook.UpdateQrzSyncMetadataAsync(qso.LocalId, qso.UpdatedAt, qso.QrzLogid));
             }
 
             return response;
@@ -683,7 +683,7 @@ internal sealed class ManagedEngineState
             ApplySyncFlagsNoLock(qso, request.SyncToQrz, response);
             if (response.SyncSuccess)
             {
-                Sync(_storage.Logbook.UpdateQsoAsync(qso));
+                Sync(_storage.Logbook.UpdateQrzSyncMetadataAsync(qso.LocalId, qso.UpdatedAt, qso.QrzLogid));
             }
 
             return response;
@@ -1181,8 +1181,6 @@ internal sealed class ManagedEngineState
 
                 if (!_hasQrzLogbookApiKey)
                 {
-                    existing.SyncStatus = SyncStatus.LocalOnly;
-                    Sync(_storage.Logbook.UpdateQsoAsync(existing));
                     outcomes.Add(new WsjtxQrzSyncOutcome(localId, existing.WorkedCallsign, Success: false, "QRZ logbook is not configured."));
                     continue;
                 }
@@ -1191,15 +1189,11 @@ internal sealed class ManagedEngineState
                 {
                     var logid = Sync((_syncEngine ?? throw new InvalidOperationException("QRZ logbook sync is unavailable."))
                         .UploadSingleQsoAsync(_storage.Logbook, existing));
-                    existing.SyncStatus = SyncStatus.Synced;
-                    existing.QrzLogid = logid;
-                    Sync(_storage.Logbook.UpdateQsoAsync(existing));
+                    Sync(_storage.Logbook.UpdateQrzSyncMetadataAsync(existing.LocalId, existing.UpdatedAt, logid));
                     outcomes.Add(new WsjtxQrzSyncOutcome(localId, existing.WorkedCallsign, Success: true, Error: null));
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    existing.SyncStatus = SyncStatus.LocalOnly;
-                    Sync(_storage.Logbook.UpdateQsoAsync(existing));
                     outcomes.Add(new WsjtxQrzSyncOutcome(localId, existing.WorkedCallsign, Success: false, ex.Message));
                 }
             }
@@ -2291,7 +2285,7 @@ internal sealed class ManagedEngineState
             var keeper = rows[0].Clone();
             foreach (var victim in rows.Skip(1))
             {
-                MergeRepairFields(keeper, victim);
+                keeper = MergeRepairFields(keeper, victim);
                 Sync(_storage.Logbook.DeleteQsoAsync(victim.LocalId));
             }
 
@@ -2312,50 +2306,20 @@ internal sealed class ManagedEngineState
         return null;
     }
 
-    private static void MergeRepairFields(QsoRecord keeper, QsoRecord victim)
+    private static QsoRecord MergeRepairFields(QsoRecord keeper, QsoRecord victim)
     {
-        if (string.IsNullOrWhiteSpace(keeper.QrzBookid) && NormalizeOptional(victim.QrzBookid) is { } bookid)
-        {
-            keeper.QrzBookid = bookid;
-        }
-
-        if (string.IsNullOrWhiteSpace(keeper.Notes) && NormalizeOptional(victim.Notes) is { } notes)
-        {
-            keeper.Notes = notes;
-        }
-
-        if (string.IsNullOrWhiteSpace(keeper.Comment) && NormalizeOptional(victim.Comment) is { } comment)
-        {
-            keeper.Comment = comment;
-        }
-
-        if (string.IsNullOrWhiteSpace(keeper.Submode) && NormalizeOptional(victim.Submode) is { } submode)
-        {
-            keeper.Submode = submode;
-        }
-
-        if (string.IsNullOrWhiteSpace(keeper.WorkedGrid) && NormalizeOptional(victim.WorkedGrid) is { } grid)
-        {
-            keeper.WorkedGrid = grid;
-        }
-
-        if (string.IsNullOrWhiteSpace(keeper.WorkedOperatorName) && NormalizeOptional(victim.WorkedOperatorName) is { } name)
-        {
-            keeper.WorkedOperatorName = name;
-        }
-
-        keeper.RstSent ??= victim.RstSent?.Clone();
-        keeper.RstReceived ??= victim.RstReceived?.Clone();
-        foreach (var pair in victim.ExtraFields)
-        {
-            if (!pair.Key.Equals("APP_QRZLOG_LOGID", StringComparison.Ordinal)
-                && !pair.Key.Equals("APP_QRZ_LOGID", StringComparison.Ordinal)
-                && !string.IsNullOrEmpty(pair.Value)
-                && !keeper.ExtraFields.ContainsKey(pair.Key))
-            {
-                keeper.ExtraFields[pair.Key] = pair.Value;
-            }
-        }
+        var merged = victim.Clone();
+        merged.MergeFrom(keeper);
+        merged.LocalId = keeper.LocalId;
+        merged.QrzLogid = keeper.QrzLogid;
+        merged.CreatedAt = keeper.CreatedAt?.Clone();
+        merged.UpdatedAt = keeper.UpdatedAt?.Clone();
+        merged.SyncStatus = keeper.SyncStatus;
+        merged.DeletedAt = keeper.DeletedAt?.Clone();
+        merged.PendingRemoteDelete = keeper.PendingRemoteDelete;
+        merged.ExtraFields.Remove("APP_QRZLOG_LOGID");
+        merged.ExtraFields.Remove("APP_QRZ_LOGID");
+        return merged;
     }
 
     private static bool IsStationProfileComplete(StationProfile profile)

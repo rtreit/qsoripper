@@ -62,6 +62,12 @@ public sealed class ManagedEngineStateTests : IDisposable
         newer.CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-02T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
         newer.QrzLogid = "12345";
         newer.Notes = "preserve me";
+        newer.ContestId = "ARRL-FIELD-DAY";
+        newer.LotwReceived = true;
+        newer.WorkedLatitude = 47.61;
+        newer.FrequencyRxHz = 14_076_000;
+        newer.QsoComplete = QsoCompletion.Yes;
+        newer.CwDecodeTranscript = "CQ TEST";
 
         await storage.Logbook.InsertQsoAsync(older);
         await storage.Logbook.InsertQsoAsync(newer);
@@ -75,6 +81,12 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Equal("older", saved.LocalId);
         Assert.Equal("12345", saved.QrzLogid);
         Assert.Equal("preserve me", saved.Notes);
+        Assert.Equal("ARRL-FIELD-DAY", saved.ContestId);
+        Assert.True(saved.LotwReceived);
+        Assert.Equal(47.61, saved.WorkedLatitude);
+        Assert.Equal(14_076_000ul, saved.FrequencyRxHz);
+        Assert.Equal(QsoCompletion.Yes, saved.QsoComplete);
+        Assert.Equal("CQ TEST", saved.CwDecodeTranscript);
         Assert.DoesNotContain("APP_QRZLOG_LOGID", saved.ExtraFields.Keys);
     }
 

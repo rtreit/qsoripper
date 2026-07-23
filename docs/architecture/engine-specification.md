@@ -1798,13 +1798,18 @@ QRZ can temporarily return the old copy.
        If it did, skip the remote row.
        Do not replace the corrected local row with an old remote response.
     d. If matched, apply the configured `ConflictPolicy`:
-       - `CONFLICT_POLICY_LAST_WRITE_WINS`: Use the remote record as the authority.
-         Replace local fields with remote fields.
-         Mark the merged row as `SYNCED`.
+       - `CONFLICT_POLICY_LAST_WRITE_WINS`: Use values in the remote record as the authority.
+         Replace the applicable local fields and mark the merged row as `SYNCED`.
+         An omitted QRZ field does not specify a deletion.
+         Preserve each populated local field when QRZ omits the applicable remote field.
+         This rule includes signal reports, contest data, QSL state, enrichment, station snapshots, notes, application fields, and split-frequency data.
+         It also includes fields that later schema versions add.
+         Always preserve local identity, creation metadata, update metadata, and soft-delete state.
        - `CONFLICT_POLICY_FLAG_FOR_REVIEW`: Check whether the local row is `MODIFIED`.
          If it is, preserve local fields and set `sync_status = CONFLICT`.
          Increase the conflict counter.
-         If the local row is `SYNCED`, the remote record has priority.
+         If the local row is `SYNCED`, values in the remote record have priority.
+         Apply the same field-preservation rules as `LAST_WRITE_WINS`.
        - `CONFLICT_POLICY_UNSPECIFIED`: Treat the zero value as `FLAG_FOR_REVIEW`.
          Section 6.3 defines this safe default.
        - For `SYNC_STATUS_LOCAL_ONLY`, link the QRZ identity and mark the row `SYNCED`.
@@ -1859,6 +1864,14 @@ QRZ can temporarily return the old copy.
 
 1. Reuse the Phase 0 QRZ `STATUS` result. Do not make a second status call.
 2. Update `sync_metadata` with the count, timestamp, and owner.
+
+**Concurrent local changes:** Each local write after a QRZ network request MUST be concurrency-safe.
+A download merge can replace a row only when the stored QSO still matches the decision snapshot.
+This rule also applies to a conflict-state change.
+Upload completion MUST patch only QRZ linkage and sync state on the current row.
+Remote-delete completion MUST clear linkage on the current row.
+It MUST NOT restore an old tombstone.
+Operator edits, deletes, and restores MUST have priority over an old sync snapshot.
 
 **Resilience:** A phase failure must not prevent other applicable phases.
 The engine must report partial results in the stream.
