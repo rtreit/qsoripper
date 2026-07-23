@@ -5,6 +5,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="CatHub.Protocol" />
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Grpc.AspNetCore" />
     <PackageReference Include="Grpc.Net.Client" />
@@ -22,8 +23,6 @@
               GrpcServices="None" />
     <Protobuf Update="..\..\..\proto\services\*service.proto"
               GrpcServices="Server" />
-    <Protobuf Update="..\..\..\proto\services\winkeyer_broker_service.proto"
-              GrpcServices="Client" />
   </ItemGroup>
 
   <ItemGroup>

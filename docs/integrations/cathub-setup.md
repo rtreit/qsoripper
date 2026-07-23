@@ -150,19 +150,10 @@ CatHub 0.1 retains the existing `qsoripper.services` WinKeyer broker wire-packag
 The identifier is part of the wire contract and does not make CatHub part of QsoRipper. The
 authoritative contract lives in the CatHub repository.
 
-QsoRipper currently carries a pinned protocol snapshot so its shared Rust and .NET protocol
-generation remains integrated with the rest of QsoRipper's contract build. The snapshot must
-track the supported CatHub protocol version exactly. Installing QsoRipper or running CatHub
-does not require the published `cathub-protocol` Rust crate or `CatHub.Protocol` NuGet
-package. Those packages are for independent applications that develop against CatHub's typed
-API.
+The Rust engine consumes `cathub-protocol` 0.1.1. The .NET engine consumes
+`CatHub.Protocol` 0.1.1. CatHub owns these packages and the source protocol files.
 
-QsoRipper records the dependency pin in `config\cathub-dependency.json`. When both repositories are
-checked out as siblings, verify the temporary QsoRipper protocol snapshot with:
-
-```powershell
-.\scripts\Test-CatHubProtocol.ps1
-```
+QsoRipper records the dependency pin in `config\cathub-dependency.json`.
 
 See the CatHub repository for the complete radio topology, virtual serial setup, permissions,
 safety behavior, WinKeyer maintenance rules, releases, and troubleshooting guide.
