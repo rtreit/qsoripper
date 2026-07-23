@@ -19,6 +19,31 @@ Primary goals:
   sentences.
 - Keep comments focused on why something exists, not what each line does.
 
+## Documentation and Reports
+
+- Use ASD-STE100 Simplified Technical English, Issue 9, for all
+  documentation and reports unless the user requests a different style.
+- This rule applies to new text and to text that you change.
+- Use approved words only with their approved meanings and parts of speech.
+- Use established project terms as technical nouns or technical verbs. Use
+  each term consistently.
+- Use American English spelling.
+- Keep a multi-word noun to three words or fewer.
+- Use only the verb forms that Issue 9 permits.
+- Use active voice when the agent is known.
+- Do not use contractions, Latin abbreviations, or semicolons.
+- Put only one instruction in each sentence unless actions occur at the same
+  time.
+- Use no more than 20 words in a procedural sentence.
+- Use no more than 25 words in a descriptive sentence.
+- Use no more than six sentences in one paragraph.
+- Keep code, identifiers, commands, paths, protocol fields, quoted text, and
+  legal text exact.
+- Do not claim STE conformance unless you checked the text against the Issue 9
+  rules and dictionary.
+- Reference:
+  [ASD-STE100 Issue 9](https://www.asd-ste100.org/assets/files/ASD-STE100_ISSUE9.pdf).
+
 ## Development Environment
 
 - This repo is normally worked on from Windows.
@@ -102,7 +127,8 @@ Local Win32 CMake validation uses Visual Studio Build Tools 2026
 ## Architecture Direction
 
 - Keep the log engine independent from any specific UI.
-- The engine exposes a gRPC API; UX implementations are independent consumers.
+- The engine exposes a gRPC API.
+- UX implementations are independent consumers.
 - No specific UI technology is required or privileged.
 - Keep third-party integrations isolated behind interfaces.
 - Make offline logging resilient, even when network integrations fail.
@@ -135,8 +161,8 @@ Local Win32 CMake validation uses Visual Studio Build Tools 2026
   incompatible schema changes.
 - ADIF is for external interchange, such as QRZ API and file I/O, only.
   Internal IPC uses protobuf.
-- Keep shared proto messages discoverable in the Debug Host Protobuf Lab; prefer
-  auto-discovered message catalogs over hand-maintained UI enums or lists.
+- Keep shared proto messages discoverable in the Debug Host Protobuf Lab.
+- Prefer auto-discovered message catalogs over hand-maintained UI enums or lists.
 - In .NET UI and DebugHost surfaces, do not hand-format generated proto enum
   names with `ToString()` and string replacement. Use shared display helpers
   such as `src\dotnet\QsoRipper.DebugHost\Utilities\ProtoEnumDisplay.cs` so
@@ -239,9 +265,9 @@ issue bodies, review comments, or other repository comments:
   autocomplete behavior.
 - Squash is the only allowed merge method on `main`. Always pass `--squash` to
   `gh pr merge`.
-- Do not click or invoke "Update branch" on PRs. Branch protection no longer
-  requires PRs to be up to date with `main` before merging; the merge queue
-  handles speculative-merge testing automatically.
+- Do not click or invoke "Update branch" on PRs.
+- Branch protection does not require PRs to be current with `main`.
+- The merge queue handles speculative-merge testing automatically.
 - When a PR implements only part of a GitHub issue, do not reference the parent
   issue with a closing keyword such as `Closes`, `Fixes`, or `Resolves`.
   Instead, create a sub-issue scoped to the work in the PR, reference that

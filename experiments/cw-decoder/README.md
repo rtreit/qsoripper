@@ -1,76 +1,71 @@
 # CW Decoder Experiment
 
-This folder is the current sandbox for improving QsoRipper CW decoding on real off-air audio.
+This folder contains experiments that improve QsoRipper CW decoding for real off-air audio.
 
-The project has converged on two parallel goals:
+The project has two goals:
 
-1. keep a **simple append-only event-stream foundation** that behaves like what the operator actually hears and sees, and
-2. layer more ambitious signal-processing experiments on top without allowing them to regress that foundation.
+1. Keep a **simple append-only event-stream foundation** that agrees with the audio and visual output.
+2. Add signal-processing experiments without a regression in that foundation.
 
-The current breakthrough is that the best live behavior did **not** come from rolling transcript windows, overlap stitching, or commit heuristics. It came from consuming the same stable dit/dah/gap event stream that paints the Visualizer bars and appending each matured event once in audio order. That path is now the "line in the sand": Decode, Labeling, Tuning, Bench, and Visualizer should all key off it first, while experimental decoders are compared against it rather than silently replacing it.
+Rolling transcript windows, overlap stitching, and commit heuristics did **not** give the best live behavior.
+
+The best path consumes the stable dit/dah/gap event stream that paints the Visualizer bars. It appends each mature event once in audio order.
+
+This path is the reference baseline. Decode, Labeling, Tuning, Bench, and Visualizer use it first. Tests compare experimental decoders with it.
 
 > **Foundational baseline (May 2026): region-isolated streaming transcript.**
 >
-> A full QEX-style technical write-up of this baseline (architecture,
-> design rationale, results, and future directions) lives at
+> A full QEX-style technical article about this baseline is available at
 > [`docs/cw-decoder-architecture.html`](docs/cw-decoder-architecture.html).
-> Open it in any browser for the rendered article; it is the canonical
-> reference for the architecture summarized here.
+> The article describes the architecture, design reasons, results, and future work.
+> Open it in a browser. It is the primary reference for this architecture.
 >
-> The append-only event-stream foundation is excellent for *driving the
-> visualizer* (waveform, lock state, pitch, WPM, classified events). But
-> for the **transcript** itself, real-world QSO audio with multiple
-> bursts at very different WPMs separated by background static (operator
-> pauses, TX/RX cycles, ragchew vs contest mixes) needs a different
-> decoder shape: detect each burst as a region, decode each region
-> independently with its own pitch/WPM/k-means lock, and append the
-> region's text once it has been stable for a trailing-static window.
+> The append-only event stream drives the visualizer. It supplies the waveform, lock state, pitch, WPM, and classified events.
 >
-> The reference implementation lives in
-> `src\region_streamer.rs` (`RegionStreamer`) and
-> `src\region_stream.rs` (`decode_region_stream`). It is exposed three
-> ways:
+> Real QSO audio can contain several bursts at different speeds. Background static can separate operator pauses, TX/RX cycles, and different QSO types.
 >
-> - **Batch mode** — `cw-decoder stream-region --file <path>` — runs
->   region detection over the entire file and emits one transcript per
->   region. This is the canonical reference output.
-> - **Live streaming** — `cw-decoder stream-live-v3 --region-transcript`
->   — runs `RegionStreamer` *alongside* the V3 envelope streamer. The
->   envelope path keeps driving viz events; only the cumulative
->   `transcript` field on emitted `text` / `appended` / `end` events is
->   sourced from region-isolated decode. `RegionStreamer::trim_committed`
->   bounds memory growth in long live sessions and `RegionStreamer::reset`
->   honors stdin-control `ResetLock` requests cleanly without restarting
->   the process.
-> - **Both UI surfaces wire `--region-transcript`** by default:
->   - Production logger GUI (F7 live mic) —
+> The transcript path detects each burst as a region. It decodes each region with an independent pitch, WPM, and k-means lock.
+>
+> It appends the region text after the text is stable for a trailing-static window.
+>
+> The reference implementation is in `src\region_streamer.rs` (`RegionStreamer`) and `src\region_stream.rs` (`decode_region_stream`).
+> Three interfaces expose it:
+>
+> - **Batch mode:** `cw-decoder stream-region --file <path>` detects regions in the complete file.
+>   It emits one transcript for each region. This output is the reference output.
+> - **Live streaming:** `cw-decoder stream-live-v3 --region-transcript` runs `RegionStreamer` with the V3 envelope streamer.
+>   The envelope path continues to supply visualizer events.
+>   Region decode supplies only the cumulative `transcript` field on `text`, `appended`, and `end` events.
+>   `RegionStreamer::trim_committed` limits memory use in long sessions.
+>   `RegionStreamer::reset` processes stdin-control `ResetLock` requests without a process restart.
+> - **User interfaces:** Both interfaces use `--region-transcript` by default:
+>   - Production logger GUI (F7 live microphone):
 >     `src\dotnet\QsoRipper.Gui\Services\CwDecoderProcessSampleSource.cs`
->   - Experimental CW visualizer GUI (live mic + file replay) —
+>   - Experimental CW visualizer GUI (live microphone and file replay):
 >     `experiments\cw-decoder\gui\Services\CwDecoderProcess.cs`
 >
-> **Reference success metric.** This baseline produces a 100% exact-match
-> transcript for the multi-burst real-world sample
-> `cw-samples\training-set-b\radio-20260502-105714.mp3` (truth file
-> `radio-20260502-105714.truth.txt`):
+> **Reference success metric.** This baseline gives a 100% exact-match transcript for this real multi-burst sample:
+> `cw-samples\training-set-b\radio-20260502-105714.mp3`.
+>
+> The truth file is `radio-20260502-105714.truth.txt`.
 >
 > ```text
 > IHU NVCHU 7QP W7N 7QP W7N
 > ```
 >
-> Both `stream-region` (batch) and `stream-live-v3 --region-transcript`
-> (live streaming) produce that exact string with the default
-> `RegionStreamerConfig::default()` config (merge_gap=0.5s,
-> min_region=0.3s, threshold_factor=0.30, pad=0.15s,
-> min_tonal_prominence_ratio=8.0, stable_latency=0.6s) and
-> `--decode-every-ms 250`.
+> Both `stream-region` and `stream-live-v3 --region-transcript` give that exact text with `RegionStreamerConfig::default()`.
+> The configuration is `merge_gap=0.5s`, `min_region=0.3s`, `threshold_factor=0.30`, `pad=0.15s`, `min_tonal_prominence_ratio=8.0`, and `stable_latency=0.6s`.
+> The command also uses `--decode-every-ms 250`.
 >
-> The baseline now also includes deterministic synthetic impairment
-> coverage in `region_streamer.rs`: clean four-burst copy, quiet static
-> gaps, noise-only no-ghost-text, and a moderate white-noise + QSB +
-> offset-QRM exchange (`CQ TEST KC7AVA 73`). `synthetic_qso.rs` also
-> carries regression coverage for the live-CQ failure mode where an
-> isolated final over marker `K` (`-.-`) was auto-calibrated as `S`
-> (`...`) when it was decoded as its own short region.
+> `region_streamer.rs` includes deterministic synthetic impairment tests:
+>
+> - a clean four-burst copy
+> - quiet static gaps
+> - noise without ghost text
+> - moderate white noise, QSB, and offset QRM for `CQ TEST KC7AVA 73`
+>
+> `synthetic_qso.rs` includes a regression test for an isolated final over marker.
+> Previously, the decoder calibrated `K` (`-.-`) as `S` (`...`) in a short independent region.
 >
 > For broader QSO-debug traffic, use the synthetic suite generator:
 >
@@ -79,28 +74,27 @@ The current breakthrough is that the best live behavior did **not** come from ro
 >   gen-qso-suite --output .artifacts\cw-qso-suite --ragchew 6 --contest 6
 > ```
 >
-> The generator emits deterministic ragchew and contest WAVs, `.truth.txt`
-> sidecars, and `manifest.ndjson`, then validates each sample through the
-> region decoder. Use `--require-exact` when you want CI-style non-zero
-> exit on any transcript mismatch; leave it off for exploratory debugging
-> runs where failures are the point.
+> The generator creates deterministic ragchew and contest WAV files.
+> It also creates `.truth.txt` sidecars and `manifest.ndjson`.
+> It then validates each sample with the region decoder.
 >
-> **Multi-pitch burst discovery (June 2026).** The pitch-routing front
-> end of `decode_region_stream` was upgraded from a whole-buffer mean-
-> Goertzel sweep to a hybrid windowed/mean approach in
-> `region_stream::discover_burst_pitches`. The whole-buffer mean smears
-> long-form ragchew turns at distinct pitches into one artifact peak;
-> the windowed source (10 s window, 5 s hop, with a noise-floor
-> confidence gate) surfaces each turn's pitch independently. The mean
-> source still runs alongside to preserve dense-cluster contest cases.
-> The combined synthetic suite now scores 12/12 exact copy (was 6/12);
-> validated through both `decode_region_stream` (batch) and
-> `RegionStreamer` (live streaming) paths at 12/16/48 kHz sample rates.
+> Use `--require-exact` to get a nonzero exit code for a transcript mismatch.
+> Do not use it for exploratory tests that intentionally find failures.
 >
-> **Future experiments must not regress this baseline.** Before merging
-> any change that touches `region_streamer.rs`, `region_stream.rs`,
-> `stream-live-v3`, the GUI launchers, or the underlying decoder
-> primitives, re-run the cross-validation:
+> **Multi-pitch burst discovery (June 2026).** `region_stream::discover_burst_pitches` now uses both windowed and mean Goertzel sweeps.
+>
+> A whole-buffer mean can merge long ragchew turns at different pitches into one false peak.
+> The windowed source finds each turn independently. It uses a 10-second window, a 5-second hop, and a noise-floor confidence gate.
+>
+> The mean source continues to support contest audio with dense pitch groups.
+> The combined synthetic suite now gives 12/12 exact copies. The earlier result was 6/12.
+>
+> Tests covered `decode_region_stream` and `RegionStreamer` at 12 kHz, 16 kHz, and 48 kHz.
+>
+> **Future experiments must not regress this baseline.**
+> Run this cross-validation before you merge a related change.
+>
+> This requirement applies to `region_streamer.rs`, `region_stream.rs`, `stream-live-v3`, GUI launchers, and decoder primitives.
 >
 > ```powershell
 > cd C:\Users\randy\Git\qsoripper
@@ -115,75 +109,80 @@ The current breakthrough is that the best live behavior did **not** come from ro
 > cargo test --manifest-path experiments\cw-decoder\Cargo.toml region_streamer::tests::synthetic
 > ```
 >
-> If you need to roll back to this baseline at any point, the reference
-> commits are PR #375 (region-based streaming decoder, batch path) and
-> PR #376 (live streaming + GUI wiring) on branch
-> `u/randy/region-based-streaming-cw`.
+> For rollback, use the commits from PR #375 and PR #376.
+> PR #375 added the region-based batch decoder. PR #376 added live streaming and GUI integration.
 >
-> The append-only event-stream foundation in `append_decode.rs` is
-> still the source of truth for the visualizer's bar painting and for
-> the `cw_decode_rx_wpm` aggregator that feeds the production logger;
-> region-isolated decode supplements it for transcript text only.
+> The reference branch is `u/randy/region-based-streaming-cw`.
+>
+> The append-only event stream in `append_decode.rs` remains the source for visualizer bars.
+> It also supplies the `cw_decode_rx_wpm` aggregator for the production logger.
+> Region-isolated decode supplies only transcript text.
 
-> **Integration status (round 1, issue #321)**: the production GUI now hosts the
-> `cw-decoder` binary as a subprocess and auto-fills `QsoRecord.cw_decode_rx_wpm`
-> on logged CW QSOs (time-weighted mean over the QSO start/end window, ADIF
-> field `APP_QSORIPPER_RX_WPM`). See
-> `src\dotnet\QsoRipper.Gui\Services\CwDecoderProcessSampleSource.cs`,
-> `src\dotnet\QsoRipper.Gui\Services\CwQsoWpmAggregator.cs`, and the
-> **Settings → Display → Monitor radio** section in the main window.
-> Round 2 will move the decoder behind an engine-side `CwDecodeService`
-> so all clients can consume the same stream.
+> **Integration status (round 1, issue #321).** The production GUI runs `cw-decoder` as a subprocess.
+> It automatically sets `QsoRecord.cw_decode_rx_wpm` on logged CW QSOs.
+> The value is a time-weighted mean for the QSO start and end window.
+> The ADIF field is `APP_QSORIPPER_RX_WPM`.
 >
-> **Fresh-user prerequisites for the radio monitor to do anything:**
+> See `src\dotnet\QsoRipper.Gui\Services\CwDecoderProcessSampleSource.cs` and `src\dotnet\QsoRipper.Gui\Services\CwQsoWpmAggregator.cs`.
+> Also see **Settings > Display > Monitor radio** in the main window.
 >
-> 1. Build the decoder once: from `experiments\cw-decoder\` run
->    `cargo build --release` (this folder is a stand-alone Cargo workspace and
->    is **not** built by the main `cargo build` in `src\rust\`). Built outputs
->    land in `experiments\cw-decoder\target\release\cw-decoder.exe`.
-> 2. Either leave the binary at that default location (the GUI walks up from
->    its base directory looking for it) or set the `CW_DECODER_EXE` env var to
->    an absolute path.
-> 3. Allow the application access to a capture device. The decoder uses the
->    OS default capture device unless you pick a specific one in the dropdown.
-> 4. Open **Settings → Display** in the GUI and tick *Enable radio monitor
->    (auto-fills CW WPM on logged QSOs)*. Pick a capture device from the
->    dropdown — physical inputs (microphones, USB Audio CODEC dongles) appear
->    as plain device names; system output devices that can be tapped via
->    WASAPI loopback appear with a `(system output / loopback)` suffix so you
->    can validate without a radio by playing audio through your speakers.
->    Save. Optionally tick *Show CW WPM in the status bar* (toggle live with
->    `Ctrl+Shift+W`) to see the live WPM readout, which dims when the monitor
->    is off as a reminder. If the decoder gets "stuck" on a wrong baseline
->    (e.g. a slow station hands off to a fast one and the dot/dash estimator
->    doesn't follow), press `Ctrl+Alt+W` to restart the decoder process and
->    let the confidence state machine re-acquire from scratch.
+> Round 2 will put the decoder behind an engine-side `CwDecodeService`.
+> All clients will then use the same stream.
 >
-> If the binary cannot be found, the monitor toggle silently flips back off
-> and the status row reports `CW WPM: decoder not built`. If the binary is
-> found but launching fails (e.g. cpal cannot open the capture device), the
-> status row reports the underlying error and the toggle flips off.
+> **Radio monitor prerequisites:**
 >
-> **Validating the GUI without a radio (loopback / file playback):**
+> 1. Go to `experiments\cw-decoder\`.
+> 2. Run `cargo build --release`.
+> 3. Keep the binary at `experiments\cw-decoder\target\release\cw-decoder.exe`.
+>    Alternatively, set `CW_DECODER_EXE` to an absolute path.
+> 4. Permit the application to use a capture device.
+> 5. Open **Settings > Display**.
+> 6. Select *Enable radio monitor (auto-fills CW WPM on logged QSOs)*.
+> 7. Select a capture device.
+> 8. Save the settings.
 >
-> 1. Build the decoder (`cargo build --release` in `experiments\cw-decoder`).
-> 2. Open **Settings → Display → Monitor radio**, enable the monitor, and
->    pick a `(system output / loopback)` entry from the *Capture device*
->    dropdown — for example *Speakers (Realtek)  (system output / loopback)*.
->    The dropdown auto-detects the loopback case so you don't need to know
->    the underlying WASAPI plumbing.
-> 3. Play a CW practice clip through your speakers. The status row (when
->    enabled with `Ctrl+Shift+W`) reports a live WPM.
-> 4. Cross-platform alternative: install VB-Audio Cable or similar, route
->    system output to the cable, and pick the cable's *input* entry from the
->    dropdown (the plain non-loopback variant).
-> 5. List candidate device names from the command line with
->    `experiments\cw-decoder\target\release\cw-decoder.exe devices` (add
->    `--json` for machine-readable output that mirrors the GUI dropdown) —
->    this prints both input devices and the output devices that are usable
->    as loopback targets.
-> 6. Log a CW QSO during playback and confirm `cw_decode_rx_wpm` is
->    populated on the new row in the recent-QSO grid.
+> This folder is an independent Cargo workspace. The main `cargo build` in `src\rust\` does not build it.
+>
+> The GUI searches parent directories for the default binary.
+> The decoder uses the default operating-system capture device unless you select another device.
+>
+> Physical inputs have normal device names.
+> WASAPI loopback outputs have the suffix `(system output / loopback)`.
+> Use a loopback output to test with audio from the speakers.
+>
+> Select *Show CW WPM in the status bar* to see the live WPM value.
+> Use `Ctrl+Shift+W` to change this option.
+> The value becomes dim when the monitor is off.
+>
+> Use `Ctrl+Alt+W` if the decoder does not follow a large speed change.
+> This command restarts the decoder and resets its confidence state.
+>
+> If the GUI cannot find the binary, it clears the monitor option.
+> The status row shows `CW WPM: decoder not built`.
+>
+> If launch fails, the status row shows the error and clears the option.
+> For example, cpal can fail to open the capture device.
+>
+> **Validate the GUI without a radio:**
+>
+> 1. Build the decoder in `experiments\cw-decoder` with `cargo build --release`.
+> 2. Open **Settings > Display > Monitor radio**.
+> 3. Enable the monitor.
+> 4. Select a `(system output / loopback)` capture device.
+>    For example, select *Speakers (Realtek) (system output / loopback)*.
+> 5. Play a CW practice clip through the speakers.
+> 6. Use `Ctrl+Shift+W` to show the live WPM value.
+> 7. Log a CW QSO during playback.
+> 8. Confirm that the recent-QSO row contains `cw_decode_rx_wpm`.
+>
+> The GUI detects WASAPI loopback devices automatically.
+>
+> For a cross-platform option, install VB-Audio Cable or equivalent software.
+> Route system output to the cable. Select the cable input in the capture-device list.
+>
+> Run `experiments\cw-decoder\target\release\cw-decoder.exe devices` to list candidate devices.
+> Add `--json` for machine-readable output.
+> The output includes input devices and output devices that support loopback.
 
 ## Current architecture
 
@@ -194,28 +193,73 @@ The current breakthrough is that the best live behavior did **not** come from ro
 Main experiment executable. It currently exposes several surfaces:
 
 - **Offline decode**
-  - `file` — single-pass or sliding-window whole-file decode through `ditdah`
+  - `file` - single-pass or sliding-window whole-file decode through `ditdah`
 - **Live capture**
-  - `devices` — list available CPAL input devices (add `--json` for machine-readable output that includes both inputs and loopback-capable outputs)
-  - `live` — TUI-driven capture + rolling-window `ditdah` decode (legacy interactive surface)
+  - `devices` - list available CPAL input devices (add `--json` for machine-readable output that includes both inputs and loopback-capable outputs)
+  - `live` - TUI-driven capture + rolling-window `ditdah` decode (legacy interactive surface)
 - **Custom streaming decoder**
-  - `stream-file` — file-driven streaming decode with optional NDJSON event output and live `--stdin-control` config updates
-  - `stream-live` — live capture through the streaming Goertzel decoder, with optional `--record` WAV mirror and `--stdin-control`
-  - `stream-live-v2` — whole-growing-buffer `ditdah` replay. This was a valuable intermediate reference because it proved that re-decoding the whole accumulated buffer and replacing the displayed transcript was far better than sliding-window `ditdah` stitching. It is no longer the GUI default, but remains useful for A/B comparison.
-  - `stream-live-v3` — **current GUI foundation.** In-house envelope decoder that drives Decode, Labeling, Tuning, Bench, and the **VISUALIZER** tab. Goertzel envelope → percentile-based noise/signal floors → hysteresis state machine → k-means dot/dah classifier. Emits NDJSON `viz` frames (envelope curve, noise/signal floors, hysteresis bands, classified events, on-duration histogram, k-means centroids, current/locked WPM, SNR) so the operator can *see* exactly what the decoder is reacting to. Its transcript is produced by the append-only event-stream decoder in `src\append_decode.rs`: each matured `on_dit`, `on_dah`, `off_char`, and `off_word` bar is consumed once in sample-time order, appended to a raw Morse stream (`.` / `-` / `/` / `//`), and decoded into a single growing text line with real spaces for word gaps. Optional `--pin-wpm` (hard-pins the streamer's `locked_wpm` so the first decode honors the operator), `--pin-hz` (bypasses the auto pitch detector when it locks onto a noise/harmonic peak), and `--min-snr-db` (default 6.0; below this floor the decoder still emits viz frames but suppresses text — kills the "noise-locked dit-spam" failure mode where the auto-pitch detector locks onto a high-tone harmonic). The streamer also enforces a default dynamic-range bimodality gate (`(signal_floor - noise_floor) / envelope_max >= 0.55`) which catches high-variance noise that sneaks past the SNR ratio gate. When either gate fires the visualizer overlays a red `LOW SNR` badge so the suppression is visible. Live captures auto-save to `experiments\cw-decoder\captures\viz-yyyyMMdd-HHmmss.wav` for later labeling. For file replay, `stream-live-v3 --file --play` clocks decoder feeding from the output playback cursor so the bars/transcript stay aligned with the audio instead of drifting in a separate process.
+  - `stream-file` - file-driven streaming decode with optional NDJSON event output and live `--stdin-control` config updates
+  - `stream-live` - live capture through the streaming Goertzel decoder, with optional `--record` WAV mirror and `--stdin-control`
+  - `stream-live-v2` - whole-growing-buffer `ditdah` replay.
+    This reference showed that complete-buffer decode was better than sliding-window transcript stitching.
+    It is not the GUI default, but it remains useful for A/B tests.
+  - `stream-live-v3` - **current GUI foundation.**
+    This in-house envelope decoder drives Decode, Labeling, Tuning, Bench, and the **VISUALIZER** tab.
+    Its stages are Goertzel envelope, percentile floors, hysteresis, and k-means dot/dah classification.
+    It emits NDJSON `viz` frames for these values:
+    - envelope curve
+    - noise and signal floors
+    - hysteresis bands
+    - classified events
+    - on-duration histogram
+    - k-means centroids
+    - current and locked WPM
+    - SNR
+    The operator can use these values to examine decoder operation.
+    The append-only decoder in `src\append_decode.rs` supplies the transcript.
+    It consumes each mature `on_dit`, `on_dah`, `off_char`, and `off_word` bar once.
+    It appends the bars to a raw Morse stream in sample-time order.
+    The raw stream uses `.`, `-`, `/`, and `//`.
+
+    Decode produces one growing text line with spaces for word gaps.
+    `--pin-wpm` fixes the initial `locked_wpm` to the operator value.
+    `--pin-hz` bypasses automatic pitch detection.
+    Use it when the detector selects noise or a harmonic.
+    `--min-snr-db` has a default value of 6.0.
+
+    Below this value, the decoder emits visualizer frames but suppresses text.
+    This control stops noise-locked dit spam from a high-tone harmonic.
+    A dynamic-range bimodality gate also rejects high-variance noise.
+    Its default expression is `(signal_floor - noise_floor) / envelope_max >= 0.55`.
+    When either gate rejects text, the visualizer shows a red `LOW SNR` badge.
+
+    Live captures go to `experiments\cw-decoder\captures\viz-yyyyMMdd-HHmmss.wav`.
+    Use these captures for later labeling.
+    During file replay, `stream-live-v3 --file --play` uses the output playback cursor.
+    Thus, the bars and transcript stay synchronized with the audio.
 - **Causal ditdah baseline**
-  - `stream-file-ditdah` — file-driven causal whole-window `ditdah` replay
-  - `stream-live-ditdah` — live capture through the rolling-window causal baseline, with optional `--record` WAV mirror. **Deprecated** — kept only for A/B comparison; the GUI now uses the `stream-live-v3` append foundation.
+  - `stream-file-ditdah` - file-driven causal whole-window `ditdah` replay
+  - `stream-live-ditdah` - live capture through the rolling-window causal baseline, with an optional `--record` WAV mirror.
+    **Deprecated.** Use it only for A/B tests. The GUI now uses the `stream-live-v3` append foundation.
 - **Labeling helpers**
-  - `harvest-file` — find candidate "golden copy" windows by intersecting offline `ditdah` and the streaming decoder, optional `--needle` anchors
-  - `preview-window` — render a slowed WAV preview of a window for human verification
-  - `profile-window` — emit a tone-energy profile for the labeling UI's signal-profile editor
+  - `harvest-file` - find candidate "golden copy" windows by intersecting offline `ditdah` and the streaming decoder, optional `--needle` anchors
+  - `preview-window` - render a slowed WAV preview of a window for human verification
+  - `profile-window` - emit a tone-energy profile for the labeling UI's signal-profile editor
 - **Playback helper**
-  - `play-file` — play an audio file through the default output device and emit JSON progress for the GUI's inline transport
+  - `play-file` - play an audio file through the default output device and emit JSON progress for the GUI's inline transport
 - **Tone diagnostics**
-  - `probe-fisher` — sweep candidate pitches across an audio file and rank them by trial-decode Fisher score
+  - `probe-fisher` - sweep candidate pitches across an audio file and rank them by trial-decode Fisher score
 - **Cold-start + lock-stability benchmark**
-  - `bench-latency` — feed a deterministic synthetic scenario matrix (silence/noise/voice lead-ins + long-clean-CW lock-stability stress) or a real recording (`--from-file --truth --cw-onset-ms`) through the streaming decoder and report two classes of metrics: cold-start *acquisition latency* (time from CW onset to first stable-N-correct decoded run) and *lock stability* once locked (post-first-lock uptime ratio, `PitchLost` count, relock cycles, longest non-Locked gap). Headline metric is `lat_ms = t_stable_N - cw_onset_ms`. Add `--foundation` to score the append-only event-stream transcript path used by the GUI; in that mode latency-specific lock metrics are intentionally empty and the output is a transcript-quality/regression record.
+  - `bench-latency` - runs a deterministic synthetic matrix or a real recording through the streaming decoder.
+    The synthetic matrix has silence, noise, voice lead-ins, and long clean CW.
+    For a real recording, use `--from-file --truth --cw-onset-ms`.
+    The command reports cold-start acquisition latency and lock stability.
+    Acquisition latency ends at the first stable, correct run of N characters.
+    Lock metrics include uptime ratio, `PitchLost` count, relock cycles, and the longest unlocked gap.
+    The main metric is `lat_ms = t_stable_N - cw_onset_ms`.
+
+    Add `--foundation` to score the GUI append-only transcript path.
+    This mode reports transcript quality for regression tests. Its latency-specific lock metrics are empty.
 
 All `--json` and `--record` flags are what the Avalonia GUI uses to drive the engine over stdout/stderr NDJSON.
 
@@ -233,13 +277,15 @@ Current uses:
 
 ### `validate-corpus` (region path, end-to-end)
 
-Walks a directory of `*.truth.txt` sidecars, pairs each with its matching
-audio file (`.wav` preferred, then `.mp3`/`.m4a`/`.flac`), runs every
-entry through the production region-isolated decoder (`region_stream`),
-and prints a per-entry pass / character error rate / ghost-char table
-plus a summary line. Designed to close the loop between the operator-
-curated truth workflow (PR #381 Visualizer "Save Truth") and the same
-batch decode core that backs the `RegionStreamer` live commits.
+This command finds `*.truth.txt` sidecars in a directory.
+It pairs each sidecar with its audio file.
+It prefers `.wav`, then `.mp3`, `.m4a`, or `.flac`.
+It sends each entry through the production region decoder (`region_stream`).
+It prints pass status, character error rate, and ghost-character count for each entry.
+It also prints a summary.
+
+The command connects the PR #381 Visualizer "Save Truth" workflow to the batch decode core.
+`RegionStreamer` also uses this decode core for live commits.
 
 ```powershell
 # Validate every operator-saved truth pair under your local corpus root.
@@ -263,14 +309,19 @@ cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml `
     --dir "C:\path\to\cw-samples" --json
 ```
 
-Subdirectory entries are namespaced by their relative path (e.g.
-`training-set-a/cw_30wpm_abbrev`) so duplicate basenames across folders
-keep distinct ids in the output table and JSON stream. Pass
+The relative path is the namespace for a subdirectory entry.
+For example, an entry can use `training-set-a/cw_30wpm_abbrev`.
+Thus, duplicate basenames in different folders keep distinct IDs in the output table and JSON stream.
+Pass
 `--no-recursive` to limit the walk to the top-level directory.
 
 ### Stress-test harness (`scripts\stress-gen.ps1` + `scripts\stress-eval.ps1`)
 
-Generates a deterministic matrix of "stressed" copies of a clean baseline WAV via `ffmpeg`, then runs the cw-decoder over every variant and emits a degradation summary + CSV. Useful for catching regressions when changing acquisition or decoding logic, and for honestly measuring how far down the SNR ladder the current implementation can still find and decode a known signal.
+The scripts use `ffmpeg` to generate a deterministic matrix of stressed copies from a clean WAV file.
+They run cw-decoder on each variant. They write a degradation summary and a CSV file.
+
+Use the harness to find regressions in acquisition or decode logic.
+It also measures the lowest SNR at which the decoder can find and decode the known signal.
 
 The matrix currently covers (per baseline):
 
@@ -279,7 +330,7 @@ The matrix currently covers (per baseline):
 - **white noise** SNR ladder: 20, 10, 6, 3, 0 dB
 - **pink noise** SNR ladder: 20, 10, 6, 3, 0 dB (closer to band hiss)
 - **brown / red noise**: 10, 6, 3 dB (atmospheric / QRN-like)
-- **narrow IF**: 250–1100 Hz bandpass (simulates a narrow CW filter)
+- **narrow IF**: 250-1100 Hz bandpass (simulates a narrow CW filter)
 - **QRM**: steady carrier at 850 Hz mixed at -16 dB
 - **combined weak-signal presets**: `weak_pink_snr6` (-18 dB signal + pink @6 dB SNR), `weak_pink_snr3` (-24 dB + pink @3 dB SNR)
 
@@ -300,8 +351,12 @@ Generate and score:
 
 Current observed behavior on the 30 WPM youtube baseline (sender at ~30 WPM):
 
-- decoder reports **29.5 WPM** on `clean` and remains at 28–30 WPM down through the entire attenuation ladder (including -30 dB), through brown/pink/white noise SNR ≥ 6 dB, through the narrow IF, and through QRM at +250 Hz from the CW pitch
-- pitch lock starts to wander to a side-bin (~574 Hz) at pink_snr6, white_snr6, weak_pink_snr3 — these are the cases where the next experimental work (top-K candidate tracking, oracle-tone eval) should pay off
+- The decoder reports **29.5 WPM** for `clean`.
+- It stays between 28 WPM and 30 WPM through the complete attenuation ladder, including -30 dB.
+- It stays in that range with brown, pink, or white noise at SNR values of 6 dB or more.
+- It also stays in that range with the narrow IF and QRM 250 Hz from the CW pitch.
+- Pitch lock moves to a side bin near 574 Hz for `pink_snr6`, `white_snr6`, and `weak_pink_snr3`.
+- Top-K candidate tracking and oracle-tone evaluation can help these cases.
 
 Stress audio is large and reproducible from the script, so `data/cw-stress/` is gitignored. Commit only the script changes and any operator-curated `TRUTH.txt` files.
 
@@ -329,12 +384,18 @@ Recent custom-streaming changes on this branch added:
 - **adjacent-bin tone purity gate** to suppress broadband impulses (finger snaps, key clicks, splatter) at the source
 - **wide-bin sniff** (`--wide-bin-count`) to integrate energy across ±N Goertzel bins for acoustically re-captured CW
 - **force-pitch override** (`--force-pitch-hz`) that bypasses acquisition when the operator already knows the target
-- **min-pulse / min-gap dot-fraction filters** that reject sub-dot blips and fill sub-dot gaps in the keying envelope (mic-mode default off, file-mode default off, mic preset turns them on)
-- **WASAPI loopback capture** (`stream-live --loopback`) for same-machine digital playback (YouTube, browsers, local files) — separates "speaker→mic acoustic recapture" (research) from "render→loopback digital pipe" (operational)
+- **min-pulse / min-gap dot-fraction filters** reject sub-dot pulses and fill sub-dot gaps.
+  File and microphone modes disable them by default. The microphone preset enables them.
+- **WASAPI loopback capture** (`stream-live --loopback`) for same-machine digital playback (YouTube, browsers, local files) - separates "speaker→mic acoustic recapture" (research) from "render→loopback digital pipe" (operational)
 - **centroid pitch picking** as a tiebreaker so locks centre on the energy ridge instead of edge-locking on a side bin
 - **mic-mode preset** that bundles wider bins, lower purity, and the min-pulse/min-gap filters in one toggle
-- **lockstep decode-and-play** (`stream-file --decode-and-play` / GUI **DECODE+PLAY**) so the audio you hear is exactly the audio being decoded, with a single cursor controlling pause / seek / region trim
-- **confidence state machine + held-event buffer** (`hunting` / `probation` / `locked`) so decoded characters never reach the operator until the lock has cleared its first quality watchdog. Bogus locks made on voice formants or impulse noise are silently discarded; genuine CW that started streaming during the verification window is buffered and flushed in order at the moment the lock is confirmed. The GUI surfaces this as a prominent **● LOCKED / ◐ VERIFYING SIGNAL / ○ ACQUIRING TARGET** badge in the status bar.
+- **lockstep decode-and-play** (`stream-file --decode-and-play` / GUI **DECODE+PLAY**) uses one audio cursor.
+  The cursor controls decode, playback, pause, seek, and region trim.
+- **confidence state machine + held-event buffer** uses `hunting`, `probation`, and `locked` states.
+  Characters do not reach the operator until the first quality check succeeds.
+  The decoder discards false locks from voice formants or impulse noise.
+  It buffers genuine CW during verification. It flushes the events in order when it confirms the lock.
+  The GUI shows this state in the status bar.
 
 This path is the more ambitious live decoder, but it still needs better corpus-driven measurement.
 
@@ -352,9 +413,18 @@ This is intentionally simple:
 - `off_char` flushes that character
 - `off_word` flushes that character and appends a real space
 
-The raw debug representation is the same thing without Morse lookup: `.` for a dit, `-` for a dah, `/` for a character gap, and `//` for a word gap. This proved crucial because it made the decoder's output comparable to the colored Visualizer bars without being coupled to Avalonia redraws. Redraw-level logging repeated rolling windows and produced false text; event-stream logging exposed the actual heard sequence.
+The raw debug representation does not apply Morse lookup.
+It uses `.` for a dit and `-` for a dah.
+It uses `/` for a character gap and `//` for a word gap.
 
-This is now the current reference path for live decoding and regression prevention. More complex pipelines may improve the event classifier, pitch selection, preprocessing, or spacing policy, but they should preserve this append-only contract or prove a measurable improvement against it.
+This representation permits comparison with the colored Visualizer bars.
+It does not depend on Avalonia redraws.
+Redraw logging repeated rolling windows and produced false text.
+Event-stream logging showed the audio sequence.
+
+This is the reference path for live decoding and regression prevention.
+Complex pipelines can improve event classification, pitch selection, preprocessing, or spacing.
+They must preserve this append-only contract or show a measurable improvement.
 
 ### 3. Causal ditdah baseline
 
@@ -377,7 +447,7 @@ It remains a useful historical reference and comparison strategy for label-drive
 
 ## Signal processing architecture
 
-The custom streaming decoder (`src\streaming.rs`) is a chain of stages, each addressing a specific failure mode the project has hit on real off-air audio. Read top-to-bottom — each stage assumes the previous one has done its job.
+The custom streaming decoder (`src\streaming.rs`) is a chain of stages, each addressing a specific failure mode the project has hit on real off-air audio. Read top-to-bottom - each stage assumes the previous one has done its job.
 
 ```
                     raw input audio (file or capture device)
@@ -388,7 +458,7 @@ The custom streaming decoder (`src\streaming.rs`) is a chain of stages, each add
                      └───────────────┬───────────────┘
                                      ▼
                      ┌───────────────────────────────┐
-                     │   HP / LP biquad chain        │  300–1500 Hz CW band
+                     │   HP / LP biquad chain        │  300-1500 Hz CW band
                      └───────────────┬───────────────┘
                                      ▼
                 ┌────────────────────┴────────────────────┐
@@ -448,33 +518,29 @@ The custom streaming decoder (`src\streaming.rs`) is a chain of stages, each add
 
 ### Key design properties
 
-- **Two-stage detection.** Acquisition uses `trial_decode_score` (a real
-  ditdah pass on a candidate window) so we only lock on tones that
-  actually look like CW — not just strong tones. Tracking is a much
-  cheaper per-sample Goertzel + gates path so the steady-state CPU
-  cost is small.
+- **Two-stage detection.** Acquisition uses `trial_decode_score`, which performs a ditdah pass on a candidate window.
+  Thus, acquisition locks only on tones that look like CW.
+  Tracking uses a less expensive Goertzel and gate path for each sample.
+  This design keeps the steady-state CPU cost low.
 - **Acquisition-first hypothesis.** The custom decoder was originally
-  the bottleneck; it now isn't. The remaining hard cases on the
+  the bottleneck. It is not the bottleneck now. The remaining hard cases on the
   9-label corpus are dominated by **wrong-tone lock**, **late lock**,
   and **lock on noise**, not by symbol classification errors. The
   oracle-tone eval mode and the planned top-K tracker (Phase 3) target
   these directly.
-- **Confidence machine = first-class operator UX.** The decoder's
-  internal lifecycle (`Hunting` / `Probation` / `Locked`) is exposed
-  to the GUI as a coloured status badge, and char-class events are
-  gated by it. Bogus locks made on voice formants or transient impulses
-  never reach the transcript, even when the watchdog needs several
-  seconds of accumulated audio to confirm them as bogus.
+- **Confidence machine = first-class operator UX.** The GUI shows the decoder state in a colored status badge.
+  The states are `Hunting`, `Probation`, and `Locked`.
+  The state controls character events. Thus, voice and transient false locks do not reach the transcript.
+  The watchdog can take several seconds to confirm a false lock.
 - **Held-event buffer keeps probation honest.** While in `Probation`,
   decoded characters are held (not dropped). If the lock survives,
   the held buffer is flushed in order so genuine CW that started
   during the verification window is preserved. If the lock is rejected,
   the held buffer is discarded.
-- **Two acquisition surfaces, one engine.** Voice-acoustic capture
-  (mic) and digital same-machine playback (loopback) flow through the
-  same streaming decoder; the mic path layers on the wide-bin /
-  min-pulse / min-gap / lower-purity preset, while loopback uses the
-  default file-mode tuning because the audio is bit-identical to the
+- **Two acquisition surfaces, one engine.** Microphone and loopback
+  audio use the same streaming decoder. The microphone path uses the
+  wide-bin, min-pulse, min-gap, and lower-purity preset. Loopback uses
+  the default file-mode settings because its audio is identical to the
   source.
 
 ### Confidence state machine
@@ -510,15 +576,29 @@ Char-class events (`Char`, `Garbled`, `Word`, `WpmUpdate`):
 |------------|----------------------------|
 | Hunting    | Dropped at the gate (lock not even attempted yet, or just lost) |
 | Probation  | Buffered in `held_events`, awaiting verdict |
-| Locked     | Passed through unchanged; held buffer is flushed on the transition |
+| Locked     | Passed through unchanged. Held buffer is flushed on the transition |
 
 Confidence transitions emit `StreamEvent::Confidence { state }`, which serializes as `{"type":"confidence","state":"hunting|probation|locked"}` over NDJSON. The Avalonia GUI reads this on the Decode tab and updates the status badge plus colour scheme.
 
-This was added specifically in response to the YouTube reference clip (`cw_30wpm_youtube_12k.wav`) where the pre-CW voice section was producing decoded garbage like `MI U I EIE N` and the decoder was missing the actual `CQ DE K UR` because the bad voice lock had to age out via the slow steady-state watchdog. With the confidence machine: the bad lock now goes through Probation silently, the watchdog rejects it, the held buffer is discarded, and the operator sees nothing until the real lock at ~604 Hz survives its check and flushes the genuine `73 TNX RST R TU = OM FB ...` transcript.
+The YouTube reference clip `cw_30wpm_youtube_12k.wav` caused this change.
+Its pre-CW voice produced false text such as `MI U I EIE N`.
+The decoder also missed `CQ DE K UR` because the false voice lock expired slowly.
+
+The confidence machine puts the false lock into Probation without output.
+The watchdog rejects the lock and discards its held events.
+The operator sees no text until the real lock near 604 Hz passes its check.
+The decoder then flushes the genuine `73 TNX RST R TU = OM FB ...` transcript.
 
 ## GUI architecture
 
-The Avalonia app under `gui\` (titled **CW SCOPE**) is the main operator surface. It launches the Rust `cw-decoder` and `eval` binaries from `experiments\cw-decoder\target\{release,debug}\`, walking up from `AppContext.BaseDirectory` to find them — either build flavor works, with release preferred when both are present. The key constraint is that the GUI does **not** rebuild the Rust engine on its own; if no binary is found it throws with a hint to run `cargo build` (typically `--release`) in `experiments\cw-decoder` first.
+The Avalonia application in `gui\` is named **CW SCOPE**. It is the main operator interface.
+It starts the Rust `cw-decoder` and `eval` binaries.
+It searches upward from `AppContext.BaseDirectory` for `experiments\cw-decoder\target\{release,debug}\`.
+Debug and release binaries work. The GUI selects the release binary when both exist.
+
+The GUI does **not** build the Rust engine.
+If it finds no binary, it tells the operator to run `cargo build`.
+Usually, run `cargo build --release` in `experiments\cw-decoder`.
 
 The GUI is organized into three tabs: **Decode**, **Labeling**, and **Tuning**.
 
@@ -544,18 +624,47 @@ Current decode-tab workflow also includes:
 - inline audio playback with a shared transport / progress surface
 - a real-time playback signal view driven by the same broad-band profile pipeline used in labeling
 - an explicit **CURRENT TONE** readout during live decode and playback
-- a prominent confidence badge — **● LOCKED** (green), **◐ VERIFYING SIGNAL** (amber), or **○ ACQUIRING TARGET** (red) — that surfaces the streaming decoder's confidence machine to the operator. Decoded characters do not appear in the transcript until the badge is green; while the badge is amber the engine is buffering candidate output and waiting for a quality watchdog confirmation.
+- a prominent confidence badge that shows **LOCKED**, **VERIFYING SIGNAL**, or **ACQUIRING TARGET**
+  - decoded characters appear only when the badge is green
+  - while the badge is amber, the engine buffers candidate output and waits for the quality check
 - a **Mic mode** preset toggle that bundles wide-bin sniff, lower tone-purity threshold, and the min-pulse/min-gap dot filters into one click for acoustically re-captured CW
-- **WASAPI loopback** capture (`stream-live --loopback`) — for same-machine playback decode (YouTube, browsers, local files) the audio is taken from the system render endpoint instead of a microphone, bypassing the speaker→room→mic chain entirely
+- **WASAPI loopback** capture (`stream-live --loopback`) for playback on the same computer
+  - supports YouTube, browsers, and local files
+  - reads audio from the system render endpoint and bypasses acoustic microphone capture
 - an experimental **RANGE LOCK** mode for custom streaming, so live/file decode can prefer the strongest tone inside a chosen Hz window
-- an experimental **TONE PURITY** gate that compares each instantaneous target-bin power against the off-band noise bins (q25 of bins at ±150/300/500/700 Hz) at the *same* sample. A real CW tone scores 5–20+ instantaneous purity; a 5 ms broadband impulse (finger snap, key click, lightning, switching ground) lights up *all* bins together so the ratio collapses to ~1 and is rejected at the source. Default `min_tone_purity = 3.0`; set to 0 to disable. Reuses the existing noise bins (no new Goertzels), and runs *before* smoothing so the gate fires faster than the 200 ms noise smoother can equalize.
-- an optional **SHOW CHAR HZ** overlay so each decoded character can display the tone the streaming decoder had locked when it emitted that symbol; a companion **SHOW PURITY** toggle adds the per-character peak tone-purity ratio under the Hz line, so spurious characters from broadband impulses (typically `purity ~1`) are visually distinguishable from real CW (`purity 5-20+`)
-- a **FORCE PITCH (Hz)** acquisition override that locks the streaming decoder to an exact pitch instead of running auto-acquisition (0 = auto). The Fisher quality watchdog AND the confidence machine are both bypassed when forced — the decoder goes straight to Locked and stays there. Useful when the operator already knows the target tone, or as a diagnostic ("does the decoder fail because of acquisition or downstream?")
-- a **WIDE BINS** wide-bin sniff (0–8) that adds companion Goertzels at `pitch ± k * bin_width` and sums their power into the main signal estimate. `0` = single 40 Hz bin (default). `N=2` ≈ 200 Hz of integration bandwidth. Built specifically for **acoustically re-captured CW** (speaker → mic round-trip) where speaker frequency response, room reverb, and slight pitch drift smear the tone across many Goertzel bins; without this gate a single 40 Hz slice catches only ~30% of the signal energy and the keying envelope flickers within elements. CLI: `--wide-bin-count <N>` on `stream-file` and `stream-live`. NDJSON: `"wide_bin_count": <N>`. Combine with `--force-pitch-hz` for live mic capture: e.g. `--force-pitch-hz 620 --wide-bin-count 2`.
+- an experimental **TONE PURITY** gate
+  - compares target-bin power with off-band noise bins for the same sample
+  - uses q25 of bins at offsets of 150, 300, 500, and 700 Hz
+  - gives a real CW tone an instantaneous purity value from 5 to more than 20
+  - gives a broadband impulse a value near 1 and rejects it
+  - uses `min_tone_purity = 3.0` by default
+  - uses a value of 0 to disable the gate
+  - reuses existing noise bins and runs before smoothing
+- an optional **SHOW CHAR HZ** overlay that shows the locked tone for each character
+  - **SHOW PURITY** adds the peak tone-purity ratio below the frequency
+  - broadband impulses usually have `purity ~1`
+  - real CW usually has `purity 5-20+`
+- a **FORCE PITCH (Hz)** acquisition override that locks the streaming decoder to an exact pitch instead of running auto-acquisition (0 = auto). The Fisher quality watchdog AND the confidence machine are both bypassed when forced - the decoder goes straight to Locked and stays there. Useful when the operator already knows the target tone, or as a diagnostic ("does the decoder fail because of acquisition or downstream?")
+- a **WIDE BINS** control from 0 to 8
+  - adds Goertzel bins at `pitch ± k * bin_width`
+  - sums their power into the main signal estimate
+  - uses one 40 Hz bin when the value is 0
+  - gives approximately 200 Hz of integration bandwidth when `N=2`
+  - supports CW audio that passes from a speaker through a room to a microphone
+  - compensates for speaker response, room reverberation, and small pitch changes
+  - prevents envelope flicker when one 40 Hz bin captures only about 30% of the signal energy
+  - uses CLI option `--wide-bin-count <N>` on `stream-file` and `stream-live`
+  - uses NDJSON field `"wide_bin_count": <N>`
+  - can be combined with `--force-pitch-hz` for live microphone capture
+  - example: `--force-pitch-hz 620 --wide-bin-count 2`
 
-The tone-purity gate replaces an earlier "recent-audio re-detection" guard that ran at character emission time. That earlier guard could not catch transient impulses because by the time it re-ran pitch detection the impulse was already history; the new gate runs per Goertzel power sample and ANDs with the existing amplitude / smoothed-SNR gates so a sample only counts as key-down when the locked bin is meaningfully louder than its closely-spaced neighbors.
+The tone-purity gate replaces a recent-audio detection guard that ran when a character was emitted.
+The earlier guard did not detect a completed transient impulse.
+The new gate runs for each Goertzel power sample.
+It operates with the amplitude and smoothed-SNR gates.
+A sample is key-down only when the locked bin is sufficiently louder than adjacent bins.
 
-That replay path is useful for answering: _“what did the live path think happened, and what does an offline rerun on the same captured audio think happened?”_
+Use replay to compare the live result with an offline result for the same captured audio.
 
 ### Labeling tab
 
@@ -581,9 +690,13 @@ Signal-profile rendering now also works without a usable pitch lock by falling b
 Harvest caching is now both:
 
 - in-memory while you stay in the current GUI session, and
-- persisted under the local app-data cache so previously harvested files reopen with their cached candidate list after restarting the app, unless you explicitly click **HARVEST** again.
+- stored in the local application-data cache
 
-The strong-signal W1AW path also now uses warmup-aware harvest windows for the streaming side, so short-window harvest is no longer forced into whole-file fallback just because the streaming decoder starts cold on every 4-second slice.
+After a restart, a harvested file opens with its cached candidate list.
+Select **HARVEST** again to replace the list.
+
+The strong-signal W1AW path now uses warmup-aware harvest windows for streaming.
+Thus, a cold decoder on each four-second slice does not force a complete-file fallback.
 
 ### Tuning tab
 
@@ -606,7 +719,7 @@ That gives the branch an honest loop:
 
 ## Labeling model and whether it still makes sense
 
-Yes — **the labeling approach still makes sense and is still worth pursuing**.
+Yes - **the labeling approach still makes sense and is still worth pursuing**.
 
 The current exact-window + clipped-edge scheme has already paid off because it separated two very different classes of problems:
 
@@ -623,7 +736,7 @@ With the labels, we can already see that:
 
 That said, the current label schema is **necessary but not sufficient** for the hardest recordings.
 
-The next label additions should be optional, not a schema reset:
+Make the next label additions optional. Do not reset the schema:
 
 - target tone estimate / confidence
 - multiple-signal flag
@@ -710,15 +823,13 @@ to drive two operator-facing surfaces:
 
 - **CW WPM auto-fill**: when a CW QSO is logged, the time-weighted mean WPM
   over the QSO start→end window is written to `QsoRecord.cw_decode_rx_wpm`.
-- **F9 CW Stats pane**: live overlay showing the current confidence/lock
-  state, signal pitch (Hz), instantaneous WPM, last decoded characters and
-  the most recent garbled symbol. Driven entirely by the same NDJSON stream
-  the CW Scope tooling uses.
+- **F9 CW Stats pane**: This live overlay shows confidence, lock state, signal pitch, WPM, recent characters, and the last garbled symbol.
+  The CW Scope tools and this pane use the same NDJSON stream.
 
-The episode boundary for both surfaces is **operator activity, not decoder
-lock**: the QSO clock starts the moment the operator first types a callsign
-and ends on save or clear. The decoder process itself runs continuously
-whenever Radio Monitor is enabled.
+**Operator activity, not decoder lock, defines the episode boundary.**
+The QSO clock starts when the operator first types a callsign.
+It ends when the operator saves or clears the QSO.
+The decoder runs continuously while Radio Monitor is enabled.
 
 ### Advanced diagnostics mode
 
@@ -744,9 +855,8 @@ captured WAV over the same time window. Sample form:
 cw-decoder decode-and-play --json --start 12.4 --end 47.9 "session.wav"
 ```
 
-Use this to compare what the operator saw in the status bar against what the
-decoder would emit in a deterministic offline replay — the canonical way to
-debug round 1 WPM regressions without trying to reproduce live propagation.
+Use this command to compare the status-bar value with a deterministic offline replay.
+This method finds round 1 WPM regressions without a reproduction of live propagation.
 
 WAV size is roughly 330 MB/hour (48 kHz mono, 16-bit) and is not rotated in
 round 1. Disable diagnostics or prune `%LOCALAPPDATA%\QsoRipper\diagnostics`
@@ -754,12 +864,11 @@ manually between debug sessions.
 
 ### WPM emission smoothing (#326)
 
-The first live capture made with the diagnostics bundle revealed a failure
-mode in `current_wpm()`: a sustained signal degradation produced a
-monotonically drifting raw WPM (11.3 → 6.75 over ~6 s on a real on-air QSO)
-while the pitch lock was still nominally healthy. The pitch-quality
-watchdog only fired ~6 s after the WPM had already collapsed, so the
-operator-facing speed dropped from a correct ~13 WPM to ~6 WPM mid-QSO.
+The first diagnostics capture found a failure in `current_wpm()`.
+During a sustained signal degradation, raw WPM decreased from 11.3 to 6.75 in approximately six seconds.
+The pitch lock continued to report a good condition.
+The pitch-quality watchdog operated approximately six seconds after the WPM decrease.
+Thus, the displayed speed decreased from approximately 13 WPM to 6 WPM during the QSO.
 
 `StreamingDecoder` now emits a smoothed value instead of the raw
 `current_wpm()` in `StreamEvent::WpmUpdate`:
@@ -768,21 +877,28 @@ operator-facing speed dropped from a correct ~13 WPM to ~6 WPM mid-QSO.
    single degenerate calibration windows where one mis-classified
    character produces a wild dot-length estimate.
 2. **Rate cap of `WPM_MAX_REL_DELTA_PER_EMIT` (=3%) per emit.** Real
-   operators cannot physically alter keying speed faster than this between
-   adjacent character emits; anything larger is the dit-cluster
-   calibration tracking the noise instead of the operator. Genuine WPM
-   changes still converge in ~3 s; a crashing calibration gets stretched
-   far enough that the watchdog drops the lock first.
+   operators cannot change keying speed by more than this between adjacent
+   characters. A larger change shows that dit-cluster calibration follows
+   noise instead of the operator. Genuine WPM changes converge in
+   approximately three seconds. A calibration failure becomes slow enough
+   for the watchdog to drop the lock first.
 
-The internal `current_wpm()` is unchanged and is still what end-of-run
-summaries and the harvest output use. Replaying the original captured
-session through the fixed decoder shows the displayed WPM staying above
-9.5 WPM across the same crash window where the pre-fix value bottomed at
-6.75 WPM.
+The internal `current_wpm()` is unchanged.
+End-of-run summaries and harvest output continue to use it.
+In a replay of the captured session, displayed WPM stays above 9.5.
+Before the fix, it decreased to 6.75 in the same interval.
 
 ## Current labeled corpus
 
-Label files live at the **repo root** under `data\cw-samples\`, not under `experiments\cw-decoder\`. `--all-labels` resolves `data\cw-samples\` relative to the current working directory, so it works fine when `eval` is invoked from the repo root and silently finds nothing when invoked from elsewhere. The examples below use `--labels-dir data\cw-samples` to make the path explicit, but `--all-labels` is equivalent when the cwd is the repo root.
+Label files are under `data\cw-samples\` at the repository root.
+They are not under `experiments\cw-decoder\`.
+
+`--all-labels` resolves `data\cw-samples\` from the current working directory.
+It finds the labels when you run `eval` from the repository root.
+It can find no labels when you run the command from a different directory.
+
+The examples use `--labels-dir data\cw-samples` to make the path clear.
+From the repository root, `--all-labels` gives the same result.
 
 Current corpus files and label counts:
 
@@ -806,7 +922,9 @@ The corpus currently has **9 labels**. The safest command form is explicit about
 cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml --bin eval -- --labels-dir data\cw-samples
 ```
 
-`--all-labels` is equivalent when run from the repo root, but it resolves `data\cw-samples\` relative to the current working directory and is easier to misuse from `experiments\cw-decoder`.
+From the repository root, `--all-labels` gives the same result.
+It resolves `data\cw-samples\` from the current working directory.
+Do not run it from `experiments\cw-decoder`.
 
 Current exact-window score:
 
@@ -823,7 +941,9 @@ Interpretation:
 
 - exact-window scoring still tells us what the classifier can do when the target audio is bounded correctly
 - full-stream scoring tells us that acquisition, segmentation, gap maturity, and finalization are the hard live problems
-- the append-only event-stream foundation is the current best live-facing compromise because it removes rolling-window string replacement/stitching from the critical path while staying directly measurable against labels and replay transcripts
+- the append-only event-stream foundation is the best current live path
+- it removes rolling-window replacement and stitching from the critical path
+- labels and replay transcripts can measure its results directly
 
 ### Append-foundation smoke evidence
 
@@ -844,13 +964,17 @@ On synthetic PARIS bench scenarios the foundation clean/noise transcripts are re
 ## What we know with reasonable confidence
 
 1. **The simple append-event stream is working much better than the rolling-window transcript machinery.**
-   The important shift was moving from "decode a rolling window, then stitch text" to "classify bars, then append matured events once." That removes a whole class of ghost characters, repeated prefixes, disappearing/replacing text, and overlapping-window artifacts.
+   The new method classifies bars and appends each mature event once.
+   The old method decoded a rolling window and then joined its text.
+   The new method removes ghost characters, repeated prefixes, text replacement, and overlapping-window artifacts.
 2. **Visualizer truth is event truth, not redraw truth.**
    The colored bars are a rolling display. Logging every redraw records repeated partial windows (`..`, then `..-`, then `..- ...`) and creates fake Morse. The useful debug layer is the audio-time event stream beneath the redraw.
 3. **Spacing is now visible and testable.**
-   The raw stream (`.` / `-` / `/` / `//`) made it obvious when a word gap was being emitted where a character gap was expected, for example `...//.-` (`S A`) instead of `.../.-` (`SA`). Future spacing work can now target that exact failure instead of guessing from final text.
+   The raw stream (`.` / `-` / `/` / `//`) shows incorrect word gaps.
+   For example, it shows `...//.-` (`S A`) instead of `.../.-` (`SA`).
+   Future spacing work can target this failure directly.
 4. **Audio/playback synchronization matters.**
-   The old Visualizer file path decoded in one process and played audio in another, so visual bars could lead or lag what the operator heard. `stream-live-v3 --file --play` fixes this by using one process and feeding the decoder from the output playback cursor.
+The old Visualizer file path used separate decode and audio processes. Thus, the visual bars did not always agree with the audio. `stream-live-v3 --file --play` uses one process. It sends the output playback cursor to the decoder.
 5. **Hard contest audio is still the frontier.**
    The foundation does not magically solve target isolation, voice lead-ins, same-band QRM, or weak/noisy spacing. It gives us a stable place to measure those failures without rolling-window artifacts obscuring them.
 
@@ -864,15 +988,16 @@ The append-only path is now the default contract:
 audio -> envelope/viz events -> append event decoder -> transcript
 ```
 
-Regressions should be caught at several levels:
+Use several test levels to detect regressions:
 
-1. **Unit level:** `AppendEventDecoder` tests should cover repeated `viz` frames, character gaps, word gaps, and final pending-character flush.
+1. **Unit level:** `AppendEventDecoder` tests must cover repeated `viz` frames, character gaps, word gaps, and the final pending-character flush.
 2. **CLI level:** `stream-live-v3 --json` transcript events must keep `transcript` / `text` as the append-foundation text, with `cursor_transcript` only as diagnostics.
-3. **GUI level:** Decode, Labeling, Bench, Tuning, and Visualizer should default to or explicitly include `foundation`; any future mode should be labeled as experimental.
-4. **Corpus level:** every future algorithm should report against `--labels-dir data\cw-samples` and include `foundation` in strategy sweeps.
-5. **Bench level:** `bench-latency --foundation --json` should remain a quick smoke that emits recognizable transcript rows before deeper latency metrics are trusted.
+3. **GUI level:** Decode, Labeling, Bench, Tuning, and Visualizer must use or include `foundation`. Identify each future mode as experimental.
+4. **Corpus level:** Each future algorithm must report against `--labels-dir data\cw-samples`. Each strategy sweep must include `foundation`.
+5. **Bench level:** Keep `bench-latency --foundation --json` as a quick test. It must produce recognizable transcript rows before detailed latency tests.
 
-The rule of thumb: improvements may change how events are detected, filtered, or classified, but they should not reintroduce rolling text stitching as the primary live transcript path.
+Improvements can change event detection, filtering, or classification.
+They must not restore rolling text stitching as the primary live transcript path.
 
 ### Keep pursuing labeling, but evolve it carefully
 
@@ -887,7 +1012,7 @@ Instead:
 
 ### Use foundation-first evaluation
 
-For corpus work, the current order should stay:
+For corpus work, keep the current order:
 
 1. append-foundation score / replay transcript
 2. exact-window label score as the upper-bound classifier check
@@ -916,17 +1041,25 @@ But every improvement must be measured back against:
 ## Recommended next steps
 
 1. **Promote foundation regression checks.**
-   Add/keep tests around `src\append_decode.rs`, require `foundation` in strategy sweeps, and preserve `raw_morse`/`cursor_transcript` diagnostics so future changes can explain differences instead of only showing final text.
+   Keep tests for `src\append_decode.rs`.
+   Require `foundation` in strategy sweeps.
+   Preserve `raw_morse` and `cursor_transcript` diagnostics.
+   These diagnostics must explain changes, not only show final text.
 2. **Quantify spacing failures.**
-   The current foundation exposed word-gap mistakes cleanly. The next useful scorer should classify failures as character substitution vs char-gap vs word-gap errors.
+   The current foundation clearly showed word-gap errors.
+   The next scorer must classify character substitution, character-gap, and word-gap errors.
 3. **Close the acquisition gap after voice/noise lead-ins.**
-   Synthetic bench results show the append foundation is honest: clean/noise PARIS is recognizable, but voice lead-ins still create pre-target garbage. That points to better target detection and lock admission, not transcript stitching.
+   Synthetic test results show that the append foundation gives an accurate result.
+   It recognizes clean and noisy PARIS, but voice lead-ins still cause incorrect initial text.
+   Improve target detection and lock admission. Do not change transcript stitching.
 4. **Layer preprocessing carefully.**
    Real-radio bandpass+compander preprocessing can help dramatically, but it previously broke clean synthetic CW in some paths. Treat preprocessing as an optional layer above the foundation with explicit A/B coverage.
 5. **Add richer label metadata for hard cases.**
-   Target tone, multi-signal flag, negative/no-copy regions, and gap annotations will make future experiments much easier to judge.
+   Add target tone, a multi-signal flag, negative regions, no-copy regions, and gap annotations.
+   These values will help the review of future experiments.
 6. **Top-K candidate tracker.**
-   Replace single-pitch lock with a CFAR-scored ridge tracker over 350-1500 Hz so multi-signal contest audio can present per-track candidates instead of one winner-takes-all lock.
+   Replace single-pitch lock with a CFAR-scored ridge tracker over 350-1500 Hz.
+   Show separate track candidates for contest audio that contains multiple signals.
 
 Current evidence suggests:
 
@@ -954,7 +1087,7 @@ If the goal is custom-streaming research:
 
 ## Build and run
 
-The Avalonia GUI launches whichever Rust binaries it finds under `experiments\cw-decoder\target\{release,debug}\` (release preferred) but does **not** rebuild them. A debug build is enough to make the GUI run; release is recommended for realistic decode latency. Build the engine first, then the GUI:
+The Avalonia GUI launches whichever Rust binaries it finds under `experiments\cw-decoder\target\{release,debug}\` (release preferred) but does **not** rebuild them. A debug build is enough to make the GUI run. Release is recommended for realistic decode latency. Build the engine first, then the GUI:
 
 ```powershell
 cargo build --release --manifest-path experiments\cw-decoder\Cargo.toml
@@ -1019,7 +1152,10 @@ Probe likely target tones by Fisher score:
 cargo run --release --manifest-path experiments\cw-decoder\Cargo.toml -- probe-fisher data\cw-samples\k5zd-zs4tx-80m-qso.mp3 --min-hz 350 --max-hz 1500 --step-hz 10 --top 8
 ```
 
-Run the cold-start + lock-stability benchmark on the synthetic scenario matrix (silence/noise/voice/long-clean-CW lead-ins; latency `lat_ms = t_stable_N - cw_onset_ms`, plus post-lock uptime / drops / relock cycles / longest non-Locked gap):
+Run the cold-start and lock-stability benchmark on the synthetic scenario matrix.
+The matrix includes silence, noise, voice, and long-clean-CW lead-ins.
+It reports `lat_ms = t_stable_N - cw_onset_ms`.
+It also reports post-lock uptime, drops, relock cycles, and the longest non-Locked gap.
 
 ```powershell
 .\experiments\cw-decoder\target\release\cw-decoder.exe bench-latency
@@ -1042,7 +1178,7 @@ Compare two configurations by tagging each run with `--label`. Combine with `--j
 .\experiments\cw-decoder\target\release\cw-decoder.exe bench-latency --label no-purity   --purity 0 --json > bench-no-purity.ndjson
 ```
 
-Run the append-foundation bench smoke. This records transcript quality for the GUI foundation; latency and lock fields are intentionally empty in this mode:
+Run the append-foundation bench smoke. This records transcript quality for the GUI foundation. Latency and lock fields are intentionally empty in this mode:
 
 ```powershell
 .\experiments\cw-decoder\target\release\cw-decoder.exe bench-latency --foundation --json > bench-foundation.ndjson
@@ -1069,22 +1205,42 @@ The variant matrix is intentionally tiered:
 
 | Tier | Variants | What stresses the decoder |
 |---|---|---|
-| baseline | `clean`, `weak`, `qrn`, `qsb`, `weak_qsb` | mild SNR / fade — decoder should pass cleanly |
-| extreme | `extreme_qrn`, `crushed`, `deep_qsb`, `buried` | heavy brown noise (mostly killed by the 300 Hz HP) + deep slow QSB; `buried` combines all three and is where the decoder first cracks |
-| harsh   | `harsh_white`, `inband_qrm`, `chaos` | white / CW-band-bandpassed noise the front end *cannot* filter away; locks acquire instantly on the right pitch but symbol classification fails — this is where the decoder's downstream gating becomes the bottleneck rather than acquisition |
+| baseline | `clean`, `weak`, `qrn`, `qsb`, `weak_qsb` | mild SNR or fade. The decoder must pass. |
+| extreme | `extreme_qrn`, `crushed`, `deep_qsb`, `buried` | heavy brown noise (mostly killed by the 300 Hz HP) + deep slow QSB. `buried` combines all three and is where the decoder first cracks |
+| harsh   | `harsh_white`, `inband_qrm`, `chaos` | white / CW-band-bandpassed noise the front end *cannot* filter away. Locks acquire instantly on the right pitch but symbol classification fails - this is where the decoder's downstream gating becomes the bottleneck rather than acquisition |
 
-The `harsh_white` / `inband_qrm` / `chaos` variants currently expose a real weakness: even with a healthy lock and a passed Fisher confidence check, the keying envelope chatters in dense in-band noise and the ditdah classifier emits long runs of garbage characters. Improving the `false_chars_before_stable` metric on these three is the next concrete bench target. Tracked in [#320](https://github.com/rtreit/qsoripper/issues/320).
+The `harsh_white`, `inband_qrm`, and `chaos` variants show a decoder weakness.
+The keying envelope chatters in dense in-band noise, although lock and Fisher confidence are good.
+The ditdah classifier then emits long groups of incorrect characters.
+
+The next bench target is a better `false_chars_before_stable` value for these variants.
+Issue [#320](https://github.com/rtreit/qsoripper/issues/320) tracks this work.
 
 ### Downstream classifier hardening for #320 (chatter-merge + duration sanity + rescue suppression)
 
-The first hysteresis-only patch killed the long ghost-character stream on `harsh_white` but did not change the underlying truth: the dense-noise variants chatter the keying envelope, and the dot/dah classifier was happy to interpret the chatter as a stream of `E`s and `T`s. A second pass landed four cooperating fixes (all opt-in, all exposed via CLI / JSON config / bench script):
+The first hysteresis-only patch stopped the long ghost-character stream on `harsh_white`.
+It did not stop envelope chatter in dense noise.
+The dot/dah classifier interpreted this chatter as groups of `E` and `T`.
+
+A second change added four related fixes.
+All fixes are optional and available through the CLI, JSON configuration, and bench script.
 
 1. **Hard ON-duration sanity gate** (always on). After the dot length is known, ON intervals shorter than `0.4 · dot` or longer than `4.8 · dot` are dropped *and* the in-progress letter is cleared. This stops both threshold chatter from being classified as a dit and giant QRM blobs from being classified as a dah. Tracked by the `invalid_on_duration_dropped` counter.
-2. **Single-element rescue suppression**. The previous code rescued any `valid_morse` letter when the rhythm gate was closed, which let single-element `E` (`.`) and `T` (`-`) ghosts leak through every short blip. The rescue is now restricted to multi-element patterns, gated by `RhythmGate::was_recently_mature`. Tracked by `single_element_rescue_suppressed`.
-3. **Real merge for `min_gap_dot_fraction`**. Previously a short OFF was just dropped, leaving the surrounding ON runs to be classified separately (so a real dah broken by a tiny noise dip could become `. .` instead of `-`). The new sanitizer (`sanitize_interval` in `streaming.rs`) actually fuses the surrounding ON intervals into one element before classification. Tracked by `short_gaps_bridged` and `on_runs_merged`.
+2. **Single-element rescue suppression**. Previously, the code rescued all `valid_morse` letters when the rhythm gate was closed.
+   Thus, short pulses produced false `E` (`.`) and `T` (`-`) characters.
+   Rescue now applies only to multi-element patterns and uses `RhythmGate::was_recently_mature`.
+   The `single_element_rescue_suppressed` counter tracks this action.
+3. **Real merge for `min_gap_dot_fraction`**. Previously, the code dropped a short OFF interval.
+   It then classified the adjacent ON intervals separately.
+   Thus, a noise gap in a dah produced `. .` instead of `-`.
+   The `sanitize_interval` function in `streaming.rs` now combines adjacent ON intervals before classification.
+   The `short_gaps_bridged` and `on_runs_merged` counters track this action.
 4. **Hysteresis wired through every streaming path**. `--hysteresis-fraction` is now accepted by `cw-decoder stream-file`, `stream-live`, `decode-and-play`, `bench-latency`, and `eval` (previously only `bench-latency` and JSON-stdin took it). The `bench-30wpm.ps1` script gained `-Hysteresis`, `-MinGap`, and `-MinPulse` parameters so the full sweep is one command.
 
-Bench JSON now also carries a `decoder_counters` block (`raw_edges_total`, `short_pulses_dropped`, `short_gaps_bridged`, `on_runs_merged`, `invalid_on_duration_dropped`, `single_element_rescue_suppressed`, `chars_emitted`, etc.) so a future tuning pass can prove a config improves CER instead of just suppressing output.
+Bench JSON now includes a `decoder_counters` block.
+It includes `raw_edges_total`, `short_pulses_dropped`, `short_gaps_bridged`, and `on_runs_merged`.
+It also includes `invalid_on_duration_dropped`, `single_element_rescue_suppressed`, and `chars_emitted`.
+These values show whether a configuration improves CER or only suppresses output.
 
 Best-known bench config on the 12-variant matrix is `-Hysteresis 0.3 -MinGap 0.2 -MinPulse 0.3`:
 
@@ -1100,26 +1256,51 @@ Best-known bench config on the 12-variant matrix is `-Hysteresis 0.3 -MinGap 0.2
 | inband_qrm    | 0              | 0                 | (never stable)  | (never stable)     |
 | chaos         | 0              | 0                 | (never stable)  | (never stable)     |
 
-So the four-patch combination reduces ghost output across the whole baseline tier (zero on most, one on the two QSB-heavy variants) without regressing latency, and it completely silences the harsh-tier ghost flood. The remaining gap — getting `harsh_white` / `inband_qrm` / `chaos` to a *stable* lock at all — is no longer a downstream-classifier problem; it is acquisition under continuous in-band carriers, which is what the next iteration (CFAR-style local-contrast detection or envelope-against-slow-carrier-floor) needs to address. The acceptance criteria in #320 are still not fully met, but the ghost-character class of failure that the issue opened with is resolved.
+The four fixes reduce ghost output across the complete baseline tier without a latency regression.
+Most variants have zero ghost characters. The two QSB-heavy variants have one.
+The fixes also stop the harsh-tier ghost flood.
+
+The remaining problem is stable acquisition for `harsh_white`, `inband_qrm`, and `chaos`.
+Continuous in-band carriers cause this problem, not the downstream classifier.
+The next test must examine CFAR local-contrast detection or an envelope against a slow carrier floor.
+
+The changes do not meet all acceptance criteria in #320.
+They do resolve the initial ghost-character failure.
 
 ### Opt-in CFAR keying (#322)
 
-A first cut of the CFAR keying idea ships behind an opt-in flag. With `--cfar-keying` (or `-CfarKeying` in `bench-30wpm.ps1`) the on/off threshold state machine is fed the dimensionless ratio `smoothed / noise` instead of raw `smoothed` Goertzel power, and the global `snr_ok` gate is bypassed (the rolling-quantile threshold over the ratio supplies its own discrimination). This is the only per-frame variant from the #322 experiment matrix that produced any stable transcript on `harsh_white` (stable @72.9 s with 38 ghost characters before lock). It costs the `clean` and `qsb` scenarios in exchange, so the flag stays off by default; the production decoder behavior across all 12 baseline scenarios is unchanged.
+The first CFAR keying implementation is available through an optional flag.
+Use `--cfar-keying`, or use `-CfarKeying` in `bench-30wpm.ps1`.
+
+This mode sends the dimensionless ratio `smoothed / noise` to the on/off threshold state machine.
+It does not use raw `smoothed` Goertzel power.
+It bypasses the global `snr_ok` gate.
+The rolling-quantile threshold for the ratio supplies its own discrimination.
+
+This was the only per-frame variant in the #322 matrix that produced a stable `harsh_white` transcript.
+It became stable at 72.9 seconds after 38 ghost characters.
+However, it causes regressions in the `clean` and `qsb` scenarios.
+Therefore, the flag is off by default.
+Production behavior is unchanged for all 12 baseline scenarios.
 
 | Mode | PASS | WARN | FAIL | Total ghost | `harsh_white` |
 | --- | --- | --- | --- | --- | --- |
 | default (no flag) | 6 | 3 | 3 | 2 | no stable |
 | `-CfarKeying` | 5 | 3 | 4 | 42 | **stable @72.9 s** |
 
-The empirical conclusion (recorded on issue #322): per-frame normalization alone cannot crack the harsh tier without regressing the clean tier. The `--cfar-keying` substrate is the foundation for the next iteration — soft element-window matched scoring that integrates the ratio metric over candidate ~1-dot, ~3-dot, and ~7-dot windows once the dot estimate is primed.
+Issue #322 records the result.
+Per-frame normalization alone cannot decode the harsh tier without a regression in the clean tier.
+
+The next iteration will use `--cfar-keying` as its base.
+It will apply soft matched scoring to candidate one-dot, three-dot, and seven-dot windows after the initial dot estimate.
 
 ## Repo-local artifacts
 
-- `gui-screenshot*.png` — historical GUI screenshots tracking visual iteration on the Decode tab
-- `screenshots\sensitivity-panel.png` — close-up of the sensitivity / threshold panel
-- `target\` — local Cargo build output (debug + release) for `cw-decoder` and `eval`
-- `gui\bin\`, `gui\obj\` — local .NET build output for the Avalonia GUI
-- `bench-runs\` — per-label JSON results from `bench-30wpm.ps1`
-- `artifacts\run\cw-debug-bars-*.txt` — Visualizer append-debug raw Morse streams (`.` / `-` / `/` / `//`) flushed when a clip stops
+- `gui-screenshot*.png` - historical GUI screenshots tracking visual iteration on the Decode tab
+- `screenshots\sensitivity-panel.png` - close-up of the sensitivity / threshold panel
+- `target\` - local Cargo build output (debug + release) for `cw-decoder` and `eval`
+- `gui\bin\`, `gui\obj\` - local .NET build output for the Avalonia GUI
+- `bench-runs\` - per-label JSON results from `bench-30wpm.ps1`
+- `artifacts\run\cw-debug-bars-*.txt` - Visualizer append-debug raw Morse streams (`.` / `-` / `/` / `//`) flushed when a clip stops
 
-These are not committed-meaningful build artifacts; they exist to make the GUI runnable without an extra build step on the developer machine.
+These are not committed-meaningful build artifacts. They exist to make the GUI runnable without an extra build step on the developer machine.

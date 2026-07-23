@@ -1,4 +1,4 @@
-# Kaggle Morse Learning Machine Challenge v2 — Baseline (2026-05-09)
+# Kaggle Morse Learning Machine Challenge v2 - Baseline (2026-05-09)
 
 First QsoRipper CW decoder submission to the public Kaggle leaderboard for the
 [Morse Learning Machine Challenge v2](https://www.kaggle.com/competitions/morse-learning-machine-challenge-v2).
@@ -16,12 +16,12 @@ First QsoRipper CW decoder submission to the public Kaggle leaderboard for the
 | Submission ID | 52489975 |
 
 Lower mean Levenshtein distance is better. There is no published golden
-baseline for the v2 dataset yet; this number anchors all future improvements.
+baseline for the v2 dataset yet. This number anchors all future improvements.
 
 ## What was decoded
 
 The competition ships 200 unlabeled WAVs (`cw001.wav` … `cw200.wav`) and asks
-for one transcript per file. There is **no training set** with truth — scoring
+for one transcript per file. There is **no training set** with truth - scoring
 is leaderboard-only against the hidden ground truth.
 
 Decoder used: `experiments/cw-decoder/target/release/cw-decoder.exe stream-region --file <wav> --json --no-realtime`.
@@ -37,18 +37,18 @@ synthetic adversarial suite + bake-off identified:
   band, or sub-region durations were rejected by `min_region_s`. Examples:
   cw187, cw189, cw190.
 - **Ghost/noise expansions**: short bursts decoded as long noisy `E/T/I/M`
-  cascades (e.g. cw197 `'O1T 0MD9 94WWWO B6 Z'`).
+  cascades (for example cw197 `'O1T 0MD9 94WWWO B6 Z'`).
 - **Leading-character drops** (the WA6MOW class from training-set-a): clean
-  callsigns recovered with one or two leading letters chopped, e.g. cw185
+  callsigns recovered with one or two leading letters chopped, for example cw185
   `'EUXILIARN'` (probably "AUXILIARY").
-- **Strong long-form CW recovered well**: cw194, cw195, cw196, cw198 each
-  produce 50+ char readable English, suggesting the steady-state portion of
-  the engine is healthy and the loss is concentrated at edges and weak files.
+- **Strong long-form CW recovered well**: cw194, cw195, cw196, and cw198 each
+  produce more than 50 readable characters. The steady-state engine is healthy.
+  Most loss occurs at signal edges and in weak files.
 
 The 20.5% "no transcript at all" rate is the single biggest concrete win
-available — every empty row is currently scoring `len(truth)` in Levenshtein.
-A naive "always emit something" lower-bound on those 41 files would meaningfully
-move the public score even without changing the engine.
+available - every empty row is currently scoring `len(truth)` in Levenshtein.
+A naive "always emit something" lower limit on those 41 files can improve the
+public score without an engine change.
 
 ## How to reproduce
 
@@ -69,21 +69,21 @@ $env:KAGGLE_API_TOKEN = (Get-Content .env | Select-String '^KAGGLE_API_TOKEN=').
 In priority order (matching the bake-off direction in
 `docs/experiments/cw-decoder-bakeoff-2026-05.md`):
 
-1. **Reduce empty-transcript rate.** Lower
-   `RegionStreamConfig::min_tonal_prominence_ratio` and `min_region_s` for the
-   Kaggle bench specifically, OR add a "best guess from raw envelope" fallback
-   when the region pipeline produces nothing. Goal: <5% empty.
+1. **Reduce the empty-transcript rate.**
+   Lower `RegionStreamConfig::min_tonal_prominence_ratio` and `min_region_s` for the Kaggle test.
+   Alternatively, add a raw-envelope estimate when the region pipeline produces no output.
+   The target empty rate is less than 5 percent.
 2. **Hard-stack Viterbi + elem-gate** (the recommended next ensemble move from
-   PR #410's discussion). Should attack the ghost-cascade class directly.
+   PR #410's discussion). This change must correct the ghost-cascade class directly.
 3. **Backward re-decode for warmup losses.** WA6MOW-class leading-character
    drops dominate the partial-callsign failures here too.
 4. **Lower SNR / off-pitch sweep**. Several empty files appear to have
    off-band pitch or weak signal. Widening the pitch search range or using a
-   coarser threshold on a second pass should rescue them.
+   coarser threshold on a second pass can correct them.
 
 ## Files in this baseline run
 
-- `experiments/cw-decoder/scripts/kaggle_morse_v2/submission.csv` — the actual
+- `experiments/cw-decoder/scripts/kaggle_morse_v2/submission.csv` - the actual
   uploaded submission (200 rows, regenerable).
-- `experiments/cw-decoder/scripts/kaggle_morse_v2/manifest.jsonl` — file index.
+- `experiments/cw-decoder/scripts/kaggle_morse_v2/manifest.jsonl` - file index.
 - Submission ID 52489975 on Kaggle ledger.

@@ -19,7 +19,7 @@ The QRZ Logbook API provides an HTTP REST interface for external programs to int
 - Every QSO record has a unique integer **`logid`**.
 - Every logbook has a unique integer **`bookid`** and belongs to a specific QRZ member.
 - A logbook serves exactly **one callsign**. Every character in a callsign is significant, including portable/mobile identifiers. For example, `XX1XX` and `XX1XX/M` are separate callsigns requiring separate logbooks.
-- When a user changes callsigns, a new logbook is opened. The user then has multiple logbooks (one per callsign).
+- When a user changes callsigns, QRZ opens a new logbook. The user then has one logbook for each callsign.
 
 ### Required QSO fields for insertion
 
@@ -33,14 +33,17 @@ A QSO record requires these key attributes to be inserted:
 
 ### Logbook date range
 
-Each logbook has a configurable date range corresponding to when the callsign was/will be active (typically license effective through expiration date). **QSOs with dates outside this range will be rejected.**
+Each logbook has a configurable date range.
+This range identifies when the callsign is active.
+Usually, it starts on the license effective date and ends on the expiration date.
+**QRZ rejects a QSO that has a date outside this range.**
 
 ### Access key model
 
-- A QRZ member may have access to multiple logbooks.
+- A QRZ member can have access to multiple logbooks.
 - `bookid` values are never transmitted directly in the API.
 - Instead, an opaque **API Access Key** provided by QRZ conveys both user identification and logbook routing.
-- The access key for a given logbook is obtained through the QRZ website.
+- Get the access key for a logbook from the QRZ website.
 
 ---
 
@@ -62,11 +65,11 @@ All applications **must** provide an identifiable `User-Agent` HTTP header.
 
 **Format guidance from QRZ:**
 
-- Personal scripts: include your callsign and a unique script name, e.g. `QsoRipper/0.1.0 (AA7BQ)`
-- Applications: `ApplicationName/version`, e.g. `QsoRipper/1.0.0`
+- Personal scripts: include your callsign and a unique script name, for example `QsoRipper/0.1.0 (AA7BQ)`
+- Applications: `ApplicationName/version`, for example `QsoRipper/1.0.0`
 - Maximum length: **128 characters**
 
-Applications with missing or generic user agents (e.g. `node-fetch`, `python-requests`) may be subject to rate limiting or restrictions.
+QRZ can limit applications that have missing or generic user agents, such as `node-fetch` and `python-requests`.
 
 ---
 
@@ -93,7 +96,7 @@ Every API request must include `KEY` and `ACTION`. The server rejects requests c
 | `LOGIDS` | Comma-separated list of `logid` values affected by the action |
 | `LOGID` | Single `logid` of inserted/replaced record (INSERT only, since it is a single-record operation) |
 | `COUNT` | Number of QSO records affected by the action |
-| `DATA` | Action-specific data payload (e.g. status reports) |
+| `DATA` | Action-specific data payload (for example status reports) |
 
 ---
 
@@ -108,7 +111,7 @@ Inserts one QSO record into the logbook selected by the API access key.
 | Parameter | Value |
 |---|---|
 | `ACTION` | `INSERT` |
-| `ADIF` | The ADIF data to be inserted |
+| `ADIF` | The ADIF data for insertion |
 | `OPTION` | _(optional)_ `REPLACE` to automatically overwrite any existing duplicate QSOs |
 
 **Response:**
@@ -135,9 +138,9 @@ RESULT=OK&LOGID=130877825&COUNT=1
 **Implementation warnings:**
 
 - The `REPLACE` option **will overwrite confirmed QSOs** with the supplied unconfirmed QSO data until QRZ re-verifies the match. Treat this as a high-risk operation requiring explicit user intent.
-- Send the option as exactly `REPLACE`. Do not append a `LOGID` selector to the
-  `OPTION` value. QRZ matches the duplicate from the supplied ADIF record and
-  returns the affected `LOGID`.
+- Send the option as exactly `REPLACE`.
+- Do not append a `LOGID` selector to the `OPTION` value.
+- QRZ matches the duplicate from the supplied ADIF record and returns the affected `LOGID`.
 
 ---
 
@@ -160,7 +163,7 @@ Deletes one or more QSO records from the logbook selected by the API access key.
 | `LOGIDS` | Comma-separated list of `logid` values that were **not found** (only when `RESULT=PARTIAL`) |
 | `COUNT` | Number of QSO records actually deleted |
 
-**Critical warning:** This command **permanently deletes** records. There is **no undo**. Deleted records cannot be recovered. QsoRipper should require explicit user confirmation before executing DELETE operations.
+**Critical warning:** This command **permanently deletes** records. There is **no undo**. You cannot recover deleted records. QsoRipper must get user confirmation before a DELETE operation.
 
 ---
 
@@ -181,7 +184,17 @@ Returns a status report for the logbook selected by the API access key.
 | `RESULT` | `OK` (success), `FAIL` (invalid access key) |
 | `DATA` | `&`-separated list of `name=value` pairs containing logbook status |
 
-**DATA payload may include:** total QSOs in book, total confirmed, DXCC total, USA states total, start date, end date, book owner, bookid, book name, authorized users.
+**The DATA payload can include:**
+
+- Total QSOs in the logbook
+- Total confirmed QSOs
+- DXCC total
+- USA states total
+- Start and end dates
+- Logbook owner
+- `bookid`
+- Logbook name
+- Authorized users
 
 ---
 
@@ -198,11 +211,11 @@ Fetches one or more QSO records from the logbook matching specified criteria.
 
 **FETCH option parameters:**
 
-Options are sent as a comma-separated list of colon-separated `name:value` pairs with **no spaces**. Example: `BAND:80m,MODE:SSB,MAX:400`
+Send options as a comma-separated list of colon-separated `name:value` pairs with **no spaces**. Example: `BAND:80m,MODE:SSB,MAX:400`
 
 | Option | Description |
 |---|---|
-| `ALL` | Fetch the entire logbook (default). When used, only `TYPE` and `STATUS` may also be specified. |
+| `ALL` | Fetch the complete logbook (default). With this option, specify only `TYPE` and `STATUS`. |
 | `DXCC:nnn` | Fetch records with DXCC=nnn |
 | `BETWEEN:2014-01-01+2014-01-31` | Fetch records between start and end dates (inclusive) |
 | `MODSINCE:2023-01-01` | Only return records modified since this date |
@@ -211,7 +224,7 @@ Options are sent as a comma-separated list of colon-separated `name:value` pairs
 | `MODE:xxx` | Fetch QSOs with the given mode |
 | `CALL:XX1XX` | Fetch QSOs with the indicated callsign |
 | `LOGIDS:nnn+nnn+nnn` | Fetch specific records by logid list (plus-separated) |
-| `MAX:nnnn` | Maximum number of records to return (0 = count only; unspecified = unlimited) |
+| `MAX:nnnn` | Maximum number of records to return (0 = count only. Unspecified = unlimited) |
 | `TYPE:ADIF\|LOGIDS` | Response format: ADIF data (default) or logid list |
 | `STATUS:CONFIRMED\|ALL` | Filter: confirmed records only, or all records (default: ALL) |
 
@@ -222,22 +235,23 @@ Options are sent as a comma-separated list of colon-separated `name:value` pairs
 | `RESULT` | `OK` (matches found), `FAIL` (parameter or other problem) |
 | `COUNT` | Total number of records matching selection criteria |
 | `LOGIDS` | Comma-separated list of matching `logid` values (limited by `MAX`) |
-| `ADIF` | ADIF data for matching QSOs (limited by `MAX`; returned when `TYPE` is `ADIF` or default) |
+| `ADIF` | ADIF data for matching QSOs (limited by `MAX`. Returned when `TYPE` is `ADIF` or default) |
 
 **Usage notes:**
 
-- Multiple options may be combined, separated by `&` or `;` characters.
+- You can combine multiple options. Separate them with `&` or `;`.
 - `COUNT` always reflects the total match count for the given criteria regardless of `MAX`.
 - To fetch **only the count**, set `MAX:0`.
-- When `ALL` is specified, only `TYPE` and `STATUS` may accompany it.
+- When you specify `ALL`, specify only `TYPE` and `STATUS` with it.
 
 ### Recommended paging strategy
 
 Large logbooks can cause timeouts if fetched in one request. Use bounded fetches:
 
 1. Start with `MAX:250,AFTERLOGID:0`
-2. If 250 records are returned, make another request with `AFTERLOGID` set to the highest `app_qrzlog_logid` value returned + 1
-3. Repeat until fewer than 250 (or your `MAX`) records are returned
+2. If QRZ returns 250 records, make another request.
+3. Set `AFTERLOGID` to one more than the highest returned `app_qrzlog_logid`.
+4. Repeat until QRZ returns fewer than 250 records or the specified `MAX`.
 
 ---
 
@@ -245,9 +259,9 @@ Large logbooks can cause timeouts if fetched in one request. Use bounded fetches
 
 | Scenario | Detection | QsoRipper behavior |
 |---|---|---|
-| Auth / privilege failure | `RESULT=AUTH` | Treat as credential/config issue; do not retry; surface to user |
-| Validation failure | `RESULT=FAIL` with `REASON` | Surface clear reason to user; keep local state unchanged |
-| Partial delete | `RESULT=PARTIAL` | Log which logids were not found; surface to user for review |
+| Auth / privilege failure | `RESULT=AUTH` | Treat as credential/config issue. Do not retry. Surface to user |
+| Validation failure | `RESULT=FAIL` with `REASON` | Surface clear reason to user. Keep local state unchanged |
+| Partial delete | `RESULT=PARTIAL` | Log which logids were not found. Surface to user for review |
 | Date range rejection | `RESULT=FAIL`, reason mentions date range | Surface as data validation error with the logbook's configured range |
 | Network / transient failure | No response or HTTP error | Bounded retries with timeout and jitter |
 | Rate limiting | HTTP 429 or similar | Back off with exponential delay |
@@ -258,7 +272,7 @@ Large logbooks can cause timeouts if fetched in one request. Use bounded fetches
 
 ## ADIF format notes
 
-QSO data is exchanged using ADIF (Amateur Data Interchange Format). Each field uses the format `<fieldname:length>value` and records end with `<eor>`.
+QRZ exchanges QSO data in ADIF (Amateur Data Interchange Format). Each field uses `<fieldname:length>value`. Each record ends with `<eor>`.
 
 **Example ADIF record:**
 
@@ -266,20 +280,20 @@ QSO data is exchanged using ADIF (Amateur Data Interchange Format). Each field u
 <band:3>80m<mode:3>SSB<call:4>XX1X<qso_date:8>20140121<station_callsign:5>AA7BQ<time_on:4>0346<eor>
 ```
 
-The QsoRipper adapter should include a robust ADIF parser/serializer that handles:
+The QsoRipper adapter must include an ADIF parser and serializer that handles:
 
 - Variable field lengths and ordering
 - Optional fields present or absent per record
 - Multi-record payloads from FETCH responses
-- QRZ-compatible normalization for numeric fields on upload; for example,
-  `TX_PWR` must be numeric watts, so values like `100W` should be normalized to
-  `100` and unparseable values should be omitted rather than sent verbatim
+- QRZ-compatible normalization for numeric fields on upload. For example,
+  `TX_PWR` must be numeric watts. Normalize values such as `100W` to
+  `100`. Omit values that you cannot parse.
 
 ---
 
 ## Mapping into QsoRipper domain
 
-The adapter should parse ADIF and map into internal QSO structures, then expose normalized domain records to the app layer.
+The adapter must parse ADIF and map it to internal QSO structures. It then sends normalized domain records to the application layer.
 
 ### Minimum field mapping
 
@@ -296,7 +310,7 @@ The adapter should parse ADIF and map into internal QSO structures, then expose 
 | `comment` / `notes` | Operator notes (optional) |
 | `gridsquare` | Locator (optional) |
 
-Additional ADIF fields should be preserved as extension data to support round-tripping with QRZ.
+The adapter must preserve additional ADIF fields as extension data for a complete QRZ transfer cycle.
 
 ---
 
@@ -308,6 +322,6 @@ Use these environment variables (see `.env.example`):
 |---|---|
 | `QSORIPPER_QRZ_LOGBOOK_BASE_URL` | Logbook API endpoint (default: `https://logbook.qrz.com/api`) |
 | `QSORIPPER_QRZ_LOGBOOK_API_KEY` | QRZ-issued logbook access key |
-| `QSORIPPER_QRZ_USER_AGENT` | User-Agent header value (e.g. `QsoRipper/0.1.0 (YOURCALL)`) |
+| `QSORIPPER_QRZ_USER_AGENT` | User-Agent header value (for example `QsoRipper/0.1.0 (YOURCALL)`) |
 | `QSORIPPER_QRZ_HTTP_TIMEOUT_SECONDS` | HTTP request timeout |
 | `QSORIPPER_QRZ_MAX_RETRIES` | Maximum retry count for transient failures |

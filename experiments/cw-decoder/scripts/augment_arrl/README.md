@@ -1,9 +1,10 @@
 # ARRL CW augmentation pipeline
 
-Generate a deterministic, multi-impairment augmentation of the pristine ARRL
-Code Practice corpus (1,576 chunks, 17.84 h, median CER 1.6 %) so downstream
-training experiments can target real-world HF channel conditions instead of
-the unrealistically clean ARRL recordings.
+Generate a repeatable augmentation of the original ARRL Code Practice corpus.
+The corpus contains 1,576 chunks and 17.84 hours of audio.
+Its median CER is 1.6 percent.
+The augmentation applies multiple impairments.
+Thus, training experiments can use realistic HF-channel conditions.
 
 ## Layout
 
@@ -29,7 +30,7 @@ seed_u32 = zlib.crc32(f"{chunk_id}|{augment_seed}".encode()) & 0xFFFFFFFF
 rng = numpy.random.default_rng(seed_u32)
 ```
 
-`chunk_id` is `"{wpm_dir}_{wav_stem}"` (e.g. `20wpm_230905_0000`) so the
+`chunk_id` is `"{wpm_dir}_{wav_stem}"` (for example `20wpm_230905_0000`) so the
 same stem in two different speed buckets yields independent variants.
 
 ## Quickstart
@@ -56,31 +57,31 @@ py -m augment_arrl.report
 
 ## Impairment summary
 
-Group A — timing / rate
+Group A - timing / rate
 
 - WPM scale (always, [0.7, 1.5])
-- Farnsworth ratio (20 %, [1.2, 3.0]) — gap-only stretch
+- Farnsworth ratio (20 %, [1.2, 3.0]) - gap-only stretch
 - WPM drift in chunk (always, ε∈[0, 0.10], f∈[0.01, 0.1] Hz)
-- Per-element LogNormal jitter (always; paddle 0.05, amateur 0.10, rough 0.20)
+- Per-element LogNormal jitter (always. Paddle 0.05, amateur 0.10, rough 0.20)
 
-Group B — frequency / pitch
+Group B - frequency / pitch
 
 - Pitch shift (always, ±50 Hz from 700 Hz carrier)
 - Pitch drift (30 %, ±20 Hz/min)
-- VFO chirp on key-down (30 %, ±5–10 Hz)
+- VFO chirp on key-down (30 %, ±5-10 Hz)
 
-Group C — HF channel
+Group C - HF channel
 
 - Watterson 2-tap (65 %, profiles `good` / `moderate` / `poor` per ITU-R F.1487)
 - QSB (55 %, f∈[0.1, 2.0] Hz, depth∈[0.2, 0.8])
 
-Group D — noise / interference
+Group D - noise / interference
 
 - AWGN (always, SNR ∈ {0, 5, 10, 15, 20, 30} dB)
 - Pink noise (45 %, configurable level)
-- Atmospheric impulses (1 %, Poisson 0.5–3 Hz)
+- Atmospheric impulses (1 %, Poisson 0.5-3 Hz)
 - QRM (30 %, partner chunk at Δpitch ∈ [-100, 100] Hz, S/QRM ∈ [-6, 6] dB)
-- Receiver birdies (5 %, 1–2 tones at ±50–200 Hz)
+- Receiver birdies (5 %, 1-2 tones at ±50-200 Hz)
 - AGC pumping (10 %, attack 10 ms / release 200 ms)
 
 ## Output layout

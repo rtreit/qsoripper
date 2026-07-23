@@ -2,7 +2,10 @@
 
 ## Overview
 
-QsoRipper uses **Protocol Buffers (proto3)** as the canonical schema definition for all shared domain types and engine/client service contracts. Proto files are the single source of truth — Rust structs and C# classes are generated from them, keeping engine hosts and clients aligned across language boundaries.
+QsoRipper uses **Protocol Buffers (proto3)** for all shared domain types and service contracts.
+Proto files are the single source of truth.
+The build generates Rust structures and C# classes from these files.
+Thus, engine hosts and clients use the same cross-language contracts.
 
 ## Why Protocol Buffers?
 
@@ -10,16 +13,16 @@ QsoRipper uses **Protocol Buffers (proto3)** as the canonical schema definition 
 |---|---|
 | Cross-language type safety | Code generation for Rust (`prost`) and C# (`Grpc.Tools`) from one schema |
 | Wire format | Binary protobuf over gRPC for inter-process communication |
-| Forward compatibility | Proto3 ignores unknown fields — matches QRZ API's own forward-compat model |
-| Schema evolution | Adding optional fields is non-breaking; `buf breaking` enforces rules |
-| Performance | Binary serialization is fast and compact — no JSON parsing overhead on the hot path |
+| Forward compatibility | Proto3 ignores unknown fields - matches QRZ API's own forward-compat model |
+| Schema evolution | Adding optional fields is non-breaking. `buf breaking` enforces rules |
+| Performance | Binary serialization is fast and compact - no JSON parsing overhead on the hot path |
 
 ## Architecture Alignment
 
 The proto-first approach directly supports these architecture principles:
 
-- **Principle #6 (Normalize Data Immediately)**: QRZ XML/ADIF responses are parsed and mapped into proto domain types at the provider edge. Internal communication always uses normalized types.
-- **Principle #8 (Consumer-Driven Interfaces)**: Proto messages are designed around what the UI needs (for example, `LookupResult` wraps state + data + latency), not QRZ's XML structure.
+- **Principle #6 (Normalize Data Immediately)**: Providers parse QRZ XML or ADIF responses and map them to proto domain types. Internal communication always uses normalized types.
+- **Principle #8 (Consumer-Driven Interfaces)**: UI requirements control proto message design. For example, `LookupResult` contains state, data, and latency.
 - **Stable core, volatile edges**: Proto domain types are the stable core. QRZ XML parsing, ADIF parsing, and HTTP concerns are edge adapters that produce proto types.
 
 ## Proto Layout Rules
@@ -29,8 +32,10 @@ QsoRipper treats the protobuf 1-1-1 guidance as an architectural rule, not a sty
 - **One top-level entity per file by default**: messages, enums, and services each get their own `.proto` file.
 - **Service declaration files contain only the service**: request, response, stream item, enum, and support payload messages live in separate files under `proto/services/`.
 - **Every RPC gets unique request/response envelopes**: unary and streaming methods both use method-specific `XxxRequest` / `XxxResponse` messages.
-- **Reusable business payloads stay separate from envelopes**: shared models such as `LookupResult`, `QsoRecord`, `SetupStatus`, and `ActiveStationContext` are nested inside envelopes rather than returned directly as RPC shapes.
-- **Exceptions are rare and explicit**: if QsoRipper ever deviates from 1-1-1, that decision must be documented and justified in the schema review. RPC envelopes are not the place for exceptions.
+- **Keep reusable business payloads separate from envelopes.**
+  Put shared models inside the method-specific envelopes.
+  Examples include `LookupResult`, `QsoRecord`, `SetupStatus`, and `ActiveStationContext`.
+- **Exceptions are rare and explicit**: The schema review must document and justify each change from 1-1-1. Do not use RPC envelopes for exceptions.
 
 ## Directory Structure
 
@@ -65,7 +70,7 @@ proto/
 | TUI client | Rust (ratatui) | Keyboard-first client proving Rust can consume the gRPC seam too |
 | CLI / GUI / DebugHost clients | C# / .NET | Rich client and debugging surfaces on the shared contracts |
 
-**Key rule:** the protobuf/gRPC contract is the stable core. Any process that implements it can be an engine host, and any process that consumes it can be a client. Rust is no longer "the engine" as an architectural requirement; it is one engine implementation in the current repository.
+**Key rule:** the protobuf/gRPC contract is the stable core. Any process that implements it can be an engine host, and any process that consumes it can be a client. Rust is no longer "the engine" as an architectural requirement. It is one engine implementation in the current repository.
 
 ## Core Domain Types
 
@@ -81,7 +86,7 @@ Normalized representation of a ham radio operator/station. Derived from QRZ XML 
 - **Contact**: email, web_url, qsl_manager
 - **QSL preferences**: eqsl, lotw, paper_qsl (tri-state enum)
 - **Zone**: cq_zone, itu_zone, iota
-- **Metadata**: qrz_serial, last_modified, bio_length, image_url, etc.
+- **Metadata**: qrz_serial, last_modified, bio_length, image_url, and other items
 
 ### QsoRecord (`qso_record.proto`)
 
@@ -105,16 +110,36 @@ Wraps the async state machine for callsign lookups:
 Loading → Found | NotFound | Error | Stale | Cancelled
 ```
 
-Includes: state enum, optional CallsignRecord, cache_hit flag, lookup_latency_ms, plus prior-QSO history (`prior_qsos` and `prior_qso_total_count`) populated from the local logbook on every non-`Loading` result.
+It contains a state enum, optional `CallsignRecord`, `cache_hit`, and `lookup_latency_ms`.
+Each non-`Loading` result also contains local prior-QSO history.
+The history uses `prior_qsos` and `prior_qso_total_count`.
 
 ### QsoHistoryEntry (`qso_history_entry.proto`)
 
-Compact summary of a prior QSO with the queried callsign, returned alongside `LookupResult` so UIs can show a "worked before" badge without a second round-trip. Fields are a strict subset of `QsoRecord`: `local_id`, `utc_timestamp`, `band`, `mode`, `submode`, `frequency_hz`, `frequency_rx_hz`, `contest_id`. The shape covers both normal-mode badges and future contest-mode dupe rules — `(band, mode, contest_id)` is sufficient for every common contest dupe rule, and `contest_id` lets a future contest engine differentiate current-contest contacts from past contacts. Contest mode is not implemented yet; this shape is forward-compatible so adding it later is purely additive.
+This message is a compact summary of a prior QSO with the queried callsign.
+It accompanies `LookupResult`.
+Thus, a UI can show a "worked before" badge without a second request.
+Its fields are a strict subset of `QsoRecord`:
+
+- `local_id`
+- `utc_timestamp`
+- `band`
+- `mode`
+- `submode`
+- `frequency_hz`
+- `frequency_rx_hz`
+- `contest_id`
+
+The message supports normal-mode badges and future contest duplicate rules.
+`(band, mode, contest_id)` supports the common duplicate rules.
+`contest_id` separates current-contest contacts from past contacts.
+Contest mode is not implemented.
+The message supports a later additive implementation.
 
 ### Supporting Enums
 
 - **Band**: 2190m through submm (33 values, full ADIF 3.1.7 enumeration with frequency ranges)
-- **Mode**: 45 modes matching the complete ADIF 3.1.7 Mode enumeration; submodes are stored as a string field
+- **Mode**: 45 modes matching the complete ADIF 3.1.7 Mode enumeration. A string field stores submodes.
 - **GeoSource**: user, geocode, grid, zip, state, dxcc, none (maps to QRZ geoloc values)
 - **SyncStatus**: local_only, synced, modified, conflict
 - **QslStatus**: no, yes, requested, queued, ignore (aligned with ADIF QSL Sent/Rcvd enums)
@@ -131,42 +156,59 @@ Client → LookupService → Engine-specific lookup coordinator/provider chain
 ```
 
 Key RPCs:
-- `Lookup` — single request/response
-- `StreamLookup` — server-streaming progressive updates (Loading → Stale → Found)
-- `GetCachedCallsign` — L1 cache-only check
-- `GetDxccEntity` — DXCC entity lookup
-- `BatchLookup` — contest prefetch
+- `Lookup` - single request/response
+- `StreamLookup` - server-streaming progressive updates (Loading → Stale → Found)
+- `GetCachedCallsign` - L1 cache-only check
+- `GetDxccEntity` - DXCC entity lookup
+- `BatchLookup` - contest prefetch
 
-Each RPC returns a unique service envelope such as `LookupResponse`, `StreamLookupResponse`, or `GetCachedCallsignResponse`. Shared payloads like `LookupResult` stay nested inside those envelopes so each RPC can evolve independently. Current built-in engine hosts implement the unary/stream/cache lookup slice and advertise those capabilities explicitly (`lookup-callsign`, `lookup-stream`, `lookup-cache`). `BatchLookup` and `GetDxccEntity` by numeric `dxcc_code` are also implemented in both the Rust and .NET hosts; `GetDxccEntity` by callsign `prefix` is the only remaining branch that still returns `UNIMPLEMENTED`. See [`docs/api/lookup-service.md`](../api/lookup-service.md) for the authoritative RPC support table.
+Each RPC returns a unique service envelope.
+Examples include `LookupResponse`, `StreamLookupResponse`, and `GetCachedCallsignResponse`.
+Shared payloads remain inside these envelopes.
+Thus, each RPC can change independently.
+Both built-in hosts implement unary, stream, and cache lookup.
+They advertise `lookup-callsign`, `lookup-stream`, and `lookup-cache`.
+
+Both hosts also implement `BatchLookup`.
+They implement `GetDxccEntity` for numeric `dxcc_code` queries.
+The callsign `prefix` query still returns `UNIMPLEMENTED`.
+See [`docs/api/lookup-service.md`](../api/lookup-service.md) for the RPC support table.
 
 ### LogbookService
 
 QSO lifecycle management:
 
-- `LogQso` / `UpdateQso` / `DeleteQso` — CRUD with optional immediate QRZ sync
-- `ListQsos` — filtered/paginated query with server-streaming response
-- `SyncWithQrz` — full or incremental sync, streams progress updates
-- `ImportAdif` / `ExportAdif` — client-streaming import, server-streaming export
+- `LogQso` / `UpdateQso` / `DeleteQso` - CRUD with optional immediate QRZ sync
+- `ListQsos` - filtered/paginated query with server-streaming response
+- `SyncWithQrz` - full or incremental sync, streams progress updates
+- `ImportAdif` / `ExportAdif` - client-streaming import, server-streaming export
 
-Logbook RPCs follow the same rule: `ListQsos` streams `ListQsosResponse` envelopes that carry `QsoRecord`, `ExportAdif` streams `ExportAdifResponse` envelopes that carry `AdifChunk`, and unary RPCs use method-specific envelopes even when the payload is a single shared domain type.
+Logbook RPCs use the same envelope rule.
+`ListQsos` streams `ListQsosResponse` envelopes that contain `QsoRecord`.
+`ExportAdif` streams `ExportAdifResponse` envelopes that contain `AdifChunk`.
+Unary RPCs use method-specific envelopes for single shared payloads.
 
 ## ADIF as External Format
 
-ADIF (Amateur Data Interchange Format) is used exclusively for:
+QsoRipper uses ADIF (Amateur Data Interchange Format) only for:
 
-1. **QRZ Logbook API** — INSERT/FETCH use ADIF-encoded QSO data
-2. **File import/export** — standard `.adi` files from other logging programs
-3. **Contest log submission** — Cabrillo/ADIF export
+1. **QRZ Logbook API** - INSERT/FETCH use ADIF-encoded QSO data
+2. **File import/export** - standard `.adi` files from other logging programs
+3. **Contest log submission** - Cabrillo/ADIF export
 
 ADIF is **never** used for internal IPC. Engine-specific ADIF adapters convert to/from proto `QsoRecord` at the edge.
 
 ### ADIF Round-Trip Strategy
 
-QsoRecord includes an `extra_fields` map (`map<string, string>`) to preserve ADIF fields that don't have dedicated proto fields (e.g., satellite info, propagation conditions, application-defined fields). Core local-station ADIF fields now flow through `station_snapshot` instead of `extra_fields`. During import:
+QsoRecord includes an `extra_fields` map (`map<string, string>`) for ADIF fields without dedicated proto fields.
+Examples are satellite information, propagation conditions, and application-defined fields.
+Core local-station ADIF fields now flow through `station_snapshot` instead of `extra_fields`.
+During import:
 
 1. Recognized fields → mapped to dedicated QsoRecord fields
 2. Unrecognized fields → stored in `extra_fields` (keyed by uppercase ADIF field name)
-3. During export → dedicated fields are emitted first, then `extra_fields` are appended
+3. During export, emit dedicated fields first.
+4. Then append `extra_fields`.
 
 This ensures no data loss when round-tripping ADIF files through QsoRipper.
 
@@ -176,9 +218,9 @@ See `docs/integrations/adif-specification.md` for the complete ADIF 3.1.7 refere
 
 ### Tooling
 
-- **buf** — schema linting (`buf lint`) and breaking change detection (`buf breaking`)
-- **prost + tonic-build** — Rust struct/gRPC generation during Cargo builds
-- **Grpc.Tools** — C# class/gRPC generation during MSBuild
+- **buf** - schema linting (`buf lint`) and breaking change detection (`buf breaking`)
+- **prost + tonic-build** - Rust struct/gRPC generation during Cargo builds
+- **Grpc.Tools** - C# class/gRPC generation during MSBuild
 
 ### Build integration
 
@@ -200,8 +242,8 @@ dotnet build src/dotnet/QsoRipper.slnx
 
 | Language | Output path | Notes |
 |---|---|---|
-| Rust | Cargo `OUT_DIR` under `src/rust/target/` | Generated at build time by `src/rust/qsoripper-core/build.rs`; not checked in |
-| C# | MSBuild intermediate output under `src/dotnet/**/obj/` | Generated at build time by `Grpc.Tools`; not checked in |
+| Rust | Cargo `OUT_DIR` under `src/rust/target/` | Generated at build time by `src/rust/qsoripper-core/build.rs`. Not checked in |
+| C# | MSBuild intermediate output under `src/dotnet/**/obj/` | Generated at build time by `Grpc.Tools`. Not checked in |
 
 ## Adding a New Field
 
@@ -209,19 +251,20 @@ dotnet build src/dotnet/QsoRipper.slnx
 2. Run `buf lint` to verify naming conventions
 3. Run `buf breaking` to verify backward compatibility
 4. Rebuild the Rust workspace and .NET consumers so generated bindings refresh
-5. Update the provider adapter (e.g., QRZ XML parser) to populate the new field
-6. Update the UI components that should display the field
+5. Update the provider adapter (for example, QRZ XML parser) to populate the new field
+6. Update the UI components that display the field.
 
-**Important:** Never reuse or reassign proto field numbers. Deleted fields should be marked with `reserved`.
+**Important:** Never reuse or reassign proto field numbers. Mark deleted fields with `reserved`.
 
 ## Conventions
 
-- **Field numbering**: Group related fields in ranges (identity: 1-9, name: 10-19, address: 20-29, etc.)
+- **Field numbering**: Group related fields in ranges (identity: 1-9, name: 10-19, address: 20-29, and other items)
 - **Field naming**: snake_case in proto files (auto-converted to PascalCase in C#, snake_case in Rust)
-- **Optional fields**: Use `optional` keyword for fields that may not be present from the provider
-- **Enums**: Prefer `_UNSPECIFIED = 0` when the schema has a neutral default; operational defaults may intentionally keep a domain-specific zero value
+- **Optional fields**: Use the `optional` keyword for fields that the provider can omit.
+- **Enums**: Prefer `_UNSPECIFIED = 0` when the schema has a neutral default. An operational default can keep a domain-specific zero value.
 - **Timestamps**: Use `google.protobuf.Timestamp` for all date/time fields
 - **C# namespace**: Set via `option csharp_namespace = "QsoRipper.Domain"` or `"QsoRipper.Services"`
 - **Packages**: Keep the current `proto/domain` and `proto/services` layout with `qsoripper.domain` / `qsoripper.services` packages until the project deliberately introduces versioned external contracts
 - **1-1-1 layout**: Default to one top-level message, enum, or service per `.proto` file
-- **RPC message shapes**: Every RPC gets unique `XxxRequest` and `XxxResponse` envelopes; shared payloads are nested inside those envelopes rather than used as the top-level RPC contract
+- **RPC message shapes**: Give each RPC unique `XxxRequest` and `XxxResponse` envelopes.
+  Put shared payloads inside these envelopes.

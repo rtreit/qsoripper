@@ -70,6 +70,11 @@ version = "=0.5.10"
 reason = "Used by tonic 0.12 transport; newer networking dependencies in the graph use socket2 0.6."
 
 [[bans.skip]]
+name = "syn"
+version = ">=2, <3"
+reason = "Proc-macro dependencies are migrating to syn 3, while tonic and ratatui transitives still require syn 2."
+
+[[bans.skip]]
 name = "tower"
 version = "=0.4.13"
 reason = "Used by tonic 0.12 transport; reqwest and newer Hyper/Axum dependencies use tower 0.5."

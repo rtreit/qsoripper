@@ -1,4 +1,4 @@
-# ARRL CW Corpus — Quality Report (Index-Driven Pipeline)
+# ARRL CW Corpus - Quality Report (Index-Driven Pipeline)
 
 Auto-generated from `data/cw-samples/arrl-archive/manifest.jsonl` and the per-session `*.trim.json` sidecars by the index-driven parallel harvester.
 
@@ -53,7 +53,7 @@ Auto-generated from `data/cw-samples/arrl-archive/manifest.jsonl` and the per-se
 ## Per-Chunk Alignment Score Distribution
 
 - median=0.0146, p95=0.0312, max retained=0.0500
-- (drop threshold: 0.05; chunks above were filtered out by `align_parallel.py`)
+- (drop threshold: 0.05. Chunks above were filtered out by `align_parallel.py`)
 
 ## Spot Checks (8 random chunks)
 
@@ -75,16 +75,24 @@ Auto-generated from `data/cw-samples/arrl-archive/manifest.jsonl` and the per-se
 
 ## Known Limitations
 
-- **Studio-clean source.** ARRL bulletins are recorded directly from a code generator; no QSB, no QRM, no fading, single oscillator pitch (~700 Hz). A model trained only on this corpus will be brittle on real on-air audio. Use it as a pretraining seed and add on-the-fly augmentation (additive noise, SNR randomization, pitch shifts ±300 Hz, time-warp ±10 %, fading, QSB, key-clicks).
-- **Bulletin vocabulary.** Texts are pulled from QST articles, ARRL announcements and callsign drills. Ham vocabulary is well represented; conversational English / contest exchanges are not.
+- **Studio-clean source.** ARRL bulletins are recorded directly from a code generator. No QSB, no QRM, no fading, single oscillator pitch (~700 Hz). A model trained only on this corpus will be brittle on real on-air audio. Use it as a pretraining seed. Add noise, SNR changes, pitch shifts, time changes, fading, QSB, and key clicks during training.
+- **Bulletin vocabulary.** Texts are pulled from QST articles, ARRL announcements and callsign drills. Ham vocabulary is well represented. Conversational English / contest exchanges are not.
 - **One WPM per file.** Mixed-speed bursts (typical of real QSOs) are not represented.
-- **Uniform char-rate alignment.** We assume constant CW rate within a session; small tempo wobble or operator pauses can shift chunk boundaries by 0.3–0.8 s. The drop threshold (alignment CER > 0.05) catches the worst cases.
+- **Uniform character-rate alignment.** We assume a constant CW rate in each session.
+  Small tempo changes or operator pauses can move chunk boundaries by 0.3 to 0.8 seconds.
+  The drop threshold (`alignment CER > 0.05`) finds the worst cases.
 - **Bi-weekly cadence.** The ARRL archive has been bi-weekly (every 2 weeks) since at least 2014. The index parser pulls every available date in one HTTP request per speed, eliminating the prior pipeline's blind date probing.
 
 ## Recommended Use
 
 - **Pretraining only.** Use this corpus to bootstrap a CTC / transducer encoder.
-- **Always augment.** Suggested chain: random gain → additive band-limited noise to reach SNR ∈ [-3, +20] dB → ±300 Hz pitch shift → random 5–10 % time stretch → occasional QSB envelope (0.3–1.5 Hz). Keep the truth label unchanged.
+- **Always augment.** Use this suggested sequence:
+  random gain, band-limited noise, pitch shift, time stretch, and a QSB envelope.
+  Use an SNR from -3 through +20 dB.
+  Use a pitch shift of up to 300 Hz in each direction.
+  Use a time stretch from 5 through 10 percent.
+  Use a QSB rate from 0.3 through 1.5 Hz.
+  Keep the truth label unchanged.
 - **Validation set.** Reserve ≥ 1 full session per speed (hold out by date) so you never evaluate on a chunk whose neighbours were trained on.
 - **Mix with augmented synthetic.** Combine 70 % ARRL chunks with 30 % synthetic CW from `gen-rough-fist` / `gen-qso-suite` to add fist variability and prosigns.
 
@@ -94,5 +102,5 @@ ARRL archive coverage observed during pilot index build:
 
 - ~285 sessions per speed × 11 speeds available = ~3 100 candidate sessions.
 - Median trimmed length ~9 min ≈ ~470 hours of clean labeled CW at full coverage.
-- At pilot's chunks-per-session density, that's ~30 000–40 000 labeled chunks.
+- At the pilot chunks-per-session density, the result is approximately 30 000-40 000 labeled chunks.
 - Storage at 8 kHz int16: ~17 GB raw WAV. MP3 source ~35 GB.

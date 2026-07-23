@@ -42,18 +42,20 @@ QsoRipper resolves the executable in this order:
 1. The path in `CATHUB_EXECUTABLE`.
 2. A binary bundled at `artifacts\publish\cathub\Release\cathub.exe` on Windows, or the
    equivalent platform path.
-3. `cathub` on `PATH`.
+3. A source build in a sibling CatHub checkout at `..\cathub\target\release\cathub.exe`,
+   or the equivalent platform path.
+4. `cathub` on `PATH`.
 
-QsoRipper never downloads, installs, or updates CatHub during startup.
-The current supported executable range is `>=0.1.0 <0.2.0`; the launcher checks
+QsoRipper does not download, install, or update CatHub during startup.
+The current supported executable range is `>=0.1.0 <0.2.0`. The launcher checks
 `cathub --version` and reports an incompatible version separately from a spawn failure.
 
 ## Configuration modes
 
 ### QsoRipper-managed unified configuration
 
-Existing `[cat_hub]` settings in QsoRipper's per-user `config.toml` remain supported. The
-QsoRipper settings UI may edit this section, and the launcher passes the unified file to
+Existing `[cat_hub]` settings in QsoRipper's per-user `config.toml` remain supported.
+The QsoRipper settings UI can edit this section. The launcher passes the unified file to
 CatHub explicitly with `--section cat_hub`. CatHub ignores unrelated QsoRipper tables.
 
 This mode keeps one station configuration file. QsoRipper setup saves preserve `[cat_hub]`
@@ -92,14 +94,14 @@ cathub config migrate `
   --output "$env:APPDATA\cathub\cathub.toml"
 ```
 
-Migration refuses to overwrite an existing destination unless `--force` is supplied.
+Migration refuses to overwrite an existing destination unless the command includes `--force`.
 Source removal is opt-in and creates a `.bak` file first.
 
 ## Start with the QsoRipper launcher
 
 Select **CatHub standalone service** in `launcher.ps1`. The launcher:
 
-1. Chooses the unified QsoRipper file when it contains `[cat_hub]`; otherwise it uses the
+1. Chooses the unified QsoRipper file when it contains `[cat_hub]`. Otherwise it uses the
    external CatHub path.
 2. Resolves the configured, bundled, or installed CatHub executable.
 3. Starts CatHub before either engine.
@@ -155,7 +157,7 @@ does not require the published `cathub-protocol` Rust crate or `CatHub.Protocol`
 package. Those packages are for independent applications that develop against CatHub's typed
 API.
 
-The dependency pin is recorded in `config\cathub-dependency.json`. When both repositories are
+QsoRipper records the dependency pin in `config\cathub-dependency.json`. When both repositories are
 checked out as siblings, verify the temporary QsoRipper protocol snapshot with:
 
 ```powershell

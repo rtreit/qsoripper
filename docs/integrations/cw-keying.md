@@ -1,6 +1,6 @@
 # CW keying setup
 
-QsoRipper exposes the same engine-backed CW macro and keyer behavior through the Rust and .NET engines. The default `null` backend expands and accepts macros without touching radio hardware. Use it to verify station context and contest exchanges before enabling a WinKeyer. Use the `cathub` backend when QsoRipper and N1MM need the same physical keyer; retain the direct `winkeyer` backend for single-client stations.
+QsoRipper exposes the same engine-backed CW macro and keyer behavior through the Rust and .NET engines. The default `null` backend expands and accepts macros without touching radio hardware. Use it to verify station context and contest exchanges before enabling a WinKeyer. Use the `cathub` backend when QsoRipper and N1MM need the same physical keyer. Use the direct `winkeyer` backend for single-client stations.
 
 ## Safety model
 
@@ -36,9 +36,9 @@ qsoripper cw speed 28
 
 ### Shared keyer through CatHub (recommended for N1MM)
 
-Create a dedicated com0com pair such as `COM40 <-> COM41`. CatHub opens `COM40`; N1MM opens `COM41`. Neither N1MM nor a QsoRipper engine opens physical `COM3`.
+Create a dedicated com0com pair such as `COM40 <-> COM41`. CatHub opens `COM40`. N1MM opens `COM41`. Neither N1MM nor a QsoRipper engine opens physical `COM3`.
 
-Create a second pair such as `COM42 <-> COM43` for device maintenance. CatHub opens `COM42`; WKTools opens `COM43`. Do not make WKTools and N1MM share COM41.
+Create a second pair such as `COM42 <-> COM43` for device maintenance. CatHub opens `COM42`. WKTools opens `COM43`. Do not make WKTools and N1MM share COM41.
 
 Add this to the unified configuration:
 
@@ -76,11 +76,24 @@ max_tx_ms = 30000
 
 Start CatHub before either engine. Configure N1MM's WinKeyer port as `COM41`, 1200 baud. Configure WKTools for `COM43`, 1200 baud. QsoRipper talks to the typed API and can remain connected while N1MM uses the virtual serial endpoint.
 
-CatHub schedules complete jobs without interleaving. N1MM Escape clears only N1MM's active stream; QsoRipper cancellation affects only its named client. The station-wide emergency stop remains global. A fixed-speed QsoRipper job temporarily overrides the keyer and restores the primary endpoint's fixed or pot-controlled speed afterward.
+CatHub schedules complete jobs without interleaving. N1MM Escape clears only N1MM's active stream. QsoRipper cancellation affects only its named client. The station-wide emergency stop remains global. A fixed-speed QsoRipper job temporarily overrides the keyer and restores the primary endpoint's fixed or pot-controlled speed afterward.
 
-The speed-pot notification contains an offset from the active `MIN_WPM` setting. CatHub tracks each client's Speed Pot Setup command, reports the canonical actual WPM through the typed API, and forwards the original protocol byte unchanged to N1MM.
+The speed-pot notification contains an offset from the active `MIN_WPM` setting.
+CatHub tracks the Speed Pot Setup command for each client.
+It reports the actual WPM through the typed API.
+It forwards the original protocol byte to N1MM without a change.
 
-Routine operation never writes EEPROM. Reset, EEPROM, firmware, calibration, and baud-changing commands require an endpoint with `config_write`, an empty transmit queue, and an exclusive maintenance lease. During maintenance, CatHub safely closes the physical host session, keeps replies private to the maintenance session, rejects other transmission, then reopens the host session and restores foreground transient state. Close WKTools when maintenance is complete so it releases COM43. Do not grant `config_write` to the everyday N1MM endpoint.
+Routine operation does not write EEPROM.
+Maintenance commands require an endpoint with `config_write`.
+They also require an empty transmit queue and an exclusive maintenance lease.
+These commands include reset, EEPROM, firmware, calibration, and baud changes.
+During maintenance, CatHub safely closes the physical host session.
+It sends replies only to the maintenance session and rejects other transmissions.
+
+Then it opens the host session and restores the foreground transient state.
+
+Close WKTools after maintenance to release COM43.
+Do not grant `config_write` to the normal N1MM endpoint.
 
 ### Direct single-client connection
 
@@ -144,10 +157,10 @@ Persisted TOML is also read at engine startup. A `QSORIPPER_CW_*` environment va
 | Access denied or port busy | Close other logging/keyer software using the port and verify OS permissions. Only one process can own the WinKeyer session. |
 | CatHub API unavailable | Start CatHub, verify `api_bind`, and confirm the engine endpoint includes the `http://` scheme. |
 | N1MM cannot open its keyer | N1MM must open the application side of the virtual pair (for example COM41), never physical COM3 or CatHub's COM40 side. |
-| Pot speed is offset | The raw protocol byte is relative to the active Speed Pot Setup minimum; use `cw status` for canonical WPM. |
+| Pot speed is offset | The raw protocol byte is relative to the active Speed Pot Setup minimum. Use `cw status` for canonical WPM. |
 | Host Open times out | Verify the port, cable, device power, and baud rate. Most WinKeyer devices use 1200 baud. |
 | Send is rejected as disabled | Set `QSORIPPER_CW_TRANSMIT_ENABLED=true` only after completing the safe probe workflow, then restart. |
-| Safety ceiling error | The keyer was still busy at `QSORIPPER_CW_MAX_TX_MS`; inspect the queued macro and keyer/radio state before retrying. |
+| Safety ceiling error | The keyer was still busy at `QSORIPPER_CW_MAX_TX_MS`. Inspect the queued macro and keyer/radio state before retrying. |
 | Wrong callsign or exchange | Verify the active station profile and pass the required `--his-call`, `--exchange`, or `--nr` context. |
 | Invalid speed | Use an integer from 5 through 99 WPM. |
 
