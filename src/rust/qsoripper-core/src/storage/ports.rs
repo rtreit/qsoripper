@@ -27,6 +27,23 @@ pub trait LogbookStore: Send + Sync {
     /// Update an existing QSO. Returns `true` when a row was updated.
     async fn update_qso(&self, qso: &QsoRecord) -> Result<bool, StorageError>;
 
+    /// Replace a QSO only when its persisted protobuf payload still matches
+    /// `expected`. Production stores must make the comparison and update
+    /// atomic so a sync snapshot cannot overwrite a concurrent operator edit.
+    async fn update_qso_if_unchanged(
+        &self,
+        expected: &QsoRecord,
+        replacement: &QsoRecord,
+    ) -> Result<bool, StorageError> {
+        let Some(current) = self.get_qso(&expected.local_id).await? else {
+            return Ok(false);
+        };
+        if current != *expected {
+            return Ok(false);
+        }
+        self.update_qso(replacement).await
+    }
+
     /// Patch QRZ sync metadata onto the current row without overwriting other QSO fields.
     ///
     /// Implementations must update atomically against their storage lock/transaction so

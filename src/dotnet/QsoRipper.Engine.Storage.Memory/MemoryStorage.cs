@@ -62,6 +62,67 @@ public sealed class MemoryStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
     }
 
     /// <inheritdoc />
+    public ValueTask<bool> UpdateQsoIfUnchangedAsync(QsoRecord expected, QsoRecord replacement)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        ArgumentNullException.ThrowIfNull(replacement);
+        if (!string.Equals(expected.LocalId, replacement.LocalId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Expected and replacement QSO IDs must match.", nameof(replacement));
+        }
+
+        lock (_lock)
+        {
+            if (!_qsos.TryGetValue(expected.LocalId, out var current) || !current.Equals(expected))
+            {
+                return new ValueTask<bool>(false);
+            }
+
+            _qsos[expected.LocalId] = replacement.Clone();
+            return new ValueTask<bool>(true);
+        }
+    }
+
+    /// <inheritdoc />
+    public ValueTask<QsoRecord?> UpdateQrzSyncMetadataAsync(
+        string localId,
+        Timestamp? expectedUpdatedAt,
+        string qrzLogid)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(qrzLogid);
+
+        lock (_lock)
+        {
+            if (!_qsos.TryGetValue(localId.Trim(), out var stored))
+            {
+                return new ValueTask<QsoRecord?>((QsoRecord?)null);
+            }
+
+            var unchangedSinceUploadStarted = Equals(stored.UpdatedAt, expectedUpdatedAt);
+            stored.QrzLogid = qrzLogid;
+            if (stored.DeletedAt is not null)
+            {
+                stored.PendingRemoteDelete = true;
+                if (stored.SyncStatus != SyncStatus.Conflict)
+                {
+                    stored.SyncStatus = SyncStatus.Modified;
+                }
+            }
+            else if (unchangedSinceUploadStarted)
+            {
+                stored.SyncStatus = SyncStatus.Synced;
+            }
+            else if (stored.SyncStatus != SyncStatus.Conflict)
+            {
+                stored.SyncStatus = SyncStatus.Modified;
+            }
+
+            return new ValueTask<QsoRecord?>(stored.Clone());
+        }
+    }
+
+    /// <inheritdoc />
     public ValueTask<bool> DeleteQsoAsync(string localId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localId);

@@ -13,6 +13,7 @@ dotenvy = "0.15"
 qsoripper-core = { path = "../qsoripper-core", version = "0.1.0" }
 qsoripper-storage-memory = { path = "../qsoripper-storage-memory", version = "0.1.0" }
 qsoripper-storage-sqlite = { path = "../qsoripper-storage-sqlite", version = "0.1.0" }
+prost = { workspace = true }
 prost-types = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 sqlite = { workspace = true }

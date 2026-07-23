@@ -162,6 +162,46 @@ public sealed class SqliteStorageTests : IDisposable
     }
 
     [Fact]
+    public async Task Conditional_update_rejects_stale_snapshot()
+    {
+        var original = MakeQso("conditional", "W1AW", Band._20M, Mode.Ft8, "2026-01-15T12:00:00Z");
+        await _storage.Logbook.InsertQsoAsync(original);
+        var current = original.Clone();
+        current.Notes = "operator edit";
+        await _storage.Logbook.UpdateQsoAsync(current);
+
+        var staleReplacement = original.Clone();
+        staleReplacement.Notes = "stale sync value";
+        Assert.False(await _storage.Logbook.UpdateQsoIfUnchangedAsync(original, staleReplacement));
+
+        var saved = await _storage.Logbook.GetQsoAsync(original.LocalId);
+        Assert.Equal("operator edit", saved!.Notes);
+    }
+
+    [Fact]
+    public async Task Qrz_metadata_patch_preserves_newer_operator_edit()
+    {
+        var original = MakeQso("metadata", "W1AW", Band._20M, Mode.Ft8, "2026-01-15T12:00:00Z");
+        original.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-15T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture));
+        await _storage.Logbook.InsertQsoAsync(original);
+        var current = original.Clone();
+        current.Notes = "operator edit";
+        current.UpdatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.Parse("2026-01-15T12:00:01Z", System.Globalization.CultureInfo.InvariantCulture));
+        current.SyncStatus = SyncStatus.Modified;
+        await _storage.Logbook.UpdateQsoAsync(current);
+
+        var patched = await _storage.Logbook.UpdateQrzSyncMetadataAsync(
+            original.LocalId,
+            original.UpdatedAt,
+            "QRZ-METADATA");
+
+        Assert.NotNull(patched);
+        Assert.Equal("operator edit", patched.Notes);
+        Assert.Equal("QRZ-METADATA", patched.QrzLogid);
+        Assert.Equal(SyncStatus.Modified, patched.SyncStatus);
+    }
+
+    [Fact]
     public async Task Delete_existing_returns_true()
     {
         await _storage.Logbook.InsertQsoAsync(MakeQso("q1", "W1AW", Band._20M, Mode.Ft8, "2026-01-15T12:00:00Z"));

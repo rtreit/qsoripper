@@ -125,29 +125,70 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
         lock (_lock)
         {
             ThrowIfDisposed();
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText =
-                """
-                UPDATE qsos SET
-                    qrz_logid = $qrz_logid,
-                    qrz_bookid = $qrz_bookid,
-                    station_callsign = $station_callsign,
-                    worked_callsign = $worked_callsign,
-                    utc_timestamp_ms = $utc_timestamp_ms,
-                    band = $band,
-                    mode = $mode,
-                    contest_id = $contest_id,
-                    created_at_ms = $created_at_ms,
-                    updated_at_ms = $updated_at_ms,
-                    sync_status = $sync_status,
-                    record = $record,
-                    deleted_at_ms = $deleted_at_ms,
-                    pending_remote_delete = $pending_remote_delete
-                WHERE local_id = $local_id
-                """;
-            BindQsoParameters(cmd, qso);
-            var rows = cmd.ExecuteNonQuery();
-            return new ValueTask<bool>(rows > 0);
+            return new ValueTask<bool>(UpdateQsoCore(qso));
+        }
+    }
+
+    /// <inheritdoc />
+    public ValueTask<bool> UpdateQsoIfUnchangedAsync(QsoRecord expected, QsoRecord replacement)
+    {
+        ArgumentNullException.ThrowIfNull(expected);
+        ArgumentNullException.ThrowIfNull(replacement);
+        if (!string.Equals(expected.LocalId, replacement.LocalId, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Expected and replacement QSO IDs must match.", nameof(replacement));
+        }
+
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+            return new ValueTask<bool>(UpdateQsoCore(replacement, expected.ToByteArray()));
+        }
+    }
+
+    /// <inheritdoc />
+    public ValueTask<QsoRecord?> UpdateQrzSyncMetadataAsync(
+        string localId,
+        Timestamp? expectedUpdatedAt,
+        string qrzLogid)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(qrzLogid);
+
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+            using var select = _connection.CreateCommand();
+            select.CommandText = "SELECT record FROM qsos WHERE local_id = $local_id";
+            select.Parameters.AddWithValue("$local_id", localId.Trim());
+            var payload = select.ExecuteScalar() as byte[];
+            if (payload is null)
+            {
+                return new ValueTask<QsoRecord?>((QsoRecord?)null);
+            }
+
+            var stored = QsoRecord.Parser.ParseFrom(payload);
+            var unchangedSinceUploadStarted = Equals(stored.UpdatedAt, expectedUpdatedAt);
+            stored.QrzLogid = qrzLogid;
+            if (stored.DeletedAt is not null)
+            {
+                stored.PendingRemoteDelete = true;
+                if (stored.SyncStatus != SyncStatus.Conflict)
+                {
+                    stored.SyncStatus = SyncStatus.Modified;
+                }
+            }
+            else if (unchangedSinceUploadStarted)
+            {
+                stored.SyncStatus = SyncStatus.Synced;
+            }
+            else if (stored.SyncStatus != SyncStatus.Conflict)
+            {
+                stored.SyncStatus = SyncStatus.Modified;
+            }
+
+            UpdateQsoCore(stored);
+            return new ValueTask<QsoRecord?>(stored);
         }
     }
 
@@ -168,35 +209,43 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
     }
 
     /// <inheritdoc />
-    public async ValueTask<bool> SoftDeleteQsoAsync(string localId, DateTimeOffset deletedAt, bool pendingRemoteDelete)
+    public ValueTask<bool> SoftDeleteQsoAsync(string localId, DateTimeOffset deletedAt, bool pendingRemoteDelete)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localId);
 
-        var existing = await GetQsoAsync(localId).ConfigureAwait(false);
-        if (existing is null)
+        lock (_lock)
         {
-            return false;
-        }
+            ThrowIfDisposed();
+            var existing = GetQsoCore(localId.Trim());
+            if (existing is null)
+            {
+                return new ValueTask<bool>(false);
+            }
 
-        existing.DeletedAt = Timestamp.FromDateTimeOffset(deletedAt);
-        existing.PendingRemoteDelete = pendingRemoteDelete;
-        return await UpdateQsoAsync(existing).ConfigureAwait(false);
+            existing.DeletedAt = Timestamp.FromDateTimeOffset(deletedAt);
+            existing.PendingRemoteDelete = pendingRemoteDelete;
+            return new ValueTask<bool>(UpdateQsoCore(existing));
+        }
     }
 
     /// <inheritdoc />
-    public async ValueTask<bool> RestoreQsoAsync(string localId)
+    public ValueTask<bool> RestoreQsoAsync(string localId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localId);
 
-        var existing = await GetQsoAsync(localId).ConfigureAwait(false);
-        if (existing is null)
+        lock (_lock)
         {
-            return false;
-        }
+            ThrowIfDisposed();
+            var existing = GetQsoCore(localId.Trim());
+            if (existing is null)
+            {
+                return new ValueTask<bool>(false);
+            }
 
-        existing.DeletedAt = null;
-        existing.PendingRemoteDelete = false;
-        return await UpdateQsoAsync(existing).ConfigureAwait(false);
+            existing.DeletedAt = null;
+            existing.PendingRemoteDelete = false;
+            return new ValueTask<bool>(UpdateQsoCore(existing));
+        }
     }
 
     /// <inheritdoc />
@@ -662,6 +711,46 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
         cmd.Parameters.AddWithValue("$record", qso.ToByteArray());
         cmd.Parameters.AddWithValue("$deleted_at_ms", NullableMsToDbValue(TimestampToMs(qso.DeletedAt)));
         cmd.Parameters.AddWithValue("$pending_remote_delete", qso.PendingRemoteDelete ? 1 : 0);
+    }
+
+    private bool UpdateQsoCore(QsoRecord qso, byte[]? expectedRecord = null)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText =
+            """
+            UPDATE qsos SET
+                qrz_logid = $qrz_logid,
+                qrz_bookid = $qrz_bookid,
+                station_callsign = $station_callsign,
+                worked_callsign = $worked_callsign,
+                utc_timestamp_ms = $utc_timestamp_ms,
+                band = $band,
+                mode = $mode,
+                contest_id = $contest_id,
+                created_at_ms = $created_at_ms,
+                updated_at_ms = $updated_at_ms,
+                sync_status = $sync_status,
+                record = $record,
+                deleted_at_ms = $deleted_at_ms,
+                pending_remote_delete = $pending_remote_delete
+            WHERE local_id = $local_id
+            """;
+        if (expectedRecord is not null)
+        {
+            cmd.CommandText += " AND record = $expected_record";
+            cmd.Parameters.AddWithValue("$expected_record", expectedRecord);
+        }
+
+        BindQsoParameters(cmd, qso);
+        return cmd.ExecuteNonQuery() > 0;
+    }
+
+    private QsoRecord? GetQsoCore(string localId)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT record FROM qsos WHERE local_id = $local_id";
+        cmd.Parameters.AddWithValue("$local_id", localId);
+        return cmd.ExecuteScalar() is byte[] payload ? QsoRecord.Parser.ParseFrom(payload) : null;
     }
 
     private static object NullableMsToDbValue(long? value)

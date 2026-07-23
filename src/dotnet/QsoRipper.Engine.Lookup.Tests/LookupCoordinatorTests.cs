@@ -469,6 +469,8 @@ public sealed class LookupCoordinatorTests
 
         public ValueTask InsertQsoAsync(QsoRecord qso) { _qsos.Add(qso); return ValueTask.CompletedTask; }
         public ValueTask<bool> UpdateQsoAsync(QsoRecord qso) => ValueTask.FromResult(false);
+        public ValueTask<bool> UpdateQsoIfUnchangedAsync(QsoRecord expected, QsoRecord replacement) => ValueTask.FromResult(false);
+        public ValueTask<QsoRecord?> UpdateQrzSyncMetadataAsync(string localId, Timestamp? expectedUpdatedAt, string qrzLogid) => ValueTask.FromResult<QsoRecord?>(null);
         public ValueTask<bool> DeleteQsoAsync(string localId) => ValueTask.FromResult(false);
         public ValueTask<bool> SoftDeleteQsoAsync(string localId, DateTimeOffset deletedAt, bool pendingRemoteDelete) => ValueTask.FromResult(false);
         public ValueTask<bool> RestoreQsoAsync(string localId) => ValueTask.FromResult(false);
