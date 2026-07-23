@@ -57,7 +57,7 @@ internal static class SetupCommand
         Console.WriteLine($"QRZ Logbook key:   {(status.HasQrzLogbookApiKey ? "(configured)" : "(not set)")}");
         Console.WriteLine($"Station profile:   {status.HasStationProfile}");
         Console.WriteLine($"Rig control:       {FormatRigControlSummary(status.RigControl)}");
-        Console.WriteLine($"CAT hub:           {FormatCatHubSummary(status.CatHub)}");
+        Console.WriteLine("CatHub config:     use the standalone 'cathub config' command");
         Console.WriteLine($"WSJT-X ingest:     {FormatWsjtxIngestSummary(status.WsjtxIngest)}");
 
         return status.SetupComplete ? 0 : 1;
@@ -1007,20 +1007,6 @@ internal static class SetupCommand
             ? string.IsNullOrWhiteSpace(wsjtx.AdifTailPath) ? "ADIF tail enabled" : $"ADIF tail {wsjtx.AdifTailPath}"
             : "ADIF tail disabled";
         return $"{state} ({udp}, {tail})";
-    }
-
-    private static string FormatCatHubSummary(CatHubSettings? catHub)
-    {
-        if (catHub is null)
-        {
-            return "(not configured)";
-        }
-
-        var backend = catHub.Radio?.Backend;
-        var backendLabel = string.IsNullOrWhiteSpace(backend) ? "unset" : backend;
-        var serialEndpointCount = catHub.SerialEndpoints.Count;
-        var hamlibNetEndpointCount = catHub.HamlibNet.Count;
-        return $"{backendLabel} ({serialEndpointCount} serial endpoint(s), {hamlibNetEndpointCount} Hamlib NET endpoint(s))";
     }
 
     private static string FormatRigControlSummary(RigControlSettings? rigControl)

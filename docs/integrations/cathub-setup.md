@@ -52,15 +52,16 @@ The current supported executable range is `>=0.1.0 <0.2.0`. The launcher checks
 
 ## Configuration modes
 
-### QsoRipper-managed unified configuration
+### Unified configuration
 
 Existing `[cat_hub]` settings in QsoRipper's per-user `config.toml` remain supported.
-The QsoRipper settings UI can edit this section. The launcher passes the unified file to
-CatHub explicitly with `--section cat_hub`. CatHub ignores unrelated QsoRipper tables.
+The launcher gives the unified file to CatHub with `--section cat_hub`.
+CatHub ignores unrelated QsoRipper tables.
 
-This mode keeps one station configuration file. QsoRipper setup saves preserve `[cat_hub]`
-verbatim unless the request explicitly contains a complete CatHub settings replacement. A
-malformed or newer CatHub section does not prevent either QsoRipper engine from starting.
+This mode keeps one station configuration file.
+QsoRipper treats `[cat_hub]` as opaque data and preserves it during setup saves.
+QsoRipper does not parse, validate, migrate, or write this table.
+A malformed or newer CatHub section does not prevent either QsoRipper engine from starting.
 
 ### Externally managed CatHub
 
@@ -75,11 +76,11 @@ rig-control provider to use CatHub's read endpoint, normally `127.0.0.1:4532`. C
 CW backend with the CatHub broker endpoint, normally `http://127.0.0.1:50071`, and a stable
 client name.
 
-QsoRipper does not rewrite the external CatHub file.
+QsoRipper does not parse or rewrite the external CatHub file.
 
 ## Validate and migrate configuration
 
-CatHub owns its configuration parser and semantic validation:
+CatHub owns its configuration parser, defaults, migration, and semantic validation:
 
 ```powershell
 cathub --section cat_hub config validate --config "$env:APPDATA\qsoripper\config.toml"

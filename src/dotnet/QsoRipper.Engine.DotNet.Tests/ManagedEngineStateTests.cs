@@ -1820,65 +1820,6 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
-    public void Save_setup_writes_cat_hub_section_and_round_trips()
-    {
-        var state = CreateState();
-
-        state.SaveSetup(new SaveSetupRequest
-        {
-            CatHub = BuildValidCatHub(),
-        });
-
-        var configPath = Path.Combine(_tempDirectory, "config.toml");
-        var content = File.ReadAllText(configPath);
-        Assert.Contains("[cat_hub.radio]", content, StringComparison.Ordinal);
-        Assert.Contains("[[cat_hub.serial_endpoint]]", content, StringComparison.Ordinal);
-        Assert.Contains("[[cat_hub.hamlib_net]]", content, StringComparison.Ordinal);
-        Assert.Contains("[cat_hub.winkeyer]", content, StringComparison.Ordinal);
-        Assert.Contains("[[cat_hub.winkeyer_endpoint]]", content, StringComparison.Ordinal);
-
-        // Re-load from disk to confirm the lenient projection round-trips the written values.
-        var reloaded = CreateState();
-        var status = reloaded.GetSetupStatus();
-        Assert.NotNull(status.CatHub);
-        Assert.Equal("ts590", status.CatHub.Radio.Backend);
-        Assert.Equal(9600u, status.CatHub.Radio.Baud);
-        Assert.Equal("serial", status.CatHub.Radio.Transport);
-        var serialEndpoint = Assert.Single(status.CatHub.SerialEndpoints);
-        Assert.Equal("HDSDR", serialEndpoint.Name);
-        Assert.Equal("CNCB0", serialEndpoint.Transport);
-        Assert.Equal("CNCA0", serialEndpoint.ApplicationTransport);
-        Assert.Equal("ts590", serialEndpoint.Dialect);
-        Assert.Contains(CatHubPermission.Read, serialEndpoint.Perms);
-        Assert.Contains(CatHubPermission.Write, serialEndpoint.Perms);
-        var hamlibNetEndpoint = Assert.Single(status.CatHub.HamlibNet);
-        Assert.Equal("engine", hamlibNetEndpoint.Name);
-        Assert.Equal("127.0.0.1:4532", hamlibNetEndpoint.Bind);
-        Assert.NotNull(status.CatHub.Winkeyer);
-        Assert.Equal("COM3", status.CatHub.Winkeyer.Port);
-        Assert.Equal("127.0.0.1:50071", status.CatHub.Winkeyer.ApiBind);
-        var winkeyerEndpoint = Assert.Single(status.CatHub.WinkeyerEndpoints);
-        Assert.Equal("n1mm-cw", winkeyerEndpoint.Name);
-        Assert.Equal("COM41", winkeyerEndpoint.ApplicationTransport);
-        Assert.True(winkeyerEndpoint.Primary);
-        Assert.Contains(WinkeyerEndpointPermission.Send, winkeyerEndpoint.Perms);
-    }
-
-    [Fact]
-    public void Save_setup_reflects_cat_hub_in_status_immediately()
-    {
-        var state = CreateState();
-
-        var response = state.SaveSetup(new SaveSetupRequest
-        {
-            CatHub = BuildValidCatHub(),
-        });
-
-        Assert.NotNull(response.Status.CatHub);
-        Assert.Equal("ts590", response.Status.CatHub.Radio.Backend);
-    }
-
-    [Fact]
     public void Save_setup_writes_wsjtx_ingest_section_and_round_trips()
     {
         var state = CreateState();
@@ -1983,204 +1924,6 @@ public sealed class ManagedEngineStateTests : IDisposable
         Assert.Contains("WSJT-X ADIF tail path is required", exception.Message, StringComparison.Ordinal);
     }
 
-    [Theory]
-    [MemberData(nameof(InvalidCatHubCases))]
-    public void Save_setup_rejects_invalid_cat_hub(CatHubSettings catHub, string expectedMessage)
-    {
-        var state = CreateState();
-
-        var exception = Assert.Throws<InvalidOperationException>(() => state.SaveSetup(new SaveSetupRequest
-        {
-            CatHub = catHub,
-        }));
-
-        Assert.Equal(expectedMessage, exception.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidCatHubCases()
-    {
-        // Missing radio message entirely.
-        yield return new object[]
-        {
-            new CatHubSettings { HamlibNet = { ValidEndpoint() } },
-            "CAT hub radio settings are required.",
-        };
-
-        // Missing backend.
-        yield return new object[]
-        {
-            new CatHubSettings
-            {
-                Radio = new CatHubRadioSettings { Transport = "tcp", Host = "127.0.0.1", TcpPort = 4532 },
-                HamlibNet = { ValidEndpoint() },
-            },
-            "CAT hub radio backend is required.",
-        };
-
-        // Unsupported backend.
-        yield return new object[]
-        {
-            new CatHubSettings
-            {
-                Radio = new CatHubRadioSettings { Backend = "flex", Transport = "tcp", Host = "127.0.0.1", TcpPort = 4532 },
-                HamlibNet = { ValidEndpoint() },
-            },
-            "CAT hub radio backend 'flex' is not supported (expected one of: ts590, rigctld, loopback).",
-        };
-
-        // Serial backend missing a serial port.
-        yield return new object[]
-        {
-            new CatHubSettings
-            {
-                Radio = new CatHubRadioSettings { Backend = "ts590" },
-                HamlibNet = { ValidEndpoint() },
-            },
-            "CAT hub radio requires a serial port for the selected backend.",
-        };
-
-        // tcp_port out of range.
-        yield return new object[]
-        {
-            new CatHubSettings
-            {
-                Radio = new CatHubRadioSettings { Backend = "loopback", TcpPort = 70000 },
-                HamlibNet = { ValidEndpoint() },
-            },
-            "CAT hub radio tcp_port must be between 1 and 65535.",
-        };
-
-        // tcp_port explicit zero.
-        yield return new object[]
-        {
-            new CatHubSettings
-            {
-                Radio = new CatHubRadioSettings { Backend = "loopback", TcpPort = 0 },
-                HamlibNet = { ValidEndpoint() },
-            },
-            "CAT hub radio tcp_port must be between 1 and 65535.",
-        };
-
-        // No endpoints at all.
-        yield return new object[]
-        {
-            new CatHubSettings { Radio = new CatHubRadioSettings { Backend = "loopback" } },
-            "CAT hub configuration requires at least one serial endpoint or hamlib_net endpoint.",
-        };
-
-        // Duplicate names across serial and Hamlib NET endpoints.
-        yield return new object[]
-        {
-            new CatHubSettings
-            {
-                Radio = new CatHubRadioSettings { Backend = "ts590", Port = "COM4" },
-                SerialEndpoints = { new CatHubSerialEndpoint { Name = "shared", Transport = "CNCB0", Dialect = "ts590" } },
-                HamlibNet = { new CatHubHamlibNetEndpoint { Name = "shared", Bind = "127.0.0.1:4532" } },
-            },
-            "CAT hub endpoint names must be unique: 'shared'.",
-        };
-
-        // Duplicate endpoint transports.
-        yield return new object[]
-        {
-            new CatHubSettings
-            {
-                Radio = new CatHubRadioSettings { Backend = "ts590", Port = "COM4" },
-                SerialEndpoints =
-                {
-                    new CatHubSerialEndpoint { Name = "a", Transport = "CNCB0", Dialect = "ts590" },
-                    new CatHubSerialEndpoint { Name = "b", Transport = "cncb0", Dialect = "ts590" },
-                },
-            },
-            "CAT hub serial endpoints must use distinct transports: 'cncb0'.",
-        };
-
-        // Application transport must be the other side of the virtual pair.
-        yield return new object[]
-        {
-            new CatHubSettings
-            {
-                Radio = new CatHubRadioSettings { Backend = "ts590", Port = "COM4" },
-                SerialEndpoints =
-                {
-                    new CatHubSerialEndpoint
-                    {
-                        Name = "n1mm",
-                        Transport = "COM20",
-                        ApplicationTransport = "com20",
-                        Dialect = "ts590",
-                    },
-                },
-            },
-            "CAT hub serial endpoint 'n1mm' application transport must differ from its hub transport.",
-        };
-
-        // Endpoint reusing the radio port.
-        yield return new object[]
-        {
-            new CatHubSettings
-            {
-                Radio = new CatHubRadioSettings { Backend = "ts590", Port = "COM4" },
-                SerialEndpoints = { new CatHubSerialEndpoint { Name = "a", Transport = "com4", Dialect = "ts590" } },
-            },
-            "CAT hub serial endpoint 'a' cannot reuse the radio port 'COM4'.",
-        };
-
-        // Unsupported dialect.
-        yield return new object[]
-        {
-            new CatHubSettings
-            {
-                Radio = new CatHubRadioSettings { Backend = "ts590", Port = "COM4" },
-                SerialEndpoints = { new CatHubSerialEndpoint { Name = "a", Transport = "CNCB0", Dialect = "kenwood" } },
-            },
-            "CAT hub serial endpoint 'a' dialect 'kenwood' is not supported (expected one of: ts590, ts2000).",
-        };
-
-        // Bind without a port.
-        yield return new object[]
-        {
-            new CatHubSettings
-            {
-                Radio = new CatHubRadioSettings { Backend = "loopback" },
-                HamlibNet = { new CatHubHamlibNetEndpoint { Name = "engine", Bind = "127.0.0.1" } },
-            },
-            "CAT hub hamlib_net endpoint 'engine' bind must be in host:port form.",
-        };
-
-        // Bind port out of range.
-        yield return new object[]
-        {
-            new CatHubSettings
-            {
-                Radio = new CatHubRadioSettings { Backend = "loopback" },
-                HamlibNet = { new CatHubHamlibNetEndpoint { Name = "engine", Bind = "127.0.0.1:70000" } },
-            },
-            "CAT hub hamlib_net endpoint 'engine' bind port must be between 1 and 65535.",
-        };
-
-        // WinKeyer application transport must be the other side of the virtual pair.
-        yield return new object[]
-        {
-            new CatHubSettings
-            {
-                Radio = new CatHubRadioSettings { Backend = "loopback" },
-                HamlibNet = { ValidEndpoint() },
-                Winkeyer = new CatHubWinkeyerSettings { Port = "COM3" },
-                WinkeyerEndpoints =
-                {
-                    new CatHubWinkeyerEndpoint
-                    {
-                        Name = "wktools",
-                        Transport = "COM42",
-                        ApplicationTransport = "com42",
-                    },
-                },
-            },
-            "CAT hub WinKeyer endpoint 'wktools' application transport must differ from its hub transport.",
-        };
-    }
-
     [Fact]
     public void Load_does_not_throw_on_malformed_cat_hub_section()
     {
@@ -2196,16 +1939,15 @@ public sealed class ManagedEngineStateTests : IDisposable
             endpoint = 42
             """);
 
-        // Loading must succeed and the malformed CAT hub section must project to null.
+        // Loading must succeed because QsoRipper treats the CatHub section as opaque.
         var state = CreateState();
         var status = state.GetSetupStatus();
 
-        Assert.Null(status.CatHub);
         Assert.Equal("k7rnd", status.QrzXmlUsername);
     }
 
     [Fact]
-    public void Save_setup_without_cat_hub_override_preserves_existing_section()
+    public void Save_setup_preserves_opaque_cat_hub_section()
     {
         var configPath = Path.Combine(_tempDirectory, "config.toml");
         File.WriteAllText(
@@ -2240,83 +1982,17 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
-    public void Get_setup_wizard_state_orders_cat_hub_before_review()
+    public void Get_setup_wizard_state_has_no_cat_hub_step()
     {
         var state = CreateState();
 
         var response = state.GetSetupWizardState();
 
-        Assert.Equal(5, response.Steps.Count);
+        Assert.Equal(4, response.Steps.Count);
         Assert.Equal(SetupWizardStep.LogFile, response.Steps[0].Step);
         Assert.Equal(SetupWizardStep.StationProfiles, response.Steps[1].Step);
         Assert.Equal(SetupWizardStep.QrzIntegration, response.Steps[2].Step);
-        Assert.Equal(SetupWizardStep.CatHub, response.Steps[3].Step);
-        Assert.Equal(SetupWizardStep.Review, response.Steps[4].Step);
-        Assert.True(response.Steps[3].Complete);
-    }
-
-    private static CatHubSettings BuildValidCatHub()
-    {
-        return new CatHubSettings
-        {
-            Radio = new CatHubRadioSettings
-            {
-                Backend = "ts590",
-                Transport = "serial",
-                Port = "COM4",
-                Baud = 9600,
-            },
-            Poll = new CatHubPollSettings { BaselineMs = 250 },
-            Ptt = new CatHubPttSettings { MaxTxMs = 60000 },
-            Events = new CatHubEventSettings { NativePush = true },
-            Winkeyer = new CatHubWinkeyerSettings
-            {
-                Port = "COM3",
-                Baud = 1200,
-                MaxTxMs = 30000,
-                ApiBind = "127.0.0.1:50071",
-            },
-            WinkeyerEndpoints =
-            {
-                new CatHubWinkeyerEndpoint
-                {
-                    Name = "n1mm-cw",
-                    Transport = "COM40",
-                    ApplicationTransport = "COM41",
-                    Baud = 1200,
-                    Primary = true,
-                    Perms =
-                    {
-                        WinkeyerEndpointPermission.Status,
-                        WinkeyerEndpointPermission.Send,
-                        WinkeyerEndpointPermission.Control,
-                    },
-                },
-            },
-            SerialEndpoints =
-            {
-                new CatHubSerialEndpoint
-                {
-                    Name = "HDSDR",
-                    Transport = "CNCB0",
-                    ApplicationTransport = "CNCA0",
-                    Baud = 9600,
-                    Dialect = "ts590",
-                    Perms = { CatHubPermission.Read, CatHubPermission.Write },
-                },
-            },
-            HamlibNet = { ValidEndpoint() },
-        };
-    }
-
-    private static CatHubHamlibNetEndpoint ValidEndpoint()
-    {
-        return new CatHubHamlibNetEndpoint
-        {
-            Name = "engine",
-            Bind = "127.0.0.1:4532",
-            Perms = { CatHubPermission.Read, CatHubPermission.Ptt },
-        };
+        Assert.Equal(SetupWizardStep.Review, response.Steps[3].Step);
     }
 
     private ManagedEngineState CreateState()

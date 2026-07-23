@@ -704,11 +704,14 @@ Plain protocol support is not sufficient for Log4OM.
 
 ##### Managed and external configuration
 
-CatHub owns its standalone configuration and defaults to `%APPDATA%\cathub\cathub.toml` on
-Windows or `$XDG_CONFIG_HOME/cathub/cathub.toml` on Unix, overridable with
-`CATHUB_CONFIG_PATH`. QsoRipper can instead manage CatHub from its unified per-user
-`config.toml`. In that mode the daemon reads settings from `[cat_hub]` and the launcher passes
-the unified path explicitly. CatHub accepts both layouts.
+CatHub owns all CatHub configuration, defaults, migration, and semantic validation.
+Its default path is `%APPDATA%\cathub\cathub.toml` on Windows.
+On Unix, its default path is `$XDG_CONFIG_HOME/cathub/cathub.toml`.
+`CATHUB_CONFIG_PATH` overrides the default path.
+
+CatHub can also read `[cat_hub]` from the QsoRipper per-user `config.toml`.
+In this mode, the launcher gives the unified path and section name to CatHub.
+QsoRipper treats this table as opaque data.
 
 Multiple components write the same file.
 Thus, each engine setup save MUST preserve unrelated data.
@@ -724,29 +727,16 @@ The engine replaces only its owned top-level tables:
 - `rig_control`
 
 The engine preserves `[cat_hub]`, `[launcher]`, and future component sections.
-The conditional
 The engine replaces the `[wsjtx_ingest]` setup table only when the request contains
 `SaveSetup.wsjtx_ingest`. It preserves omitted WSJT-X ingest settings. A conformant engine in any
 language must implement this merge-preserving behavior rather than rewriting the whole file,
 so it never clobbers another component's configuration.
 
-`[cat_hub]` is a **managed-mode compatibility surface**.
-Preserve it exactly during each save.
-Rewrite it only when `SaveSetup` contains a `cat_hub` message.
-In that condition, replace the complete section.
-See SetupService and `SaveSetup`.
-For status and wizard display, parse `[cat_hub]` separately from engine configuration.
-
-Use a lenient parser.
-
-A malformed or unknown schema produces an empty projection and a warning.
-It does not prevent engine load.
-Isolate this read path from engine startup.
-Rewrite `[cat_hub]` only after an explicit replacement.
-
-When CatHub is externally managed, store only the rigctld and CW client endpoints.
-Do not write the CatHub standalone file.
-CatHub is the authoritative parser and validator for both layouts.
+The engine MUST preserve `[cat_hub]` exactly during each setup save.
+The engine MUST NOT parse, validate, migrate, or write this table.
+Malformed data and a newer CatHub schema MUST NOT prevent engine startup.
+QsoRipper stores only its rigctld and CW client settings.
+Use CatHub commands to manage either configuration layout.
 
 ### 3.5 SpaceWeatherService
 
@@ -825,38 +815,6 @@ Persists setup configuration and station profile.
 3. Apply the configuration to the running engine (activate the station profile, enable integrations).
 4. Mark setup as complete.
 
-**CAT hub (`cat_hub`) management:**
-- Serial and WinKeyer endpoints can include `application_transport`, the paired virtual endpoint
-  opened by the client application. The hub opens only `transport`. Engines preserve and return
-  the application-side value for setup guidance and reject an endpoint whose two transports are the
-  same.
-- The optional `cat_hub` field (`CatHubSettings`) is a compatibility adapter for a
-  QsoRipper-managed standalone CatHub process. It writes only the unified file's `[cat_hub]`
-  section. It never writes CatHub's external standalone file.
-- The field is **full-replacement**: when present it is the complete desired `[cat_hub]`
-  section. A `radio` (with a `backend`) is required and at least one endpoint (a
-  `serial_endpoints` or `hamlib_net` entry) is required. The engine rewrites `[cat_hub]` from it.
-- When `cat_hub` is omitted, the engine leaves any existing `[cat_hub]` section **untouched**
-  (verbatim, including comments and unknown keys). Only an explicit `cat_hub` triggers a
-  rewrite - so a routine save (for example updating QRZ credentials) never reserializes the daemon's
-  configuration. This mirrors the conditional-ownership rule in the unified-configuration note.
-- QsoRipper performs limited input validation for its compatibility projection.
-  CatHub remains authoritative.
-  Use `cathub config validate` for complete semantic validation.
-  Compatibility validation checks these requirements:
-  - `backend` is `ts590`, `rigctld`, or `loopback`.
-  - Radio `transport` is `serial` or `tcp`.
-  - A non-loopback serial radio has a `port`.
-  - Endpoint `dialect` is `ts590`, `ts590-transparent`, or `ts2000`.
-  - Endpoint names are unique across serial and Hamlib NET endpoints.
-  - Endpoint transports are different.
-  - Hamlib NET binds are different and use `host:port`.
-  - An endpoint transport does not reuse the radio port.
-  CAT permission tokens include `read`, `frequency_write`, `write`, `ptt`, and `config_write`.
-  `frequency_write` permits tuning without other modeled changes.
-  `write` permits all modeled writes.
-  A violation returns `INVALID_ARGUMENT`.
-
 **WSJT-X ingest (`wsjtx_ingest`) management:**
 - The optional `wsjtx_ingest` field (`WsjtxIngestSettings`) lets setup clients manage the
   engine-owned `[wsjtx_ingest]` section.
@@ -918,7 +876,7 @@ Persists setup configuration and station profile.
   QRZ upload work must not block the local UDP or tail loops.
 
 **Error semantics:**
-- `INVALID_ARGUMENT` - invalid or missing required setup fields, an invalid `cat_hub` section, or invalid `wsjtx_ingest` settings.
+- `INVALID_ARGUMENT` - invalid or missing required setup fields, or invalid `wsjtx_ingest` settings.
 - `INTERNAL` - failed to persist configuration.
 
 #### GetSetupWizardState
@@ -927,9 +885,7 @@ Returns the current state of the setup wizard for multi-step UIs.
 
 **Behavior:**
 - Return the list of `SetupWizardStep` values with their completion status (`SetupWizardStepStatus`).
-- The ordered enum surface is `LOG_FILE`, `STATION_PROFILES`, `QRZ_INTEGRATION`, `CAT_HUB`, and `REVIEW`.
-- The CAT hub step (`SETUP_WIZARD_STEP_CAT_HUB`) is optional and always reported complete. It
-  exposes the current `[cat_hub]` projection for display and editing.
+- The ordered enum surface is `LOG_FILE`, `STATION_PROFILES`, `QRZ_INTEGRATION`, and `REVIEW`.
 
 #### ValidateSetupStep
 

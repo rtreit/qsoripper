@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
@@ -117,83 +116,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
     [ObservableProperty]
     private string _rigControlStaleThresholdMs = string.Empty;
 
-    // CAT hub ([cat_hub]) — the engine owns this whole section. The editor below
-    // only emits it on save when the operator actually edits it (IsCatHubDirty),
-    // so an untouched section keeps its comments and unknown keys verbatim.
-    [ObservableProperty]
-    private string _catHubBackend = string.Empty;
-
-    [ObservableProperty]
-    private string _catHubModel = string.Empty;
-
-    [ObservableProperty]
-    private string _catHubTransport = string.Empty;
-
-    [ObservableProperty]
-    private string _catHubPort = string.Empty;
-
-    [ObservableProperty]
-    private string _catHubBaud = string.Empty;
-
-    [ObservableProperty]
-    private string _catHubHost = string.Empty;
-
-    [ObservableProperty]
-    private string _catHubTcpPort = string.Empty;
-
-    // Tri-state ComboBox index: 0 = daemon default (omit), 1 = yes, 2 = no.
-    [ObservableProperty]
-    private int _catHubCertifiedIndex;
-
-    [ObservableProperty]
-    private string _catHubReplyTimeoutMs = string.Empty;
-
-    [ObservableProperty]
-    private string _catHubPollBaselineMs = string.Empty;
-
-    [ObservableProperty]
-    private string _catHubPollHeartbeatMs = string.Empty;
-
-    [ObservableProperty]
-    private string _catHubPttMaxTxMs = string.Empty;
-
-    // Tri-state ComboBox index: 0 = daemon default (omit), 1 = on, 2 = off.
-    [ObservableProperty]
-    private int _catHubNativePushIndex;
-
-    [ObservableProperty]
-    private string _catHubWinkeyerPort = string.Empty;
-
-    [ObservableProperty]
-    private string _catHubWinkeyerBaud = string.Empty;
-
-    [ObservableProperty]
-    private string _catHubWinkeyerMaxTxMs = string.Empty;
-
-    [ObservableProperty]
-    private string _catHubWinkeyerApiBind = string.Empty;
-
-    private bool _hasPersistedCatHub;
-    private bool _catHubLoading;
-
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(ShowCatHubRewriteWarning))]
-    private bool _isCatHubDirty;
-
-    /// <summary>
-    /// True once the operator edits a CAT hub field for a section that already
-    /// exists on disk. Surfacing this warns that saving rewrites the whole
-    /// <c>[cat_hub]</c> section and drops comments / unknown keys.
-    /// </summary>
-    public bool ShowCatHubRewriteWarning => IsCatHubDirty && _hasPersistedCatHub;
-
-    public ObservableCollection<CatHubSerialEndpointRowViewModel> CatHubSerialEndpoints { get; } = [];
-
-    public ObservableCollection<CatHubHamlibNetEndpointRowViewModel> CatHubHamlibNetEndpoints { get; } = [];
-
-    public ObservableCollection<CatHubWinkeyerEndpointRowViewModel> CatHubWinkeyerEndpoints { get; } = [];
-
-    // WSJT-X ingestion ([wsjtx_ingest]) is conditionally engine-owned like CAT hub.
+    // WSJT-X ingestion ([wsjtx_ingest]) is conditionally engine-owned.
     // Untouched settings are omitted on save so existing comments and unknown keys stay intact.
     [ObservableProperty]
     private bool _wsjtxIngestEnabled;
@@ -341,31 +264,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
     public SettingsViewModel(IEngineClient engine)
     {
         _engine = engine;
-        CatHubSerialEndpoints.CollectionChanged += OnCatHubCollectionChanged;
-        CatHubHamlibNetEndpoints.CollectionChanged += OnCatHubCollectionChanged;
-        CatHubWinkeyerEndpoints.CollectionChanged += OnCatHubCollectionChanged;
     }
-
-    private static readonly HashSet<string> CatHubScalarPropertyNames = new(StringComparer.Ordinal)
-    {
-        nameof(CatHubBackend),
-        nameof(CatHubModel),
-        nameof(CatHubTransport),
-        nameof(CatHubPort),
-        nameof(CatHubBaud),
-        nameof(CatHubHost),
-        nameof(CatHubTcpPort),
-        nameof(CatHubCertifiedIndex),
-        nameof(CatHubReplyTimeoutMs),
-        nameof(CatHubPollBaselineMs),
-        nameof(CatHubPollHeartbeatMs),
-        nameof(CatHubPttMaxTxMs),
-        nameof(CatHubNativePushIndex),
-        nameof(CatHubWinkeyerPort),
-        nameof(CatHubWinkeyerBaud),
-        nameof(CatHubWinkeyerMaxTxMs),
-        nameof(CatHubWinkeyerApiBind),
-    };
 
     private static readonly HashSet<string> WsjtxIngestScalarPropertyNames = new(StringComparer.Ordinal)
     {
@@ -381,25 +280,10 @@ internal sealed partial class SettingsViewModel : ObservableObject
     protected override void OnPropertyChanged(PropertyChangedEventArgs e)
     {
         base.OnPropertyChanged(e);
-        if (e.PropertyName is not null && CatHubScalarPropertyNames.Contains(e.PropertyName))
-        {
-            MarkCatHubDirty();
-        }
-
         if (e.PropertyName is not null && WsjtxIngestScalarPropertyNames.Contains(e.PropertyName))
         {
             MarkWsjtxIngestDirty();
         }
-    }
-
-    private void MarkCatHubDirty()
-    {
-        if (_catHubLoading)
-        {
-            return;
-        }
-
-        IsCatHubDirty = true;
     }
 
     private void MarkWsjtxIngestDirty()
@@ -410,72 +294,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
         }
 
         IsWsjtxIngestDirty = true;
-    }
-
-    private void OnCatHubCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        if (e.OldItems is not null)
-        {
-            foreach (ObservableObject row in e.OldItems)
-            {
-                row.PropertyChanged -= OnCatHubRowChanged;
-            }
-        }
-
-        if (e.NewItems is not null)
-        {
-            foreach (ObservableObject row in e.NewItems)
-            {
-                row.PropertyChanged += OnCatHubRowChanged;
-            }
-        }
-
-        MarkCatHubDirty();
-    }
-
-    private void OnCatHubRowChanged(object? sender, PropertyChangedEventArgs e) => MarkCatHubDirty();
-
-    [RelayCommand]
-    private void AddCatHubSerialEndpoint()
-    {
-        CatHubSerialEndpoints.Add(new CatHubSerialEndpointRowViewModel());
-    }
-
-    [RelayCommand]
-    private void RemoveCatHubSerialEndpoint(CatHubSerialEndpointRowViewModel? row)
-    {
-        if (row is not null)
-        {
-            CatHubSerialEndpoints.Remove(row);
-        }
-    }
-
-    [RelayCommand]
-    private void AddCatHubHamlibNetEndpoint()
-    {
-        CatHubHamlibNetEndpoints.Add(new CatHubHamlibNetEndpointRowViewModel());
-    }
-
-    [RelayCommand]
-    private void RemoveCatHubHamlibNetEndpoint(CatHubHamlibNetEndpointRowViewModel? row)
-    {
-        if (row is not null)
-        {
-            CatHubHamlibNetEndpoints.Remove(row);
-        }
-    }
-
-    [RelayCommand]
-    private void AddCatHubWinkeyerEndpoint() =>
-        CatHubWinkeyerEndpoints.Add(new CatHubWinkeyerEndpointRowViewModel());
-
-    [RelayCommand]
-    private void RemoveCatHubWinkeyerEndpoint(CatHubWinkeyerEndpointRowViewModel? row)
-    {
-        if (row is not null)
-        {
-            CatHubWinkeyerEndpoints.Remove(row);
-        }
     }
 
     /// <summary>
@@ -614,12 +432,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
                 return;
             }
 
-            if (IsCatHubDirty && !TryValidateCatHubInputs(out var catHubError))
-            {
-                ErrorMessage = catHubError;
-                return;
-            }
-
             if (IsWsjtxIngestDirty && !TryValidateWsjtxIngestInputs(out var wsjtxError))
             {
                 ErrorMessage = wsjtxError;
@@ -663,16 +475,13 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private void SelectRigSection() => SelectedSectionIndex = 4;
 
     [RelayCommand]
-    private void SelectCatHubSection() => SelectedSectionIndex = 5;
+    private void SelectWsjtxSection() => SelectedSectionIndex = 5;
 
     [RelayCommand]
-    private void SelectWsjtxSection() => SelectedSectionIndex = 6;
+    private void SelectNextSection() => SelectedSectionIndex = (SelectedSectionIndex + 1) % 6;
 
     [RelayCommand]
-    private void SelectNextSection() => SelectedSectionIndex = (SelectedSectionIndex + 1) % 7;
-
-    [RelayCommand]
-    private void SelectPreviousSection() => SelectedSectionIndex = (SelectedSectionIndex + 6) % 7;
+    private void SelectPreviousSection() => SelectedSectionIndex = (SelectedSectionIndex + 5) % 6;
 
     [RelayCommand]
     private async Task TestQrzXmlAsync()
@@ -795,7 +604,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
 
         // Password and API key are never returned by the engine for security;
         // leave them empty so the user can re-enter if they want to change them.
-        ApplyCatHub(status.CatHub);
         ApplyWsjtxIngest(status.WsjtxIngest);
     }
 
@@ -823,121 +631,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
         {
             _wsjtxIngestLoading = false;
             IsWsjtxIngestDirty = false;
-        }
-    }
-
-    private void ApplyCatHub(CatHubSettings? catHub)
-    {
-        _catHubLoading = true;
-        try
-        {
-            foreach (var row in CatHubSerialEndpoints)
-            {
-                row.PropertyChanged -= OnCatHubRowChanged;
-            }
-
-            foreach (var row in CatHubHamlibNetEndpoints)
-            {
-                row.PropertyChanged -= OnCatHubRowChanged;
-            }
-
-            foreach (var row in CatHubWinkeyerEndpoints)
-            {
-                row.PropertyChanged -= OnCatHubRowChanged;
-            }
-
-            CatHubSerialEndpoints.Clear();
-            CatHubHamlibNetEndpoints.Clear();
-            CatHubWinkeyerEndpoints.Clear();
-
-            _hasPersistedCatHub = catHub is not null;
-            var winkeyer = catHub?.Winkeyer;
-            CatHubWinkeyerPort = winkeyer?.Port ?? string.Empty;
-            CatHubWinkeyerBaud = winkeyer is { HasBaud: true }
-                ? winkeyer.Baud.ToString(CultureInfo.InvariantCulture) : string.Empty;
-            CatHubWinkeyerMaxTxMs = winkeyer is { HasMaxTxMs: true }
-                ? winkeyer.MaxTxMs.ToString(CultureInfo.InvariantCulture) : string.Empty;
-            CatHubWinkeyerApiBind = winkeyer is { HasApiBind: true }
-                ? winkeyer.ApiBind : string.Empty;
-
-            var radio = catHub?.Radio;
-            CatHubBackend = radio is { HasBackend: true } ? radio.Backend : string.Empty;
-            CatHubModel = radio is { HasModel: true } ? radio.Model : string.Empty;
-            CatHubTransport = radio is { HasTransport: true } ? radio.Transport : string.Empty;
-            CatHubPort = radio is { HasPort: true } ? radio.Port : string.Empty;
-            CatHubBaud = radio is { HasBaud: true } ? radio.Baud.ToString(CultureInfo.InvariantCulture) : string.Empty;
-            CatHubHost = radio is { HasHost: true } ? radio.Host : string.Empty;
-            CatHubTcpPort = radio is { HasTcpPort: true } ? radio.TcpPort.ToString(CultureInfo.InvariantCulture) : string.Empty;
-            CatHubCertifiedIndex = radio is { HasCertified: true } ? (radio.Certified ? 1 : 2) : 0;
-            CatHubReplyTimeoutMs = radio is { HasReplyTimeoutMs: true }
-                ? radio.ReplyTimeoutMs.ToString(CultureInfo.InvariantCulture) : string.Empty;
-
-            var poll = catHub?.Poll;
-            CatHubPollBaselineMs = poll is { HasBaselineMs: true }
-                ? poll.BaselineMs.ToString(CultureInfo.InvariantCulture) : string.Empty;
-            CatHubPollHeartbeatMs = poll is { HasHeartbeatMs: true }
-                ? poll.HeartbeatMs.ToString(CultureInfo.InvariantCulture) : string.Empty;
-
-            var ptt = catHub?.Ptt;
-            CatHubPttMaxTxMs = ptt is { HasMaxTxMs: true }
-                ? ptt.MaxTxMs.ToString(CultureInfo.InvariantCulture) : string.Empty;
-
-            var events = catHub?.Events;
-            CatHubNativePushIndex = events is { HasNativePush: true } ? (events.NativePush ? 1 : 2) : 0;
-
-            if (catHub is not null)
-            {
-                foreach (var endpoint in catHub.SerialEndpoints)
-                {
-                    CatHubSerialEndpoints.Add(new CatHubSerialEndpointRowViewModel
-                    {
-                        Name = endpoint.Name,
-                        Transport = endpoint.Transport,
-                        ApplicationTransport = endpoint.HasApplicationTransport ? endpoint.ApplicationTransport : string.Empty,
-                        Baud = endpoint.Baud != 0 ? endpoint.Baud.ToString(CultureInfo.InvariantCulture) : string.Empty,
-                        Dialect = string.IsNullOrWhiteSpace(endpoint.Dialect) ? "ts590" : endpoint.Dialect,
-                        PermRead = endpoint.Perms.Contains(CatHubPermission.Read),
-                        PermWrite = endpoint.Perms.Contains(CatHubPermission.Write),
-                        PermPtt = endpoint.Perms.Contains(CatHubPermission.Ptt),
-                        PermConfigWrite = endpoint.Perms.Contains(CatHubPermission.ConfigWrite),
-                    });
-                }
-
-                foreach (var endpoint in catHub.HamlibNet)
-                {
-                    CatHubHamlibNetEndpoints.Add(new CatHubHamlibNetEndpointRowViewModel
-                    {
-                        Name = endpoint.Name,
-                        Bind = endpoint.Bind,
-                        PermRead = endpoint.Perms.Contains(CatHubPermission.Read),
-                        PermWrite = endpoint.Perms.Contains(CatHubPermission.Write),
-                        PermPtt = endpoint.Perms.Contains(CatHubPermission.Ptt),
-                        PermConfigWrite = endpoint.Perms.Contains(CatHubPermission.ConfigWrite),
-                    });
-                }
-
-                foreach (var endpoint in catHub.WinkeyerEndpoints)
-                {
-                    CatHubWinkeyerEndpoints.Add(new CatHubWinkeyerEndpointRowViewModel
-                    {
-                        Name = endpoint.Name,
-                        Transport = endpoint.Transport,
-                        ApplicationTransport = endpoint.HasApplicationTransport ? endpoint.ApplicationTransport : string.Empty,
-                        Baud = endpoint.HasBaud ? endpoint.Baud.ToString(CultureInfo.InvariantCulture) : string.Empty,
-                        Primary = endpoint.HasPrimary && endpoint.Primary,
-                        PermStatus = endpoint.Perms.Contains(WinkeyerEndpointPermission.Status),
-                        PermSend = endpoint.Perms.Contains(WinkeyerEndpointPermission.Send),
-                        PermControl = endpoint.Perms.Contains(WinkeyerEndpointPermission.Control),
-                        PermPtt = endpoint.Perms.Contains(WinkeyerEndpointPermission.Ptt),
-                        PermConfigWrite = endpoint.Perms.Contains(WinkeyerEndpointPermission.ConfigWrite),
-                    });
-                }
-            }
-        }
-        finally
-        {
-            _catHubLoading = false;
-            IsCatHubDirty = false;
         }
     }
 
@@ -1019,11 +712,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
             request.RigControl = rigControl;
         }
 
-        if (IsCatHubDirty)
-        {
-            request.CatHub = BuildCatHubSettings();
-        }
-
         if (IsWsjtxIngestDirty)
         {
             request.WsjtxIngest = BuildWsjtxIngestSettings();
@@ -1046,155 +734,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
         SetOptionalString(WsjtxAdifTailPath, value => settings.AdifTailPath = value);
         SetUInt32Field(WsjtxPollIntervalMs, value => settings.PollIntervalMs = value);
         return settings;
-    }
-
-    private CatHubSettings BuildCatHubSettings()
-    {
-        var settings = new CatHubSettings();
-
-        var radio = new CatHubRadioSettings();
-        SetOptionalString(CatHubBackend, value => radio.Backend = value.ToLowerInvariant());
-        SetOptionalString(CatHubModel, value => radio.Model = value);
-        SetOptionalString(CatHubTransport, value => radio.Transport = value.ToLowerInvariant());
-        SetOptionalString(CatHubPort, value => radio.Port = value);
-        SetUInt32Field(CatHubBaud, value => radio.Baud = value);
-        SetOptionalString(CatHubHost, value => radio.Host = value);
-        SetUInt32Field(CatHubTcpPort, value => radio.TcpPort = value);
-        if (CatHubCertifiedIndex != 0)
-        {
-            radio.Certified = CatHubCertifiedIndex == 1;
-        }
-
-        SetUInt64Field(CatHubReplyTimeoutMs, value => radio.ReplyTimeoutMs = value);
-        settings.Radio = radio;
-
-        if (!string.IsNullOrWhiteSpace(CatHubPollBaselineMs) || !string.IsNullOrWhiteSpace(CatHubPollHeartbeatMs))
-        {
-            var poll = new CatHubPollSettings();
-            SetUInt64Field(CatHubPollBaselineMs, value => poll.BaselineMs = value);
-            SetUInt64Field(CatHubPollHeartbeatMs, value => poll.HeartbeatMs = value);
-            settings.Poll = poll;
-        }
-
-        if (!string.IsNullOrWhiteSpace(CatHubPttMaxTxMs))
-        {
-            var ptt = new CatHubPttSettings();
-            SetUInt64Field(CatHubPttMaxTxMs, value => ptt.MaxTxMs = value);
-            settings.Ptt = ptt;
-        }
-
-        if (CatHubNativePushIndex != 0)
-        {
-            settings.Events = new CatHubEventSettings { NativePush = CatHubNativePushIndex == 1 };
-        }
-
-        if (!string.IsNullOrWhiteSpace(CatHubWinkeyerPort))
-        {
-            var winkeyer = new CatHubWinkeyerSettings { Port = CatHubWinkeyerPort.Trim() };
-            SetUInt32Field(CatHubWinkeyerBaud, value => winkeyer.Baud = value);
-            SetUInt64Field(CatHubWinkeyerMaxTxMs, value => winkeyer.MaxTxMs = value);
-            SetOptionalString(CatHubWinkeyerApiBind, value => winkeyer.ApiBind = value);
-            settings.Winkeyer = winkeyer;
-        }
-
-        foreach (var endpoint in CatHubWinkeyerEndpoints)
-        {
-            var proto = new CatHubWinkeyerEndpoint
-            {
-                Name = endpoint.Name.Trim(),
-                Transport = endpoint.Transport.Trim(),
-                Primary = endpoint.Primary,
-            };
-            SetOptionalString(endpoint.ApplicationTransport, value => proto.ApplicationTransport = value);
-            if (uint.TryParse(endpoint.Baud, CultureInfo.InvariantCulture, out var baud))
-            {
-                proto.Baud = baud;
-            }
-            if (endpoint.PermStatus)
-            {
-                proto.Perms.Add(WinkeyerEndpointPermission.Status);
-            }
-
-            if (endpoint.PermSend)
-            {
-                proto.Perms.Add(WinkeyerEndpointPermission.Send);
-            }
-
-            if (endpoint.PermControl)
-            {
-                proto.Perms.Add(WinkeyerEndpointPermission.Control);
-            }
-
-            if (endpoint.PermPtt)
-            {
-                proto.Perms.Add(WinkeyerEndpointPermission.Ptt);
-            }
-
-            if (endpoint.PermConfigWrite)
-            {
-                proto.Perms.Add(WinkeyerEndpointPermission.ConfigWrite);
-            }
-            settings.WinkeyerEndpoints.Add(proto);
-        }
-
-        foreach (var endpoint in CatHubSerialEndpoints)
-        {
-            var proto = new CatHubSerialEndpoint
-            {
-                Name = endpoint.Name.Trim(),
-                Transport = endpoint.Transport.Trim(),
-                Dialect = string.IsNullOrWhiteSpace(endpoint.Dialect) ? "ts590" : endpoint.Dialect.Trim().ToLowerInvariant(),
-            };
-            SetOptionalString(endpoint.ApplicationTransport, value => proto.ApplicationTransport = value);
-            if (uint.TryParse(endpoint.Baud, CultureInfo.InvariantCulture, out var baud))
-            {
-                proto.Baud = baud;
-            }
-
-            AddPerms(proto.Perms, endpoint.PermRead, endpoint.PermWrite, endpoint.PermPtt, endpoint.PermConfigWrite);
-            settings.SerialEndpoints.Add(proto);
-        }
-
-        foreach (var endpoint in CatHubHamlibNetEndpoints)
-        {
-            var proto = new CatHubHamlibNetEndpoint
-            {
-                Name = endpoint.Name.Trim(),
-                Bind = endpoint.Bind.Trim(),
-            };
-            AddPerms(proto.Perms, endpoint.PermRead, endpoint.PermWrite, endpoint.PermPtt, endpoint.PermConfigWrite);
-            settings.HamlibNet.Add(proto);
-        }
-
-        return settings;
-    }
-
-    private static void AddPerms(
-        Google.Protobuf.Collections.RepeatedField<CatHubPermission> perms,
-        bool read,
-        bool write,
-        bool ptt,
-        bool configWrite)
-    {
-        if (read)
-        {
-            perms.Add(CatHubPermission.Read);
-        }
-
-        if (write)
-        {
-            perms.Add(CatHubPermission.Write);
-        }
-
-        if (ptt)
-        {
-            perms.Add(CatHubPermission.Ptt);
-        }
-
-        if (configWrite)
-        {
-            perms.Add(CatHubPermission.ConfigWrite);
-        }
     }
 
     private RigControlSettings? BuildRigControlSettings()
@@ -1296,181 +835,6 @@ internal sealed partial class SettingsViewModel : ObservableObject
             && !WsjtxIngestSetup.IsValidPollInterval(pollInterval))
         {
             validationError = "WSJT-X poll interval must be 0 for the engine default or a positive whole number.";
-            return false;
-        }
-
-        return true;
-    }
-
-    private bool TryValidateCatHubInputs(out string? validationError)
-    {
-        validationError = null;
-
-        var backend = CatHubBackend.Trim().ToLowerInvariant();
-        var managed = backend is not ("" or "loopback");
-        if (managed && backend is not ("ts590" or "rigctld"))
-        {
-            validationError = "CAT hub backend must be ts590, rigctld, or loopback.";
-            return false;
-        }
-
-        var transport = CatHubTransport.Trim().ToLowerInvariant();
-        if (transport.Length > 0 && transport is not ("serial" or "tcp"))
-        {
-            validationError = "CAT hub transport must be serial or tcp.";
-            return false;
-        }
-
-        if (managed && transport == "serial" && string.IsNullOrWhiteSpace(CatHubPort))
-        {
-            validationError = "CAT hub serial transport requires a port (e.g. COM3).";
-            return false;
-        }
-
-        if (!TryValidateUInt32Field(CatHubBaud, 1, 4_000_000, "CAT hub baud", out validationError))
-        {
-            return false;
-        }
-
-        if (!TryValidateUInt32Field(CatHubTcpPort, 1, 65_535, "CAT hub TCP port", out validationError))
-        {
-            return false;
-        }
-
-        if (!TryValidateUInt64Field(CatHubReplyTimeoutMs, 1, "CAT hub reply timeout", out validationError)
-            || !TryValidateUInt64Field(CatHubPollBaselineMs, 1, "CAT hub poll baseline", out validationError)
-            || !TryValidateUInt64Field(CatHubPollHeartbeatMs, 1, "CAT hub poll heartbeat", out validationError)
-            || !TryValidateUInt64Field(CatHubPttMaxTxMs, 1, "CAT hub PTT max TX", out validationError))
-        {
-            return false;
-        }
-
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var endpoint in CatHubSerialEndpoints)
-        {
-            if (string.IsNullOrWhiteSpace(endpoint.Name))
-            {
-                validationError = "Every CAT hub endpoint needs a name.";
-                return false;
-            }
-
-            if (string.IsNullOrWhiteSpace(endpoint.Transport))
-            {
-                validationError = $"CAT hub endpoint '{endpoint.Name}' needs a transport (path or host:port).";
-                return false;
-            }
-
-            if (!string.IsNullOrWhiteSpace(endpoint.ApplicationTransport)
-                && string.Equals(endpoint.Transport.Trim(), endpoint.ApplicationTransport.Trim(), StringComparison.OrdinalIgnoreCase))
-            {
-                validationError = $"CAT hub endpoint '{endpoint.Name}' application port must differ from its hub port.";
-                return false;
-            }
-
-            var dialect = endpoint.Dialect.Trim().ToLowerInvariant();
-            if (dialect is not ("ts590" or "ts2000"))
-            {
-                validationError = $"CAT hub endpoint '{endpoint.Name}' dialect must be ts590 or ts2000.";
-                return false;
-            }
-
-            if (!names.Add(endpoint.Name.Trim()))
-            {
-                validationError = $"CAT hub endpoint name '{endpoint.Name}' is used more than once.";
-                return false;
-            }
-        }
-
-        foreach (var endpoint in CatHubHamlibNetEndpoints)
-        {
-            if (string.IsNullOrWhiteSpace(endpoint.Name))
-            {
-                validationError = "Every CAT hub network endpoint needs a name.";
-                return false;
-            }
-
-            if (string.IsNullOrWhiteSpace(endpoint.Bind) || !endpoint.Bind.Contains(':', StringComparison.Ordinal))
-            {
-                validationError = $"CAT hub endpoint '{endpoint.Name}' bind must be host:port (e.g. 127.0.0.1:4532).";
-                return false;
-            }
-
-            if (!names.Add(endpoint.Name.Trim()))
-            {
-                validationError = $"CAT hub endpoint name '{endpoint.Name}' is used more than once.";
-                return false;
-            }
-        }
-
-        if (CatHubWinkeyerEndpoints.Count > 0 && string.IsNullOrWhiteSpace(CatHubWinkeyerPort))
-        {
-            validationError = "WinKeyer endpoints require a physical WinKeyer port.";
-            return false;
-        }
-
-        if (!string.IsNullOrWhiteSpace(CatHubWinkeyerPort))
-        {
-            if (!TryValidateUInt32Field(CatHubWinkeyerBaud, 1200, 1200, "WinKeyer baud", out validationError)
-                || !TryValidateUInt64Field(CatHubWinkeyerMaxTxMs, 1000, "WinKeyer max TX", out validationError))
-            {
-                return false;
-            }
-
-            if (!string.IsNullOrWhiteSpace(CatHubWinkeyerApiBind)
-                && !(CatHubWinkeyerApiBind.StartsWith("127.", StringComparison.Ordinal)
-                    || CatHubWinkeyerApiBind.StartsWith("[::1]:", StringComparison.Ordinal)))
-            {
-                validationError = "WinKeyer API bind must use a loopback address.";
-                return false;
-            }
-        }
-
-        var winkeyerTransports = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var primaryEndpoints = 0;
-        foreach (var endpoint in CatHubWinkeyerEndpoints)
-        {
-            if (string.IsNullOrWhiteSpace(endpoint.Name) || string.IsNullOrWhiteSpace(endpoint.Transport))
-            {
-                validationError = "Every WinKeyer endpoint needs a name and virtual serial transport.";
-                return false;
-            }
-
-            if (!winkeyerTransports.Add(endpoint.Transport.Trim()))
-            {
-                validationError = $"WinKeyer transport '{endpoint.Transport}' is used more than once.";
-                return false;
-            }
-
-            if (!string.IsNullOrWhiteSpace(endpoint.ApplicationTransport)
-                && string.Equals(endpoint.Transport.Trim(), endpoint.ApplicationTransport.Trim(), StringComparison.OrdinalIgnoreCase))
-            {
-                validationError = $"WinKeyer endpoint '{endpoint.Name}' application port must differ from its hub port.";
-                return false;
-            }
-
-            if (endpoint.Primary)
-            {
-                primaryEndpoints++;
-            }
-
-            if (endpoint.PermSend && !endpoint.PermStatus
-                || endpoint.PermPtt && (!endpoint.PermSend || !endpoint.PermControl)
-                || endpoint.PermConfigWrite && (!endpoint.PermStatus || !endpoint.PermControl))
-            {
-                validationError = $"WinKeyer endpoint '{endpoint.Name}' has an invalid permission combination.";
-                return false;
-            }
-        }
-
-        if (primaryEndpoints > 1)
-        {
-            validationError = "Only one WinKeyer endpoint may be primary.";
-            return false;
-        }
-
-        if (managed && CatHubHamlibNetEndpoints.Count == 0 && CatHubSerialEndpoints.Count == 0)
-        {
-            validationError = "A managed CAT hub radio needs at least one endpoint or network endpoint.";
             return false;
         }
 
