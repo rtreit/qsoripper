@@ -20,8 +20,8 @@ Use it to:
 
 | RPC | Status | Notes |
 |---|---|---|
-| `GetSetupStatus` | ✅ Implemented | Returns persisted setup status, config path, suggested log file path, and validation warnings |
-| `SaveSetup` | ✅ Implemented | Validates and writes `config.toml`, then hot-applies the new persisted config to the running engine |
+| `GetSetupStatus` | Implemented | Returns persisted setup status, config path, suggested log file path, and validation warnings |
+| `SaveSetup` | Implemented | Validates and writes `config.toml`, then hot-applies the new persisted config to the running engine |
 
 Both RPCs use unique request/response envelopes and share a reusable `SetupStatus` payload. `GetSetupStatusResponse.status` and `SaveSetupResponse.status` each carry that payload instead of reusing an RPC response as a nested model.
 
@@ -53,7 +53,7 @@ rpc GetSetupStatus(GetSetupStatusRequest) returns (GetSetupStatusResponse)
 | `active_station_profile_id` | `string` (optional) | Persisted active station-profile id when profile lifecycle is configured |
 | `station_profile_count` | `uint32` | Count of persisted station profiles currently stored |
 | `qrz_xml_username` | `string` (optional) | Persisted QRZ XML username |
-| `has_qrz_xml_password` | `bool` | Whether a QRZ XML password is stored |
+| `has_qrz_xml_password` | `bool` | Whether storage contains a QRZ XML password |
 | `suggested_log_file_path` | `string` | Recommended log file path when the user has not picked one yet |
 | `warnings` | `repeated string` | Human-readable setup gaps or validation warnings |
 
@@ -78,9 +78,9 @@ Saved setup persists the QRZ XML password so engine restarts can continue servin
 
 **Validation rules**
 
-- `station_profile.station_callsign` is required
-- `log_file_path` is required for the current operator-facing setup flow
-- QRZ XML username/password must either both be set or both be omitted
+- Supply `station_profile.station_callsign`.
+- Supply `log_file_path` for the current operator setup flow.
+- Supply both QRZ XML credentials or neither credential.
 - `dxcc`, `cq_zone`, and `itu_zone` must be greater than zero when present
 - `latitude` / `longitude` must be finite and within valid bounds
 
@@ -90,7 +90,7 @@ Saved setup persists the QRZ XML password so engine restarts can continue servin
 |---|---|---|
 | `status` | `SetupStatus` | The persisted setup state after validation/save completes |
 
-Legacy compatibility note: the proto still carries `storage_backend`, `sqlite_path`, and `suggested_sqlite_path` for older clients, but new callers should use `log_file_path` and `suggested_log_file_path`.
+Legacy compatibility note: the proto still contains `storage_backend`, `sqlite_path`, and `suggested_sqlite_path` for older clients. New callers must use `log_file_path` and `suggested_log_file_path`.
 
 ## Persistence model
 
@@ -101,4 +101,4 @@ Legacy compatibility note: the proto still carries `storage_backend`, `sqlite_pa
   - environment: `QSORIPPER_CONFIG_PATH`
   - CLI: `--config path\to\config.toml`
 
-Saved setup is hot-applied to the running engine for **new** requests. Existing saved QSOs remain unchanged because they already carry their own `station_snapshot`.
+The engine hot-applies saved setup for **new** requests. Existing QSOs do not change because each QSO contains its own `station_snapshot`.

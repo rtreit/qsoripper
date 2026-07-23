@@ -1,16 +1,19 @@
-# ARRL CW Corpus — Index-Driven Parallel Harvester
+# ARRL CW Corpus - Index-Driven Parallel Harvester
 
-Fetch, trim, align, and slice the ARRL Code Practice (W1AW bulletin) archive
-into a labeled CW training corpus. Designed to be **fast** and **resumable**:
-one HTTP request per speed builds the full session index, then download / trim
-/ align run in parallel across all available cores.
+Fetch the ARRL Code Practice archive.
+Then trim, align, and divide it into a labeled CW training corpus.
+The archive contains W1AW bulletins.
+The process is **fast** and **resumable**.
+One HTTP request for each speed builds the complete session index.
+Then download, trim, and align operations use all available cores.
 
 ## Pilot result
 
-Pilot run on 4 speeds × 50 newest sessions = 200 sessions completed in **6.2
-minutes wall time** on a Windows workstation (8 download workers, 8 align
-workers). 1576 chunks / ~17.8 hours of clean labeled CW produced. See
-`quality_report.md` and `../../../EXPERIMENT_REPORT.md`.
+The pilot used four speeds and the 50 newest sessions for each speed.
+It processed 200 sessions in **6.2 minutes** on a Windows workstation.
+The process used eight download workers and eight alignment workers.
+It produced 1,576 chunks and approximately 17.8 hours of clean labeled CW.
+See `quality_report.md` and `../../../EXPERIMENT_REPORT.md`.
 
 ## Prerequisites
 
@@ -38,7 +41,7 @@ Common flags:
 | `--limit-per-speed`   | `50`                 | Newest N sessions per speed |
 | `--workers`           | `8`                  | Concurrent HTTP downloads (per-host cap) |
 | `--align-workers`     | `os.cpu_count()`     | Process pool size for trim+align |
-| `--skip-stages`       | _empty_              | e.g. `0,1` to skip rebuild & redownload |
+| `--skip-stages`       | _empty_              | for example `0,1` to skip rebuild & redownload |
 
 Stage indices: `0=build_index 1=download 2=trim 3=align 4=manifest 5=report`.
 
@@ -47,13 +50,13 @@ Stage indices: `0=build_index 1=download 2=trim 3=align 4=manifest 5=report`.
 | Stage | Module | What it does | Output |
 |:-----:|:-------|:-------------|:-------|
 | 0 | `build_index.py`     | One GET per speed → parses anchor tags → emits `index.jsonl` of every (wpm,date,mp3,txt) tuple. **No date-probing.** | `data/cw-samples/arrl-archive/index.jsonl` |
-| 1 | `download_parallel.py` | aiohttp + `Semaphore(workers)`; validates content-type (rejects the ARRL CDN GIF error page); per-file `*.dl.json` sidecar. Polite. | `data/cw-samples/arrl-archive/{wpm}wpm/raw/{YYMMDD}.{mp3,txt}` |
-| 2 | `trim_parallel.py`   | ProcessPool; ffmpeg → 8 kHz mono → Goertzel @ 700 Hz → strip intro/outro silence. | `…/trimmed/{YYMMDD}.wav` + `.trim.json` |
-| 3 | `align_parallel.py`  | ProcessPool spawning N `cw-decoder.exe stream-region` subprocesses; Levenshtein-anchored alignment vs truth → sentence-bounded chunks; drops chunks with align CER > 0.05 and whole files with CER > 0.50. | `…/chunks/{YYMMDD}_{seq:04d}.wav` + `.chunks.jsonl` |
+| 1 | `download_parallel.py` | aiohttp + `Semaphore(workers)`. Validates content-type (rejects the ARRL CDN GIF error page). Per-file `*.dl.json` sidecar. Polite. | `data/cw-samples/arrl-archive/{wpm}wpm/raw/{YYMMDD}.{mp3,txt}` |
+| 2 | `trim_parallel.py`   | ProcessPool. Ffmpeg → 8 kHz mono → Goertzel @ 700 Hz → strip intro/outro silence. | `…/trimmed/{YYMMDD}.wav` + `.trim.json` |
+| 3 | `align_parallel.py`  | ProcessPool spawning N `cw-decoder.exe stream-region` subprocesses. Levenshtein-anchored alignment vs truth → sentence-bounded chunks. Drops chunks with align CER > 0.05 and whole files with CER > 0.50. | `…/chunks/{YYMMDD}_{seq:04d}.wav` + `.chunks.jsonl` |
 | 4 | `manifest.py`        | Aggregates all `*.chunks.jsonl` → master manifest + 20-row committed sample. | `…/manifest.jsonl`, `sample_manifest.jsonl` |
 | 5 | `report.py`          | Per-speed coverage, duration histogram, alignment score distribution, spot checks, pipeline timings. | `quality_report.md` |
 
-All stages are **idempotent** — re-running with the same args is a no-op for
+All stages are **idempotent** - re-running with the same args is a no-op for
 already-completed work (downloads check size, trim/align check sidecar / chunks
 JSONL).
 
@@ -78,31 +81,31 @@ JSONL).
 - `wav_path` is forward-slash relative to the repo root.
 - `alignment_score` is per-chunk Levenshtein-anchored CER between the truth
   text and the decoder's transcript at the same proportional position. Lower
-  is better; chunks > 0.05 are dropped before manifest writeout.
+  is better. Chunks > 0.05 are dropped before manifest writeout.
 - `duration_s` is the actual sliced WAV duration (mono int16, 8 kHz).
 
 ## Scaling guidance
 
 - **Wider speed coverage:** add `5,7.5,10,13,18,35,40` to `--speeds`. The
   current `cw-decoder` model has trouble locking at 15 WPM (whole-file CER
-  ~0.30 → 0 chunks retained); `20+ WPM` works cleanly. The ARRL archive index
-  parser handles all 11 official speeds; the URL slug for fractional speeds
-  is `7pt5` (e.g. `https://www.arrl.org/7pt5-wpm-code-archive`).
+  ~0.30 → 0 chunks retained). `20+ WPM` works cleanly. The ARRL archive index
+  parser handles all 11 official speeds. The URL slug for fractional speeds
+  is `7pt5` (for example `https://www.arrl.org/7pt5-wpm-code-archive`).
 - **Full archive:** drop `--limit-per-speed`. Each speed has ~285 sessions
-  going back to 2013–2014 (bi-weekly cadence). Total at 8 speeds with full
+  going back to 2013-2014 (bi-weekly cadence). Total at 8 speeds with full
   alignment ≈ ~3 000 sessions, ~470 audio hours, ~30 000+ chunks.
 - **Throughput:** download stage is bandwidth-bound at ~1.1 files/s/host
   (deliberately polite). Alignment stage is CPU-bound, ~1.2 sessions/s on 8
   cores. To go faster on a beefier box bump `--align-workers`. Do **not**
-  bump `--workers` past 8; ARRL is a non-profit hosting public files.
-- **Resumability:** kill at any point and re-run; finished work is skipped.
+  bump `--workers` past 8. ARRL is a non-profit hosting public files.
+- **Resumability:** kill at any point and re-run. Finished work is skipped.
   To force a refetch, delete the per-file `*.dl.json` sidecar (or the file
   itself).
 
 ## Why the index-driven approach
 
 The prior pipeline (`u/randy/cw-exp-arrl-corpus`) blindly probed every
-Mon/Wed/Fri date in 2024–2026 with a HEAD request, then a GET on hits. That
+Mon/Wed/Fri date in 2024-2026 with a HEAD request, then a GET on hits. That
 took 80+ minutes for **2 sessions**. ARRL bulletins are actually **bi-weekly**
 and every available file is listed in plain HTML on the per-speed archive
 page. One HTTP request per speed (≤11 total) replaces ~9 000 blind probes.

@@ -1,13 +1,12 @@
-# CW Decoder Bake-Off — May 2026
+# CW Decoder Bake-Off - May 2026
 
 This document captures a multi-round parallel experiment to fix two specific
 failure modes in the CW decoder observed on real over-the-air captures:
 
-1. **Ghost character cascades** — when SNR drops within an otherwise-decodable
-   region, the decoder emits a stream of phantom `E`/`T`/`I`/`M` characters
-   instead of dropping output.
-2. **Word-segmentation errors** — leading characters of repeated callsigns
-   (e.g. `WA` of `WA6MOW`) silently disappear before reaching the decoder's
+1. **Ghost character cascades** - SNR decreases in a region that the decoder can usually decode.
+   The decoder then emits many false `E`, `T`, `I`, and `M` characters.
+2. **Word-segmentation errors** - leading characters of repeated callsigns
+   (for example `WA` of `WA6MOW`) silently disappear before reaching the decoder's
    gap-classification stage.
 
 Eight algorithmic approaches were implemented in parallel git worktrees and
@@ -28,36 +27,36 @@ the final `transcript`/`end` event. Each transcript was normalized via
 
 Metrics:
 
-- **CER** — character error rate (Levenshtein distance / max-length)
-- **WER** — word error rate
+- **CER** - character error rate (Levenshtein distance / max-length)
+- **WER** - word error rate
 - Token recall / precision
 
 Six samples from `data/cw-samples/training-set-a/`:
 
 | Sample | Truth (excerpt) | Notes |
 |---|---|---|
-| `cq-pota-aa6pw` | `NQ POTA AA6PW AA6PW CQPOTA AA6PW...` | Headline ghost target — heavy E/T/I cascades |
+| `cq-pota-aa6pw` | `NQ POTA AA6PW AA6PW CQPOTA AA6PW...` | Headline ghost target - heavy E/T/I cascades |
 | `cq-sota-wa7ben` | CQ SOTA call from WA7BEN | Standard pileup CQ |
-| `wa6mow` | WA6MOW callsign repeats | Word-segmentation target — `WA` drops |
+| `wa6mow` | WA6MOW callsign repeats | Word-segmentation target - `WA` drops |
 | 3 additional CQ/exchange samples | mixed | Baseline coverage |
 
 Mean CER is the unweighted average across the six samples.
 
 ---
 
-## Round 1 — initial algorithmic diversity
+## Round 1 - initial algorithmic diversity
 
 Four orthogonal approaches launched in parallel.
 
-### viterbi — `u/randy/cw-exp-viterbi` @ `f16c651` 🥇 WINNER
+### viterbi - `u/randy/cw-exp-viterbi` @ `f16c651` - winner
 
 **Hypothesis:** Hard length thresholding (dit < X ms, dah ≥ X ms) is too
 brittle when SNR varies inside a region.
 
 **Implementation** (`vendor/ditdah/src/decoder.rs`):
 
-1. `merge_short_blips` — coalesce sub-threshold blips before classification.
-2. `soft_decode_intervals` — Gaussian per-class log-probability over (dit, dah)
+1. `merge_short_blips` - coalesce sub-threshold blips before classification.
+2. `soft_decode_intervals` - Gaussian per-class log-probability over (dit, dah)
    lengths given current WPM estimate.
 3. Argmax over the soft scores instead of hard threshold.
 
@@ -73,28 +72,28 @@ brittle when SNR varies inside a region.
 an element is borderline length, instead of flipping a coin at the threshold.
 
 **Why `wa6mow` did not move:** the `WA` problem is upstream of length
-classification — elements are not detected at all, so no classifier can fix
+classification - elements are not detected at all, so no classifier can fix
 it. See gap-gmm / next-round notes.
 
-### charlm — `u/randy/cw-exp-charlm` @ `b15ed0c` — mixed, partially salvageable
+### charlm - `u/randy/cw-exp-charlm` @ `b15ed0c` - mixed, partially salvageable
 
 **Hypothesis:** A character-level n-gram language model can rescore ambiguous
 decodes using English / callsign-prefix frequency.
 
 **Implementation:** 4-gram + callsign-prefix LM scored against decoder output.
 A mid-edit syntax error (orphan `];` debris from an incomplete edit) caused 13
-cascading "unknown prefix" diagnostics; cleaned up by the orchestrator.
+cascading "unknown prefix" diagnostics. Cleaned up by the orchestrator.
 
-**Results:** Mean CER worse on most samples — the English LM over-confidently
+**Results:** Mean CER worse on most samples - the English LM over-confidently
 "corrects" rare callsigns toward English text.
 
 **Salvageable win:** **`wa6mow` recall 0.67 → 1.00**. The callsign-prefix
 component genuinely helps when the substring contains a known prefix pattern.
 
-**Action:** cherry-pick the callsign-join logic only; discard English LM
+**Action:** cherry-pick the callsign-join logic only. Discard English LM
 rescoring.
 
-### snr-gate — `u/randy/cw-exp-snr-gate` @ `9b07ad5` — honest negative
+### snr-gate - `u/randy/cw-exp-snr-gate` @ `9b07ad5` - honest negative
 
 **Hypothesis:** Suppress decoding entirely in low-SNR regions.
 
@@ -105,7 +104,7 @@ Default-off plumbing landed correctly.
 signals). Plumbing kept because it is reusable for elem-gate and future
 experiments.
 
-### ctc-neural — `u/randy/cw-exp-ctc-neural` @ `04d7456` — research artifact
+### ctc-neural - `u/randy/cw-exp-ctc-neural` @ `04d7456` - research artifact
 
 **Hypothesis:** End-to-end CNN + CTC trained on synthetic CW.
 
@@ -124,24 +123,25 @@ decode. ~50 hours of synthetic training data.
 1. **Blank-collapse trap** required four fixes (head bias init
    `head.bias[BLANK] = -3.0`, pitch-invariant pooling, high-SNR curriculum
    warmup, `GroupNorm` not `BatchNorm`) just to train.
-2. Synthetic training data did not generalize to real OTA — synthetic too
+2. Synthetic training data did not generalize to real OTA - synthetic too
    clean.
 3. Tiny model + short clips + no LM thrashes on calls it has never seen.
 
-**Verdict:** Not shippable as a decoder. It did, however, beat the baseline on
-`cq-pota-aa6pw` (0.202) without any morse-domain heuristic, proving "noise
-regions are decodable if you stop forcing them through hard classifiers." That
-result motivated the ARRL corpus track.
+**Verdict:** Do not ship this decoder.
+It did beat the baseline on `cq-pota-aa6pw` with a score of 0.202.
+It did this without a Morse-domain heuristic.
+The result shows that a decoder can process noise regions without hard classifiers.
+This result motivated the ARRL corpus track.
 
 ---
 
-## Round 2 — targeted mechanism stacking
+## Round 2 - targeted mechanism stacking
 
-### elem-gate — `u/randy/cw-exp-elem-gate` @ `2b36af5` 🥈 ties Viterbi, orthogonal mechanism
+### elem-gate - `u/randy/cw-exp-elem-gate` @ `2b36af5` 🥈 ties Viterbi, orthogonal mechanism
 
 **Hypothesis:** Per-element SNR gate (different from region-level snr-gate).
 
-**Implementation:** Compute SNR for each detected element; drop elements below
+**Implementation:** Compute SNR for each detected element. Drop elements below
 a configurable dB floor. Env var `DITDAH_ELEM_GATE_DB` (default 12 dB).
 
 **Results:**
@@ -153,22 +153,22 @@ a configurable dB floor. Env var `DITDAH_ELEM_GATE_DB` (default 12 dB).
 | `wa6mow` WER | 0.600 | 0.600 |
 
 **Key insight:** reaches the same `cq-pota-aa6pw` CER as Viterbi via a
-completely different mechanism (gate vs. soft classification). They should
-**stack** — Viterbi handles borderline lengths, elem-gate kills phantom
+completely different mechanism (gate compared with soft classification). They must
+**stack** - Viterbi handles borderline lengths, elem-gate kills phantom
 elements before they reach the classifier.
 
-### bigram-viterbi — `u/randy/cw-exp-bigram-viterbi` @ `1eea2ed` — no-op pending corpus
+### bigram-viterbi - `u/randy/cw-exp-bigram-viterbi` @ `1eea2ed` - no-op pending corpus
 
 **Hypothesis:** Replace argmax with full Viterbi over character bigrams.
 
-**Result:** No-op at safe weights — bigrams trained on a small synthetic
+**Result:** No-op at safe weights - bigrams trained on a small synthetic
 corpus contained no real signal. **Now unblocked** by the 154k-character ARRL
 corpus from `arrl-corpus-fast`.
 
-### gap-gmm — `u/randy/cw-exp-gap-gmm` @ `2bd6e19` — falsified hypothesis
+### gap-gmm - `u/randy/cw-exp-gap-gmm` @ `2bd6e19` - falsified hypothesis
 
 **Hypothesis:** Inter-element gaps follow a 3-component GMM (intra-char,
-inter-char, inter-word); EM fit gives better word boundaries than fixed
+inter-char, inter-word). EM fit gives better word boundaries than fixed
 thresholds.
 
 **Result:** No improvement on `wa6mow`. Diagnostic insight: the `WA` of
@@ -179,7 +179,7 @@ smoothed-power.
 **Value:** killed a wrong hypothesis cheaply. Future word-segmentation work
 must target onset detection, not gap classification.
 
-### ensemble — `u/randy/cw-exp-ensemble` @ `050991d` — infrastructure win, voting inconclusive
+### ensemble - `u/randy/cw-exp-ensemble` @ `050991d` - infrastructure win, voting inconclusive
 
 **Hypothesis:** Vote across multiple decoder variants per region.
 
@@ -204,9 +204,9 @@ retrained ctc-neural decoder as a fourth voter.
 
 ---
 
-## Round 3 — ARRL auto-labeled corpus
+## Round 3 - ARRL auto-labeled corpus
 
-### arrl-corpus-fast — `u/randy/cw-exp-arrl-corpus-fast` @ `4dd5183` — pipeline shipped
+### arrl-corpus-fast - `u/randy/cw-exp-arrl-corpus-fast` @ `4dd5183` - pipeline shipped
 
 **Goal:** Build an auto-labeled training corpus from ARRL Code Practice MP3s,
 which ship with ground-truth text files at predictable URLs.
@@ -247,9 +247,9 @@ manifest        1.0s
 report          1.2s
 ```
 
-**Known gap:** 15 WPM yields zero chunks — `cw-decoder` does not lock at slow
+**Known gap:** 15 WPM yields zero chunks - `cw-decoder` does not lock at slow
 speeds in its current configuration. MP3 + truth files are intact and cached
-on disk; once decoder lock-range is widened,
+on disk. Once decoder lock-range is widened,
 `run.py --skip-stages 0,1,2 --speeds 15` will harvest in seconds.
 
 **Other speeds (5 / 7.5 / 10 / 13 / 35 / 40 WPM)** are supported by the index
@@ -264,15 +264,15 @@ A serial pilot (`u/randy/cw-exp-arrl-corpus`) was also completed (449 chunks /
 
 | # | Approach | Mean CER | aa6pw CER | wa6mow WER | Status | Recommendation |
 |---|---|---:|---:|---:|---|---|
-| — | baseline | 0.234 | 0.321 | 0.600 | reference | — |
-| 🥇 | **viterbi** | **0.202** | **0.167** | 0.600 | ready | **merge to main** |
+| - | baseline | 0.234 | 0.321 | 0.600 | reference | - |
+| 1 | **viterbi** | **0.202** | **0.167** | 0.600 | ready | **merge to main** |
 | 🥈 | **elem-gate** | 0.208 | **0.167** | 0.600 | ready | **stack on viterbi** |
 | 3 | ensemble (anchor) | 0.219 | 0.167 | **0.400** | infra | hold for ctc retrain |
-| 4 | charlm | mixed | — | recall 1.00 | partial | cherry-pick callsign-join only |
+| 4 | charlm | mixed | - | recall 1.00 | partial | cherry-pick callsign-join only |
 | 5 | snr-gate | 0.234 | 0.321 | 0.600 | plumbing | keep, default-off |
-| 6 | bigram-viterbi | no-op | — | — | unblocked | retrain on ARRL corpus |
-| 7 | gap-gmm | no-op | — | — | falsified | discard, fix upstream first |
-| 8 | ctc-neural | 0.917 | **0.202** | — | research | retrain on ARRL → 4th voter |
+| 6 | bigram-viterbi | no-op | - | - | unblocked | retrain on ARRL corpus |
+| 7 | gap-gmm | no-op | - | - | falsified | discard, fix upstream first |
+| 8 | ctc-neural | 0.917 | **0.202** | - | research | retrain on ARRL → 4th voter |
 
 ---
 
@@ -281,13 +281,13 @@ A serial pilot (`u/randy/cw-exp-arrl-corpus`) was also completed (449 chunks /
 1. **Soft beats hard.** The single biggest CER win came from replacing one
    hard threshold with a soft Gaussian (Viterbi).
 2. **Two orthogonal mechanisms reach the same ceiling.** Viterbi and elem-gate
-   both hit `cq-pota-aa6pw` CER 0.167 from completely different angles —
+   both hit `cq-pota-aa6pw` CER 0.167 from completely different angles -
    strong evidence they will stack.
 3. **Word segmentation is upstream.** `gap-gmm` falsified the
-   gap-classification hypothesis. Don't waste effort on classifier-stage
-   word-gap work; fix element detection first.
+   gap-classification hypothesis. Do not use effort on classifier-stage
+   word-gap work. Fix element detection first.
 4. **Synthetic neural did not generalize** but proved the hypothesis. Real
-   path requires real corpus — which now exists (ARRL pipeline).
+   path requires real corpus - which now exists (ARRL pipeline).
 5. **Corpus throughput matters.** ~40× speedup just from index-driven
    discovery + parallelism. Same lesson likely applies to future training
    pipelines.
@@ -305,7 +305,7 @@ A serial pilot (`u/randy/cw-exp-arrl-corpus`) was also completed (449 chunks /
   `git worktree add -b u/randy/cw-exp-<name> C:\Users\randy\Git\qsoripper-experiments\<name> <base-sha>`.
   Each worktree has its own `target/` dir so parallel cargo builds do not
   collide.
-- ARRL corpus pipeline is idempotent — re-running with cached state skips
+- ARRL corpus pipeline is idempotent - re-running with cached state skips
   ~200 cached sessions in <2 s.
 
 ## Operational notes
@@ -314,7 +314,7 @@ A serial pilot (`u/randy/cw-exp-arrl-corpus`) was also completed (449 chunks /
   package name is `cw-decoder-poc`).
 - `bench.py` invokes the default `stream-region` subcommand. For ensemble
   variants use `stream-region-ensemble --variant <v>`.
-- Always rebuild before benchmarking — bench.py uses the pre-built
+- Always rebuild before benchmarking - bench.py uses the pre-built
   `target/release/cw-decoder.exe` and a stale binary will mask source-level
   failures.
 - `RegionStreamConfig::default()` does not match CLI defaults
@@ -327,15 +327,15 @@ A serial pilot (`u/randy/cw-exp-arrl-corpus`) was also completed (449 chunks /
 
 Concrete experiments unlocked by this work:
 
-- **bigram-viterbi (re-run)** — train transition matrix on the 154k-char ARRL
+- **bigram-viterbi (re-run)** - train transition matrix on the 154k-char ARRL
   corpus instead of synthetic data. Probably the cheapest next win.
-- **ctc-neural (retrain)** — retrain on the 17.84 h ARRL corpus with a
+- **ctc-neural (retrain)** - retrain on the 17.84 h ARRL corpus with a
   beam-search decoder + n-gram language model trained on the same corpus.
   Issue #409 has the full Phase 1-7 plan.
-- **viterbi + elem-gate stack** — combine the two mechanisms; both hit
-  `cq-pota-aa6pw` 0.167 independently, so a stacked decoder may break that
+- **viterbi + elem-gate stack** - combine the two mechanisms. Both hit
+  `cq-pota-aa6pw` 0.167 independently, so a stacked decoder can break that
   ceiling.
-- **Upstream element detection** — re-investigate onset detection / Goertzel /
+- **Upstream element detection** - re-investigate onset detection / Goertzel /
   smoothed-power so `WA` of `WA6MOW` survives. Required for any further
   word-segmentation work.
 

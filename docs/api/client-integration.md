@@ -1,6 +1,7 @@
 # Client Integration Guide
 
-This guide covers everything you need to connect a client application to a QsoRipper engine host over gRPC, or to stand up another engine implementation that honors the same contracts.
+This guide explains how to connect a client to a QsoRipper engine with gRPC.
+It also explains how to implement a conformant engine.
 
 ## Endpoint Defaults
 
@@ -29,7 +30,9 @@ All .NET clients use the shared selector rules from `QsoRipper.EngineSelection`:
 3. `QSORIPPER_ENDPOINT`
 4. built-in profile defaults
 
-Local running-engine discovery is based on launcher state under `artifacts\run\` (`qsoripper-*.state.json` plus legacy `qsoripper-engine*.json`) and validates entries with PID + transport checks before presenting them as active.
+Local engine discovery reads launcher state below `artifacts\run\`.
+It reads `qsoripper-*.state.json` and legacy `qsoripper-engine*.json` files.
+It checks each PID and transport before it shows an engine as active.
 
 Current client behavior:
 
@@ -62,9 +65,14 @@ QSORIPPER_SERVER_ADDR=0.0.0.0:50051 cargo run -p qsoripper-server
 
 ## Generating Client Stubs
 
-The proto files under `proto/` are the authoritative contract. Use standard protobuf/gRPC tooling for your language to generate stubs from that contract rather than hand-writing client or server shapes.
+The proto files under `proto/` are the authoritative contract. Use standard protobuf/gRPC tools for your language to generate stubs from that contract. Do not write the client or server shapes manually.
 
-QsoRipper follows protobuf 1-1-1 by default: one top-level entity per file, service files that contain only the `service`, and method-specific `XxxRequest` / `XxxResponse` envelopes for every RPC. Your code generation step therefore needs to include the split service support files, not just the `*service.proto` declarations.
+QsoRipper uses protobuf 1-1-1 by default.
+Each file has one top-level entity.
+A service file contains only the `service`.
+Each RPC has method-specific `XxxRequest` and `XxxResponse` envelopes.
+Include all split service support files in code generation.
+Do not include only the `*service.proto` declarations.
 
 ### Prerequisites
 
@@ -245,7 +253,10 @@ println!("State: {:?}", result.state);
 
 ## Browser and Web Clients
 
-Browsers cannot issue native gRPC (HTTP/2 + binary framing) requests due to browser networking constraints. Web clients must use **gRPC-Web**, which is a modified protocol that works over standard HTTP/1.1 or HTTP/2 in a way browsers can handle.
+Browsers cannot send native gRPC requests.
+Their network interfaces do not supply the necessary HTTP/2 binary framing.
+Web clients must use **gRPC-Web**.
+This modified protocol works with standard browser HTTP/1.1 or HTTP/2 connections.
 
 The QsoRipper engine exposes native gRPC only. To connect a browser or web client, you need an intermediate proxy or gateway.
 
@@ -277,7 +288,7 @@ grpcwebproxy \
 
 **Option 3: connect-go / connect-web**
 
-The [Connect protocol](https://connectrpc.com/) is compatible with gRPC and adds HTTP/JSON support for browser clients without a separate proxy. This would require the engine server to add Connect support (not currently implemented).
+The [Connect protocol](https://connectrpc.com/) is compatible with gRPC. It adds HTTP/JSON support for browser clients without a separate proxy. The engine server requires Connect support for this option.
 
 ### Generating Browser Client Stubs
 
@@ -296,7 +307,10 @@ Or use `@connectrpc/protoc-gen-connect-es` with `@bufbuild/protoc-gen-es` if you
 
 ### Important: No Native Browser gRPC
 
-Do not attempt to connect a browser-side JavaScript client directly to `http://localhost:50051` with a standard gRPC client library — it will fail. The browser HTTP stack does not support the HTTP/2 framing that native gRPC requires. Always route browser traffic through a gRPC-Web–aware proxy.
+Do not connect browser JavaScript directly to `http://localhost:50051` with a standard gRPC library.
+This connection will fail.
+The browser HTTP stack does not support native gRPC HTTP/2 framing.
+Always send browser traffic through a gRPC-Web-aware proxy.
 
 ## Schema Evolution and Compatibility
 
@@ -304,15 +318,17 @@ The current QsoRipper proto contract follows standard proto3 additive evolution 
 
 > PR [#74](https://github.com/rtreit/qsoripper/pull/74) was a deliberate breaking-contract cleanup performed while the project is still early. Clients pinned to older pre-1-1-1 revisions must regenerate against the current `proto/` surface rather than assuming wire compatibility across that cutover.
 
-- **New optional fields** may be added to any message in future releases without breaking existing clients.
-- **New RPCs** may be added to existing services. Old clients will not call them.
-- **Enum values** may be added. Clients should handle unknown enum integer values gracefully (proto3 preserves unknown enum values as their integer form).
-- **Field numbers and types** should not be changed within the current published baseline. `buf breaking` is the guardrail for future changes against that baseline.
+- Future releases can add **new optional fields** to any message without breaking existing clients.
+- Existing services can add **new RPCs**. Old clients will not call them.
+- Schemas can add **enum values**. Clients must accept unknown enum integer values. Proto3 keeps unknown enum values in integer form.
+- Do not change **field numbers and types** within the current published baseline. `buf breaking` protects future changes against that baseline.
 
 **Client tolerance recommendations:**
-- Ignore unknown fields in responses — proto3 decoders do this by default.
+- Ignore unknown fields in responses - proto3 decoders do this by default.
 - Use a `default` or fallback branch when switching on enum values so new values are handled gracefully.
-- Do not rely on zero values to mean "absent" for `optional` fields in proto3 — use `has_*` checks (in languages that support them) or check for explicit presence.
+- Do not use a zero value to mean "absent" for an `optional` proto3 field.
+- Use `has_*` when the language supports it.
+- Otherwise, test for explicit presence.
 
 ## Buf for Schema Validation
 

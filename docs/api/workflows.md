@@ -1,6 +1,6 @@
 # Workflow Examples
 
-This page provides example request/response shapes and state transitions for common QsoRipper engine workflows. These are intended to make integration concrete rather than requiring you to derive behavior from raw proto names.
+This page gives request, response, and state-transition examples for common QsoRipper workflows. The examples explain integration behavior that proto names do not show.
 
 All examples show field values in a language-neutral pseudo-JSON format. Actual wire encoding is binary protobuf.
 
@@ -82,7 +82,7 @@ The streaming variant is ideal for TUI/GUI clients that want to show a loading i
 
 **Stream (fresh lookup, no prior cache entry):**
 
-Message 1 — emitted immediately:
+Message 1 - emitted immediately:
 ```json
 {
   "result": {
@@ -92,7 +92,7 @@ Message 1 — emitted immediately:
 }
 ```
 
-Message 2 — emitted after provider responds:
+Message 2 - emitted after provider responds:
 ```json
 {
   "result": {
@@ -106,14 +106,14 @@ Message 2 — emitted after provider responds:
 ```
 *Stream closes after message 2.*
 
-**Stream (stale cache hit — returns cached data while refreshing):**
+**Stream (stale cache hit - returns cached data while refreshing):**
 
 Message 1:
 ```json
 { "result": { "state": "LOOKUP_STATE_LOADING", "queried_callsign": "K7ABC" } }
 ```
 
-Message 2 — stale entry returned immediately:
+Message 2 - stale entry returned immediately:
 ```json
 {
   "result": {
@@ -125,7 +125,7 @@ Message 2 — stale entry returned immediately:
 }
 ```
 
-Message 3 — fresh result replaces stale entry:
+Message 3 - fresh result replaces stale entry:
 ```json
 {
   "result": {
@@ -188,17 +188,17 @@ Use `GetCachedCallsign` when you want a zero-latency check without triggering a 
 **Recommended type-ahead pattern:**
 
 1. On each keystroke, call `GetCachedCallsign` for a zero-latency cache check.
-2. If the result is `FOUND` or `STALE`, display it immediately — no network call needed.
+2. If the result is `FOUND` or `STALE`, display it immediately - no network call needed.
 3. After a short debounce (typing has stabilized), call `StreamLookup` to fetch a fresh result.
 4. Update the display when the stream emits `FOUND`, `NOT_FOUND`, or `ERROR`.
 
-Calling `StreamLookup` on every keystroke without debounce would generate unnecessary network traffic. Wait for typing to stabilize before firing a provider lookup, and cancel in-flight streams when a newer request supersedes them.
+Do not call `StreamLookup` after each keystroke. This action causes unnecessary network traffic. Wait until typing stops. Cancel an active stream when a new request replaces it.
 
 ---
 
 ## LogbookService Workflows
 
-> **Note:** Local `LogbookService` CRUD, status, and ADIF import/export flows are implemented today. QRZ sync remains unimplemented; see the [LogbookService Reference](logbook-service.md) for the current status table.
+> **Note:** Local `LogbookService` implements CRUD, status, and ADIF transfer. QRZ sync has no implementation. See the [LogbookService Reference](logbook-service.md).
 
 ---
 
@@ -221,7 +221,7 @@ Calling `StreamLookup` on every keystroke without debounce would generate unnece
 }
 ```
 
-> When an effective active station context exists, `station_callsign` can be omitted from `LogQso` and will be derived from that active context. If no active context exists, the request must still provide `station_callsign` explicitly.
+> When an active station context exists, `LogQso` can omit `station_callsign`. The engine gets it from that context. Otherwise, the request must supply it.
 
 **Response:**
 ```json
@@ -351,9 +351,12 @@ Client closes the send side after all chunks are sent.
 
 Notes:
 - The server buffers all incoming chunks, parses only after the client closes the stream, then imports records.
-- Imported `STATION_CALLSIGN`, `OPERATOR`, and `MY_*` fields are preserved as historical `station_snapshot` data.
-- The active station profile is only used when the ADIF record has no local-station context at all, and that fallback is reported in `warnings`.
-- Records with unrecognized core ADIF values such as `BAND`, `MODE`, or invalid `QSO_DATE`/`TIME_ON` are skipped with warnings; the raw ADIF values remain in `extra_fields` for round-trip export fidelity.
+- The engine preserves imported `STATION_CALLSIGN`, `OPERATOR`, and `MY_*` fields in historical `station_snapshot` data.
+- The engine uses the active station profile only when the ADIF record has no local-station context. It reports this fallback in `warnings`.
+- The server skips records that have unrecognized core ADIF values.
+  Examples include `BAND`, `MODE`, or invalid `QSO_DATE` and `TIME_ON` values.
+  The server adds warnings for these records.
+  Raw values remain in `extra_fields` for round-trip export.
 
 ---
 
@@ -372,10 +375,10 @@ Export all QSOs between two dates:
 
 **Response stream:** One or more `ExportAdifResponse` messages containing raw ADIF bytes in `chunk.data`, then stream close.
 
-Clients should concatenate chunk data in order to reconstruct the complete ADIF file.
+Clients must concatenate chunk data to reconstruct the complete ADIF file.
 
 Notes:
-- Filters already present in `ExportAdifRequest` (`after`, `before`, `contest_id`) are applied before serialization.
+- Apply the `ExportAdifRequest` filters before serialization: `after`, `before`, and `contest_id`.
 - Export order is chronological (`oldest first`) for predictable migration output.
 - When `include_header` is `true`, the payload starts with an ADIF header containing the QsoRipper program metadata.
 
@@ -398,4 +401,4 @@ Use `GetSyncStatus` to verify engine connectivity and check logbook statistics:
 }
 ```
 
-> Current server reports live local counts from the configured backend. Until QRZ sync is implemented, QRZ-specific fields remain `0` or absent.
+> The current server reports live local counts from the configured backend. Until QRZ sync has an implementation, QRZ fields remain `0` or absent.

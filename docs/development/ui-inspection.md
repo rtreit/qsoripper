@@ -124,7 +124,7 @@ Notes:
 - The script is currently Windows-only.
 - The script bootstraps a repo-local Node 22 + Terminalizer runtime on first use.
 - No global Terminalizer install is required.
-- The current terminal lane targets scripted CLI workflows honestly; it can point at a future TUI binary later without changing the artifact contract.
+- The current terminal lane targets scripted CLI workflows honestly. It can point at a future TUI binary later without changing the artifact contract.
 - Output includes a GIF, transcript, YAML recording, and JSON summary.
 
 ### Terminal / TUI live automation
@@ -148,7 +148,7 @@ Notes:
 - Action scripts are JSON and conceptually mirror `drive-avalonia.ps1`: scenario in, artifacts plus `report.json` out.
 - The harness can drive either a structured command or the built-in deterministic `sample-tui` fixture.
 - Snapshot actions write rendered `*.screen.png` files plus `*.screen.txt`, `*.screen.json`, and `*.ansi.txt` artifacts under `artifacts\ux\current\<scenario>\`.
-- Keep `scripts\capture-tui.ps1` for rendered GIF review; the two paths are complementary.
+- Keep `scripts\capture-tui.ps1` for rendered GIF review. The two paths are complementary.
 
 ## Recommended quick verification
 

@@ -2,7 +2,11 @@
 
 Single-purpose WinUI 3 diagnostic app for CAT latency testing.
 
-The app bypasses the normal QsoRipper UI update paths. It opens one persistent TCP connection to cathub's rigctld-compatible endpoint at `127.0.0.1:4532`, polls `f`, `m`, and `v` every 100 ms, and also polls the engine's gRPC `GetRigSnapshot` endpoint at `http://127.0.0.1:50051`.
+The application does not use the normal QsoRipper UI update paths.
+It opens one persistent TCP connection to the CatHub endpoint at `127.0.0.1:4532`.
+This endpoint is compatible with `rigctld`.
+The application polls `f`, `m`, and `v` every 100 ms.
+It also polls the engine `GetRigSnapshot` endpoint at `http://127.0.0.1:50051`.
 
 It displays the live direct cathub frequency, VFO, mode, query time, detected frequency-change gap, and engine skew. Engine skew is `engine_frequency_hz - direct_cathub_frequency_hz`.
 

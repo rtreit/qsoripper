@@ -1,14 +1,14 @@
 # ADIF Specification Reference (v3.1.7)
 
-> Reference for QsoRipper development based on the [ADIF 3.1.7 specification](https://www.adif.org/317/ADIF_317.htm).
-> Machine-readable exports (CSV, JSON, XML) are available at https://adif.org.uk/317/resources
+> This QsoRipper reference uses the [ADIF 3.1.7 specification](https://www.adif.org/317/ADIF_317.htm).
+> CSV, JSON, and XML exports are available at https://adif.org.uk/317/resources.
 
 ## Overview
 
-ADIF (Amateur Data Interchange Format) is the standard for exchanging ham radio QSO data between applications. It defines precise text-based representations for amateur radio information. ADIF is **not** a database schema or UI specification — it only governs import/export interchange.
+ADIF (Amateur Data Interchange Format) is the standard for exchanging ham radio QSO data between applications. It defines precise text-based representations for amateur radio information. ADIF is **not** a database schema or UI specification - it only governs import/export interchange.
 
 Key points:
-- Applications choose which fields to support; not all fields are required
+- Applications choose which fields to support. The standard does not require all fields.
 - Minimum suggested QSO: `QSO_DATE`, `TIME_ON`, `FREQ` and/or `BAND`, `CALL`, `MODE`
 - Field names are case-insensitive
 - Two file formats: **ADI** (tag-length-value, the primary format) and **ADX** (XML-based)
@@ -21,24 +21,24 @@ Key points:
 | Type | Indicator | Description |
 |---|---|---|
 | Boolean | B | Single char: `Y`/`y` (true) or `N`/`n` (false) |
-| Character | — | ASCII 32-126 |
+| Character | - | ASCII 32-126 |
 | Date | D | 8 digits `YYYYMMDD` in UTC (1930 ≤ YYYY) |
-| Digit | — | ASCII 48-57 |
+| Digit | - | ASCII 48-57 |
 | Enumeration | E | Case-insensitive value from a defined set |
-| GridSquare | — | 2/4/6/8-char Maidenhead locator (case-insensitive) |
-| GridSquareExt | — | Characters 9-10 (or 9-12) of extended Maidenhead locator |
-| Integer | — | Decimal integer, optional leading minus |
+| GridSquare | - | 2/4/6/8-char Maidenhead locator (case-insensitive) |
+| GridSquareExt | - | Characters 9-10 (or 9-12) of extended Maidenhead locator |
+| Integer | - | Decimal integer, optional leading minus |
 | IntlString | I | Unicode/UTF-8 string (**ADX files only**) |
-| IOTARefNo | — | Format `CC-XXX` (continent + 3-digit island group) |
+| IOTARefNo | - | Format `CC-XXX` (continent + 3-digit island group) |
 | Location | L | 11 chars: `XDDD MM.MMM` (X=N/S/E/W, DDD=degrees, MM.MMM=minutes) |
 | MultilineString | M | Characters + CR/LF line breaks |
 | Number | N | Decimal number, optional minus, optional decimal point |
-| PositiveInteger | — | Unsigned decimal integer > 0 |
-| POTARef | — | Parks on the Air reference: `xxxx-nnnnn[@yyyyyy]` |
-| SOTARef | — | SOTA reference: `prefix/REF-NNN` |
+| PositiveInteger | - | Unsigned decimal integer > 0 |
+| POTARef | - | Parks on the Air reference: `xxxx-nnnnn[@yyyyyy]` |
+| SOTARef | - | SOTA reference: `prefix/REF-NNN` |
 | String | S | Sequence of Characters (ASCII 32-126) |
 | Time | T | 4 digits `HHMM` or 6 digits `HHMMSS` in UTC |
-| WWFFRef | — | WWFF reference: `xxFF-nnnn` (8-11 chars) |
+| WWFFRef | - | WWFF reference: `xxFF-nnnn` (8-11 chars) |
 
 ---
 
@@ -86,53 +86,53 @@ Key points:
 
 | Mode | Submodes (selected) |
 |---|---|
-| AM | — |
-| ARDOP | — |
-| ATV | — |
+| AM | - |
+| ARDOP | - |
+| ATV | - |
 | C4FM | *(import-only, use DIGITALVOICE + submode C4FM)* |
 | CHIP | CHIP64, CHIP128 |
-| CLO | — |
-| CONTESTI | — |
+| CLO | - |
+| CONTESTI | - |
 | CW | PCW |
 | DIGITALVOICE | C4FM, DMR, DSTAR, FREEDV, M17 |
 | DOMINO | DOM-M, DOM4, DOM5, DOM8, DOM11, DOM16, DOM22, DOM44, DOM88, DOMINOEX, DOMINOF |
 | DSTAR | *(import-only, use DIGITALVOICE + submode DSTAR)* |
 | DYNAMIC | VARA HF, VARA SATELLITE, VARA FM 1200, VARA FM 9600, FREEDATA |
-| FAX | — |
-| FM | — |
+| FAX | - |
+| FM | - |
 | FSK | SCAMP_FAST, SCAMP_SLOW, SCAMP_VSLOW |
-| FT8 | — |
+| FT8 | - |
 | HELL | FMHELL, FSKHELL, FSKH105, FSKH245, HELL80, HELLX5, HELLX9, HFSK, PSKHELL, SLOWHELL |
 | ISCAT | ISCAT-A, ISCAT-B |
 | JT4 | JT4A through JT4G |
 | JT9 | JT9-1, JT9-2, JT9-5, JT9-10, JT9-30, JT9A-H (+ FAST variants) |
-| JT44 | — |
+| JT44 | - |
 | JT65 | JT65A, JT65B, JT65B2, JT65C, JT65C2 |
 | MFSK | FST4, FST4W, FT2, FT4, JS8, JTMS, MFSK4-128(L), MSK144, Q65, FSQCALL |
 | MTONE | SCAMP_OO, SCAMP_OO_SLW |
-| MSK144 | — |
+| MSK144 | - |
 | OFDM | RIBBIT_PIX, RIBBIT_SMS |
 | OLIVIA | OLIVIA 4/125, 4/250, 8/250, 8/500, 16/500, 16/1000, 32/1000 |
 | OPERA | OPERA-BEACON, OPERA-QSO |
 | PAC | PAC2, PAC3, PAC4 |
 | PAX | PAX2 |
-| PKT | — |
+| PKT | - |
 | PSK | PSK10-1000 variants, QPSK31-500, FSK31, 8PSK variants, SIM31, PSKAM/PSKFEC variants |
-| Q15 | — |
+| Q15 | - |
 | QRA64 | QRA64A through QRA64E |
 | ROS | ROS-EME, ROS-HF, ROS-MF |
 | RTTY | ASCI |
-| RTTYM | — |
+| RTTYM | - |
 | SSB | USB, LSB |
-| SSTV | — |
-| T10 | — |
+| SSTV | - |
+| T10 | - |
 | THOR | THOR-M, THOR4-100, THOR25X4, THOR50X1, THOR50X2 |
 | THRB | THRBX, THRBX1-4, THROB1-4 |
 | TOR | AMTORFEC, GTOR, NAVTEX, SITORB |
-| V4 | — |
-| VOI | — |
-| WINMOR | — |
-| WSPR | — |
+| V4 | - |
+| VOI | - |
+| WINMOR | - |
+| WSPR | - |
 
 ### Continent Enumeration
 
@@ -256,7 +256,7 @@ Key points:
 
 ---
 
-## QSO Fields — Complete Reference
+## QSO Fields - Complete Reference
 
 > All fields are optional. Applications decide which to support. Field names are case-insensitive.
 
@@ -264,34 +264,34 @@ Key points:
 
 | Field | Type | Enum | Description |
 |---|---|---|---|
-| CALL | String | — | Contacted station's callsign |
-| CONTACTED_OP | String | — | Callsign of the individual operating the contacted station |
-| NAME | String | — | Contacted operator's name |
-| AGE | Number | — | Contacted operator's age (0-120) |
-| ADDRESS | MultilineString | — | Contacted station's full mailing address |
-| QTH | String | — | Contacted station's city |
-| EMAIL | String | — | Contacted station's email |
-| WEB | String | — | Contacted station's URL |
-| SILENT_KEY | Boolean | — | Contacted operator is now a Silent Key |
-| EQ_CALL | String | — | Contacted station's owner's callsign |
-| PFX | String | — | Contacted station's WPX prefix |
+| CALL | String | - | Contacted station's callsign |
+| CONTACTED_OP | String | - | Callsign of the individual operating the contacted station |
+| NAME | String | - | Contacted operator's name |
+| AGE | Number | - | Contacted operator's age (0-120) |
+| ADDRESS | MultilineString | - | Contacted station's full mailing address |
+| QTH | String | - | Contacted station's city |
+| EMAIL | String | - | Contacted station's email |
+| WEB | String | - | Contacted station's URL |
+| SILENT_KEY | Boolean | - | Contacted operator is now a Silent Key |
+| EQ_CALL | String | - | Contacted station's owner's callsign |
+| PFX | String | - | Contacted station's WPX prefix |
 
 ### Core QSO Fields
 
 | Field | Type | Enum | Description |
 |---|---|---|---|
-| QSO_DATE | Date | — | Date QSO started (YYYYMMDD, UTC) |
-| QSO_DATE_OFF | Date | — | Date QSO ended |
-| TIME_ON | Time | — | QSO start time (HHMM or HHMMSS, UTC) |
-| TIME_OFF | Time | — | QSO end time |
+| QSO_DATE | Date | - | Date QSO started (YYYYMMDD, UTC) |
+| QSO_DATE_OFF | Date | - | Date QSO ended |
+| TIME_ON | Time | - | QSO start time (HHMM or HHMMSS, UTC) |
+| TIME_OFF | Time | - | QSO end time |
 | BAND | Enum | Band | QSO band |
 | BAND_RX | Enum | Band | Logging station's receiving band (split QSO) |
 | MODE | Enum | Mode | QSO mode |
 | SUBMODE | String | Submode | QSO submode |
-| FREQ | Number | — | QSO frequency in MHz |
-| FREQ_RX | Number | — | Logging station's receiving frequency in MHz (split QSO) |
+| FREQ | Number | - | QSO frequency in MHz |
+| FREQ_RX | Number | - | Logging station's receiving frequency in MHz (split QSO) |
 | QSO_COMPLETE | Enum | QSO Complete | Whether QSO was complete (Y/N/NIL/?) |
-| QSO_RANDOM | Boolean | — | Whether QSO was random or scheduled |
+| QSO_RANDOM | Boolean | - | Whether QSO was random or scheduled |
 
 ### Signal Reports
 
@@ -306,21 +306,21 @@ Key points:
 
 | Field | Type | Enum | Description |
 |---|---|---|---|
-| GRIDSQUARE | GridSquare | — | Contacted station's Maidenhead grid (2/4/6/8 chars) |
-| GRIDSQUARE_EXT | GridSquareExt | — | Characters 9-12 of contacted station's extended grid |
-| LAT | Location | — | Contacted station's latitude |
-| LON | Location | — | Contacted station's longitude |
+| GRIDSQUARE | GridSquare | - | Contacted station's Maidenhead grid (2/4/6/8 chars) |
+| GRIDSQUARE_EXT | GridSquareExt | - | Characters 9-12 of contacted station's extended grid |
+| LAT | Location | - | Contacted station's latitude |
+| LON | Location | - | Contacted station's longitude |
 | DXCC | Enum | DXCC Entity Code | Contacted station's DXCC entity code |
-| COUNTRY | String | — | Contacted station's DXCC entity name |
-| STATE | Enum | Primary Admin Subdiv | Contacted station's primary admin subdivision (US state, etc.) |
-| CNTY | Enum | Secondary Admin Subdiv | Contacted station's secondary admin subdivision (US county, etc.) |
-| CNTY_ALT | SecondaryAdminSubdivListAlt | — | Alternate secondary admin subdivision codes |
+| COUNTRY | String | - | Contacted station's DXCC entity name |
+| STATE | Enum | Primary Admin Subdiv | Contacted station's primary admin subdivision (US state, and other items) |
+| CNTY | Enum | Secondary Admin Subdiv | Contacted station's secondary admin subdivision (US county, and other items) |
+| CNTY_ALT | SecondaryAdminSubdivListAlt | - | Alternate secondary admin subdivision codes |
 | CONT | Enum | Continent | Contacted station's continent |
-| CQZ | PositiveInteger | — | Contacted station's CQ zone (1-40) |
-| ITUZ | PositiveInteger | — | Contacted station's ITU zone (1-90) |
-| IOTA | IOTARefNo | — | Contacted station's IOTA designator (CC-XXX) |
-| IOTA_ISLAND_ID | PositiveInteger | — | Contacted station's IOTA island identifier |
-| DISTANCE | Number | — | Distance in km between stations (≥0) |
+| CQZ | PositiveInteger | - | Contacted station's CQ zone (1-40) |
+| ITUZ | PositiveInteger | - | Contacted station's ITU zone (1-90) |
+| IOTA | IOTARefNo | - | Contacted station's IOTA designator (CC-XXX) |
+| IOTA_ISLAND_ID | PositiveInteger | - | Contacted station's IOTA island identifier |
+| DISTANCE | Number | - | Distance in km between stations (≥0) |
 | REGION | Enum | Region | Contacted station's WAE/CQ entity within DXCC |
 
 ### Logging Station Fields (MY_ prefix)
@@ -371,24 +371,24 @@ Key points:
 | QSL_SENT_VIA | Enum | QSL Via | Means by which QSL was sent |
 | QSL_RCVD | Enum | QSL Rcvd | Paper QSL received status (default: N) |
 | QSL_RCVD_VIA | Enum | QSL Via | Means by which QSL was received |
-| QSLSDATE | Date | — | QSL sent date |
-| QSLRDATE | Date | — | QSL received date |
-| QSL_VIA | String | — | Contacted station's QSL route |
-| QSLMSG | MultilineString | — | Message for paper/electronic QSL |
-| QSLMSG_RCVD | MultilineString | — | Message received on QSL |
+| QSLSDATE | Date | - | QSL sent date |
+| QSLRDATE | Date | - | QSL received date |
+| QSL_VIA | String | - | Contacted station's QSL route |
+| QSLMSG | MultilineString | - | Message for paper/electronic QSL |
+| QSLMSG_RCVD | MultilineString | - | Message received on QSL |
 | LOTW_QSL_SENT | Enum | QSL Sent | LoTW QSL sent status (default: N) |
 | LOTW_QSL_RCVD | Enum | QSL Rcvd | LoTW QSL received status (default: N) |
-| LOTW_QSLSDATE | Date | — | Date QSL sent to LoTW |
-| LOTW_QSLRDATE | Date | — | Date QSL received from LoTW |
+| LOTW_QSLSDATE | Date | - | Date QSL sent to LoTW |
+| LOTW_QSLRDATE | Date | - | Date QSL received from LoTW |
 | EQSL_QSL_SENT | Enum | QSL Sent | eQSL sent status (default: N) |
 | EQSL_QSL_RCVD | Enum | QSL Rcvd | eQSL received status (default: N) |
-| EQSL_QSLSDATE | Date | — | Date QSL sent to eQSL |
-| EQSL_QSLRDATE | Date | — | Date QSL received from eQSL |
+| EQSL_QSLSDATE | Date | - | Date QSL sent to eQSL |
+| EQSL_QSLRDATE | Date | - | Date QSL received from eQSL |
 | EQSL_AG | Enum | EQSL_AG | eQSL Authenticity Guaranteed status (default: U) |
 | DCL_QSL_SENT | Enum | QSL Sent | DARC Community Logbook sent status (default: N) |
 | DCL_QSL_RCVD | Enum | QSL Rcvd | DARC Community Logbook received status (default: N) |
-| DCL_QSLSDATE | Date | — | Date QSL sent to DCL |
-| DCL_QSLRDATE | Date | — | Date QSL received from DCL |
+| DCL_QSLSDATE | Date | - | Date QSL sent to DCL |
+| DCL_QSLRDATE | Date | - | Date QSL received from DCL |
 | CREDIT_SUBMITTED | CreditList | Credit | Credits sought for this QSO |
 | CREDIT_GRANTED | CreditList | Credit | Credits granted for this QSO |
 
@@ -418,8 +418,8 @@ Key points:
 | SRX_STRING | String | Contest info received (Cabrillo format) |
 | STX | Integer | Contest serial number transmitted (≥0) |
 | STX_STRING | String | Contest info transmitted (Cabrillo format) |
-| CHECK | String | Contest check (e.g. ARRL Sweepstakes) |
-| CLASS | String | Contest class (e.g. ARRL Field Day) |
+| CHECK | String | Contest check (for example ARRL Sweepstakes) |
+| CLASS | String | Contest class (for example ARRL Field Day) |
 | PRECEDENCE | String | Contest precedence |
 | ARRL_SECT | Enum (ARRL Section) | Contacted station's ARRL section |
 
@@ -488,7 +488,7 @@ The primary interchange format. Tag-length-value syntax.
 
 - `FIELDNAME`: case-insensitive field name
 - `LENGTH`: unsigned decimal integer = number of characters in DATA
-- `TYPE`: optional data type indicator (e.g., `S` for String, `D` for Date, `N` for Number)
+- `TYPE`: optional data type indicator (for example, `S` for String, `D` for Date, `N` for Number)
 - `DATA`: field value (exactly LENGTH characters)
 
 ### File Structure
@@ -503,13 +503,13 @@ Record2 <EOR>
 
 - If the file starts with `<`, there is no header (first `<` begins first record)
 - Header can contain arbitrary text + header data specifiers
-- Characters between data specifiers and outside tags are ignored (allows formatting)
+- Parsers ignore characters between data specifiers and outside tags. This permits formatting.
 
 ### Header Fields
 
 | Field | Description |
 |---|---|
-| ADIF_VER | ADIF version number (e.g., `3.1.7`) |
+| ADIF_VER | ADIF version number (for example, `3.1.7`) |
 | CREATED_TIMESTAMP | File creation timestamp |
 | PROGRAMID | Name of the generating application |
 | PROGRAMVERSION | Version of the generating application |
@@ -554,12 +554,12 @@ Generated by QsoRipper v0.1.0
 ### Parsing Rules
 
 1. **Case-insensitive**: field names, mode/band values, EOH/EOR tags
-2. **Ignore unknown fields**: forward compatibility — skip fields your app doesn't recognize
+2. **Ignore unknown fields**: forward compatibility - skip fields that the application does not recognize
 3. **Ignore text outside specifiers**: allows comments, whitespace, formatting between records
 4. **Length-delimited**: the LENGTH value determines exactly how many characters to read for DATA
-5. **No maximum field length**: importing apps may truncate, exporting apps may write any length
+5. **No maximum field length**: Importing applications can truncate. Exporting applications can write any length.
 6. **Field order arbitrary**: fields within a record can appear in any order
-7. **No duplicate fields per record**: each field name may appear at most once per record
+7. **No duplicate fields per record**: Each field name can occur only once in each record.
 
 ### Application-Defined Fields
 
@@ -605,7 +605,7 @@ XML-based format with UTF-8 encoding. Uses `.adx` extension. Supports internatio
 </ADX>
 ```
 
-ADX support is optional — all ADIF-compliant apps must support ADI, but ADX is not required.
+ADX support is optional - all ADIF-compliant apps must support ADI, but ADX is not required.
 
 ---
 
@@ -616,34 +616,34 @@ The ADIF parser (Rust-side edge adapter) converts ADIF fields to/from proto `Qso
 | ADIF Field | Proto QsoRecord Field | Notes |
 |---|---|---|
 | STATION_CALLSIGN | station_callsign | Falls back to OPERATOR if absent |
-| CALL | worked_callsign | — |
+| CALL | worked_callsign | - |
 | QSO_DATE + TIME_ON | utc_timestamp | Combined into Timestamp |
 | QSO_DATE_OFF + TIME_OFF | utc_end_timestamp | End date falls back to QSO_DATE when ADIF omits QSO_DATE_OFF |
 | BAND | band | Map string to Band enum |
-| MODE + SUBMODE | mode | Map to Mode enum; store submode separately if needed |
+| MODE + SUBMODE | mode | Map to Mode enum. Store submode separately if needed |
 | FREQ | frequency_hz | Convert MHz → Hz via string/decimal math for sub-kHz precision |
 | RST_SENT | rst_sent | Parse into RstReport |
 | RST_RCVD | rst_received | Parse into RstReport |
-| TX_PWR | tx_power | — |
-| CONTACTED_OP | worked_operator_callsign | — |
-| GRIDSQUARE | worked_grid | — |
-| COUNTRY | worked_country | — |
-| DXCC | worked_dxcc | — |
-| STATE | worked_state | — |
-| CONT | worked_continent | — |
-| CQZ | worked_cq_zone | — |
-| ITUZ | worked_itu_zone | — |
-| CNTY | worked_county | — |
-| IOTA | worked_iota | — |
-| ARRL_SECT | worked_arrl_section | — |
-| NAME | worked_operator_name | — |
-| CONTEST_ID | contest_id | — |
-| STX | serial_sent | — |
-| SRX | serial_received | — |
-| STX_STRING | exchange_sent | — |
-| SRX_STRING | exchange_received | — |
-| COMMENT | comment | — |
-| NOTES | notes | — |
+| TX_PWR | tx_power | - |
+| CONTACTED_OP | worked_operator_callsign | - |
+| GRIDSQUARE | worked_grid | - |
+| COUNTRY | worked_country | - |
+| DXCC | worked_dxcc | - |
+| STATE | worked_state | - |
+| CONT | worked_continent | - |
+| CQZ | worked_cq_zone | - |
+| ITUZ | worked_itu_zone | - |
+| CNTY | worked_county | - |
+| IOTA | worked_iota | - |
+| ARRL_SECT | worked_arrl_section | - |
+| NAME | worked_operator_name | - |
+| CONTEST_ID | contest_id | - |
+| STX | serial_sent | - |
+| SRX | serial_received | - |
+| STX_STRING | exchange_sent | - |
+| SRX_STRING | exchange_received | - |
+| COMMENT | comment | - |
+| NOTES | notes | - |
 | QSL_SENT | qsl_sent_status | Map Y/N/R/Q/I to QslStatus enum |
 | QSL_RCVD | qsl_received_status | Map Y/N/R/I to QslStatus enum |
 | QSLSDATE | qsl_sent_date | Stored as a Timestamp at 00:00:00 UTC |
@@ -665,7 +665,9 @@ The ADIF parser (Rust-side edge adapter) converts ADIF fields to/from proto `Qso
 | MY_ALTITUDE | station_snapshot.altitude_meters | Logging-station altitude in meters (MSL) |
 | MY_GRIDSQUARE_EXT | station_snapshot.gridsquare_ext | Extended grid chars 9-12 |
 
-**Fields not in QsoRecord or its nested station snapshot** (such as unsupported `MY_` fields, propagation data, satellite info, etc.) are preserved in an overflow map for round-trip fidelity during ADIF import/export.
+**Fields outside `QsoRecord` and its station snapshot** remain in an overflow map.
+Examples include unsupported `MY_` fields, propagation data, and satellite information.
+This map preserves the fields during ADIF import and export.
 
 ---
 
@@ -684,16 +686,16 @@ Alternatives: [`adif-rs`](https://github.com/macopacabana/adif-rs) (simpler), [`
 ### Recommended .NET Package
 
 The .NET GUI does not parse ADIF directly (gRPC provides normalized proto types), but for any direct ADIF file handling:
-- [`AdifNet`](https://www.nuget.org/packages/AdifNet/) — full ADI+ADX, .NET 8, SQL adapter
-- [`AdifLib`](https://www.nuget.org/packages/AdifLib/) — lightweight, .NET Standard 2.0
+- [`AdifNet`](https://www.nuget.org/packages/AdifNet/) - full ADI+ADX, .NET 8, SQL adapter
+- [`AdifLib`](https://www.nuget.org/packages/AdifLib/) - lightweight, .NET Standard 2.0
 
 ### Design Considerations
 
-1. **Round-trip fidelity**: preserve all ADIF fields during import, even those not in QsoRecord, so exports don't lose data
+1. **Round-trip fidelity**: preserve all ADIF fields during import, even those not in QsoRecord, so exports do not lose data
 2. **Forward compatibility**: ignore unknown fields (matching ADIF's upward compatibility policy)
-3. **Band/Mode normalization**: convert string values to proto enums; handle submodes
+3. **Band/Mode normalization**: convert string values to proto enums. Handle submodes
 4. **Date/time combining**: merge QSO_DATE + TIME_ON into a single UTC timestamp
-5. **Frequency vs Band**: FREQ is optional when BAND is present; derive one from the other when possible
+5. **Frequency vs Band**: FREQ is optional when BAND is present. Derive one from the other when possible
 6. **Import-only fields**: accept deprecated fields on import but never emit them on export
 
 ---
