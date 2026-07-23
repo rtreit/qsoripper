@@ -10,11 +10,12 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 use crate::proto::qsoripper::domain::StationProfile;
-use crate::proto::qsoripper::services::winkeyer_broker_service_client::WinkeyerBrokerServiceClient;
 use crate::proto::qsoripper::services::{CwKeyerBackend, CwKeyerStatus, CwMacro, CwSendContext};
-use crate::proto::qsoripper::services::{
+use cathub_protocol::winkeyer_broker_service_client::WinkeyerBrokerServiceClient;
+use cathub_protocol::{
     WinkeyerBrokerServiceAbortClientRequest, WinkeyerBrokerServiceGetStatusRequest,
-    WinkeyerBrokerServiceSendTextRequest, WinkeyerBrokerServiceSetSpeedRequest, WinkeyerSpeedMode,
+    WinkeyerBrokerServiceSendTextRequest, WinkeyerBrokerServiceSetSpeedRequest,
+    WinkeyerBrokerStatus, WinkeyerSpeedMode,
 };
 
 /// Environment variable that selects the CW keyer backend.
@@ -1027,9 +1028,7 @@ impl CathubWinkeyer {
         })
     }
 
-    fn get_status(
-        &mut self,
-    ) -> Result<crate::proto::qsoripper::services::WinkeyerBrokerStatus, CwError> {
+    fn get_status(&mut self) -> Result<WinkeyerBrokerStatus, CwError> {
         let response = self
             .runtime
             .block_on(
