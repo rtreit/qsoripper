@@ -6,10 +6,11 @@ option csharp_namespace = "QsoRipper.Services";
 
 // Identifies a single step in the setup wizard flow.
 enum SetupWizardStep {
+  reserved 5;
+  reserved "SETUP_WIZARD_STEP_CAT_HUB";
   SETUP_WIZARD_STEP_UNSPECIFIED = 0;
   SETUP_WIZARD_STEP_LOG_FILE = 1;
   SETUP_WIZARD_STEP_STATION_PROFILES = 2;
   SETUP_WIZARD_STEP_QRZ_INTEGRATION = 3;
-  SETUP_WIZARD_STEP_CAT_HUB = 5;
   SETUP_WIZARD_STEP_REVIEW = 4;
 }

@@ -363,13 +363,6 @@ internal sealed class ManagedEngineState
 
         lock (_gate)
         {
-            // Validate any supplied CAT hub replacement BEFORE mutating state, so an invalid
-            // request rejects cleanly (surfaced as gRPC InvalidArgument) without partially
-            // applying other setup fields.
-            if (request.CatHub is not null)
-            {
-                _ = SharedSetupConfigPersistence.BuildCatHubTableOrThrow(request.CatHub);
-            }
             var normalizedWsjtxIngest = request.WsjtxIngest is null
                 ? null
                 : NormalizeWsjtxIngest(request.WsjtxIngest);
@@ -425,15 +418,6 @@ internal sealed class ManagedEngineState
             {
                 _persistedSetup.WsjtxIngest = normalizedWsjtxIngest;
                 _persistedSetup.WsjtxIngestWriteOverride = normalizedWsjtxIngest?.Clone();
-            }
-
-            // CONDITIONAL OWNERSHIP: only an explicit cat_hub in the request triggers a
-            // `[cat_hub]` rewrite. The override is consumed (cleared) by PersistNoLock so a
-            // later save without cat_hub preserves the section verbatim.
-            if (request.CatHub is not null)
-            {
-                _persistedSetup.CatHubWriteOverride = request.CatHub.Clone();
-                _persistedSetup.CatHub = request.CatHub.Clone();
             }
 
             UpdatePersistedStorageSettingsNoLock(request);
@@ -1647,10 +1631,7 @@ internal sealed class ManagedEngineState
     {
         SharedSetupConfigPersistence.Save(_configPath, _persistedSetup);
 
-        // The CAT hub override is a one-shot replacement signal (mirrors Rust's per-request
-        // cat_hub_update). The WSJT-X override uses the same conditional-ownership model.
-        // Clear both after writing so subsequent saves preserve those sections.
-        _persistedSetup.CatHubWriteOverride = null;
+        // Clear the one-shot override after writing.
         _persistedSetup.WsjtxIngestWriteOverride = null;
     }
 
@@ -1706,11 +1687,6 @@ internal sealed class ManagedEngineState
             status.WsjtxIngestStatus = wsjtxLiveStatus.Clone();
         }
 
-        if (_persistedSetup.CatHub is not null)
-        {
-            status.CatHub = _persistedSetup.CatHub.Clone();
-        }
-
         if (isSqlite)
         {
             status.PersistenceDefinitions.Add(
@@ -1764,13 +1740,6 @@ internal sealed class ManagedEngineState
                 Step = SetupWizardStep.QrzIntegration,
                 Complete = !string.IsNullOrWhiteSpace(_qrzXmlUsername)
                     && _hasQrzXmlPassword,
-            },
-            new SetupWizardStepStatus
-            {
-                // CAT hub configuration is entirely optional and fully validated on save, so the
-                // step is always complete. Ordered before Review to match the Rust engine.
-                Step = SetupWizardStep.CatHub,
-                Complete = true,
             },
             new SetupWizardStepStatus
             {

@@ -169,7 +169,6 @@ pub(crate) fn save_request_from_status(status: &SetupStatus) -> SaveSetupRequest
         qrz_logbook_api_key: None,
         sync_config: status.sync_config,
         rig_control: status.rig_control.clone(),
-        cat_hub: None,
         wsjtx_ingest: status.wsjtx_ingest.clone(),
         persistence_values,
     }
@@ -373,7 +372,8 @@ fn rig_control_label(rig: Option<&RigControlSettings>) -> String {
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use qsoripper_core::proto::qsoripper::domain::StationProfile;
+    use qsoripper_core::proto::qsoripper::domain::{StationProfile, SyncConfig};
+    use qsoripper_core::proto::qsoripper::services::{RuntimeConfigValue, WsjtxIngestSettings};
 
     fn mk_status(callsign: &str, log_path: Option<&str>) -> SetupStatus {
         SetupStatus {
@@ -400,6 +400,97 @@ mod tests {
                 .as_ref()
                 .map(|p| p.station_callsign.as_str()),
             Some("K7XYZ")
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn save_request_projects_all_client_owned_settings_and_filters_persistence_values() {
+        let station_profile = StationProfile {
+            station_callsign: "K7XYZ".to_owned(),
+            operator_callsign: Some("K7ABC".to_owned()),
+            ..Default::default()
+        };
+        let sync_config = SyncConfig {
+            auto_sync_enabled: true,
+            sync_interval_seconds: 300,
+            conflict_policy: ConflictPolicy::LastWriteWins as i32,
+        };
+        let rig_control = RigControlSettings {
+            enabled: Some(true),
+            host: Some("127.0.0.1".to_owned()),
+            port: Some(4532),
+            read_timeout_ms: Some(2_000),
+            stale_threshold_ms: Some(5_000),
+        };
+        let wsjtx_ingest = WsjtxIngestSettings {
+            enabled: true,
+            udp_enabled: Some(true),
+            udp_bind: "127.0.0.1:2237".to_owned(),
+            adif_tail_enabled: true,
+            adif_tail_path: Some("wsjtx_log.adi".to_owned()),
+            poll_interval_ms: 1_000,
+            sync_to_qrz: false,
+        };
+        let status = SetupStatus {
+            storage_backend: 2,
+            sqlite_path: Some("legacy.db".to_owned()),
+            station_profile: Some(station_profile.clone()),
+            qrz_xml_username: Some("K7XYZ".to_owned()),
+            has_qrz_xml_password: true,
+            log_file_path: Some("current.db".to_owned()),
+            has_qrz_logbook_api_key: true,
+            sync_config: Some(sync_config),
+            rig_control: Some(rig_control.clone()),
+            wsjtx_ingest: Some(wsjtx_ingest.clone()),
+            persistence_values: vec![
+                RuntimeConfigValue {
+                    key: "persistence.path".to_owned(),
+                    has_value: true,
+                    display_value: "current.db".to_owned(),
+                    ..Default::default()
+                },
+                RuntimeConfigValue {
+                    key: "persistence.secret".to_owned(),
+                    has_value: true,
+                    display_value: "hidden".to_owned(),
+                    secret: true,
+                    ..Default::default()
+                },
+                RuntimeConfigValue {
+                    key: "persistence.redacted".to_owned(),
+                    has_value: true,
+                    display_value: "redacted".to_owned(),
+                    redacted: true,
+                    ..Default::default()
+                },
+                RuntimeConfigValue {
+                    key: "persistence.empty".to_owned(),
+                    display_value: "ignored".to_owned(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let request = save_request_from_status(&status);
+
+        assert_eq!(request.storage_backend, 2);
+        assert_eq!(request.sqlite_path.as_deref(), Some("legacy.db"));
+        assert_eq!(request.station_profile, Some(station_profile));
+        assert_eq!(request.qrz_xml_username.as_deref(), Some("K7XYZ"));
+        assert!(request.qrz_xml_password.is_none());
+        assert_eq!(request.log_file_path.as_deref(), Some("current.db"));
+        assert!(request.qrz_logbook_api_key.is_none());
+        assert_eq!(request.sync_config, Some(sync_config));
+        assert_eq!(request.rig_control, Some(rig_control));
+        assert_eq!(request.wsjtx_ingest, Some(wsjtx_ingest));
+        assert_eq!(
+            request.persistence_values,
+            vec![SetupFieldValue {
+                key: "persistence.path".to_owned(),
+                value: Some("current.db".to_owned()),
+            }]
         );
     }
 

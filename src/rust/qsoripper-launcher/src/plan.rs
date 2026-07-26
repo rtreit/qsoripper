@@ -15,6 +15,8 @@ pub(crate) struct LaunchPlan {
     pub args: Vec<OsString>,
     pub env: Vec<(String, String)>,
     pub readiness_port: Option<u16>,
+    pub cathub_runtime_info: Option<PathBuf>,
+    pub configured_cathub_endpoint: Option<String>,
 }
 
 enum CatHubReadiness {
@@ -62,19 +64,30 @@ pub(crate) fn ui_plan(ui_id: &str, selection: &Selection) -> Option<LaunchPlan> 
         args,
         env,
         readiness_port: None,
+        cathub_runtime_info: None,
+        configured_cathub_endpoint: None,
     })
 }
 
 /// Build the launch plan for an engine component. Engines take no per-process
 /// configuration from the launcher in the first pass.
-pub(crate) fn engine_plan(engine_id: &str) -> Option<LaunchPlan> {
+pub(crate) fn engine_plan(engine_id: &str, cathub_endpoint: Option<&str>) -> Option<LaunchPlan> {
     let spec = find(engine_id)?;
     let readiness_port = spec.engine_port;
+    let mut env = Vec::new();
+    if let Some(endpoint) = cathub_endpoint {
+        env.push((
+            "QSORIPPER_CW_CATHUB_ENDPOINT".to_string(),
+            endpoint.to_string(),
+        ));
+    }
     Some(LaunchPlan {
         spec,
         args: Vec::new(),
-        env: Vec::new(),
+        env,
         readiness_port,
+        cathub_runtime_info: None,
+        configured_cathub_endpoint: None,
     })
 }
 
@@ -86,28 +99,41 @@ pub(crate) fn daemon_plan(
     daemon_id: &str,
     unified_config_path: &Path,
     standalone_config_override: Option<&Path>,
+    runtime_info_path: &Path,
 ) -> Option<LaunchPlan> {
     let spec = find(daemon_id)?;
     let mut args: Vec<OsString> = Vec::new();
     let mut readiness_port = spec.engine_port;
+    let mut cathub_runtime_info = None;
+    let mut configured_cathub_endpoint = None;
     if daemon_id == DAEMON_CATHUB {
         let (config, managed) =
             resolve_cathub_config(unified_config_path, standalone_config_override);
         if let CatHubReadiness::Configured(configured_port) = cathub_readiness_port(&config) {
             readiness_port = configured_port;
         }
+        configured_cathub_endpoint = cathub_winkeyer_endpoint(&config);
         if managed {
             args.push("--section".into());
             args.push("cat_hub".into());
         }
         args.push("--config".into());
         args.push(config.into_os_string());
+        if configured_cathub_endpoint.is_some() {
+            args.push("--winkeyer-api-bind".into());
+            args.push("127.0.0.1:0".into());
+        }
+        args.push("--runtime-info".into());
+        args.push(runtime_info_path.as_os_str().to_owned());
+        cathub_runtime_info = Some(runtime_info_path.to_path_buf());
     }
     Some(LaunchPlan {
         spec,
         args,
         env: Vec::new(),
         readiness_port,
+        cathub_runtime_info,
+        configured_cathub_endpoint,
     })
 }
 
@@ -175,6 +201,17 @@ fn cathub_readiness_port(config_path: &Path) -> CatHubReadiness {
         .and_then(toml_edit::Item::as_str)
         .and_then(socket_port);
     CatHubReadiness::Configured(hamlib_port.or(winkeyer_port))
+}
+
+fn cathub_winkeyer_endpoint(config_path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(config_path).ok()?;
+    let document = text.parse::<toml_edit::DocumentMut>().ok()?;
+    let root = document.get("cat_hub").unwrap_or(document.as_item());
+    let bind = root
+        .get("winkeyer")
+        .and_then(|winkeyer| winkeyer.get("api_bind"))
+        .and_then(toml_edit::Item::as_str)?;
+    Some(format!("http://{bind}"))
 }
 
 fn socket_port(bind: &str) -> Option<u16> {
@@ -264,14 +301,23 @@ mod tests {
         let unified = dir.path().join("config.toml");
         std::fs::write(&unified, "[launcher]\nengines = [\"rust-engine\"]\n").unwrap();
         let external = dir.path().join("cathub.toml");
-        let plan = daemon_plan(DAEMON_CATHUB, &unified, Some(&external)).expect("plan");
+        let runtime = dir.path().join("runtime.json");
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, Some(&external), &runtime).expect("plan");
         let strs: Vec<String> = plan
             .args
             .into_iter()
             .map(|a| a.into_string().unwrap())
             .collect();
         let expected = external.to_string_lossy().into_owned();
-        assert_eq!(strs, vec!["--config".to_string(), expected]);
+        assert_eq!(
+            strs,
+            vec![
+                "--config".to_string(),
+                expected,
+                "--runtime-info".to_string(),
+                runtime.to_string_lossy().into_owned()
+            ]
+        );
     }
 
     #[test]
@@ -279,7 +325,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let unified = dir.path().join("config.toml");
         std::fs::write(&unified, "[cat_hub]\n[radio]\nport = \"COM3\"\n").unwrap();
-        let plan = daemon_plan(DAEMON_CATHUB, &unified, None).expect("plan");
+        let runtime = dir.path().join("runtime.json");
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, None, &runtime).expect("plan");
         let strs: Vec<String> = plan
             .args
             .into_iter()
@@ -292,7 +339,9 @@ mod tests {
                 "--section".to_string(),
                 "cat_hub".to_string(),
                 "--config".to_string(),
-                expected
+                expected,
+                "--runtime-info".to_string(),
+                runtime.to_string_lossy().into_owned()
             ]
         );
     }
@@ -303,14 +352,23 @@ mod tests {
         let unified = dir.path().join("config.toml");
         std::fs::write(&unified, "this is = not valid = toml [[[").unwrap();
         let external = dir.path().join("cathub.toml");
-        let plan = daemon_plan(DAEMON_CATHUB, &unified, Some(&external)).expect("plan");
+        let runtime = dir.path().join("runtime.json");
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, Some(&external), &runtime).expect("plan");
         let strs: Vec<String> = plan
             .args
             .into_iter()
             .map(|a| a.into_string().unwrap())
             .collect();
         let expected = external.to_string_lossy().into_owned();
-        assert_eq!(strs, vec!["--config".to_string(), expected]);
+        assert_eq!(
+            strs,
+            vec![
+                "--config".to_string(),
+                expected,
+                "--runtime-info".to_string(),
+                runtime.to_string_lossy().into_owned()
+            ]
+        );
     }
 
     #[test]
@@ -322,7 +380,8 @@ mod tests {
             "[cat_hub.radio]\nbackend = \"loopback\"\n[[cat_hub.hamlib_net]]\nname = \"engine\"\nbind = \"127.0.0.1:4632\"\n",
         )
         .unwrap();
-        let plan = daemon_plan(DAEMON_CATHUB, &unified, None).expect("plan");
+        let runtime = dir.path().join("runtime.json");
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, None, &runtime).expect("plan");
         assert_eq!(plan.readiness_port, Some(4632));
     }
 
@@ -335,8 +394,21 @@ mod tests {
             "[cat_hub.radio]\nbackend = \"loopback\"\n[cat_hub.winkeyer]\napi_bind = \"127.0.0.1:51071\"\n",
         )
         .unwrap();
-        let plan = daemon_plan(DAEMON_CATHUB, &unified, None).expect("plan");
+        let runtime = dir.path().join("runtime.json");
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, None, &runtime).expect("plan");
         assert_eq!(plan.readiness_port, Some(51071));
+        assert_eq!(
+            plan.configured_cathub_endpoint.as_deref(),
+            Some("http://127.0.0.1:51071")
+        );
+        let args: Vec<String> = plan
+            .args
+            .into_iter()
+            .map(|argument| argument.into_string().unwrap())
+            .collect();
+        assert!(args.windows(2).any(|pair| {
+            pair == ["--winkeyer-api-bind".to_string(), "127.0.0.1:0".to_string()]
+        }));
     }
 
     #[test]
@@ -348,7 +420,20 @@ mod tests {
             "[cat_hub.radio]\nbackend = \"loopback\"\n[[cat_hub.serial_endpoint]]\nname = \"logger\"\ntransport = \"COM10\"\n",
         )
         .unwrap();
-        let plan = daemon_plan(DAEMON_CATHUB, &unified, None).expect("plan");
+        let runtime = dir.path().join("runtime.json");
+        let plan = daemon_plan(DAEMON_CATHUB, &unified, None, &runtime).expect("plan");
         assert_eq!(plan.readiness_port, None);
+    }
+
+    #[test]
+    fn engine_plan_injects_discovered_cathub_endpoint() {
+        let plan = engine_plan(ENGINE_RUST, Some("http://127.0.0.1:54321")).expect("plan");
+        assert_eq!(
+            plan.env,
+            vec![(
+                "QSORIPPER_CW_CATHUB_ENDPOINT".to_string(),
+                "http://127.0.0.1:54321".to_string()
+            )]
+        );
     }
 }
