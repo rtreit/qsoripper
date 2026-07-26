@@ -12,7 +12,9 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System, Update
 
 use crate::catalog::{ComponentId, ComponentSpec};
 
-const SUPPORTED_CATHUB_SERIES: &str = "0.1";
+const MINIMUM_CATHUB_VERSION: (u32, u32, u32) = (0, 1, 2);
+const MAXIMUM_CATHUB_VERSION: (u32, u32, u32) = (0, 2, 0);
+const SUPPORTED_CATHUB_RANGE: &str = ">=0.1.2 <0.2.0";
 
 /// A child the launcher started, tracked by OS PID so it survives the launcher
 /// exiting and so a later "stop" can find it again.
@@ -324,16 +326,23 @@ pub(crate) fn verify_cathub_version(exe: &Path) -> Result<String> {
     let version = parse_cathub_version(&reported)
         .context("CatHub returned an unrecognized version response")?;
     if !is_supported_cathub_version(version) {
-        bail!(
-            "incompatible CatHub version {version}; QsoRipper supports {SUPPORTED_CATHUB_SERIES}.x"
-        );
+        bail!("incompatible CatHub version {version}; QsoRipper supports {SUPPORTED_CATHUB_RANGE}");
     }
     Ok(version.to_owned())
 }
 
 fn is_supported_cathub_version(version: &str) -> bool {
-    version == SUPPORTED_CATHUB_SERIES
-        || version.starts_with(&format!("{SUPPORTED_CATHUB_SERIES}."))
+    parse_version_triplet(version)
+        .is_some_and(|parsed| parsed >= MINIMUM_CATHUB_VERSION && parsed < MAXIMUM_CATHUB_VERSION)
+}
+
+fn parse_version_triplet(version: &str) -> Option<(u32, u32, u32)> {
+    let version = version.split_once('-').map_or(version, |(core, _)| core);
+    let mut fields = version.split('.');
+    let major = fields.next()?.parse().ok()?;
+    let minor = fields.next()?.parse().ok()?;
+    let patch = fields.next()?.parse().ok()?;
+    fields.next().is_none().then_some((major, minor, patch))
 }
 
 fn parse_cathub_version(reported: &str) -> Option<&str> {
@@ -546,8 +555,9 @@ mod tests {
 
     #[test]
     fn accepts_only_supported_cathub_version_series() {
-        assert!(is_supported_cathub_version("0.1"));
-        assert!(is_supported_cathub_version("0.1.0"));
+        assert!(!is_supported_cathub_version("0.1"));
+        assert!(!is_supported_cathub_version("0.1.0"));
+        assert!(is_supported_cathub_version("0.1.2"));
         assert!(is_supported_cathub_version("0.1.12"));
         assert!(!is_supported_cathub_version("0.0.9"));
         assert!(!is_supported_cathub_version("0.2.0"));

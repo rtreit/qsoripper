@@ -713,6 +713,12 @@ CatHub can also read `[cat_hub]` from the QsoRipper per-user `config.toml`.
 In this mode, the launcher gives the unified path and section name to CatHub.
 QsoRipper treats this table as opaque data.
 
+For a launcher-managed process, the launcher gives CatHub `127.0.0.1:0` for the typed
+WinKeyer API. CatHub binds an available loopback port. It publishes the effective endpoint
+and process ID after all configured listeners bind. The launcher validates this runtime data.
+It gives the endpoint to each engine through `QSORIPPER_CW_CATHUB_ENDPOINT`.
+The configured Hamlib NET port stays fixed for external clients.
+
 Multiple components write the same file.
 Thus, each engine setup save MUST preserve unrelated data.
 The engine replaces only its owned top-level tables:
@@ -1598,7 +1604,7 @@ The engine can store the same keys under `[cw_keying]` in the shared `config.tom
 | `QSORIPPER_CW_KEYER_BACKEND` | Enum | `null` | CW keying backend: `null`, direct `winkeyer`, or shared `cathub`. `cwdaemon` is reserved for a future backend. |
 | `QSORIPPER_CW_WINKEYER_PORT` | String | | Serial port for WinKeyer, such as `COM3` on Windows or `/dev/ttyUSB0` on Linux. Required when backend is `winkeyer`. |
 | `QSORIPPER_CW_WINKEYER_BAUD` | Integer | `1200` | WinKeyer serial baud rate. Most WinKeyer devices use 1200 baud. |
-| `QSORIPPER_CW_CATHUB_ENDPOINT` | URL | `http://127.0.0.1:50071` | Loopback WinKeyer broker endpoint. Used only by the `cathub` backend. |
+| `QSORIPPER_CW_CATHUB_ENDPOINT` | URL | `http://127.0.0.1:50071` | Loopback WinKeyer broker endpoint. The launcher supplies CatHub's effective runtime endpoint. Used only by the `cathub` backend. |
 | `QSORIPPER_CW_CATHUB_CLIENT_NAME` | String | `qsoripper-engine` | Stable broker client identity used for scoped queue cancellation and telemetry. |
 | `QSORIPPER_CW_SPEED_WPM` | Integer | `25` | Default CW speed in words per minute. Valid range is 5 through 99. |
 | `QSORIPPER_CW_TRANSMIT_ENABLED` | Bool | `false` | Explicit safety gate for hardware text transmission. The WinKeyer backend will not send text until this is `true`. |

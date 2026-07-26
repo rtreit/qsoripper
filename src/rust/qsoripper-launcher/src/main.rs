@@ -1,6 +1,7 @@
 //! Binary entry point for the `QsoRipper` launcher TUI.
 
 mod catalog;
+mod cathub_runtime;
 mod config;
 mod discovery;
 mod model;

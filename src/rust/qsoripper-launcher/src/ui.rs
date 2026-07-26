@@ -17,6 +17,9 @@ use ratatui::Terminal;
 use crate::catalog::{
     catalog, ComponentId, ComponentKind, ENGINE_DOTNET, ENGINE_RUST, UI_DEBUGHOST,
 };
+use crate::cathub_runtime::{
+    clear_runtime_info, read_live_runtime_info, runtime_info_path, wait_for_runtime_info,
+};
 use crate::config;
 use crate::discovery::ArtifactRoot;
 use crate::model::Selection;
@@ -110,6 +113,7 @@ pub(crate) struct AppState {
     should_quit: bool,
     runtime: Option<tokio::runtime::Runtime>,
     sync_dialog: Option<SyncDialog>,
+    cathub_endpoint: Option<String>,
 }
 
 impl AppState {
@@ -136,6 +140,7 @@ impl AppState {
             should_quit: false,
             runtime: None,
             sync_dialog: None,
+            cathub_endpoint: None,
         }
     }
 
@@ -281,14 +286,26 @@ impl AppState {
     /// (with `last_message`/status set) if any daemon fails so the caller aborts
     /// the rest of the launch.
     fn launch_daemons(&mut self) -> bool {
+        self.cathub_endpoint = None;
         for daemon_id in self.selection.daemons.clone() {
             let external_config = std::env::var_os("CATHUB_CONFIG_PATH").map(PathBuf::from);
-            let Some(plan) = daemon_plan(daemon_id, &self.config_path, external_config.as_deref())
-            else {
+            let runtime_path = runtime_info_path(&self.config_path);
+            let Some(plan) = daemon_plan(
+                daemon_id,
+                &self.config_path,
+                external_config.as_deref(),
+                &runtime_path,
+            ) else {
                 continue;
             };
             let exe = plan.spec.artifact.executable_path(&self.artifact_root);
             let port = plan.readiness_port.unwrap_or(0);
+            if let Ok(info) = read_live_runtime_info(&runtime_path) {
+                self.cathub_endpoint = info.winkeyer_endpoint;
+                self.statuses
+                    .insert(daemon_id, Status::listening_external());
+                continue;
+            }
             if port != 0 && is_port_listening(port, Duration::from_millis(200)) {
                 // Something owns the port. If it is a stale copy of our own
                 // published binary left by an earlier session/rebuild, reclaim
@@ -298,6 +315,8 @@ impl AppState {
                     wait_for_port_release(port, Duration::from_secs(3));
                 }
                 if is_port_listening(port, Duration::from_millis(200)) {
+                    self.cathub_endpoint
+                        .clone_from(&plan.configured_cathub_endpoint);
                     self.statuses
                         .insert(daemon_id, Status::listening_external());
                     continue;
@@ -309,11 +328,32 @@ impl AppState {
                 self.last_message = format!("Aborted launch: {error}");
                 return false;
             }
+            if let Some(path) = plan.cathub_runtime_info.as_deref() {
+                if let Err(error) = clear_runtime_info(path) {
+                    self.statuses
+                        .insert(daemon_id, Status::failed(&error.to_string()));
+                    self.last_message = format!("Aborted launch: {error}");
+                    return false;
+                }
+            }
             self.statuses.insert(daemon_id, Status::starting());
             let arg_refs: Vec<&std::ffi::OsStr> = plan.args.iter().map(AsRef::as_ref).collect();
             match spawn(&plan.spec, &exe, &arg_refs, &plan.env, &mut self.registry) {
                 Ok(p) => {
-                    if port != 0
+                    if let Some(path) = plan.cathub_runtime_info.as_deref() {
+                        match wait_for_runtime_info(path, p.pid, Duration::from_secs(15)) {
+                            Ok(info) => {
+                                self.cathub_endpoint = info.winkeyer_endpoint;
+                            }
+                            Err(error) => {
+                                self.statuses
+                                    .insert(daemon_id, Status::failed(&error.to_string()));
+                                self.last_message =
+                                    format!("Aborted launch: {error}. Check Get-CatHubLog.ps1.");
+                                return false;
+                            }
+                        }
+                    } else if port != 0
                         && !wait_for_port(port, Duration::from_secs(15), Duration::from_millis(300))
                     {
                         self.statuses.insert(
@@ -349,7 +389,7 @@ impl AppState {
 
         // Engines next.
         for engine_id in self.selection.engines.clone() {
-            let Some(plan) = engine_plan(engine_id) else {
+            let Some(plan) = engine_plan(engine_id, self.cathub_endpoint.as_deref()) else {
                 continue;
             };
             let exe = plan.spec.artifact.executable_path(&self.artifact_root);
