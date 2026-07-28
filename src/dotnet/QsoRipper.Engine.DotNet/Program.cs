@@ -2,8 +2,6 @@ using System.Net;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using QsoRipper.Engine.ContestCalendar;
 using QsoRipper.Engine.DotNet;
-using QsoRipper.Engine.Lookup;
-using QsoRipper.Engine.Lookup.Qrz;
 using QsoRipper.Engine.RigControl;
 using QsoRipper.Engine.SpaceWeather;
 using QsoRipper.Engine.Storage;
@@ -25,8 +23,7 @@ builder.Services.AddSingleton(_ =>
 var resolvedStorage = CreateStorage(persistedSetup.Config);
 builder.Services.AddSingleton(resolvedStorage.Storage);
 
-var lookupCoordinator = CreateLookupCoordinator(resolvedStorage.Storage, persistedSetup.Config);
-builder.Services.AddSingleton(lookupCoordinator);
+var qrzSecretStore = new PlatformQrzSecretStore();
 
 var contestCalendarMonitor = CreateContestCalendarMonitor();
 var rigControlMonitor = CreateRigControlMonitor();
@@ -35,13 +32,15 @@ var spaceWeatherMonitor = CreateSpaceWeatherMonitor();
 builder.Services.AddSingleton(provider => new ManagedEngineState(
     options.ConfigPath,
     provider.GetRequiredService<IEngineStorage>(),
-    provider.GetRequiredService<ILookupCoordinator>(),
+    null,
     contestCalendarMonitor,
     rigControlMonitor,
     spaceWeatherMonitor,
     null,
     resolvedStorage.PersistenceLocation,
-    persistedSetup));
+    persistedSetup,
+    null,
+    qrzSecretStore));
 
 builder.Services.AddHostedService(provider =>
     new QsoRipper.Engine.DotNet.Wsjtx.WsjtxIngestSupervisor(provider.GetRequiredService<ManagedEngineState>()));
@@ -94,44 +93,6 @@ static ResolvedStorageSettings CreateStorage(SharedPersistedSetupConfig persiste
     }
 
     return new ResolvedStorageSettings(new MemoryStorage(), null);
-}
-
-static ILookupCoordinator CreateLookupCoordinator(IEngineStorage storage, SharedPersistedSetupConfig persistedSetup)
-{
-    var username = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_USERNAME")?.Trim();
-    var password = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_XML_PASSWORD")?.Trim();
-    var userAgent = Environment.GetEnvironmentVariable("QSORIPPER_QRZ_USER_AGENT")?.Trim();
-
-    if (string.IsNullOrWhiteSpace(username))
-    {
-        username = persistedSetup.QrzXmlUsername?.Trim();
-    }
-
-    if (string.IsNullOrWhiteSpace(password))
-    {
-        password = persistedSetup.QrzXmlPassword?.Trim();
-    }
-
-    if (string.IsNullOrWhiteSpace(userAgent))
-    {
-        userAgent = persistedSetup.QrzXmlUserAgent?.Trim();
-    }
-
-    ICallsignProvider provider;
-    if (!string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password))
-    {
-        // HttpClient is intentionally not disposed — it is a singleton owned by the provider for the app lifetime.
-#pragma warning disable CA2000 // Dispose objects before losing scope
-        var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-#pragma warning restore CA2000
-        provider = new QrzXmlProvider(httpClient, username, password, userAgent: userAgent);
-    }
-    else
-    {
-        provider = new DisabledCallsignProvider();
-    }
-
-    return new LookupCoordinator(provider, storage.LookupSnapshots, logbookStore: storage.Logbook);
 }
 
 static ContestCalendarMonitor? CreateContestCalendarMonitor()

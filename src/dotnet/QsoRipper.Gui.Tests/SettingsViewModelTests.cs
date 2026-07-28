@@ -61,6 +61,27 @@ public class SettingsViewModelTests
     }
 
     [Fact]
+    public async Task LoadAsyncShowsSecureQrzSecretStateWithoutLoadingSecretValues()
+    {
+        var client = new UxFixtureEngineClient(
+            new UxCaptureFixture
+            {
+                QrzXmlUsername = "k7rnd",
+                HasQrzXmlPassword = true,
+                HasQrzLogbookApiKey = true,
+            });
+        var viewModel = new SettingsViewModel(client);
+
+        await viewModel.LoadAsync();
+
+        Assert.Equal("k7rnd", viewModel.QrzXmlUsername);
+        Assert.True(viewModel.HasConfiguredQrzXmlPassword);
+        Assert.True(viewModel.HasConfiguredQrzLogbookApiKey);
+        Assert.Equal(string.Empty, viewModel.QrzXmlPassword);
+        Assert.Equal(string.Empty, viewModel.QrzLogbookApiKey);
+    }
+
+    [Fact]
     public async Task SaveCommandIncludesPersistencePathValueWhenRequired()
     {
         var client = new UxFixtureEngineClient(new UxCaptureFixture());

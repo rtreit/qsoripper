@@ -69,6 +69,9 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private string _qrzXmlPassword = string.Empty;
 
     [ObservableProperty]
+    private bool _hasConfiguredQrzXmlPassword;
+
+    [ObservableProperty]
     private bool _isTestingQrzXml;
 
     [ObservableProperty]
@@ -80,6 +83,9 @@ internal sealed partial class SettingsViewModel : ObservableObject
     // QRZ Logbook
     [ObservableProperty]
     private string _qrzLogbookApiKey = string.Empty;
+
+    [ObservableProperty]
+    private bool _hasConfiguredQrzLogbookApiKey;
 
     [ObservableProperty]
     private bool _isTestingLogbook;
@@ -559,6 +565,8 @@ internal sealed partial class SettingsViewModel : ObservableObject
     private void ApplyStatus(SetupStatus status)
     {
         QrzXmlUsername = status.QrzXmlUsername ?? string.Empty;
+        HasConfiguredQrzXmlPassword = status.HasQrzXmlPassword;
+        HasConfiguredQrzLogbookApiKey = status.HasQrzLogbookApiKey;
         PersistenceSectionTitle = string.IsNullOrWhiteSpace(status.PersistenceLabel)
             ? "Storage"
             : status.PersistenceLabel;
@@ -602,8 +610,7 @@ internal sealed partial class SettingsViewModel : ObservableObject
             RigControlStaleThresholdMs = string.Empty;
         }
 
-        // Password and API key are never returned by the engine for security;
-        // leave them empty so the user can re-enter if they want to change them.
+        // The engine returns only saved state. The input stays empty until the user replaces a secret.
         ApplyWsjtxIngest(status.WsjtxIngest);
     }
 

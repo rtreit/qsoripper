@@ -1,5 +1,6 @@
 //! Runnable tonic gRPC host for the `QsoRipper` Rust engine.
 
+mod qrz_secret_store;
 mod repair;
 mod runtime_config;
 mod setup;

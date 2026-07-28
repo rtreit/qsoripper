@@ -126,6 +126,7 @@ internal sealed class ManagedEngineState
     private readonly RigControlMonitor? _rigControlMonitor;
     private readonly SpaceWeatherMonitor? _spaceWeatherMonitor;
     private readonly IQrzCredentialTester _qrzCredentialTester;
+    private readonly IQrzSecretStore _qrzSecretStore;
     private readonly string _configPath;
     private readonly SharedPersistedSetupConfig _persistedSetup;
     private readonly string? _currentPersistenceLocation;
@@ -187,7 +188,7 @@ internal sealed class ManagedEngineState
     {
     }
 
-    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, ContestCalendarMonitor? contestCalendarMonitor, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor, QrzSyncEngine? syncEngine, string? currentPersistenceLocation, LoadedSharedSetupConfig? loadedPersistedSetup, IQrzCredentialTester? qrzCredentialTester = null)
+    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, ContestCalendarMonitor? contestCalendarMonitor, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor, QrzSyncEngine? syncEngine, string? currentPersistenceLocation, LoadedSharedSetupConfig? loadedPersistedSetup, IQrzCredentialTester? qrzCredentialTester = null, IQrzSecretStore? qrzSecretStore = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
         ArgumentNullException.ThrowIfNull(storage);
@@ -199,6 +200,7 @@ internal sealed class ManagedEngineState
         _rigControlMonitor = rigControlMonitor;
         _spaceWeatherMonitor = spaceWeatherMonitor;
         _qrzCredentialTester = qrzCredentialTester ?? new QrzCredentialTester();
+        _qrzSecretStore = qrzSecretStore ?? new NullQrzSecretStore();
         _ownsSyncEngine = syncEngine is null;
         _syncEngine = syncEngine;
         var loadedSetup = loadedPersistedSetup ?? SharedSetupConfigPersistence.Load(_configPath);
@@ -209,11 +211,17 @@ internal sealed class ManagedEngineState
                 : null);
         _qrzXmlUsername = NormalizeOptional(Environment.GetEnvironmentVariable(QrzXmlUsernameKey))
             ?? NormalizeOptional(_persistedSetup.QrzXmlUsername);
+        var legacyQrzXmlPassword = NormalizeOptional(_persistedSetup.QrzXmlPassword);
+        var legacyQrzLogbookApiKey = NormalizeOptional(_persistedSetup.QrzLogbookApiKey);
+        MigrateLegacySecret(QrzSecret.XmlPassword, legacyQrzXmlPassword);
+        MigrateLegacySecret(QrzSecret.LogbookApiKey, legacyQrzLogbookApiKey);
         _qrzXmlPassword = NormalizeOptional(Environment.GetEnvironmentVariable(QrzXmlPasswordKey))
-            ?? NormalizeOptional(_persistedSetup.QrzXmlPassword);
+            ?? legacyQrzXmlPassword
+            ?? ReadStoredSecret(QrzSecret.XmlPassword);
         _hasQrzXmlPassword = _qrzXmlPassword is not null;
         _qrzLogbookApiKey = NormalizeOptional(Environment.GetEnvironmentVariable(QrzLogbookApiKeyKey))
-            ?? NormalizeOptional(_persistedSetup.QrzLogbookApiKey);
+            ?? legacyQrzLogbookApiKey
+            ?? ReadStoredSecret(QrzSecret.LogbookApiKey);
         _hasQrzLogbookApiKey = _qrzLogbookApiKey is not null;
         var hadPersistedSecrets = !string.IsNullOrWhiteSpace(_persistedSetup.QrzXmlPassword)
             || !string.IsNullOrWhiteSpace(_persistedSetup.QrzLogbookApiKey);
@@ -363,6 +371,11 @@ internal sealed class ManagedEngineState
 
         lock (_gate)
         {
+            var requestedQrzXmlPassword = NormalizeOptional(request.QrzXmlPassword);
+            var requestedQrzLogbookApiKey = NormalizeOptional(request.QrzLogbookApiKey);
+            PersistRequestedSecret(QrzSecret.XmlPassword, requestedQrzXmlPassword);
+            PersistRequestedSecret(QrzSecret.LogbookApiKey, requestedQrzLogbookApiKey);
+
             var normalizedWsjtxIngest = request.WsjtxIngest is null
                 ? null
                 : NormalizeWsjtxIngest(request.WsjtxIngest);
@@ -383,17 +396,17 @@ internal sealed class ManagedEngineState
                 RebuildLookupCoordinatorNoLock();
             }
 
-            if (!string.IsNullOrWhiteSpace(request.QrzXmlPassword))
+            if (requestedQrzXmlPassword is not null)
             {
-                _qrzXmlPassword = request.QrzXmlPassword.Trim();
+                _qrzXmlPassword = requestedQrzXmlPassword;
                 _hasQrzXmlPassword = true;
                 _runtimeOverrides.Remove(QrzXmlPasswordKey);
                 RebuildLookupCoordinatorNoLock();
             }
 
-            if (!string.IsNullOrWhiteSpace(request.QrzLogbookApiKey))
+            if (requestedQrzLogbookApiKey is not null)
             {
-                _qrzLogbookApiKey = request.QrzLogbookApiKey.Trim();
+                _qrzLogbookApiKey = requestedQrzLogbookApiKey;
                 _hasQrzLogbookApiKey = true;
                 _runtimeOverrides.Remove(QrzLogbookApiKeyKey);
                 if (_ownsSyncEngine)
@@ -2317,6 +2330,58 @@ internal sealed class ManagedEngineState
         }
 
         return normalized;
+    }
+
+    private string? ReadStoredSecret(QrzSecret secret)
+    {
+        try
+        {
+            return NormalizeOptional(_qrzSecretStore.Get(secret));
+        }
+        catch (QrzSecretStoreException)
+        {
+            return null;
+        }
+    }
+
+    private void MigrateLegacySecret(QrzSecret secret, string? value)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _qrzSecretStore.Set(secret, value);
+        }
+        catch (QrzSecretStoreException)
+        {
+            // Keep the legacy value active for this process. The TOML rewrite still removes it.
+        }
+    }
+
+    private void PersistRequestedSecret(QrzSecret secret, string? value)
+    {
+        if (value is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _qrzSecretStore.Set(secret, value);
+        }
+        catch (QrzSecretStoreException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new QrzSecretStoreException(
+                "The platform credential store did not save the QRZ secret.",
+                exception);
+        }
     }
 
     private static string? NormalizeOptional(string? value)

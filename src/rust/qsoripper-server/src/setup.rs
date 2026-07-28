@@ -41,6 +41,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock};
 use tonic::{Request, Response, Status};
 
+#[cfg(not(test))]
+use crate::qrz_secret_store::PlatformQrzSecretStore;
+use crate::qrz_secret_store::{QrzSecret, QrzSecretStore};
 use crate::runtime_config::{
     RuntimeConfigManager, DEFAULT_QRZ_LOGBOOK_BASE_URL, QRZ_LOGBOOK_API_KEY_ENV_VAR,
     QRZ_LOGBOOK_BASE_URL_ENV_VAR, SQLITE_PATH_ENV_VAR, STORAGE_BACKEND_ENV_VAR,
@@ -62,6 +65,7 @@ const PERSISTENCE_PATH_KEY: &str = "persistence.path";
 const PERSISTENCE_STEP_DESCRIPTION: &str =
     "Choose where QsoRipper stores the local logbook used by this engine.";
 const PERSISTENCE_STEP_LABEL: &str = "Log storage";
+const SECRET_STORE_ERROR_PREFIX: &str = "QRZ secret storage failed.";
 
 #[derive(Clone)]
 pub(crate) struct SetupControlSurface {
@@ -130,7 +134,13 @@ impl SetupService for SetupControlSurface {
             .state
             .save_setup(request.into_inner(), &self.runtime_config)
             .await
-            .map_err(Status::invalid_argument)?;
+            .map_err(|message| {
+                if message.starts_with(SECRET_STORE_ERROR_PREFIX) {
+                    Status::failed_precondition(message)
+                } else {
+                    Status::invalid_argument(message)
+                }
+            })?;
         let status = self.attach_wsjtx_status(status).await;
         Ok(Response::new(SaveSetupResponse {
             status: Some(status),
@@ -292,15 +302,43 @@ pub(crate) struct SetupState {
     config_path: PathBuf,
     suggested_log_file_path: PathBuf,
     persisted_config: RwLock<Option<PersistedSetupConfig>>,
+    secret_store: Arc<dyn QrzSecretStore>,
 }
 
 impl SetupState {
     pub(crate) fn load(config_path: PathBuf) -> Result<Self, String> {
-        let persisted_config = load_persisted_config(&config_path)?;
+        #[cfg(not(test))]
+        let secret_store: Arc<dyn QrzSecretStore> = Arc::new(PlatformQrzSecretStore::new());
+        #[cfg(test)]
+        let secret_store: Arc<dyn QrzSecretStore> =
+            Arc::new(crate::qrz_secret_store::MemoryQrzSecretStore::default());
+
+        Self::load_with_secret_store(config_path, secret_store)
+    }
+
+    fn load_with_secret_store(
+        config_path: PathBuf,
+        secret_store: Arc<dyn QrzSecretStore>,
+    ) -> Result<Self, String> {
+        let mut persisted_config = load_persisted_config(&config_path)?;
+        if let Some(config) = persisted_config.as_mut() {
+            migrate_or_hydrate_secret(
+                &secret_store,
+                QrzSecret::XmlPassword,
+                &mut config.qrz_xml.password,
+            );
+            migrate_or_hydrate_secret(
+                &secret_store,
+                QrzSecret::LogbookApiKey,
+                &mut config.qrz_logbook.api_key,
+            );
+        }
+
         Ok(Self {
             suggested_log_file_path: suggested_log_file_path(&config_path),
             config_path,
             persisted_config: RwLock::new(persisted_config),
+            secret_store,
         })
     }
 
@@ -345,15 +383,36 @@ impl SetupState {
         runtime_config: &RuntimeConfigManager,
     ) -> Result<SetupStatus, String> {
         let existing_config = self.persisted_config.read().await.clone();
-        let config = PersistedSetupConfig::from_request(
+        let mut config = PersistedSetupConfig::from_request(
             existing_config.as_ref(),
             &request,
             self.suggested_log_file_path.as_path(),
         )?;
+        hydrate_secret(
+            &self.secret_store,
+            QrzSecret::XmlPassword,
+            &mut config.qrz_xml.password,
+        );
+        hydrate_secret(
+            &self.secret_store,
+            QrzSecret::LogbookApiKey,
+            &mut config.qrz_logbook.api_key,
+        );
         let runtime_values = config.to_runtime_values();
         runtime_config
             .preview_config_file_values(runtime_values.clone())
             .await?;
+
+        persist_requested_secret(
+            &self.secret_store,
+            QrzSecret::XmlPassword,
+            request.qrz_xml_password.as_deref(),
+        )?;
+        persist_requested_secret(
+            &self.secret_store,
+            QrzSecret::LogbookApiKey,
+            request.qrz_logbook_api_key.as_deref(),
+        )?;
 
         let wsjtx_ingest_update = request.wsjtx_ingest.as_ref().map(|_| &config.wsjtx_ingest);
         write_persisted_config(self.config_path.as_path(), &config, wsjtx_ingest_update)?;
@@ -552,6 +611,44 @@ impl SetupState {
             .await?;
         Ok(result)
     }
+}
+
+fn migrate_or_hydrate_secret(
+    secret_store: &Arc<dyn QrzSecretStore>,
+    secret: QrzSecret,
+    value: &mut Option<String>,
+) {
+    if let Some(legacy_value) = value.as_deref() {
+        let _ = secret_store.set(secret, legacy_value);
+    } else {
+        hydrate_secret(secret_store, secret, value);
+    }
+}
+
+fn hydrate_secret(
+    secret_store: &Arc<dyn QrzSecretStore>,
+    secret: QrzSecret,
+    value: &mut Option<String>,
+) {
+    if value.is_none() {
+        if let Ok(stored_value) = secret_store.get(secret) {
+            *value = stored_value;
+        }
+    }
+}
+
+fn persist_requested_secret(
+    secret_store: &Arc<dyn QrzSecretStore>,
+    secret: QrzSecret,
+    requested_value: Option<&str>,
+) -> Result<(), String> {
+    let Some(value) = normalize_optional_string(requested_value) else {
+        return Ok(());
+    };
+
+    secret_store
+        .set(secret, &value)
+        .map_err(|error| format!("{SECRET_STORE_ERROR_PREFIX} {error}"))
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -2169,6 +2266,7 @@ mod tests {
         RIGCTLD_ENABLED_ENV_VAR, RIGCTLD_HOST_ENV_VAR, RIGCTLD_PORT_ENV_VAR,
         RIGCTLD_READ_TIMEOUT_MS_ENV_VAR, RIGCTLD_STALE_THRESHOLD_MS_ENV_VAR,
     };
+    use crate::qrz_secret_store::MemoryQrzSecretStore;
     use crate::runtime_config::RuntimeConfigManager;
     use qsoripper_core::proto::qsoripper::domain::{ConflictPolicy, StationProfile, SyncConfig};
     use qsoripper_core::proto::qsoripper::services::{
@@ -3623,6 +3721,52 @@ file_path = "{}"
         drop(service);
         drop(runtime_config);
         drop(setup_state);
+
+        let config_directory = config_path.parent().expect("config directory");
+        let _ = fs::remove_dir_all(config_directory);
+    }
+
+    #[tokio::test]
+    async fn secure_qrz_secrets_survive_engine_state_reload() {
+        let config_path = unique_config_path();
+        let log_file_path = absolute_log_file_path(&config_path, "secure-secret-reload.db");
+        let secret_store = Arc::new(MemoryQrzSecretStore::default());
+        let setup_state = Arc::new(
+            SetupState::load_with_secret_store(config_path.clone(), secret_store.clone())
+                .expect("setup state"),
+        );
+        let runtime_config = Arc::new(RuntimeConfigManager::new(BTreeMap::new()).expect("runtime"));
+        let service = SetupControlSurface::new(setup_state.clone(), runtime_config);
+
+        SetupService::save_setup(
+            &service,
+            Request::new(SaveSetupRequest {
+                log_file_path: Some(log_file_path),
+                station_profile: Some(StationProfile {
+                    station_callsign: "k7rnd".to_string(),
+                    ..StationProfile::default()
+                }),
+                qrz_xml_username: Some("k7rnd".to_string()),
+                qrz_xml_password: Some("xml-secret".to_string()),
+                qrz_logbook_api_key: Some("logbook-secret".to_string()),
+                ..Default::default()
+            }),
+        )
+        .await
+        .expect("save setup");
+
+        drop(service);
+        drop(setup_state);
+
+        let reloaded =
+            SetupState::load_with_secret_store(config_path.clone(), secret_store).expect("reload");
+        let status = reloaded.status().await;
+        assert!(status.has_qrz_xml_password);
+        assert!(status.has_qrz_logbook_api_key);
+
+        let saved_toml = fs::read_to_string(&config_path).expect("read config");
+        assert!(!saved_toml.contains("xml-secret"));
+        assert!(!saved_toml.contains("logbook-secret"));
 
         let config_directory = config_path.parent().expect("config directory");
         let _ = fs::remove_dir_all(config_directory);
