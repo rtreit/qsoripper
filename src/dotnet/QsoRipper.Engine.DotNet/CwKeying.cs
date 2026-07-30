@@ -3,6 +3,7 @@ using System.IO.Ports;
 using System.Text;
 using Grpc.Core;
 using Grpc.Net.Client;
+using CatHub.Protocol;
 using QsoRipper.Domain;
 using QsoRipper.Services;
 

@@ -14,15 +14,15 @@ QsoRipper needs the CatHub executable, not the `cathub-protocol` Rust crate or t
 `CatHub.Protocol` NuGet package. Those packages are for applications that develop against
 CatHub's typed WinKeyer API.
 
-Download the CatHub 0.1.2 Windows or Linux archive and adjacent SHA-256 checksum from the
-[GitHub release](https://github.com/treitforge/cathub/releases/tag/v0.1.2). Verify the
+Download the CatHub 0.2.0 Windows or Linux archive and adjacent SHA-256 checksum from the
+[GitHub release](https://github.com/treitforge/cathub/releases/tag/v0.2.0). Verify the
 checksum, extract the executable, and either add its directory to `PATH` or set
 `CATHUB_EXECUTABLE`.
 
 If Rust 1.88 or newer is installed, install the same release from crates.io:
 
 ```powershell
-cargo install cathub --version 0.1.2
+cargo install cathub --version 0.2.0
 ```
 
 Cargo downloads `cathub-protocol` automatically while building the daemon. The protocol
@@ -42,12 +42,10 @@ QsoRipper resolves the executable in this order:
 1. The path in `CATHUB_EXECUTABLE`.
 2. A binary bundled at `artifacts\publish\cathub\Release\cathub.exe` on Windows, or the
    equivalent platform path.
-3. A source build in a sibling CatHub checkout at `..\cathub\target\release\cathub.exe`,
-   or the equivalent platform path.
-4. `cathub` on `PATH`.
+3. `cathub` on `PATH`.
 
 QsoRipper does not download, install, or update CatHub during startup.
-The current supported executable range is `>=0.1.2 <0.2.0`. The launcher checks
+The current supported executable range is `>=0.2.0 <0.3.0`. The launcher checks
 `cathub --version` and reports an incompatible version separately from a spawn failure.
 
 ## Configuration modes
@@ -157,12 +155,11 @@ keyer and broker. Enable transmission only during an attended hardware test.
 
 ## Protocol compatibility
 
-CatHub 0.1 retains the existing `qsoripper.services` WinKeyer broker wire-package identifier.
-The identifier is part of the wire contract and does not make CatHub part of QsoRipper. The
-authoritative contract lives in the CatHub repository.
+CatHub 0.2 uses the CatHub-owned `cathub.services` WinKeyer broker wire-package identifier.
+The authoritative contract lives in the CatHub repository.
 
-The Rust engine consumes `cathub-protocol` 0.1.1. The .NET engine consumes
-`CatHub.Protocol` 0.1.1. CatHub owns these packages and the source protocol files.
+The Rust engine consumes `cathub-protocol` 0.2.0. The .NET engine consumes
+`CatHub.Protocol` 0.2.0. CatHub owns these packages and the source protocol files.
 
 QsoRipper records the dependency pin in `config\cathub-dependency.json`.
 

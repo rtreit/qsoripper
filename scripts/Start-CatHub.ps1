@@ -24,15 +24,11 @@ function Find-CatHubExecutable {
     if (Test-Path -LiteralPath $bundled) {
         return $bundled
     }
-    $sibling = Join-Path (Split-Path -Parent $repoRoot) "cathub\target\release\$binaryName"
-    if (Test-Path -LiteralPath $sibling) {
-        return $sibling
-    }
     $command = Get-Command cathub -ErrorAction SilentlyContinue
     if ($command) {
         return $command.Source
     }
-    throw 'CatHub is not installed. Set CATHUB_EXECUTABLE, add cathub to PATH, build it in a sibling cathub checkout, or bundle it under artifacts\publish\cathub\Release.'
+    throw 'CatHub is not installed. Set CATHUB_EXECUTABLE, add cathub to PATH, or bundle it under artifacts\publish\cathub\Release.'
 }
 
 function Get-QsoRipperConfigPath {
