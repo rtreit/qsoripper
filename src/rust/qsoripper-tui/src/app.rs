@@ -1,6 +1,6 @@
 //! Top-level application state shared across the main event loop and UI renderer.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use qsoripper_core::proto::qsoripper::domain::QsoRecord;
 
@@ -303,15 +303,7 @@ impl App {
         if !self.qso_timer_active {
             return None;
         }
-        let secs = self.qso_started_at.elapsed().as_secs();
-        let h = secs / 3600;
-        let m = (secs % 3600) / 60;
-        let s = secs % 60;
-        Some(if h > 0 {
-            format!("{h}:{m:02}:{s:02}")
-        } else {
-            format!("{m}:{s:02}")
-        })
+        Some(format_qso_duration(self.qso_started_at.elapsed()))
     }
 
     /// Set a success status message, replacing any current message.
@@ -347,6 +339,18 @@ impl App {
                 self.status_message = None;
             }
         }
+    }
+}
+
+fn format_qso_duration(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
     }
 }
 
@@ -497,12 +501,9 @@ mod tests {
     }
 
     #[test]
-    fn qso_duration_str_formats_hours() {
-        let mut app = App::new("http://localhost:50051".to_string());
-        app.qso_timer_active = true;
-        app.qso_started_at = Instant::now() - Duration::from_secs(3661);
-        let dur = app.qso_duration_str().unwrap();
-        assert!(dur.starts_with('1'), "expected H:MM:SS, got: {dur}");
+    fn format_qso_duration_formats_minutes_and_hours() {
+        assert_eq!(format_qso_duration(Duration::from_secs(61)), "1:01");
+        assert_eq!(format_qso_duration(Duration::from_secs(3661)), "1:01:01");
     }
 
     #[test]
