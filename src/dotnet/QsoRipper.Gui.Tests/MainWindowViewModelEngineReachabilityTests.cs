@@ -92,7 +92,7 @@ public sealed class MainWindowViewModelEngineReachabilityTests
         public Task<TestQrzLogbookCredentialsResponse> TestQrzLogbookCredentialsAsync(string apiKey, CancellationToken ct = default) =>
             throw new NotImplementedException();
 
-        public Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default)
+        public Task<IReadOnlyList<QsoRecord>> ListQsosAsync(CancellationToken ct = default)
         {
             if (FailWithRpcException)
             {

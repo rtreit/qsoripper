@@ -311,7 +311,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
             GuiPerformanceTrace.Write(nameof(CheckFirstRunAsync) + ".start");
             await ApplyPreferredEngineSelectionAsync();
             GuiPerformanceTrace.Write(nameof(CheckFirstRunAsync) + ".afterPreferredEngine");
-            StatusMessage = "Loading recent QSOs...";
+            StatusMessage = "Loading QSOs...";
             var recentQsoRefreshTask = RecentQsos.RefreshAsync();
             var status = (await _engine.GetSetupStatusAsync()).Status;
             GuiPerformanceTrace.Write(
@@ -1755,7 +1755,7 @@ internal sealed partial class MainWindowViewModel : ObservableObject, IDisposabl
     private async Task ActivateDashboardAsync(bool focusSearch, Task? recentQsoRefreshTask = null)
     {
         GuiPerformanceTrace.Write(nameof(ActivateDashboardAsync) + ".start");
-        StatusMessage = "Loading recent QSOs...";
+        StatusMessage = "Loading QSOs...";
         recentQsoRefreshTask ??= RecentQsos.RefreshAsync();
         await recentQsoRefreshTask;
         GuiPerformanceTrace.Write(nameof(ActivateDashboardAsync) + ".afterRecentQsosRefresh");

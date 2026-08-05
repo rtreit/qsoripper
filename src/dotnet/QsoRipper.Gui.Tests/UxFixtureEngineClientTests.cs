@@ -109,7 +109,7 @@ public class UxFixtureEngineClientTests
 
         var response = await client.SyncWithQrzAsync();
         var syncStatus = await client.GetSyncStatusAsync();
-        var records = await client.ListRecentQsosAsync();
+        var records = await client.ListQsosAsync();
 
         Assert.Equal(1u, response.UploadedRecords);
         Assert.Equal(0u, syncStatus.PendingUpload);

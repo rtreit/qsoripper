@@ -29,7 +29,7 @@ internal interface IEngineClient
         string apiKey,
         CancellationToken ct = default);
 
-    Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default);
+    Task<IReadOnlyList<QsoRecord>> ListQsosAsync(CancellationToken ct = default);
 
     Task<UpdateQsoResponse> UpdateQsoAsync(
         QsoRecord qso,
