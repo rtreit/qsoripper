@@ -13,6 +13,7 @@
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
+    <PackageReference Include="keyring-dotnet" />
     <PackageReference Include="System.IO.Ports" />
     <PackageReference Include="Tomlyn" />
   </ItemGroup>

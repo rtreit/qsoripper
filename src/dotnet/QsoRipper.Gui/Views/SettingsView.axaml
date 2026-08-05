@@ -378,10 +378,10 @@
                     Spacing="16">
           <TextBlock Classes="settingsSectionHeader" Text="QRZ XML Lookup" />
           <TextBlock Classes="settingsSectionHint"
-                     Text="Used for callsign lookups. Leave blank to disable." />
+                     Text="Used for callsign lookups. Blank secret fields keep saved values." />
 
           <Grid ColumnDefinitions="120,*"
-                RowDefinitions="Auto,Auto"
+                RowDefinitions="Auto,Auto,Auto"
                 ColumnSpacing="12"
                 RowSpacing="6">
             <TextBlock Grid.Row="0" Grid.Column="0" Text="Username:" VerticalAlignment="Center" />
@@ -397,6 +397,11 @@
                      Text="{Binding QrzXmlPassword, Mode=TwoWay}"
                      PasswordChar="•"
                      PlaceholderText="Enter to update" />
+            <TextBlock Grid.Row="2"
+                       Grid.Column="1"
+                       Classes="settingsSectionHint"
+                       Text="Credential is configured. Enter a value to replace it."
+                       IsVisible="{Binding HasConfiguredQrzXmlPassword}" />
           </Grid>
 
           <StackPanel Orientation="Horizontal"
@@ -424,7 +429,9 @@
                      Text="API key for bidirectional sync with logbook.qrz.com." />
 
           <Grid ColumnDefinitions="120,*"
-                ColumnSpacing="12">
+                RowDefinitions="Auto,Auto"
+                ColumnSpacing="12"
+                RowSpacing="4">
             <TextBlock Grid.Column="0" Text="API Key:" VerticalAlignment="Center" />
             <TextBox x:Name="SettingsQrzLogbookApiKeyBox"
                      AutomationProperties.AutomationId="SettingsQrzLogbookApiKeyBox"
@@ -432,6 +439,11 @@
                      Text="{Binding QrzLogbookApiKey, Mode=TwoWay}"
                      PasswordChar="•"
                      PlaceholderText="Enter to update" />
+            <TextBlock Grid.Row="1"
+                       Grid.Column="1"
+                       Classes="settingsSectionHint"
+                       Text="Credential is configured. Enter a value to replace it."
+                       IsVisible="{Binding HasConfiguredQrzLogbookApiKey}" />
           </Grid>
 
           <StackPanel Orientation="Horizontal"

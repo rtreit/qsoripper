@@ -310,6 +310,48 @@ public sealed class ManagedEngineStateTests : IDisposable
     }
 
     [Fact]
+    public void Secure_qrz_secrets_survive_engine_state_reload()
+    {
+        var configPath = Path.Combine(_tempDirectory, "config.toml");
+        var secretStore = new FakeQrzSecretStore();
+        var state = CreateStateWithSecretStore(configPath, secretStore);
+
+        state.SaveSetup(new SaveSetupRequest
+        {
+            QrzXmlUsername = "k7rnd",
+            QrzXmlPassword = "xml-secret",
+            QrzLogbookApiKey = "logbook-secret",
+        });
+
+        var reloaded = CreateStateWithSecretStore(configPath, secretStore);
+        var status = reloaded.GetSetupStatus();
+        var persistedConfig = File.ReadAllText(configPath);
+
+        Assert.Equal("k7rnd", status.QrzXmlUsername);
+        Assert.True(status.HasQrzXmlPassword);
+        Assert.True(status.HasQrzLogbookApiKey);
+        Assert.DoesNotContain("xml-secret", persistedConfig, StringComparison.Ordinal);
+        Assert.DoesNotContain("logbook-secret", persistedConfig, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Save_setup_reports_failed_precondition_when_secret_storage_fails()
+    {
+        var secretStore = new FakeQrzSecretStore { FailWrites = true };
+        var state = CreateStateWithSecretStore(
+            Path.Combine(_tempDirectory, "config.toml"),
+            secretStore);
+        var service = new ManagedSetupGrpcService(state);
+
+        var exception = await Assert.ThrowsAsync<RpcException>(() => service.SaveSetup(
+            new SaveSetupRequest { QrzXmlPassword = "xml-secret" },
+            new TestServerCallContext()));
+
+        Assert.Equal(StatusCode.FailedPrecondition, exception.StatusCode);
+        Assert.DoesNotContain("xml-secret", exception.Status.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Save_setup_preserves_unknown_shared_config_tables()
     {
         // The unified config.toml is shared with the CAT hub daemon ([cat_hub]) and launcher
@@ -2000,6 +2042,24 @@ public sealed class ManagedEngineStateTests : IDisposable
         return new ManagedEngineState(Path.Combine(_tempDirectory, "config.toml"), new MemoryStorage());
     }
 
+    private static ManagedEngineState CreateStateWithSecretStore(
+        string configPath,
+        IQrzSecretStore secretStore)
+    {
+        return new ManagedEngineState(
+            configPath,
+            new MemoryStorage(),
+            lookupCoordinator: null,
+            contestCalendarMonitor: null,
+            rigControlMonitor: null,
+            spaceWeatherMonitor: null,
+            syncEngine: null,
+            currentPersistenceLocation: null,
+            loadedPersistedSetup: null,
+            qrzCredentialTester: null,
+            qrzSecretStore: secretStore);
+    }
+
     private ManagedEngineState CreateStateWithSync()
     {
         var storage = new MemoryStorage();
@@ -2099,6 +2159,26 @@ public sealed class ManagedEngineStateTests : IDisposable
                 LogbookOwner = "K7RND",
                 QsoCount = 42,
             });
+        }
+    }
+
+    private sealed class FakeQrzSecretStore : IQrzSecretStore
+    {
+        private readonly Dictionary<QrzSecret, string> _values = [];
+
+        public bool FailWrites { get; init; }
+
+        public string? Get(QrzSecret secret) =>
+            _values.TryGetValue(secret, out var value) ? value : null;
+
+        public void Set(QrzSecret secret, string value)
+        {
+            if (FailWrites)
+            {
+                throw new QrzSecretStoreException("The platform credential store is unavailable.");
+            }
+
+            _values[secret] = value;
         }
     }
 

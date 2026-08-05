@@ -77,6 +77,10 @@ internal sealed class ManagedSetupGrpcService(ManagedEngineState state)
         {
             return Task.FromResult(state.SaveSetup(request));
         }
+        catch (QrzSecretStoreException ex)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
         catch (InvalidOperationException ex)
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));

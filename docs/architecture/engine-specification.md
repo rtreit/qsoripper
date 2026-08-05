@@ -414,7 +414,10 @@ They must also cancel stale UI requests.
 They must use this shared lookup service for callsign enrichment.
 They must not duplicate QRZ XML logic in the UI.
 
-Credentials supplied through setup remain process-session secrets and are never serialized. For restart availability, operators provide secrets through the documented environment variables or a secure configuration provider. See §6.3.
+Credentials supplied through setup remain available after an engine restart.
+The engine stores them in the platform credential store.
+The engine never stores them in the shared TOML file.
+See §6.3.
 
 **Slash-call fallback:** A callsign can contain a `/` modifier, such as `W1AW/7`.
 If the full lookup fails, remove the modifier.
@@ -817,9 +820,15 @@ Persists setup configuration and station profile.
 
 **Behavior:**
 1. Validate all provided fields.
-2. Persist non-secret configuration and station/storage settings to the config path. Install QRZ passwords and API keys only in process memory. Never serialize them.
-3. Apply the configuration to the running engine (activate the station profile, enable integrations).
-4. Mark setup as complete.
+2. Persist supplied QRZ passwords and API keys in the platform credential store. Never serialize them.
+3. If credential storage fails, return `FAILED_PRECONDITION`. Do not report that setup saved the supplied secret.
+4. Persist non-secret configuration and station/storage settings to the config path.
+5. Apply the configuration to the running engine (activate the station profile, enable integrations).
+6. Mark setup as complete.
+
+An omitted QRZ secret keeps the stored secret unchanged.
+A nonempty QRZ secret replaces the stored secret.
+The engine must use the credential identifiers in §6.3.
 
 **WSJT-X ingest (`wsjtx_ingest`) management:**
 - The optional `wsjtx_ingest` field (`WsjtxIngestSettings`) lets setup clients manage the
@@ -1664,17 +1673,37 @@ The engine must start and function even when external integrations are unavailab
 
 - The engine stores configuration in a shared TOML file at `QSORIPPER_CONFIG_PATH`.
 - The `SaveSetup` RPC writes only non-secret configuration to this path.
-- On startup, the engine loads persisted configuration and overlays environment variable overrides (env vars take precedence).
+- On startup, the engine loads persisted configuration, secure secrets, and environment variable overrides.
 - Runtime config mutations (via `DeveloperControlService`) are ephemeral and do not persist across restarts unless explicitly saved.
 - The persisted/default conflict policy is `LAST_WRITE_WINS`. When a present setup request explicitly supplies the proto zero value, engines normalize it to the safe `FLAG_FOR_REVIEW` policy before persistence.
 
 #### Secret handling
 
 - The engine MUST NOT serialize QRZ passwords, API keys, session keys, or other credentials to the shared TOML file.
-- Secrets supplied by `SaveSetup` or `DeveloperControlService` are process-session values. Restart-persistent secrets come from environment variables or a platform secure configuration provider.
+- `SaveSetup` MUST store supplied QRZ secrets in the platform credential store.
+- `DeveloperControlService` secret mutations are process-session values.
+- The secret precedence is runtime override, environment variable, platform credential store, and then unset.
+- Environment variables support managed deployments and headless systems.
+- Desktop setup uses the platform credential store:
+  - Windows uses a generic Windows Credential Manager record.
+  - macOS uses a generic Keychain password record.
+  - Linux uses the Secret Service API and the default collection.
+- All conformant engines MUST use these logical identifiers:
+  - Package: `com.treitforge.qsoripper`
+  - Service: `qrz`
+  - QRZ XML password account: `xml-password`
+  - QRZ logbook API key account: `logbook-api-key`
+- Platform records MUST map the logical identifiers as follows:
+  - Windows target: `<package>.<service>/<account>`
+  - macOS service: `<package>.<service>`, with the logical account as the Keychain account
+  - Linux schema: `<package>`, with `service=<service>` and `username=<account>`
+- Engines MUST read records that another conformant engine writes.
+- The engine MUST continue without QRZ integration when the platform credential store is unavailable.
+- A `SaveSetup` request that supplies a secret MUST fail if the engine cannot store that secret.
 - Status and runtime configuration responses expose only configured/unconfigured state and redacted display text. Logs and error details never contain secret values or sensitive request payloads.
 - A legacy configuration can contain plaintext QRZ secrets.
-  An engine MAY use these values for the current process.
+  The engine MUST try to move these values to the platform credential store.
+  The engine MAY use these values for the current process if the move fails.
   It MUST immediately rewrite its owned tables without the plaintext fields.
   This migration is idempotent.
 
