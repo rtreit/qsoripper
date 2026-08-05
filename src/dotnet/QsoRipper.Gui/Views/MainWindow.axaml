@@ -158,7 +158,7 @@
       <MenuItem Header="_View">
         <MenuItem Header="_Find" InputGesture="Ctrl+F"
                   Command="{Binding FocusSearchCommand}" />
-        <MenuItem Header="_Refresh Recent QSOs" InputGesture="F5"
+        <MenuItem Header="_Refresh QSOs" InputGesture="F5"
                   Command="{Binding RecentQsos.RefreshCommand}" />
         <MenuItem Header="Zoom _In" InputGesture="Ctrl++"
                   Command="{Binding RecentQsos.ZoomInCommand}" />
@@ -929,7 +929,7 @@
                   IsVisible="{Binding IsSortChooserOpen}">
             <ScrollViewer MaxHeight="480" VerticalScrollBarVisibility="Auto">
             <StackPanel Spacing="6">
-              <TextBlock Text="Sort recent QSOs"
+              <TextBlock Text="Sort QSOs"
                          FontSize="12.5"
                          FontWeight="SemiBold" />
               <Button Content="1  UTC"

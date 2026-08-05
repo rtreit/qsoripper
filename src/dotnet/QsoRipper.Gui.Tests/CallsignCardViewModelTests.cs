@@ -58,7 +58,7 @@ public sealed class CallsignCardViewModelTests
         public Task<SaveSetupResponse> SaveSetupAsync(SaveSetupRequest request, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<GetSetupStatusResponse> GetSetupStatusAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<TestQrzLogbookCredentialsResponse> TestQrzLogbookCredentialsAsync(string apiKey, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<IReadOnlyList<QsoRecord>> ListQsosAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<UpdateQsoResponse> UpdateQsoAsync(QsoRecord qso, bool syncToQrz = false, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<SyncWithQrzResponse> SyncWithQrzAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<GetSyncStatusResponse> GetSyncStatusAsync(CancellationToken ct = default) => throw new NotImplementedException();

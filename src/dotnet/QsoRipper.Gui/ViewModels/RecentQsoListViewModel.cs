@@ -13,7 +13,6 @@ namespace QsoRipper.Gui.ViewModels;
 
 internal sealed partial class RecentQsoListViewModel : ObservableObject
 {
-    private const int DefaultLimit = 200;
     private const double DefaultGridFontSize = 12;
     private const double MinGridFontSize = 10;
     private const double MaxGridFontSize = 18;
@@ -57,7 +56,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         {
             if (!HasLoaded)
             {
-                return "Recent QSOs will appear here after setup completes.";
+                return "QSOs will appear here after setup completes.";
             }
 
             if (!string.IsNullOrWhiteSpace(ErrorMessage) && _allItems.Count == 0)
@@ -67,7 +66,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
 
             if (_parsedSearchQuery.HasTokens)
             {
-                return "No recent QSOs match the current search.";
+                return "No QSOs match the current search.";
             }
 
             return "No QSOs have been logged yet.";
@@ -193,8 +192,8 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         try
         {
             var selectedLocalId = SelectedQso?.LocalId;
-            var qsos = await _engine.ListRecentQsosAsync(DefaultLimit);
-            GuiPerformanceTrace.Write(nameof(RefreshAsync) + ".afterListRecentQsos", $"count={qsos.Count}");
+            var qsos = await _engine.ListQsosAsync();
+            GuiPerformanceTrace.Write(nameof(RefreshAsync) + ".afterListQsos", $"count={qsos.Count}");
             var items = new RecentQsoItemViewModel[qsos.Count];
             var format = TimestampFormat;
             for (var index = 0; index < qsos.Count; index++)
@@ -215,7 +214,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         {
             HasLoaded = true;
             ErrorMessage = string.IsNullOrWhiteSpace(ex.Status.Detail)
-                ? $"Recent QSOs could not be loaded ({ex.StatusCode})."
+                ? $"QSOs could not be loaded ({ex.StatusCode})."
                 : ex.Status.Detail;
             RefreshView();
         }
@@ -609,7 +608,7 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
         RecentQsoSortColumn.State => "state",
         RecentQsoSortColumn.County => "county",
         RecentQsoSortColumn.Sync => "sync",
-        _ => "recent QSOs"
+        _ => "QSOs"
     };
 
     private void ApplySortDescriptions(RecentQsoSortColumn column, bool ascending)

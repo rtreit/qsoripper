@@ -87,15 +87,12 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
             cancellationToken: ct);
     }
 
-    public async Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default)
+    public async Task<IReadOnlyList<QsoRecord>> ListQsosAsync(CancellationToken ct = default)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
-
-        var recentQsos = new List<QsoRecord>(limit);
+        var qsos = new List<QsoRecord>();
         using var call = _logbookClient.ListQsos(
             new ListQsosRequest
             {
-                Limit = (uint)limit,
                 Sort = QsoSortOrder.NewestFirst
             },
             cancellationToken: ct);
@@ -104,11 +101,11 @@ internal sealed class EngineGrpcService : IEngineClient, IDisposable
         {
             if (response.Qso is not null)
             {
-                recentQsos.Add(response.Qso);
+                qsos.Add(response.Qso);
             }
         }
 
-        return recentQsos;
+        return qsos;
     }
 
     public async Task<UpdateQsoResponse> UpdateQsoAsync(

@@ -70,7 +70,32 @@ public class RecentQsoListViewModelTests
         Assert.Equal("2 QSOs", viewModel.CountStatusText);
         Assert.Equal("No filter", viewModel.FilterStatusText);
         Assert.Equal("Sync local", viewModel.TopSyncIndicatorText);
-        Assert.Equal(200, engine.LastRecentQsoLimit);
+        Assert.Equal(1, engine.ListQsosCallCount);
+    }
+
+    [Fact]
+    public async Task RefreshAsyncLoadsMoreThanPreviousRowLimit()
+    {
+        var engine = new FakeEngineClient
+        {
+            RecentQsos = Enumerable.Range(1, 250)
+                .Select(index => CreateQso(
+                    $"qso-{index}",
+                    $"K7{index:000}",
+                    Band._20M,
+                    Mode.Cw,
+                    14_025_000,
+                    "CN87",
+                    $"QSO {index}"))
+                .ToArray()
+        };
+
+        var viewModel = new RecentQsoListViewModel(engine);
+
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(250, viewModel.VisibleItems.Count);
+        Assert.Equal("250 QSOs", viewModel.CountStatusText);
     }
 
     [Fact]
@@ -387,7 +412,7 @@ public class RecentQsoListViewModelTests
 
         public List<QsoRecord> UpdatedQsos { get; } = [];
 
-        public int? LastRecentQsoLimit { get; private set; }
+        public int ListQsosCallCount { get; private set; }
 
         public Task<GetSetupWizardStateResponse> GetWizardStateAsync(CancellationToken ct = default) =>
             throw new NotImplementedException();
@@ -407,9 +432,9 @@ public class RecentQsoListViewModelTests
         public Task<TestQrzLogbookCredentialsResponse> TestQrzLogbookCredentialsAsync(string apiKey, CancellationToken ct = default) =>
             throw new NotImplementedException();
 
-        public Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default)
+        public Task<IReadOnlyList<QsoRecord>> ListQsosAsync(CancellationToken ct = default)
         {
-            LastRecentQsoLimit = limit;
+            ListQsosCallCount++;
             if (RefreshException is not null)
             {
                 throw RefreshException;
