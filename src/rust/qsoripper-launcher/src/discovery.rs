@@ -25,7 +25,6 @@ impl Configuration {
 pub(crate) struct ArtifactRoot {
     publish_root: PathBuf,
     configuration: &'static str,
-    repo_root: Option<PathBuf>,
 }
 
 impl ArtifactRoot {
@@ -34,15 +33,12 @@ impl ArtifactRoot {
         Self {
             publish_root,
             configuration: configuration.as_str(),
-            repo_root: None,
         }
     }
 
     /// Resolve `artifacts/publish/` relative to a repo root.
     pub(crate) fn from_repo_root(repo_root: &Path, configuration: Configuration) -> Self {
-        let mut root = Self::new(repo_root.join("artifacts").join("publish"), configuration);
-        root.repo_root = Some(repo_root.to_path_buf());
-        root
+        Self::new(repo_root.join("artifacts").join("publish"), configuration)
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -51,10 +47,6 @@ impl ArtifactRoot {
 
     pub(crate) fn configuration(&self) -> &str {
         self.configuration
-    }
-
-    pub(crate) fn repo_root(&self) -> Option<&Path> {
-        self.repo_root.as_deref()
     }
 }
 

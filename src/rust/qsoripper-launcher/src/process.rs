@@ -12,9 +12,9 @@ use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, Signal, System, Update
 
 use crate::catalog::{ComponentId, ComponentSpec};
 
-const MINIMUM_CATHUB_VERSION: (u32, u32, u32) = (0, 1, 2);
-const MAXIMUM_CATHUB_VERSION: (u32, u32, u32) = (0, 2, 0);
-const SUPPORTED_CATHUB_RANGE: &str = ">=0.1.2 <0.2.0";
+const MINIMUM_CATHUB_VERSION: (u32, u32, u32) = (0, 2, 0);
+const MAXIMUM_CATHUB_VERSION: (u32, u32, u32) = (0, 3, 0);
+const SUPPORTED_CATHUB_RANGE: &str = ">=0.2.0 <0.3.0";
 
 /// A child the launcher started, tracked by OS PID so it survives the launcher
 /// exiting and so a later "stop" can find it again.
@@ -557,10 +557,10 @@ mod tests {
     fn accepts_only_supported_cathub_version_series() {
         assert!(!is_supported_cathub_version("0.1"));
         assert!(!is_supported_cathub_version("0.1.0"));
-        assert!(is_supported_cathub_version("0.1.2"));
-        assert!(is_supported_cathub_version("0.1.12"));
+        assert!(is_supported_cathub_version("0.2.0"));
+        assert!(is_supported_cathub_version("0.2.12"));
         assert!(!is_supported_cathub_version("0.0.9"));
-        assert!(!is_supported_cathub_version("0.2.0"));
+        assert!(!is_supported_cathub_version("0.3.0"));
         assert!(!is_supported_cathub_version("0.10.0"));
     }
 
