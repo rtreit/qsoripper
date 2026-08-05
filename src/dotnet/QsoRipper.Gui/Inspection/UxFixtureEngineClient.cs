@@ -274,12 +274,11 @@ internal sealed class UxFixtureEngineClient : IEngineClient
             });
     }
 
-    public Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default)
+    public Task<IReadOnlyList<QsoRecord>> ListQsosAsync(CancellationToken ct = default)
     {
         lock (_gate)
         {
             var records = _recentQsos
-                .Take(limit)
                 .Select(record => record.Clone())
                 .ToArray();
             return Task.FromResult((IReadOnlyList<QsoRecord>)records);

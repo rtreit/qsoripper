@@ -26,7 +26,7 @@ public sealed class SwitchableEngineClientTests
             "http://engine-a",
             endpoint => clients[endpoint]);
 
-        var initialQsos = await switchable.ListRecentQsosAsync();
+        var initialQsos = await switchable.ListQsosAsync();
         Assert.Equal("rust", Assert.Single(initialQsos).LocalId);
 
         var result = await switchable.SwitchAsync(dotnetProfile, "http://engine-b");
@@ -34,7 +34,7 @@ public sealed class SwitchableEngineClientTests
         Assert.True(result.Success);
         Assert.Equal(dotnetProfile.ProfileId, switchable.CurrentProfile.ProfileId);
         Assert.Equal("http://engine-b", switchable.CurrentEndpoint);
-        var switchedQsos = await switchable.ListRecentQsosAsync();
+        var switchedQsos = await switchable.ListQsosAsync();
         Assert.Equal("dotnet", Assert.Single(switchedQsos).LocalId);
         Assert.Equal(0, first.DisposeCount);
         Assert.Equal(0, second.DisposeCount);
@@ -62,7 +62,7 @@ public sealed class SwitchableEngineClientTests
         Assert.False(result.Success);
         Assert.Equal(rustProfile.ProfileId, switchable.CurrentProfile.ProfileId);
         Assert.Equal("http://engine-a", switchable.CurrentEndpoint);
-        var currentQsos = await switchable.ListRecentQsosAsync();
+        var currentQsos = await switchable.ListQsosAsync();
         Assert.Equal("rust", Assert.Single(currentQsos).LocalId);
         Assert.Equal(1, failedCandidate.DisposeCount);
     }
@@ -98,7 +98,7 @@ public sealed class SwitchableEngineClientTests
             CancellationToken ct = default) =>
             throw new NotImplementedException();
 
-        public Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<QsoRecord>> ListQsosAsync(CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<QsoRecord>>([new QsoRecord { LocalId = localId }]);
 
         public Task<UpdateQsoResponse> UpdateQsoAsync(

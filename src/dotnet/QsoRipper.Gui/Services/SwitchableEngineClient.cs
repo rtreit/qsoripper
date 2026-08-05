@@ -180,8 +180,8 @@ internal sealed class SwitchableEngineClient : IEngineClient, IDisposable
         CancellationToken ct = default) =>
         SnapshotClient().TestQrzLogbookCredentialsAsync(apiKey, ct);
 
-    public Task<IReadOnlyList<QsoRecord>> ListRecentQsosAsync(int limit = 200, CancellationToken ct = default) =>
-        SnapshotClient().ListRecentQsosAsync(limit, ct);
+    public Task<IReadOnlyList<QsoRecord>> ListQsosAsync(CancellationToken ct = default) =>
+        SnapshotClient().ListQsosAsync(ct);
 
     public Task<UpdateQsoResponse> UpdateQsoAsync(
         QsoRecord qso,
