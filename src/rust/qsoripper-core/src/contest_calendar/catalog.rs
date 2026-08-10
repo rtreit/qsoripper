@@ -232,7 +232,7 @@ fn parse_mode(value: &str) -> Option<Mode> {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use std::{fs, path::PathBuf, time::SystemTime};
+    use std::fs;
 
     use super::*;
 
@@ -254,7 +254,7 @@ mod tests {
         )
         .expect("write catalog");
 
-        let catalog = ContestDetailsCatalog::load(path.clone()).expect("catalog");
+        let catalog = ContestDetailsCatalog::load(&path).expect("catalog");
         let contest = ContestCalendarEntry {
             contest_id: "contest".to_string(),
             name: "Real Time Contest".to_string(),
@@ -276,7 +276,6 @@ mod tests {
             Some("https://example.test/rules")
         );
         assert_eq!(enriched.details_status, ContestDetailsStatus::Full as i32);
-        fs::remove_file(path).expect("remove catalog");
     }
 
     #[test]
@@ -293,7 +292,7 @@ mod tests {
         )
         .expect("write catalog");
 
-        let catalog = ContestDetailsCatalog::load(path.clone()).expect("catalog");
+        let catalog = ContestDetailsCatalog::load(&path).expect("catalog");
         let contest = ContestCalendarEntry {
             contest_id: "contest".to_string(),
             details_status: ContestDetailsStatus::Partial as i32,
@@ -306,16 +305,14 @@ mod tests {
             enriched.details_status,
             ContestDetailsStatus::MetadataOnly as i32
         );
-        fs::remove_file(path).expect("remove catalog");
     }
 
-    fn temp_catalog_path() -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "qsoripper-contest-catalog-{:?}.json",
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
-        ))
+    fn temp_catalog_path() -> tempfile::TempPath {
+        tempfile::Builder::new()
+            .prefix("qsoripper-contest-catalog-")
+            .suffix(".json")
+            .tempfile()
+            .expect("create temp catalog")
+            .into_temp_path()
     }
 }
