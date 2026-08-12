@@ -9,4 +9,5 @@ import "domain/qso_record.proto";
 message UpdateQsoRequest {
   qsoripper.domain.QsoRecord qso = 1;
   bool sync_to_qrz = 2;
+  bool sync_to_lotw = 3;
 }

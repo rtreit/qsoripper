@@ -128,6 +128,7 @@ pub(crate) async fn log_qso(
     let request = LogQsoRequest {
         qso: Some(qso),
         sync_to_qrz: false,
+        sync_to_lotw: false,
     };
 
     let response = client.log_qso(request).await?.into_inner();
@@ -444,6 +445,7 @@ pub(crate) async fn update_qso(
         .update_qso(UpdateQsoRequest {
             qso: Some(qso),
             sync_to_qrz: false,
+            sync_to_lotw: false,
         })
         .await?;
     Ok(())

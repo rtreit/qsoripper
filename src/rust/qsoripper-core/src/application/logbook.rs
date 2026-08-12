@@ -4,7 +4,9 @@ use crate::domain::qso::new_local_id;
 use crate::domain::station::{
     materialize_station_snapshot_for_create, station_snapshot_has_values,
 };
-use crate::proto::qsoripper::domain::{Band, Mode, QsoRecord, StationProfile, SyncStatus};
+use crate::proto::qsoripper::domain::{
+    Band, LotwSyncStatus, Mode, QslStatus, QsoRecord, StationProfile, SyncStatus,
+};
 use crate::storage::{
     DeletedRecordsFilter, EngineStorage, LogbookCounts, QsoListQuery, StorageError, SyncMetadata,
 };
@@ -95,6 +97,13 @@ impl LogbookEngine {
         qso.qrz_bookid = None;
         qso.deleted_at = None;
         qso.pending_remote_delete = false;
+        qso.lotw_sent = None;
+        qso.lotw_received = None;
+        qso.lotw_sent_status = QslStatus::Unspecified as i32;
+        qso.lotw_received_status = QslStatus::Unspecified as i32;
+        qso.lotw_sent_date = None;
+        qso.lotw_received_date = None;
+        qso.lotw_sync_status = LotwSyncStatus::LocalOnly as i32;
 
         materialize_station_snapshot_for_create(&mut qso, Some(active_station_profile));
         normalize_qso_for_persistence(&mut qso);
@@ -135,6 +144,21 @@ impl LogbookEngine {
         qso.station_snapshot.clone_from(&existing.station_snapshot);
         qso.deleted_at.clone_from(&existing.deleted_at);
         qso.pending_remote_delete = existing.pending_remote_delete;
+        qso.lotw_sent = existing.lotw_sent;
+        qso.lotw_received = existing.lotw_received;
+        qso.lotw_sent_status = existing.lotw_sent_status;
+        qso.lotw_received_status = existing.lotw_received_status;
+        qso.lotw_sent_date.clone_from(&existing.lotw_sent_date);
+        qso.lotw_received_date
+            .clone_from(&existing.lotw_received_date);
+        qso.lotw_sync_status = if matches!(
+            LotwSyncStatus::try_from(existing.lotw_sync_status),
+            Ok(LotwSyncStatus::Uploaded | LotwSyncStatus::Confirmed)
+        ) {
+            LotwSyncStatus::Modified as i32
+        } else {
+            existing.lotw_sync_status
+        };
         normalize_qso_for_persistence(&mut qso);
         validate_qso_for_persistence(&qso)?;
 
@@ -315,11 +339,47 @@ impl LogbookEngine {
         active_station_profile: Option<&StationProfile>,
         refresh: bool,
     ) -> Result<AdifImportSummary, LogbookError> {
+        Box::pin(self.import_adif_qsos_inner(qsos, active_station_profile, refresh, None)).await
+    }
+
+    /// Import ADIF-mapped QSOs and add a durable diagnostic to affected records.
+    ///
+    /// Each incoming record must contain its diagnostic in the configured extra field.
+    /// The first diagnostic stored for a duplicate identity remains authoritative.
+    /// This behavior lets concurrent recovery inputs identify the path that won.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LogbookError::Storage`] when the backend fails while checking duplicates or
+    /// persisting an imported record.
+    pub async fn import_adif_qsos_with_diagnostic(
+        &self,
+        qsos: Vec<QsoRecord>,
+        active_station_profile: Option<&StationProfile>,
+        refresh: bool,
+        diagnostic: &AdifImportDiagnostic,
+    ) -> Result<AdifImportSummary, LogbookError> {
+        Box::pin(self.import_adif_qsos_inner(
+            qsos,
+            active_station_profile,
+            refresh,
+            Some(diagnostic),
+        ))
+        .await
+    }
+
+    async fn import_adif_qsos_inner(
+        &self,
+        qsos: Vec<QsoRecord>,
+        active_station_profile: Option<&StationProfile>,
+        refresh: bool,
+        diagnostic: Option<&AdifImportDiagnostic>,
+    ) -> Result<AdifImportSummary, LogbookError> {
         let mut summary = AdifImportSummary::default();
 
         for (index, qso) in qsos.into_iter().enumerate() {
             let outcome = self
-                .import_single_adif_qso(index + 1, qso, active_station_profile, refresh)
+                .import_single_adif_qso(index + 1, qso, active_station_profile, refresh, diagnostic)
                 .await?;
 
             match outcome.kind {
@@ -390,6 +450,7 @@ impl LogbookEngine {
         mut qso: QsoRecord,
         active_station_profile: Option<&StationProfile>,
         refresh: bool,
+        diagnostic: Option<&AdifImportDiagnostic>,
     ) -> Result<AdifImportOutcome, LogbookError> {
         let had_imported_station_context = qso_has_station_context(&qso);
         let mut warnings = Vec::new();
@@ -430,6 +491,17 @@ impl LogbookEngine {
             }
 
             if refresh {
+                if let Some(diagnostic) = diagnostic {
+                    if let Some(current_note) =
+                        qso.extra_fields.get(&diagnostic.extra_field_key).cloned()
+                    {
+                        let effective_note = existing
+                            .extra_fields
+                            .get(&diagnostic.extra_field_key)
+                            .map_or(current_note.as_str(), String::as_str);
+                        set_import_diagnostic(&mut qso, diagnostic, effective_note);
+                    }
+                }
                 let merged = merge_qso_for_refresh(existing.clone(), &qso);
                 let mut comparable_existing = existing;
                 comparable_existing.updated_at = merged.updated_at;
@@ -465,6 +537,11 @@ impl LogbookEngine {
             });
         }
 
+        if let Some(diagnostic) = diagnostic {
+            if let Some(note) = qso.extra_fields.get(&diagnostic.extra_field_key).cloned() {
+                set_import_diagnostic(&mut qso, diagnostic, &note);
+            }
+        }
         let stored = self.log_qso(qso).await?;
         Ok(AdifImportOutcome {
             kind: AdifImportOutcomeKind::Imported,
@@ -554,6 +631,15 @@ pub struct AdifImportSummary {
     pub affected_qsos: Vec<QsoRecord>,
 }
 
+/// Diagnostic data that an integration adds to an ADIF-imported QSO.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdifImportDiagnostic {
+    /// Extra-field key that keeps the first diagnostic stable across refreshes.
+    pub extra_field_key: String,
+    /// Prefix that identifies diagnostic lines in operator notes.
+    pub note_prefix: String,
+}
+
 impl LogbookSyncStatus {
     fn from_parts(counts: LogbookCounts, metadata: SyncMetadata) -> Self {
         Self {
@@ -613,6 +699,30 @@ impl AdifImportOutcome {
 fn normalize_qso_for_persistence(qso: &mut QsoRecord) {
     qso.station_callsign = qso.station_callsign.trim().to_uppercase();
     qso.worked_callsign = qso.worked_callsign.trim().to_uppercase();
+}
+
+fn set_import_diagnostic(
+    qso: &mut QsoRecord,
+    diagnostic: &AdifImportDiagnostic,
+    effective_note: &str,
+) {
+    let mut notes = qso
+        .notes
+        .as_deref()
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| !line.starts_with(&diagnostic.note_prefix))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !notes.is_empty() {
+        notes.push('\n');
+    }
+    notes.push_str(effective_note);
+    qso.notes = Some(notes);
+    qso.extra_fields.insert(
+        diagnostic.extra_field_key.clone(),
+        effective_note.to_string(),
+    );
 }
 
 fn validate_qso_for_persistence(qso: &QsoRecord) -> Result<(), LogbookError> {

@@ -45,13 +45,16 @@ use tonic::{Request, Response, Status};
 use crate::qrz_secret_store::PlatformQrzSecretStore;
 use crate::qrz_secret_store::{QrzSecret, QrzSecretStore};
 use crate::runtime_config::{
-    RuntimeConfigManager, DEFAULT_QRZ_LOGBOOK_BASE_URL, QRZ_LOGBOOK_API_KEY_ENV_VAR,
-    QRZ_LOGBOOK_BASE_URL_ENV_VAR, SQLITE_PATH_ENV_VAR, STORAGE_BACKEND_ENV_VAR,
-    SYNC_AUTO_ENABLED_ENV_VAR, SYNC_CONFLICT_POLICY_ENV_VAR, SYNC_INTERVAL_SECONDS_ENV_VAR,
-    WSJTX_INGEST_ADIF_TAIL_ENABLED_ENV_VAR, WSJTX_INGEST_ADIF_TAIL_PATH_ENV_VAR,
-    WSJTX_INGEST_ENABLED_ENV_VAR, WSJTX_INGEST_POLL_INTERVAL_MS_ENV_VAR,
-    WSJTX_INGEST_SYNC_TO_QRZ_ENV_VAR, WSJTX_INGEST_UDP_BIND_ENV_VAR,
-    WSJTX_INGEST_UDP_ENABLED_ENV_VAR,
+    RuntimeConfigManager, DEFAULT_LOTW_REPORT_URL, DEFAULT_LOTW_TIMEOUT_SECONDS,
+    DEFAULT_LOTW_TQSL_PATH, DEFAULT_QRZ_LOGBOOK_BASE_URL, LOTW_CERTIFICATE_PASSWORD_ENV_VAR,
+    LOTW_PASSWORD_ENV_VAR, LOTW_REPORT_URL_ENV_VAR, LOTW_STATION_LOCATION_ENV_VAR,
+    LOTW_TIMEOUT_SECONDS_ENV_VAR, LOTW_TQSL_PATH_ENV_VAR, LOTW_USERNAME_ENV_VAR,
+    QRZ_LOGBOOK_API_KEY_ENV_VAR, QRZ_LOGBOOK_BASE_URL_ENV_VAR, SQLITE_PATH_ENV_VAR,
+    STORAGE_BACKEND_ENV_VAR, SYNC_AUTO_ENABLED_ENV_VAR, SYNC_CONFLICT_POLICY_ENV_VAR,
+    SYNC_INTERVAL_SECONDS_ENV_VAR, WSJTX_INGEST_ADIF_TAIL_ENABLED_ENV_VAR,
+    WSJTX_INGEST_ADIF_TAIL_PATH_ENV_VAR, WSJTX_INGEST_ENABLED_ENV_VAR,
+    WSJTX_INGEST_POLL_INTERVAL_MS_ENV_VAR, WSJTX_INGEST_SYNC_TO_QRZ_ENV_VAR,
+    WSJTX_INGEST_UDP_BIND_ENV_VAR, WSJTX_INGEST_UDP_ENABLED_ENV_VAR,
 };
 use crate::station_profile_support::{
     insert_station_profile_runtime_values, normalize_station_profile as normalize_profile_payload,
@@ -665,6 +668,8 @@ struct PersistedSetupConfig {
     qrz_xml: PersistedQrzXmlConfig,
     #[serde(default, skip_serializing_if = "PersistedQrzLogbookConfig::is_empty")]
     qrz_logbook: PersistedQrzLogbookConfig,
+    #[serde(default, skip_serializing_if = "PersistedLotwConfig::is_empty")]
+    lotw: PersistedLotwConfig,
     #[serde(default, skip_serializing_if = "PersistedSyncConfig::is_empty")]
     sync: PersistedSyncConfig,
     #[serde(default, skip_serializing_if = "PersistedRigControlConfig::is_empty")]
@@ -826,6 +831,8 @@ impl PersistedSetupConfig {
                 base_url.to_string(),
             );
         }
+
+        self.lotw.insert_runtime_values(&mut values);
 
         // Sync config
         values.insert(
@@ -1293,6 +1300,70 @@ impl PersistedQrzLogbookConfig {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct PersistedLotwConfig {
+    username: Option<String>,
+    /// Legacy plaintext values are accepted for migration but are not written.
+    #[serde(default, skip_serializing)]
+    password: Option<String>,
+    tqsl_path: Option<String>,
+    station_location: Option<String>,
+    /// Legacy plaintext values are accepted for migration but are not written.
+    #[serde(default, skip_serializing)]
+    certificate_password: Option<String>,
+    report_url: Option<String>,
+    timeout_seconds: Option<u64>,
+}
+
+impl PersistedLotwConfig {
+    fn is_empty(config: &Self) -> bool {
+        normalize_optional_string(config.username.as_deref()).is_none()
+            && normalize_optional_string(config.password.as_deref()).is_none()
+            && normalize_optional_string(config.tqsl_path.as_deref())
+                .is_none_or(|value| value == DEFAULT_LOTW_TQSL_PATH)
+            && normalize_optional_string(config.station_location.as_deref()).is_none()
+            && normalize_optional_string(config.certificate_password.as_deref()).is_none()
+            && normalize_optional_string(config.report_url.as_deref())
+                .is_none_or(|value| value == DEFAULT_LOTW_REPORT_URL)
+            && config
+                .timeout_seconds
+                .is_none_or(|value| value.to_string() == DEFAULT_LOTW_TIMEOUT_SECONDS)
+    }
+
+    fn insert_runtime_values(&self, values: &mut BTreeMap<String, String>) {
+        insert_optional_runtime_value(values, LOTW_USERNAME_ENV_VAR, self.username.as_deref());
+        insert_optional_runtime_value(values, LOTW_PASSWORD_ENV_VAR, self.password.as_deref());
+        insert_optional_runtime_value(values, LOTW_TQSL_PATH_ENV_VAR, self.tqsl_path.as_deref());
+        insert_optional_runtime_value(
+            values,
+            LOTW_STATION_LOCATION_ENV_VAR,
+            self.station_location.as_deref(),
+        );
+        insert_optional_runtime_value(
+            values,
+            LOTW_CERTIFICATE_PASSWORD_ENV_VAR,
+            self.certificate_password.as_deref(),
+        );
+        insert_optional_runtime_value(values, LOTW_REPORT_URL_ENV_VAR, self.report_url.as_deref());
+        if let Some(timeout_seconds) = self.timeout_seconds {
+            values.insert(
+                LOTW_TIMEOUT_SECONDS_ENV_VAR.to_string(),
+                timeout_seconds.to_string(),
+            );
+        }
+    }
+}
+
+fn insert_optional_runtime_value(
+    values: &mut BTreeMap<String, String>,
+    key: &str,
+    value: Option<&str>,
+) {
+    if let Some(value) = value {
+        values.insert(key.to_string(), value.to_string());
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct PersistedSyncConfig {
     #[serde(default)]
     auto_sync_enabled: bool,
@@ -1601,8 +1672,10 @@ fn load_persisted_config(config_path: &Path) -> Result<Option<PersistedSetupConf
             config_path.display()
         )
     })?;
-    let had_plaintext_secrets =
-        config.qrz_xml.password.is_some() || config.qrz_logbook.api_key.is_some();
+    let had_plaintext_secrets = config.qrz_xml.password.is_some()
+        || config.qrz_logbook.api_key.is_some()
+        || config.lotw.password.is_some()
+        || config.lotw.certificate_password.is_some();
     let legacy_station_profile = config.station_profile.clone();
     config
         .station_profiles
@@ -1619,13 +1692,14 @@ fn load_persisted_config(config_path: &Path) -> Result<Option<PersistedSetupConf
 /// Every other
 /// unknown top-level table (for example `[launcher]` written by the launcher) is always
 /// preserved untouched so the unified `config.toml` can be shared across all components.
-const ENGINE_OWNED_CONFIG_KEYS: [&str; 8] = [
+const ENGINE_OWNED_CONFIG_KEYS: [&str; 9] = [
     "logbook",
     "storage",
     "station_profile",
     "station_profiles",
     "qrz_xml",
     "qrz_logbook",
+    "lotw",
     "sync",
     "rig_control",
 ];
@@ -3926,6 +4000,23 @@ file_path = "{}"
         );
         assert!(!toml_output.contains("super_secret_password"));
         assert!(!toml_output.contains("password"));
+    }
+
+    #[test]
+    fn lotw_passwords_are_redacted_from_serialized_config() {
+        let mut config = PersistedSetupConfig::default();
+        config.lotw.username = Some("K7RND".to_string());
+        config.lotw.password = Some("website_secret".to_string());
+        config.lotw.certificate_password = Some("certificate_secret".to_string());
+        config.lotw.station_location = Some("Home".to_string());
+
+        let toml_output = toml::to_string_pretty(&config).expect("serialize config");
+
+        assert!(toml_output.contains("K7RND"));
+        assert!(toml_output.contains("Home"));
+        assert!(!toml_output.contains("website_secret"));
+        assert!(!toml_output.contains("certificate_secret"));
+        assert!(!toml_output.contains("certificate_password"));
     }
 
     #[test]

@@ -21,4 +21,10 @@
     <ProjectReference Include="..\QsoRipper.Engine.Storage.Memory\QsoRipper.Engine.Storage.Memory.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="..\..\..\tests\fixtures\lotw_confirmations.adi"
+             Link="lotw_confirmations.adi"
+             CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

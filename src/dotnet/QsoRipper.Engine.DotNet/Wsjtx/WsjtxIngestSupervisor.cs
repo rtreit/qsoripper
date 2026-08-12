@@ -325,7 +325,10 @@ internal sealed class WsjtxIngestSupervisor : IHostedService, IDisposable
             await _importLock.WaitAsync(token).ConfigureAwait(false);
             try
             {
-                detail = _state.ImportAdifDetailed(payload, refresh: false);
+                detail = _state.ImportAdifDetailed(
+                    payload,
+                    refresh: false,
+                    WsjtxImportDiagnostic.AdifTailSource);
             }
             finally
             {
@@ -359,7 +362,10 @@ internal sealed class WsjtxIngestSupervisor : IHostedService, IDisposable
             await _importLock.WaitAsync(token).ConfigureAwait(false);
             try
             {
-                detail = _state.ImportAdifDetailed(adif, refresh);
+                detail = _state.ImportAdifDetailed(
+                    adif,
+                    refresh,
+                    WsjtxImportDiagnostic.UdpSource);
             }
             finally
             {

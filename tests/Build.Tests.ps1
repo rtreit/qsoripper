@@ -12,6 +12,8 @@ $scriptPath = Join-Path $repoRoot 'build.ps1'
 $global:BuildTestsScriptContent = Get-Content $scriptPath -Raw
 $buildAndTestPath = Join-Path $repoRoot 'build-and-test.ps1'
 $global:BuildTestsBuildAndTestContent = Get-Content $buildAndTestPath -Raw
+$testScriptPath = Join-Path $repoRoot 'test.ps1'
+$global:BuildTestsTestScriptContent = Get-Content $testScriptPath -Raw
 $rustWorkflowPath = Join-Path $repoRoot '.github' 'workflows' 'rust-quality.yml'
 $global:BuildTestsRustWorkflowContent = Get-Content $rustWorkflowPath -Raw
 $dotnetWorkflowPath = Join-Path $repoRoot '.github' 'workflows' 'dotnet-quality.yml'
@@ -141,11 +143,12 @@ Describe 'Win32 CLI publish/discovery path contract (WIN32-BUG-2)' {
 
 Describe 'Local Visual Studio generator selection' {
 
-    It 'does not fall back to the Visual Studio 2022 generator for local builds' {
-        Assert-BuildNotMatches $global:BuildTestsScriptContent 'Visual Studio 17 2022'
+    It 'prefers Visual Studio 2026 before Visual Studio 2022 for local builds' {
+        Assert-BuildMatches $global:BuildTestsScriptContent "@\('Visual Studio 18 2026', 'Visual Studio 17 2022'\)"
+        Assert-BuildMatches $global:BuildTestsTestScriptContent "@\('Visual Studio 18 2026', 'Visual Studio 17 2022'\)"
     }
 
-    It 'does not use the Visual Studio 2022 generator in Win32 CI' {
+    It 'does not pin Win32 CI to Visual Studio 2022' {
         Assert-BuildNotMatches $global:BuildTestsWin32WorkflowContent 'Visual Studio 17 2022'
     }
 }

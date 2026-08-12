@@ -3,6 +3,8 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using QsoRipper.Domain;
 using QsoRipper.Engine.ContestCalendar;
+using QsoRipper.Engine.DotNet.Lotw;
+using QsoRipper.Engine.DotNet.Wsjtx;
 using QsoRipper.Engine.Lookup;
 using QsoRipper.Engine.QrzLogbook;
 using QsoRipper.Engine.RigControl;
@@ -112,6 +114,13 @@ internal sealed class ManagedEngineState
     private const string QrzXmlPasswordKey = "QSORIPPER_QRZ_XML_PASSWORD";
     private const string QrzUserAgentKey = "QSORIPPER_QRZ_USER_AGENT";
     private const string QrzLogbookApiKeyKey = "QSORIPPER_QRZ_LOGBOOK_API_KEY";
+    private const string LotwUsernameKey = "QSORIPPER_LOTW_USERNAME";
+    private const string LotwPasswordKey = "QSORIPPER_LOTW_PASSWORD";
+    private const string LotwTqslPathKey = "QSORIPPER_LOTW_TQSL_PATH";
+    private const string LotwStationLocationKey = "QSORIPPER_LOTW_STATION_LOCATION";
+    private const string LotwCertificatePasswordKey = "QSORIPPER_LOTW_CERTIFICATE_PASSWORD";
+    private const string LotwReportUrlKey = "QSORIPPER_LOTW_REPORT_URL";
+    private const string LotwTimeoutSecondsKey = "QSORIPPER_LOTW_TIMEOUT_SECONDS";
     private const string RigEnabledKey = "QSORIPPER_RIGCTLD_ENABLED";
 
     private const string ManagedLookupProviderSummary = "Managed sample provider";
@@ -148,7 +157,10 @@ internal sealed class ManagedEngineState
     private readonly bool _ownsSyncEngine;
     private QrzLogbookClient? _ownedSyncClient;
     private QrzSyncEngine? _syncEngine;
+    private readonly ILotwApi? _lotwApi;
+    private readonly ManagedLotwSettings _lotwSettings;
     private bool _isSyncing;
+    private bool _isLotwSyncing;
     private DateTimeOffset? _nextSync;
     private string? _lastSyncError;
 
@@ -188,7 +200,7 @@ internal sealed class ManagedEngineState
     {
     }
 
-    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, ContestCalendarMonitor? contestCalendarMonitor, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor, QrzSyncEngine? syncEngine, string? currentPersistenceLocation, LoadedSharedSetupConfig? loadedPersistedSetup, IQrzCredentialTester? qrzCredentialTester = null, IQrzSecretStore? qrzSecretStore = null)
+    public ManagedEngineState(string configPath, IEngineStorage storage, ILookupCoordinator? lookupCoordinator, ContestCalendarMonitor? contestCalendarMonitor, RigControlMonitor? rigControlMonitor, SpaceWeatherMonitor? spaceWeatherMonitor, QrzSyncEngine? syncEngine, string? currentPersistenceLocation, LoadedSharedSetupConfig? loadedPersistedSetup, IQrzCredentialTester? qrzCredentialTester = null, IQrzSecretStore? qrzSecretStore = null, ILotwApi? lotwApi = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configPath);
         ArgumentNullException.ThrowIfNull(storage);
@@ -201,6 +213,7 @@ internal sealed class ManagedEngineState
         _spaceWeatherMonitor = spaceWeatherMonitor;
         _qrzCredentialTester = qrzCredentialTester ?? new QrzCredentialTester();
         _qrzSecretStore = qrzSecretStore ?? new NullQrzSecretStore();
+        _lotwApi = lotwApi;
         _ownsSyncEngine = syncEngine is null;
         _syncEngine = syncEngine;
         var loadedSetup = loadedPersistedSetup ?? SharedSetupConfigPersistence.Load(_configPath);
@@ -223,10 +236,41 @@ internal sealed class ManagedEngineState
             ?? legacyQrzLogbookApiKey
             ?? ReadStoredSecret(QrzSecret.LogbookApiKey);
         _hasQrzLogbookApiKey = _qrzLogbookApiKey is not null;
+        var persistedLotw = _persistedSetup.Lotw ?? new ManagedLotwSettings();
+        _lotwSettings = new ManagedLotwSettings
+        {
+            Username = NormalizeOptional(Environment.GetEnvironmentVariable(LotwUsernameKey))
+                ?? NormalizeOptional(persistedLotw.Username),
+            Password = NormalizeOptional(Environment.GetEnvironmentVariable(LotwPasswordKey))
+                ?? NormalizeOptional(persistedLotw.Password),
+            TqslPath = NormalizeOptional(Environment.GetEnvironmentVariable(LotwTqslPathKey))
+                ?? NormalizeOptional(persistedLotw.TqslPath)
+                ?? "tqsl",
+            StationLocation = NormalizeOptional(Environment.GetEnvironmentVariable(LotwStationLocationKey))
+                ?? NormalizeOptional(persistedLotw.StationLocation),
+            CertificatePassword = NormalizeOptional(Environment.GetEnvironmentVariable(LotwCertificatePasswordKey))
+                ?? NormalizeOptional(persistedLotw.CertificatePassword),
+            ReportUrl = NormalizeOptional(Environment.GetEnvironmentVariable(LotwReportUrlKey))
+                ?? NormalizeOptional(persistedLotw.ReportUrl)
+                ?? LotwClient.DefaultReportUrl,
+            TimeoutSeconds = ParsePositiveUInt32(Environment.GetEnvironmentVariable(LotwTimeoutSecondsKey))
+                ?? persistedLotw.TimeoutSeconds
+                ?? 60,
+        };
         var hadPersistedSecrets = !string.IsNullOrWhiteSpace(_persistedSetup.QrzXmlPassword)
-            || !string.IsNullOrWhiteSpace(_persistedSetup.QrzLogbookApiKey);
+            || !string.IsNullOrWhiteSpace(_persistedSetup.QrzLogbookApiKey)
+            || !string.IsNullOrWhiteSpace(persistedLotw.Password)
+            || !string.IsNullOrWhiteSpace(persistedLotw.CertificatePassword);
         _persistedSetup.QrzXmlPassword = null;
         _persistedSetup.QrzLogbookApiKey = null;
+        _persistedSetup.Lotw = new ManagedLotwSettings
+        {
+            Username = _lotwSettings.Username,
+            TqslPath = _lotwSettings.TqslPath,
+            StationLocation = _lotwSettings.StationLocation,
+            ReportUrl = _lotwSettings.ReportUrl,
+            TimeoutSeconds = _lotwSettings.TimeoutSeconds,
+        };
         _syncConfig = NormalizeSyncConfig(_persistedSetup.SyncConfig);
         _persistedSetup.SyncConfig = _syncConfig.Clone();
         if (_persistedSetup.WsjtxIngest is not null)
@@ -594,6 +638,13 @@ internal sealed class ManagedEngineState
             qso.StationCallsign = string.Empty;
             qso.StationSnapshot = null;
             qso.SyncStatus = SyncStatus.LocalOnly;
+            qso.ClearLotwSent();
+            qso.ClearLotwReceived();
+            qso.LotwSentStatus = QslStatus.Unspecified;
+            qso.LotwReceivedStatus = QslStatus.Unspecified;
+            qso.LotwSentDate = null;
+            qso.LotwReceivedDate = null;
+            qso.LotwSyncStatus = LotwSyncStatus.LocalOnly;
             qso.ClearQrzLogid();
             qso.ClearQrzBookid();
             qso.CreatedAt = Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow);
@@ -614,6 +665,7 @@ internal sealed class ManagedEngineState
             {
                 Sync(_storage.Logbook.UpdateQrzSyncMetadataAsync(qso.LocalId, qso.UpdatedAt, qso.QrzLogid));
             }
+            ApplyLotwSyncFlagNoLock(qso, request.SyncToLotw, response);
 
             return response;
         }
@@ -667,6 +719,29 @@ internal sealed class ManagedEngineState
             }
             qso.DeletedAt = existing.DeletedAt?.Clone();
             qso.PendingRemoteDelete = existing.PendingRemoteDelete;
+            if (existing.HasLotwSent)
+            {
+                qso.LotwSent = existing.LotwSent;
+            }
+            else
+            {
+                qso.ClearLotwSent();
+            }
+            if (existing.HasLotwReceived)
+            {
+                qso.LotwReceived = existing.LotwReceived;
+            }
+            else
+            {
+                qso.ClearLotwReceived();
+            }
+            qso.LotwSentStatus = existing.LotwSentStatus;
+            qso.LotwReceivedStatus = existing.LotwReceivedStatus;
+            qso.LotwSentDate = existing.LotwSentDate?.Clone();
+            qso.LotwReceivedDate = existing.LotwReceivedDate?.Clone();
+            qso.LotwSyncStatus = existing.LotwSyncStatus is LotwSyncStatus.Uploaded or LotwSyncStatus.Confirmed
+                ? LotwSyncStatus.Modified
+                : existing.LotwSyncStatus;
             qso.SyncStatus = existing.SyncStatus == SyncStatus.Synced
                 ? SyncStatus.Modified
                 : existing.SyncStatus;
@@ -682,6 +757,7 @@ internal sealed class ManagedEngineState
             {
                 Sync(_storage.Logbook.UpdateQrzSyncMetadataAsync(qso.LocalId, qso.UpdatedAt, qso.QrzLogid));
             }
+            ApplyLotwSyncFlagNoLock(qso, request.SyncToLotw, response);
 
             return response;
         }
@@ -966,6 +1042,68 @@ internal sealed class ManagedEngineState
         }
     }
 
+    public void EnsureLotwSyncAvailable()
+    {
+        lock (_gate)
+        {
+            if (_isLotwSyncing)
+            {
+                throw new LotwConfigurationException("A LoTW sync is already in progress.");
+            }
+
+            var (_, ownedClient) = CreateLotwSyncEngineNoLock();
+            ownedClient?.Dispose();
+        }
+    }
+
+    public SyncWithLotwResponse SyncWithLotw(SyncWithLotwRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        LotwSyncEngine engine;
+        IDisposable? ownedClient;
+        lock (_gate)
+        {
+            if (_isLotwSyncing)
+            {
+                throw new LotwConfigurationException("A LoTW sync is already in progress.");
+            }
+            (engine, ownedClient) = CreateLotwSyncEngineNoLock();
+            _isLotwSyncing = true;
+        }
+
+        try
+        {
+            var result = Sync(engine.SyncAsync(
+                request.FullSync,
+                request.HasUpload ? request.Upload : true,
+                request.HasDownload ? request.Download : true,
+                cancellationToken));
+            return new SyncWithLotwResponse
+            {
+                TotalRecords = ToUInt32(result.TotalRecords),
+                ProcessedRecords = ToUInt32(result.ProcessedRecords),
+                UploadedRecords = ToUInt32(result.UploadedRecords),
+                ConfirmedRecords = ToUInt32(result.ConfirmedRecords),
+                UnmatchedRecords = ToUInt32(result.UnmatchedRecords),
+                ConflictRecords = ToUInt32(result.ConflictRecords),
+                ErrorRecords = ToUInt32(result.ErrorRecords),
+                ConfirmationHighWater = result.ConfirmationHighWater ?? string.Empty,
+                CurrentAction = "LoTW sync completed.",
+                Complete = true,
+                Error = result.ErrorSummary ?? string.Empty,
+            };
+        }
+        finally
+        {
+            ownedClient?.Dispose();
+            lock (_gate)
+            {
+                _isLotwSyncing = false;
+            }
+        }
+    }
+
     public void SetNextAutomaticSync(DateTimeOffset? nextSync)
     {
         lock (_gate)
@@ -1033,11 +1171,15 @@ internal sealed class ManagedEngineState
     /// Imports ADIF bytes and reports the QSOs that were inserted or refreshed, so callers
     /// (such as the WSJT-X ingest supervisor) can drive per-import QRZ sync and live status.
     /// </summary>
-    public WsjtxImportDetail ImportAdifDetailed(byte[] adifBytes, bool refresh)
+    public WsjtxImportDetail ImportAdifDetailed(
+        byte[] adifBytes,
+        bool refresh,
+        string? wsjtxImportSource = null)
     {
         ArgumentNullException.ThrowIfNull(adifBytes);
 
         var qsos = ManagedAdifCodec.ParseAdiQsos(adifBytes);
+        var importedAt = DateTimeOffset.UtcNow;
         lock (_gate)
         {
             var response = new ImportAdifResponse();
@@ -1082,6 +1224,15 @@ internal sealed class ManagedEngineState
                 {
                     if (refresh)
                     {
+                        if (!string.IsNullOrWhiteSpace(wsjtxImportSource))
+                        {
+                            var current = WsjtxImportDiagnostic.Create(wsjtxImportSource, qso, importedAt);
+                            var diagnostic = WsjtxImportDiagnostic.Resolve(
+                                allExisting[existingMatch],
+                                current);
+                            WsjtxImportDiagnostic.Apply(qso, diagnostic);
+                        }
+
                         var merged = ManagedQsoParity.MergeQsoForRefresh(allExisting[existingMatch], qso);
                         Sync(_storage.Logbook.UpdateQsoAsync(merged));
                         allExisting[existingMatch] = merged;
@@ -1097,6 +1248,12 @@ internal sealed class ManagedEngineState
                     }
 
                     continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(wsjtxImportSource))
+                {
+                    var diagnostic = WsjtxImportDiagnostic.Create(wsjtxImportSource, qso, importedAt);
+                    WsjtxImportDiagnostic.Apply(qso, diagnostic);
                 }
 
                 ValidateQsoNoLock(qso);
@@ -1998,6 +2155,65 @@ internal sealed class ManagedEngineState
         }
     }
 
+    private void ApplyLotwSyncFlagNoLock(QsoRecord qso, bool syncToLotw, LogQsoResponse response)
+    {
+        if (!syncToLotw)
+        {
+            response.LotwSyncSuccess = false;
+            return;
+        }
+
+        try
+        {
+            var (engine, ownedClient) = CreateLotwSyncEngineNoLock();
+            using (ownedClient)
+            {
+                Sync(engine.UploadSingleAsync(qso.Clone(), CancellationToken.None));
+            }
+            response.LotwSyncSuccess = true;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            response.LotwSyncSuccess = false;
+            response.LotwSyncError = exception.Message;
+        }
+    }
+
+    private void ApplyLotwSyncFlagNoLock(QsoRecord qso, bool syncToLotw, UpdateQsoResponse response)
+    {
+        if (!syncToLotw)
+        {
+            response.LotwSyncSuccess = false;
+            return;
+        }
+
+        try
+        {
+            var (engine, ownedClient) = CreateLotwSyncEngineNoLock();
+            using (ownedClient)
+            {
+                Sync(engine.UploadSingleAsync(qso.Clone(), CancellationToken.None));
+            }
+            response.LotwSyncSuccess = true;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            response.LotwSyncSuccess = false;
+            response.LotwSyncError = exception.Message;
+        }
+    }
+
+    private (LotwSyncEngine Engine, IDisposable? OwnedClient) CreateLotwSyncEngineNoLock()
+    {
+        if (_lotwApi is not null)
+        {
+            return (new LotwSyncEngine(_lotwApi, _storage.Logbook), null);
+        }
+
+        var client = new LotwClient(_lotwSettings);
+        return (new LotwSyncEngine(client, _storage.Logbook), client);
+    }
+
     private void RebuildLookupCoordinatorNoLock()
     {
         var username = Environment.GetEnvironmentVariable(QrzXmlUsernameKey)?.Trim()
@@ -2387,6 +2603,16 @@ internal sealed class ManagedEngineState
     private static string? NormalizeOptional(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static uint? ParsePositiveUInt32(string? value)
+    {
+        return uint.TryParse(value, out var parsed) && parsed > 0 ? parsed : null;
+    }
+
+    private static uint ToUInt32(int value)
+    {
+        return value <= 0 ? 0 : (uint)value;
     }
 
     private static SyncConfig NormalizeSyncConfig(SyncConfig config)

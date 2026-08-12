@@ -13,4 +13,10 @@ public sealed record SyncMetadata
 
     /// <summary>Callsign of the QRZ logbook owner, or <c>null</c> if unknown.</summary>
     public string? QrzLogbookOwner { get; init; }
+
+    /// <summary>Timestamp of the latest completed LoTW sync attempt.</summary>
+    public DateTimeOffset? LotwLastSync { get; init; }
+
+    /// <summary>High-water value from the latest LoTW confirmation report.</summary>
+    public string? LotwLastQsl { get; init; }
 }

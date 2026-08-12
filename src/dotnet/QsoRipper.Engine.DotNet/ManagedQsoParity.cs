@@ -364,6 +364,31 @@ internal static class ManagedQsoParity
             merged.LotwReceived = incoming.LotwReceived;
         }
 
+        if (incoming.LotwSentStatus != QslStatus.Unspecified)
+        {
+            merged.LotwSentStatus = incoming.LotwSentStatus;
+        }
+
+        if (incoming.LotwReceivedStatus != QslStatus.Unspecified)
+        {
+            merged.LotwReceivedStatus = incoming.LotwReceivedStatus;
+        }
+
+        if (incoming.LotwSentDate is not null)
+        {
+            merged.LotwSentDate = incoming.LotwSentDate.Clone();
+        }
+
+        if (incoming.LotwReceivedDate is not null)
+        {
+            merged.LotwReceivedDate = incoming.LotwReceivedDate.Clone();
+        }
+
+        if (incoming.LotwSyncStatus != LotwSyncStatus.LocalOnly)
+        {
+            merged.LotwSyncStatus = incoming.LotwSyncStatus;
+        }
+
         if (incoming.HasEqslSent)
         {
             merged.EqslSent = incoming.EqslSent;

@@ -64,6 +64,13 @@ pub(crate) const STATION_LATITUDE_ENV_VAR: &str = "QSORIPPER_STATION_LATITUDE";
 pub(crate) const STATION_LONGITUDE_ENV_VAR: &str = "QSORIPPER_STATION_LONGITUDE";
 pub(crate) const QRZ_LOGBOOK_API_KEY_ENV_VAR: &str = "QSORIPPER_QRZ_LOGBOOK_API_KEY";
 pub(crate) const QRZ_LOGBOOK_BASE_URL_ENV_VAR: &str = "QSORIPPER_QRZ_LOGBOOK_BASE_URL";
+pub(crate) const LOTW_USERNAME_ENV_VAR: &str = "QSORIPPER_LOTW_USERNAME";
+pub(crate) const LOTW_PASSWORD_ENV_VAR: &str = "QSORIPPER_LOTW_PASSWORD";
+pub(crate) const LOTW_TQSL_PATH_ENV_VAR: &str = "QSORIPPER_LOTW_TQSL_PATH";
+pub(crate) const LOTW_STATION_LOCATION_ENV_VAR: &str = "QSORIPPER_LOTW_STATION_LOCATION";
+pub(crate) const LOTW_CERTIFICATE_PASSWORD_ENV_VAR: &str = "QSORIPPER_LOTW_CERTIFICATE_PASSWORD";
+pub(crate) const LOTW_REPORT_URL_ENV_VAR: &str = "QSORIPPER_LOTW_REPORT_URL";
+pub(crate) const LOTW_TIMEOUT_SECONDS_ENV_VAR: &str = "QSORIPPER_LOTW_TIMEOUT_SECONDS";
 pub(crate) const SYNC_AUTO_ENABLED_ENV_VAR: &str = "QSORIPPER_SYNC_AUTO_ENABLED";
 pub(crate) const SYNC_INTERVAL_SECONDS_ENV_VAR: &str = "QSORIPPER_SYNC_INTERVAL_SECONDS";
 pub(crate) const SYNC_CONFLICT_POLICY_ENV_VAR: &str = "QSORIPPER_SYNC_CONFLICT_POLICY";
@@ -79,6 +86,9 @@ pub(crate) const WSJTX_INGEST_POLL_INTERVAL_MS_ENV_VAR: &str =
 pub(crate) const WSJTX_INGEST_SYNC_TO_QRZ_ENV_VAR: &str = "QSORIPPER_WSJTX_INGEST_SYNC_TO_QRZ";
 
 pub(crate) const DEFAULT_QRZ_LOGBOOK_BASE_URL: &str = "https://logbook.qrz.com/api";
+pub(crate) const DEFAULT_LOTW_REPORT_URL: &str = "https://lotw.arrl.org/lotwuser/lotwreport.adi";
+pub(crate) const DEFAULT_LOTW_TQSL_PATH: &str = "tqsl";
+pub(crate) const DEFAULT_LOTW_TIMEOUT_SECONDS: &str = "60";
 const DEFAULT_SYNC_AUTO_ENABLED: &str = "false";
 const DEFAULT_SYNC_INTERVAL_SECONDS: &str = "300";
 const DEFAULT_SYNC_CONFLICT_POLICY: &str = "last_write_wins";
@@ -584,6 +594,69 @@ const SUPPORTED_FIELDS: &[ConfigFieldSpec] = &[
         default_value: Some(DEFAULT_QRZ_LOGBOOK_BASE_URL),
     },
     ConfigFieldSpec {
+        key: LOTW_USERNAME_ENV_VAR,
+        label: "LoTW username",
+        description: "LoTW website account name used for confirmation downloads.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: LOTW_PASSWORD_ENV_VAR,
+        label: "LoTW password",
+        description: "LoTW website password. The live snapshot always redacts this value.",
+        kind: RuntimeConfigValueKind::String,
+        secret: true,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: LOTW_TQSL_PATH_ENV_VAR,
+        label: "TQSL executable",
+        description: "Path or command name for the local TQSL executable.",
+        kind: RuntimeConfigValueKind::Path,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(DEFAULT_LOTW_TQSL_PATH),
+    },
+    ConfigFieldSpec {
+        key: LOTW_STATION_LOCATION_ENV_VAR,
+        label: "TQSL station location",
+        description: "Existing TQSL station location used to sign QSO records.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: LOTW_CERTIFICATE_PASSWORD_ENV_VAR,
+        label: "TQSL certificate password",
+        description: "Optional TQSL certificate password. The live snapshot always redacts this value.",
+        kind: RuntimeConfigValueKind::String,
+        secret: true,
+        allowed_values: &[],
+        default_value: None,
+    },
+    ConfigFieldSpec {
+        key: LOTW_REPORT_URL_ENV_VAR,
+        label: "LoTW report URL",
+        description: "HTTPS endpoint used to download LoTW confirmation reports.",
+        kind: RuntimeConfigValueKind::String,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(DEFAULT_LOTW_REPORT_URL),
+    },
+    ConfigFieldSpec {
+        key: LOTW_TIMEOUT_SECONDS_ENV_VAR,
+        label: "LoTW timeout seconds",
+        description: "Timeout for LoTW report requests and TQSL execution.",
+        kind: RuntimeConfigValueKind::Integer,
+        secret: false,
+        allowed_values: &[],
+        default_value: Some(DEFAULT_LOTW_TIMEOUT_SECONDS),
+    },
+    ConfigFieldSpec {
         key: SYNC_AUTO_ENABLED_ENV_VAR,
         label: "Sync auto-enabled",
         description: "Whether the engine should automatically sync with the QRZ logbook on a periodic schedule.",
@@ -919,7 +992,7 @@ fn normalize_value(key: &'static str, raw_value: &str) -> Result<String, String>
         parse_bounded_f64(key, trimmed, -90.0, 90.0).map(|value| value.to_string())
     } else if key == STATION_LONGITUDE_ENV_VAR {
         parse_bounded_f64(key, trimmed, -180.0, 180.0).map(|value| value.to_string())
-    } else if key == SYNC_INTERVAL_SECONDS_ENV_VAR {
+    } else if key == SYNC_INTERVAL_SECONDS_ENV_VAR || key == LOTW_TIMEOUT_SECONDS_ENV_VAR {
         trimmed
             .parse::<u32>()
             .map(|value| value.to_string())

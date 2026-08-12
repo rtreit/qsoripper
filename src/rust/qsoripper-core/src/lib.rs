@@ -17,6 +17,8 @@ pub mod ffi;
 pub mod geodesy;
 /// Lookup orchestration, providers, and cache policy.
 pub mod lookup;
+/// ARRL Logbook of the World upload and confirmation synchronization.
+pub mod lotw;
 /// Generated protobuf and gRPC bindings.
 pub mod proto;
 /// QRZ Logbook API client for bidirectional QSO sync.

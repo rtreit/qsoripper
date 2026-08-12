@@ -177,7 +177,7 @@ If `cppcheck` is not installed, `.\build.ps1` still builds the Win32 app and ski
 
 By default, `.\build.ps1` builds the Rust workspace in **Release**, publishes the Native AOT CLI to `artifacts\publish\qsoripper-cli\Release\`, and publishes the desktop GUI to `artifacts\publish\qsoripper-gui\Release\`. Use `-Configuration Debug` to switch the Rust build and both .NET publish outputs to `Debug`.
 
-Use `.\test.ps1` to run the Rust, .NET, Win32 CTest, and Pester suites. This command does not run the additional gates from `.\build.ps1 check`. Use `.\build-and-test.ps1` when you want to build first and then run the full test script. Local Win32 CMake tests use Visual Studio Build Tools 2026 (`Visual Studio 18 2026`).
+Use `.\test.ps1` to run the Rust, .NET, Win32 CTest, and Pester suites. This command does not run the additional gates from `.\build.ps1 check`. Use `.\build-and-test.ps1` when you want to build first and then run the full test script. Local Win32 CMake tests prefer Visual Studio Build Tools 2026 (`Visual Studio 18 2026`). They use Visual Studio 2022 (`Visual Studio 17 2022`) when Build Tools 2026 are not available.
 
 For engine-neutral local validation, use the split checks plus the shared conformance harness:
 
@@ -268,8 +268,9 @@ Press `Enter` to start the selected items.
 Press `S` to stop launcher-managed processes.
 
 Selections persist below `[launcher]` in `config.toml`.
-The launcher does not build artifacts.
-Run `.\build.ps1` first.
+Run `.\build.ps1` first for QsoRipper artifacts.
+The PowerShell wrapper validates a sibling CatHub build on each start.
+It builds CatHub when the sibling executable is missing or incompatible.
 
 **Local engine launcher (recommended):**
 

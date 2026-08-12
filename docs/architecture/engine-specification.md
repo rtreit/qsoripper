@@ -38,6 +38,7 @@ The engine is a long-running server process responsible for:
 | QSO storage | Persistent CRUD for QSO records via a pluggable storage backend |
 | Callsign lookup | QRZ XML lookups with caching, deduplication, and DXCC enrichment |
 | QRZ logbook sync | Bidirectional synchronization with the QRZ logbook API |
+| LoTW sync | Signed TQSL uploads and LoTW confirmation downloads |
 | Rig control | Polling a rigctld daemon for logging-relevant frequency, mode, split, and power state |
 | Space weather | Fetching and caching NOAA space weather indices |
 | Contest calendar | Fetching and caching active contest metadata |
@@ -144,6 +145,7 @@ The primary QSO CRUD and sync surface. This is the most critical service in the 
 | `GetQso` | `GetQsoRequest` | `GetQsoResponse` | Unary |
 | `ListQsos` | `ListQsosRequest` | `stream ListQsosResponse` | Server-streaming |
 | `SyncWithQrz` | `SyncWithQrzRequest` | `stream SyncWithQrzResponse` | Server-streaming |
+| `SyncWithLotw` | `SyncWithLotwRequest` | `stream SyncWithLotwResponse` | Server-streaming |
 | `GetSyncStatus` | `GetSyncStatusRequest` | `GetSyncStatusResponse` | Unary |
 | `ImportAdif` | `stream ImportAdifRequest` | `ImportAdifResponse` | Client-streaming |
 | `ExportAdif` | `ExportAdifRequest` | `stream ExportAdifResponse` | Server-streaming |
@@ -159,7 +161,7 @@ Creates a new QSO record in the local logbook.
 4. Stamp `station_callsign` from the active station profile.
 5. Capture a `StationSnapshot` from the active station context and attach it to the QSO.
 6. Set `created_at` and `updated_at` to the current UTC time.
-7. Set `sync_status` to `SYNC_STATUS_LOCAL_ONLY`, clear QRZ linkage, and clear soft-delete state. The engine ignores caller values for these fields.
+7. Set QRZ and LoTW sync states to local-only. Clear remote linkage, confirmation fields, and soft-delete state.
 8. Persist the record via the storage backend.
 9. If `sync_to_qrz=true`, immediately push the new record to QRZ Logbook.
    This operation uses the per-operation sync in Section 7.3.
@@ -172,7 +174,13 @@ Creates a new QSO record in the local logbook.
    - Put a clear message in `sync_error`.
    - The local save MUST succeed for all sync results.
    - If sync was not requested, set `sync_success=false` and omit `sync_error`.
-10. Return the generated `local_id` and a successful QRZ `qrz_logid`.
+10. If `sync_to_lotw=true`, send the new record through TQSL.
+    - On success, set `lotw_sync_status=LOTW_SYNC_STATUS_UPLOADED`.
+    - Set `lotw_sent_status=QSL_STATUS_YES` and set `lotw_sent_date`.
+    - Set `LogQsoResponse.lotw_sync_success=true`.
+    - On failure, set `lotw_sync_status=LOTW_SYNC_STATUS_FAILED`.
+    - Keep the local QSO and put a safe message in `lotw_sync_error`.
+11. Return the generated `local_id` and a successful QRZ `qrz_logid`.
     The response does not contain a `QsoRecord`.
     Clients that need the stored row call `GetQso`.
 
@@ -209,7 +217,11 @@ Updates an existing QSO record by `local_id`.
    - Put a clear message in `sync_error`.
    - If sync was not requested, set `sync_success=false` and omit `sync_error`.
    - The local save MUST succeed for all sync results.
-7. Return `success=true`.
+7. Preserve LoTW confirmation fields from the stored record.
+   Change an uploaded or confirmed LoTW state to `LOTW_SYNC_STATUS_MODIFIED`.
+8. If `sync_to_lotw=true`, send the updated record through TQSL.
+   Use the LoTW result fields in `UpdateQsoResponse`.
+9. Return `success=true`.
    The response does not contain a `QsoRecord`.
    Clients that need the stored row call `GetQso`.
 
@@ -323,6 +335,40 @@ The server stream MUST contain a terminal response with `complete=true`. Engines
   Set `complete=true`, and populate `error`.
   This rule applies to integration, storage, parsing, and per-QSO failures.
   These failures do not change the transport status.
+
+#### SyncWithLotw
+
+Uploads local QSOs through TQSL and downloads LoTW confirmations.
+
+**Behavior:**
+
+1. Select active QSOs with a local-only, queued, modified, or failed LoTW state.
+2. Write the selected records to a temporary ADIF file.
+3. Run TQSL in batch mode with the configured station location.
+4. Mark each successful upload as uploaded.
+5. Request the LoTW confirmation report.
+6. Use `APP_LoTW_LASTQSL` as the next incremental high-water value.
+7. Match each confirmation by station, worked callsign, band, mode, and QSO time.
+8. Permit a QSO time difference of 30 minutes or less.
+9. Mark one match as confirmed.
+10. Mark all ambiguous matches as conflicts.
+11. Count a report record with no match as unmatched.
+
+The engine keeps local notes and comments during confirmation updates.
+The engine can add missing LoTW confirmation data to the local QSO.
+The request can disable upload or download for one sync.
+An absent upload or download field means enabled.
+A full sync does not send the saved high-water value.
+
+The server stream MUST contain a terminal response with `complete=true`.
+The terminal response contains upload, confirmation, unmatched, conflict, and error counts.
+
+**Error semantics:**
+
+- `FAILED_PRECONDITION` - Required LoTW or TQSL configuration is not available.
+- TQSL and report failures do not remove local QSOs.
+- A terminal response contains failures that occur after the first stream message.
+- Error text MUST NOT contain a password, certificate passphrase, or report URL query.
 
 #### GetSyncStatus
 
@@ -732,6 +778,7 @@ The engine replaces only its owned top-level tables:
 - `station_profiles`
 - `qrz_xml`
 - `qrz_logbook`
+- `lotw`
 - `sync`
 - `rig_control`
 
@@ -881,6 +928,14 @@ The engine must use the credential identifiers in §6.3.
   It does not replace newer local edits with older ADIF rows.
 - Both inputs feed `LogbookEngine::import_adif_qsos`. Duplicate UDP events, repeated ADIF scans,
   and later manual imports must not create duplicate QSOs.
+- A QSO that WSJT-X ingestion inserts or refreshes MUST include this line in `notes`:
+  `QsoRipper WSJT-X import: imported_at_utc=<ISO-8601 UTC>, qso_end_to_import_ms=<signed integer|unavailable>, source=<udp_logged_adif|adif_tail>, engine=<rust|dotnet>`.
+- The engine MUST keep existing operator notes and append the diagnostic on a separate line.
+- The engine MUST store the same diagnostic in `APP_QSORIPPER_WSJTX_IMPORT`.
+  This application field preserves the first ingest source when both inputs process the same QSO.
+- The GUI SHOULD add a transient first-list-refresh diagnostic when it materializes a marked QSO.
+  The diagnostic reports `first_list_refresh_at_utc`, `import_to_list_refresh_ms`, and `qso_end_to_list_refresh_ms`.
+  The GUI MUST NOT persist this diagnostic or mark the QSO as changed.
 - `WsjtxIngestStatus` reports the enabled state, running state, input health, and last event time.
   It also reports result counters, parse errors, the last ingest error, and the last QRZ sync result.
 - When `sync_to_qrz=true`, imported or refreshed WSJT-X QSOs use the `LogQso` QRZ upload behavior.
@@ -1352,7 +1407,7 @@ The SQLite backend stores QSO records as protobuf binary blobs in a `record` col
 
 #### `sync_metadata` table
 
-Singleton row tracking QRZ logbook sync state.
+Singleton row tracking remote logbook sync state.
 
 | Column | Type | Constraints | Description |
 |---|---|---|---|
@@ -1360,6 +1415,8 @@ Singleton row tracking QRZ logbook sync state.
 | `qrz_qso_count` | `INTEGER` | `NOT NULL DEFAULT 0` | QSO count reported by QRZ |
 | `last_sync_ms` | `INTEGER` | | Last sync timestamp in ms |
 | `qrz_logbook_owner` | `TEXT` | | QRZ logbook owner callsign |
+| `lotw_last_sync_ms` | `INTEGER` | | Latest completed LoTW sync timestamp in ms |
+| `lotw_last_qsl` | `TEXT` | | Latest `APP_LoTW_LASTQSL` value |
 
 The backend inserts a seed row `(1, 0)` during creation.
 
@@ -1452,7 +1509,30 @@ Omit it when the engine cannot safely normalize the local value.
 - `QSORIPPER_QRZ_LOGBOOK_API_KEY`
 - `QSORIPPER_QRZ_LOGBOOK_BASE_URL` (override for testing)
 
-### 5.3 Rig Control (rigctld)
+### 5.3 ARRL Logbook of the World
+
+**Upload tool:** TrustedQSL (`tqsl`)
+
+The engine writes upload records to a temporary ADIF file.
+It runs TQSL with `-a compliant -d -l <location> -u <file> -x`.
+It adds `-p <passphrase>` only when the certificate passphrase is configured.
+The engine deletes the temporary file after TQSL stops.
+
+**Report endpoint:** `https://lotw.arrl.org/lotwuser/lotwreport.adi`
+
+The engine requests confirmed QSOs with detail fields.
+It supplies the saved `APP_LoTW_LASTQSL` value for an incremental request.
+The engine parses the returned data as ADIF.
+
+**Credential environment variables:**
+
+- `QSORIPPER_LOTW_USERNAME`
+- `QSORIPPER_LOTW_PASSWORD`
+- `QSORIPPER_LOTW_CERTIFICATE_PASSWORD`
+
+See `docs/integrations/lotw.md` for operator setup.
+
+### 5.4 Rig Control (rigctld)
 
 **Protocol:** TCP text-based protocol (Hamlib rigctld).
 
@@ -1593,6 +1673,21 @@ Environment variables with the `QSORIPPER_` prefix control all configuration. Th
 | `QSORIPPER_QRZ_LOGBOOK_API_KEY` | String | | QRZ logbook API key (secret) |
 | `QSORIPPER_QRZ_LOGBOOK_BASE_URL` | URL | `https://logbook.qrz.com/api` | QRZ logbook API base URL |
 
+#### ARRL Logbook of the World
+
+Non-secret values can also use the `[lotw]` table in `config.toml`.
+The table keys are `username`, `tqsl_path`, `station_location`, `report_url`, and `timeout_seconds`.
+
+| Variable | Type | Default | Description |
+|---|---|---|---|
+| `QSORIPPER_LOTW_USERNAME` | String | | LoTW account name |
+| `QSORIPPER_LOTW_PASSWORD` | String | | LoTW website password (secret) |
+| `QSORIPPER_LOTW_TQSL_PATH` | Path | `tqsl` | TQSL executable path |
+| `QSORIPPER_LOTW_STATION_LOCATION` | String | | TQSL station location name |
+| `QSORIPPER_LOTW_CERTIFICATE_PASSWORD` | String | | TQSL certificate passphrase (secret) |
+| `QSORIPPER_LOTW_REPORT_URL` | URL | Production report URL | LoTW report endpoint |
+| `QSORIPPER_LOTW_TIMEOUT_SECONDS` | Integer | `60` | Network and TQSL timeout |
+
 #### Contest Calendar
 
 | Variable | Type | Default | Description |
@@ -1662,6 +1757,7 @@ The engine must start and function even when external integrations are unavailab
 |---|---|
 | QRZ XML credentials | QRZ lookups disabled. Lookup entry points return `LookupState.LOOKUP_STATE_ERROR` with a sanitized configuration message. |
 | QRZ logbook API key | Logbook sync disabled. `SyncWithQrz` returns `FAILED_PRECONDITION`. |
+| LoTW credentials or TQSL settings | LoTW sync disabled. `SyncWithLotw` returns `FAILED_PRECONDITION`. |
 | rigctld host/port | Rig control disabled. `GetRigStatus` returns `RIG_CONNECTION_STATUS_DISABLED`. |
 | NOAA weather disabled | Space weather disabled. Weather RPCs return a snapshot with `SPACE_WEATHER_STATUS_ERROR`. |
 | Contest calendar disabled | Contest lookup disabled. `GetActiveContests` returns `CONTEST_CALENDAR_STATUS_DISABLED`. |
@@ -1679,7 +1775,7 @@ The engine must start and function even when external integrations are unavailab
 
 #### Secret handling
 
-- The engine MUST NOT serialize QRZ passwords, API keys, session keys, or other credentials to the shared TOML file.
+- The engine MUST NOT serialize passwords, API keys, session keys, or certificate passphrases to the shared TOML file.
 - `SaveSetup` MUST store supplied QRZ secrets in the platform credential store.
 - `DeveloperControlService` secret mutations are process-session values.
 - The secret precedence is runtime override, environment variable, platform credential store, and then unset.

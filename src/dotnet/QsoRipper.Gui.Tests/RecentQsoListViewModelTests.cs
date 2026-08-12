@@ -99,6 +99,46 @@ public class RecentQsoListViewModelTests
     }
 
     [Fact]
+    public async Task RefreshAsyncShowsStableWsjtxListRefreshDiagnosticWithoutUpdatingQso()
+    {
+        var importedAt = new DateTimeOffset(2026, 8, 8, 2, 51, 34, 75, TimeSpan.Zero);
+        var qsoEnd = new DateTimeOffset(2026, 8, 8, 2, 51, 30, 250, TimeSpan.Zero);
+        var firstListRefreshAt = new DateTimeOffset(2026, 8, 8, 2, 51, 40, 500, TimeSpan.Zero);
+        var importDiagnostic =
+            "QsoRipper WSJT-X import: imported_at_utc=2026-08-08T02:51:34.075Z, qso_end_to_import_ms=3825, source=udp_logged_adif, engine=rust";
+        var qso = CreateQso(
+            "wsjtx-1",
+            "N7XAK",
+            Band._20M,
+            Mode.Ft8,
+            14_076_297,
+            "DM34",
+            "POTA",
+            notes: importDiagnostic,
+            utcTimestamp: importedAt);
+        qso.UtcEndTimestamp = Timestamp.FromDateTimeOffset(qsoEnd);
+        qso.ExtraFields["APP_QSORIPPER_WSJTX_IMPORT"] = importDiagnostic;
+        var engine = new FakeEngineClient { RecentQsos = [qso] };
+        var timeProvider = new AdjustableTimeProvider(firstListRefreshAt);
+        var viewModel = new RecentQsoListViewModel(engine, timeProvider);
+
+        await viewModel.RefreshAsync();
+
+        var item = Assert.Single(viewModel.VisibleItems);
+        Assert.Equal(importDiagnostic, item.Note);
+        Assert.Contains("first_list_refresh_at_utc=2026-08-08T02:51:40.500Z", item.DisplayNote, StringComparison.Ordinal);
+        Assert.Contains("import_to_list_refresh_ms=6425", item.DisplayNote, StringComparison.Ordinal);
+        Assert.Contains("qso_end_to_list_refresh_ms=10250", item.DisplayNote, StringComparison.Ordinal);
+        Assert.Empty(engine.UpdatedQsos);
+
+        timeProvider.UtcNow = firstListRefreshAt.AddMinutes(1);
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(item.DisplayNote, Assert.Single(viewModel.VisibleItems).DisplayNote);
+        Assert.Empty(engine.UpdatedQsos);
+    }
+
+    [Fact]
     public async Task SearchTextFiltersAcrossMultipleColumnsAndTracksTokens()
     {
         var engine = new FakeEngineClient
@@ -475,5 +515,12 @@ public class RecentQsoListViewModelTests
         public Task<ComputeGreatCircleResponse> ComputeGreatCircleAsync(ComputeGreatCircleRequest request, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<GetActiveStationContextResponse> GetActiveStationContextAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<PurgeDeletedQsosResponse> PurgeDeletedQsosAsync(IReadOnlyList<string>? localIds = null, Timestamp? olderThan = null, bool includePendingRemoteDeletes = false, CancellationToken ct = default) => throw new NotImplementedException();
+    }
+
+    private sealed class AdjustableTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public DateTimeOffset UtcNow { get; set; } = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => UtcNow;
     }
 }

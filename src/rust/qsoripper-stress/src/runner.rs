@@ -1377,6 +1377,7 @@ impl GrpcVectorKind {
                 .log_qso(LogQsoRequest {
                     qso: Some(make_adversarial_qso(iteration)),
                     sync_to_qrz: false,
+                    sync_to_lotw: false,
                 })
                 .await
                 .map(|_| ())
@@ -1385,6 +1386,7 @@ impl GrpcVectorKind {
                 .log_qso(LogQsoRequest {
                     qso: Some(make_oversized_qso(iteration)),
                     sync_to_qrz: false,
+                    sync_to_lotw: false,
                 })
                 .await
                 .map(|_| ())
@@ -1393,6 +1395,7 @@ impl GrpcVectorKind {
                 .log_qso(LogQsoRequest {
                     qso: Some(QsoRecord::default()),
                     sync_to_qrz: false,
+                    sync_to_lotw: false,
                 })
                 .await
                 .map(|_| ())
@@ -1406,6 +1409,7 @@ impl GrpcVectorKind {
                     .update_qso(UpdateQsoRequest {
                         qso: Some(qso),
                         sync_to_qrz: false,
+                        sync_to_lotw: false,
                     })
                     .await
                     .map(|_| ())

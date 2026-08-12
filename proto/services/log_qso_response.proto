@@ -9,4 +9,6 @@ message LogQsoResponse {
   optional string qrz_logid = 2;  // Set if sync_to_qrz was true and succeeded
   bool sync_success = 3;
   optional string sync_error = 4;
+  bool lotw_sync_success = 5;
+  optional string lotw_sync_error = 6;
 }

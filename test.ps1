@@ -14,7 +14,8 @@
     Build configuration for .NET and Win32 test runs. Default: Debug.
 
 .PARAMETER Win32Generator
-    CMake generator for local Win32 tests. Default: Visual Studio 18 2026.
+    CMake generator for local Win32 tests. If omitted, the script tries
+    Visual Studio 18 2026, then Visual Studio 17 2022.
 
 .EXAMPLE
     ./test.ps1
@@ -30,7 +31,7 @@ param(
     [ValidateSet('Release', 'Debug')]
     [string]$Configuration = 'Debug',
 
-    [string]$Win32Generator = 'Visual Studio 18 2026'
+    [string]$Win32Generator = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,7 +39,7 @@ $ErrorActionPreference = 'Stop'
 $RustManifest = Join-Path $PSScriptRoot 'src' 'rust' 'Cargo.toml'
 $DotnetSolution = Join-Path $PSScriptRoot 'src' 'dotnet' 'QsoRipper.slnx'
 $Win32SourceDir = Join-Path $PSScriptRoot 'src' 'c' 'qsoripper-win32'
-$Win32BuildDir = Join-Path $PSScriptRoot 'build' 'win32-tests'
+$Win32BuildRoot = Join-Path $PSScriptRoot 'build'
 $PesterTestsDir = Join-Path $PSScriptRoot 'tests'
 $EngineConformanceScript = Join-Path $PSScriptRoot 'tests' 'Run-EngineConformance.ps1'
 
@@ -306,18 +307,47 @@ function Test-Win32 {
         exit 1
     }
 
-    Measure-TestStep "Configuring Win32 tests ($Win32Generator)" {
-        cmake -S $Win32SourceDir -B $Win32BuildDir -G $Win32Generator
+    $generators = if ([string]::IsNullOrWhiteSpace($Win32Generator)) {
+        @('Visual Studio 18 2026', 'Visual Studio 17 2022')
+    }
+    else {
+        @($Win32Generator)
+    }
+    $selection = [pscustomobject]@{
+        Generator = $null
+        BuildDir  = $null
     }
 
-    Invoke-TestStep "Building Win32 tests ($Configuration)" cmake @(
-        '--build', $Win32BuildDir,
+    Measure-TestStep 'Configuring Win32 tests' {
+        foreach ($generator in $generators) {
+            $generatorKey = ($generator.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+            $candidateBuildDir = Join-Path $Win32BuildRoot "win32-tests-$generatorKey"
+            Write-Host "  Trying CMake generator: $generator"
+            cmake -S $Win32SourceDir -B $candidateBuildDir -G $generator
+            if ($LASTEXITCODE -eq 0) {
+                $selection.Generator = $generator
+                $selection.BuildDir = $candidateBuildDir
+                break
+            }
+        }
+
+        if ($null -eq $selection.Generator) {
+            Write-Host 'FAILED: no supported Visual Studio CMake generator found for Win32 tests.' -ForegroundColor Red
+            exit 1
+        }
+    }
+
+    $selectedGenerator = $selection.Generator
+    $win32BuildDir = $selection.BuildDir
+
+    Invoke-TestStep "Building Win32 tests with $selectedGenerator ($Configuration)" cmake @(
+        '--build', $win32BuildDir,
         '--config', $Configuration,
         '--parallel'
     )
 
     Invoke-TestStepWithCounts "Running Win32 CTest ($Configuration)" ctest @(
-        '--test-dir', $Win32BuildDir,
+        '--test-dir', $win32BuildDir,
         '-C', $Configuration,
         '--output-on-failure'
     ) 'Win32' ${function:Get-CtestCounts}

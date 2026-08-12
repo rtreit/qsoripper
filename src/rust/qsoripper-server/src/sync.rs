@@ -1075,6 +1075,8 @@ async fn update_metadata(
             nanos: 0,
         }),
         qrz_logbook_owner,
+        lotw_last_sync: prev_metadata.lotw_last_sync,
+        lotw_last_qsl: prev_metadata.lotw_last_qsl.clone(),
     };
 
     if let Err(err) = store.upsert_sync_metadata(&updated).await {
@@ -2432,6 +2434,7 @@ mod tests {
                 qrz_qso_count: 0,
                 last_sync: None,
                 qrz_logbook_owner: Some("AE7XI".into()),
+                ..SyncMetadata::default()
             })
             .await
             .unwrap();
@@ -2530,6 +2533,7 @@ mod tests {
                 qrz_qso_count: 0,
                 last_sync: None,
                 qrz_logbook_owner: Some("ORIG_OWNER".into()),
+                ..SyncMetadata::default()
             })
             .await
             .unwrap();
@@ -2685,6 +2689,7 @@ mod tests {
                 seconds: 1_700_000_000,
                 nanos: 0,
             }),
+            ..SyncMetadata::default()
         };
         store.upsert_sync_metadata(&previous).await.unwrap();
 

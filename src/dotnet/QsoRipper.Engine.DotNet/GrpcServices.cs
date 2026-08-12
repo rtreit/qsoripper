@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using Google.Protobuf;
 using Grpc.Core;
 using QsoRipper.Domain;
+using QsoRipper.Engine.DotNet.Lotw;
 using QsoRipper.Engine.Lookup;
 using QsoRipper.Services;
 
@@ -424,6 +425,34 @@ internal sealed class ManagedLogbookGrpcService(ManagedEngineState state)
         catch (QrzSyncUnavailableException ex)
         {
             throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
+    }
+
+    public override async Task SyncWithLotw(
+        SyncWithLotwRequest request,
+        IServerStreamWriter<SyncWithLotwResponse> responseStream,
+        ServerCallContext context)
+    {
+        if (request.HasUpload && !request.Upload && request.HasDownload && !request.Download)
+        {
+            throw new RpcException(new Status(
+                StatusCode.InvalidArgument,
+                "SyncWithLotw requires upload, download, or both."));
+        }
+
+        try
+        {
+            state.EnsureLotwSyncAvailable();
+            await responseStream.WriteAsync(new SyncWithLotwResponse
+            {
+                CurrentAction = "Starting LoTW sync.",
+                Complete = false,
+            });
+            await responseStream.WriteAsync(state.SyncWithLotw(request, context.CancellationToken));
+        }
+        catch (LotwConfigurationException exception)
+        {
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, exception.Message));
         }
     }
 

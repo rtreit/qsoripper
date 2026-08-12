@@ -42,9 +42,15 @@ QsoRipper resolves the executable in this order:
 1. The path in `CATHUB_EXECUTABLE`.
 2. A binary bundled at `artifacts\publish\cathub\Release\cathub.exe` on Windows, or the
    equivalent platform path.
-3. `cathub` on `PATH`.
+3. A sibling `cathub` repository build at `target\release\cathub.exe`, or the equivalent
+   platform path.
+4. `cathub` on `PATH`.
 
-QsoRipper does not download, install, or update CatHub during startup.
+Sibling discovery applies when the QsoRipper and CatHub repositories have the same parent directory.
+`launcher.ps1` validates the sibling executable on each start.
+It builds the sibling CatHub source when the executable is missing or incompatible.
+This check does not depend on a persistent environment variable.
+QsoRipper does not download or change CatHub source during startup.
 The current supported executable range is `>=0.2.0 <0.3.0`. The launcher checks
 `cathub --version` and reports an incompatible version separately from a spawn failure.
 
@@ -100,14 +106,15 @@ Source removal is opt-in and creates a `.bak` file first.
 
 Select **CatHub standalone service** in `launcher.ps1`. The launcher:
 
-1. Chooses the unified QsoRipper file when it contains `[cat_hub]`. Otherwise it uses the
+1. Validates CatHub and builds a missing or incompatible sibling executable.
+2. Chooses the unified QsoRipper file when it contains `[cat_hub]`. Otherwise it uses the
    external CatHub path.
-2. Resolves the configured, bundled, or installed CatHub executable.
-3. Gives CatHub `127.0.0.1:0` for the typed WinKeyer API.
-4. Starts CatHub before either engine.
-5. Waits for CatHub to publish its effective endpoints.
-6. Gives the selected WinKeyer endpoint to each engine.
-7. Starts the selected engines and UIs only after CatHub is ready.
+3. Resolves the configured, bundled, sibling, or installed CatHub executable.
+4. Gives CatHub `127.0.0.1:0` for the typed WinKeyer API.
+5. Starts CatHub before either engine.
+6. Waits for CatHub to publish its effective endpoints.
+7. Gives the selected WinKeyer endpoint to each engine.
+8. Starts the selected engines and UIs only after CatHub is ready.
 
 Windows selects an available loopback port for the typed API.
 This avoids conflicts with ports that Docker, WSL, Hyper-V, or another service reserves.
