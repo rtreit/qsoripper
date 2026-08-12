@@ -1893,8 +1893,9 @@ mod tests {
         SpaceWeatherControlSurface, StorageBackendKind, StorageOptions,
     };
     use crate::runtime_config::{
-        RuntimeConfigManager, SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR, STATION_GRID_ENV_VAR,
-        STATION_OPERATOR_CALLSIGN_ENV_VAR, STATION_PROFILE_NAME_ENV_VAR, STORAGE_BACKEND_ENV_VAR,
+        self, RuntimeConfigManager, SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR,
+        STATION_GRID_ENV_VAR, STATION_OPERATOR_CALLSIGN_ENV_VAR, STATION_PROFILE_NAME_ENV_VAR,
+        STORAGE_BACKEND_ENV_VAR,
     };
     use prost_types::Timestamp;
     use qsoripper_core::lookup::{
@@ -1915,7 +1916,8 @@ mod tests {
         ExportAdifRequest, GetCachedCallsignRequest, GetCurrentSpaceWeatherRequest,
         GetDxccEntityRequest, GetQsoRequest, GetSyncStatusRequest, ImportAdifRequest,
         ImportAdifResponse, ListQsosRequest, LogQsoRequest, LookupRequest, QsoSortOrder,
-        RefreshSpaceWeatherRequest, RestoreQsoRequest, StreamLookupRequest, UpdateQsoRequest,
+        RefreshSpaceWeatherRequest, RestoreQsoRequest, StreamLookupRequest, SyncWithLotwRequest,
+        UpdateQsoRequest,
     };
     use tokio_stream::StreamExt;
     use tonic::transport::Channel;
@@ -2047,6 +2049,35 @@ mod tests {
         Arc::new(RuntimeConfigManager::new(startup_values).expect("runtime config"))
     }
 
+    fn test_runtime_config_with_lotw(report_url: &str) -> Arc<RuntimeConfigManager> {
+        let mut startup_values = BTreeMap::new();
+        startup_values.insert(
+            runtime_config::STORAGE_BACKEND_ENV_VAR.to_string(),
+            "memory".to_string(),
+        );
+        startup_values.insert(
+            runtime_config::LOTW_USERNAME_ENV_VAR.to_string(),
+            "KC7AVA".to_string(),
+        );
+        startup_values.insert(
+            runtime_config::LOTW_PASSWORD_ENV_VAR.to_string(),
+            "test-password".to_string(),
+        );
+        startup_values.insert(
+            runtime_config::LOTW_STATION_LOCATION_ENV_VAR.to_string(),
+            "Home".to_string(),
+        );
+        startup_values.insert(
+            runtime_config::LOTW_REPORT_URL_ENV_VAR.to_string(),
+            report_url.to_string(),
+        );
+        startup_values.insert(
+            runtime_config::LOTW_TIMEOUT_SECONDS_ENV_VAR.to_string(),
+            "1".to_string(),
+        );
+        Arc::new(RuntimeConfigManager::new(startup_values).expect("runtime config"))
+    }
+
     #[tokio::test]
     async fn get_current_space_weather_returns_disabled_snapshot_when_provider_is_disabled() {
         let service =
@@ -2085,6 +2116,157 @@ mod tests {
             error_message.contains("disabled"),
             "unexpected error message: {error_message}"
         );
+    }
+
+    #[tokio::test]
+    async fn lotw_client_reports_missing_and_invalid_configuration() {
+        let service = test_logbook_service(test_runtime_config());
+        let error = service
+            .build_lotw_client()
+            .await
+            .err()
+            .expect("missing LoTW configuration");
+        assert!(error.contains("username"));
+
+        let mut startup_values = BTreeMap::new();
+        startup_values.insert(
+            runtime_config::LOTW_TIMEOUT_SECONDS_ENV_VAR.to_string(),
+            "not-an-integer".to_string(),
+        );
+        let config = Arc::new(RuntimeConfigManager::new(startup_values).expect("runtime config"));
+        let service = test_logbook_service(config);
+        let error = service
+            .build_lotw_client()
+            .await
+            .err()
+            .expect("invalid LoTW timeout");
+        assert!(error.contains("integer"));
+    }
+
+    #[tokio::test]
+    async fn lotw_sync_rejects_request_with_no_enabled_phase() {
+        let service = test_logbook_service(test_runtime_config());
+
+        let error = LogbookService::sync_with_lotw(
+            &service,
+            Request::new(SyncWithLotwRequest {
+                upload: Some(false),
+                download: Some(false),
+                ..SyncWithLotwRequest::default()
+            }),
+        )
+        .await
+        .expect_err("invalid LoTW request");
+
+        assert_eq!(error.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn lotw_upload_only_sync_completes_when_logbook_is_empty() {
+        let service =
+            test_logbook_service(test_runtime_config_with_lotw("http://127.0.0.1:1/report"));
+
+        let mut stream = LogbookService::sync_with_lotw(
+            &service,
+            Request::new(SyncWithLotwRequest {
+                upload: Some(true),
+                download: Some(false),
+                ..SyncWithLotwRequest::default()
+            }),
+        )
+        .await
+        .expect("LoTW sync stream")
+        .into_inner();
+
+        let starting = stream
+            .next()
+            .await
+            .expect("starting result")
+            .expect("starting response");
+        assert_eq!(
+            starting.current_action.as_deref(),
+            Some("Starting LoTW sync")
+        );
+        let completed = stream
+            .next()
+            .await
+            .expect("completion result")
+            .expect("completion response");
+        assert!(completed.complete);
+        assert_eq!(completed.error_records, 0);
+        assert_eq!(
+            completed.current_action.as_deref(),
+            Some("LoTW sync complete")
+        );
+    }
+
+    #[tokio::test]
+    async fn lotw_download_failure_is_returned_in_completion_response() {
+        let service =
+            test_logbook_service(test_runtime_config_with_lotw("http://127.0.0.1:1/report"));
+
+        let mut stream = LogbookService::sync_with_lotw(
+            &service,
+            Request::new(SyncWithLotwRequest {
+                upload: Some(false),
+                download: Some(true),
+                ..SyncWithLotwRequest::default()
+            }),
+        )
+        .await
+        .expect("LoTW sync stream")
+        .into_inner();
+
+        let _starting = stream.next().await.expect("starting result");
+        let completed = stream
+            .next()
+            .await
+            .expect("completion result")
+            .expect("completion response");
+        assert!(completed.complete);
+        assert_eq!(completed.error_records, 1);
+        assert!(completed
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("network request failed")));
+    }
+
+    #[tokio::test]
+    async fn per_operation_lotw_sync_returns_configuration_error_without_losing_qso() {
+        let service = test_logbook_service(test_runtime_config_with_logbook(
+            StorageBackendKind::Memory,
+            None,
+            true,
+        ));
+
+        let logged = LogbookService::log_qso(
+            &service,
+            Request::new(LogQsoRequest {
+                qso: Some(sample_qso_without_station_callsign("W1AW")),
+                sync_to_qrz: false,
+                sync_to_lotw: true,
+            }),
+        )
+        .await
+        .expect("log response")
+        .into_inner();
+
+        assert!(!logged.lotw_sync_success);
+        assert!(logged
+            .lotw_sync_error
+            .as_deref()
+            .is_some_and(|error| error.contains("username")));
+        let stored = LogbookService::get_qso(
+            &service,
+            Request::new(GetQsoRequest {
+                local_id: logged.local_id,
+            }),
+        )
+        .await
+        .expect("get response")
+        .into_inner()
+        .qso;
+        assert!(stored.is_some());
     }
 
     fn unique_sqlite_test_path(label: &str) -> PathBuf {
