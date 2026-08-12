@@ -58,8 +58,9 @@ internal static class SharedSetupConfigPersistence
         var directory = Path.GetDirectoryName(normalizedPath);
         if (!string.IsNullOrWhiteSpace(directory))
         {
+            var directoryAlreadyExists = Directory.Exists(directory);
             Directory.CreateDirectory(directory);
-            if (!OperatingSystem.IsWindows())
+            if (!OperatingSystem.IsWindows() && !directoryAlreadyExists)
             {
                 File.SetUnixFileMode(
                     directory,
