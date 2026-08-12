@@ -22,11 +22,13 @@ use crate::cathub_runtime::{
 };
 use crate::config;
 use crate::discovery::ArtifactRoot;
+use crate::engine_runtime::{inspect_cathub_endpoint, CatHubEndpointInspection};
 use crate::model::Selection;
 use crate::plan::{daemon_plan, engine_plan, ui_plan};
 use crate::ports::{is_port_listening, wait_for_port, wait_for_port_release};
 use crate::process::{
-    open_url, reap_stale_published_copies, spawn, stop_pid, verify_cathub_version, ProcessRegistry,
+    open_url, reap_managed_published_copies, reap_stale_published_copies, spawn, stop_pid,
+    verify_cathub_version, ProcessRegistry,
 };
 use crate::sync::{diff_rows, DialogState, DiffRow, Side, SyncDialog};
 
@@ -381,16 +383,7 @@ impl AppState {
         true
     }
 
-    /// Spawn selected daemons, then engines (waiting for readiness on each),
-    /// then every selected UI with its per-UI engine binding env vars.
-    fn launch_selected(&mut self) {
-        // Daemons first: the CAT hub must own the radio and expose its rigctld
-        // endpoint before any engine connects. Abort the launch if one fails.
-        if !self.launch_daemons() {
-            return;
-        }
-
-        // Engines next.
+    fn launch_engines(&mut self) -> bool {
         for engine_id in self.selection.engines.clone() {
             let Some(plan) = engine_plan(engine_id, self.cathub_endpoint.as_deref()) else {
                 continue;
@@ -398,16 +391,55 @@ impl AppState {
             let exe = plan.spec.artifact.executable_path(&self.artifact_root);
             let port = plan.spec.engine_port.unwrap_or(0);
             if port != 0 && is_port_listening(port, Duration::from_millis(200)) {
-                // Something owns the port. If it is a stale copy of our own
-                // published binary left by an earlier session/rebuild, reclaim
-                // the port so the restart spawns fresh code; otherwise respect
-                // a genuinely external owner.
-                if reap_stale_published_copies(&exe) > 0 {
+                if let Some(process) = self.registry.get(engine_id) {
+                    self.statuses
+                        .insert(engine_id, Status::running(process.pid));
+                    continue;
+                }
+
+                // The registry is in memory. A new launcher session reclaims
+                // an earlier published engine so it receives this CatHub
+                // instance's dynamic endpoint.
+                if reap_managed_published_copies(&exe) > 0 {
                     wait_for_port_release(port, Duration::from_secs(3));
                 }
                 if is_port_listening(port, Duration::from_millis(200)) {
-                    self.statuses
-                        .insert(engine_id, Status::listening_external());
+                    let Some(expected_endpoint) = self.cathub_endpoint.clone() else {
+                        self.statuses
+                            .insert(engine_id, Status::listening_external());
+                        continue;
+                    };
+                    let engine_endpoint = format!("http://127.0.0.1:{port}");
+                    let Some(runtime) = self.ensure_runtime() else {
+                        self.statuses.insert(
+                            engine_id,
+                            Status::failed("could not inspect external engine"),
+                        );
+                        return false;
+                    };
+                    match inspect_cathub_endpoint(runtime, &engine_endpoint, &expected_endpoint) {
+                        CatHubEndpointInspection::Compatible => {
+                            self.statuses
+                                .insert(engine_id, Status::listening_external());
+                        }
+                        CatHubEndpointInspection::Incompatible { actual } => {
+                            let actual = actual.as_deref().unwrap_or("<none>");
+                            let reason = format!(
+                                "external engine uses CatHub endpoint {actual}; expected {expected_endpoint}"
+                            );
+                            self.statuses.insert(engine_id, Status::failed(&reason));
+                            self.last_message = format!("Aborted launch: {reason}");
+                            return false;
+                        }
+                        CatHubEndpointInspection::Unavailable(error) => {
+                            let reason = format!(
+                                "could not verify external engine CatHub endpoint: {error}"
+                            );
+                            self.statuses.insert(engine_id, Status::failed(&reason));
+                            self.last_message = format!("Aborted launch: {reason}");
+                            return false;
+                        }
+                    }
                     continue;
                 }
             }
@@ -431,6 +463,17 @@ impl AppState {
                         .insert(engine_id, Status::failed(&e.to_string()));
                 }
             }
+        }
+        true
+    }
+
+    /// Spawn selected daemons, then engines (waiting for readiness on each),
+    /// then every selected UI with its per-UI engine binding env vars.
+    fn launch_selected(&mut self) {
+        // Daemons first: the CAT hub must own the radio and expose its rigctld
+        // endpoint before any engine connects. Abort the launch if one fails.
+        if !self.launch_daemons() || !self.launch_engines() {
+            return;
         }
 
         // UIs next.
