@@ -268,8 +268,9 @@ Press `Enter` to start the selected items.
 Press `S` to stop launcher-managed processes.
 
 Selections persist below `[launcher]` in `config.toml`.
-The launcher does not build artifacts.
-Run `.\build.ps1` first.
+Run `.\build.ps1` first for QsoRipper artifacts.
+The PowerShell wrapper validates a sibling CatHub build on each start.
+It builds CatHub when the sibling executable is missing or incompatible.
 
 **Local engine launcher (recommended):**
 
