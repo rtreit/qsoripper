@@ -15,7 +15,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 use ratatui::Terminal;
 
 use crate::catalog::{
-    catalog, ComponentId, ComponentKind, ENGINE_DOTNET, ENGINE_RUST, UI_DEBUGHOST,
+    catalog, ArtifactSpec, ComponentId, ComponentKind, ENGINE_DOTNET, ENGINE_RUST, UI_DEBUGHOST,
 };
 use crate::cathub_runtime::{
     clear_runtime_info, read_live_runtime_info, runtime_info_path, wait_for_runtime_info,
@@ -298,7 +298,7 @@ impl AppState {
             ) else {
                 continue;
             };
-            let exe = plan.spec.artifact.executable_path(&self.artifact_root);
+            let mut exe = plan.spec.artifact.executable_path(&self.artifact_root);
             let port = plan.readiness_port.unwrap_or(0);
             if let Ok(info) = read_live_runtime_info(&runtime_path) {
                 self.cathub_endpoint = info.winkeyer_endpoint;
@@ -322,11 +322,14 @@ impl AppState {
                     continue;
                 }
             }
-            if let Err(error) = verify_cathub_version(&exe) {
-                self.statuses
-                    .insert(daemon_id, Status::failed(&error.to_string()));
-                self.last_message = format!("Aborted launch: {error}");
-                return false;
+            match resolve_cathub_executable(&plan.spec.artifact, &self.artifact_root) {
+                Ok(resolved) => exe = resolved,
+                Err(error) => {
+                    self.statuses
+                        .insert(daemon_id, Status::failed(&error.to_string()));
+                    self.last_message = format!("Aborted launch: {error}");
+                    return false;
+                }
             }
             if let Some(path) = plan.cathub_runtime_info.as_deref() {
                 if let Err(error) = clear_runtime_info(path) {
@@ -505,6 +508,18 @@ impl AppState {
     fn status_for(&self, id: ComponentId) -> Status {
         self.statuses.get(&id).cloned().unwrap_or_else(Status::idle)
     }
+}
+
+fn resolve_cathub_executable(artifact: &ArtifactSpec, root: &ArtifactRoot) -> Result<PathBuf> {
+    let mut last_error = None;
+    for candidate in artifact.executable_candidates(root) {
+        match verify_cathub_version(&candidate) {
+            Ok(_) => return Ok(candidate),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| anyhow::anyhow!("CatHub executable discovery returned no candidates")))
 }
 
 fn engine_label(id: ComponentId) -> &'static str {

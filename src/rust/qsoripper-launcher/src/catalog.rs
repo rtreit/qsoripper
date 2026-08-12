@@ -55,34 +55,80 @@ pub(crate) struct ArtifactSpec {
 impl ArtifactSpec {
     /// Resolve the full executable path under the published artifact root.
     pub(crate) fn executable_path(&self, root: &ArtifactRoot) -> PathBuf {
+        self.executable_candidates(root)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| self.bundled_executable_path(root))
+    }
+
+    /// Return executable candidates in precedence order.
+    ///
+    /// External components can come from an explicit override, the publish tree,
+    /// a sibling development repository, or `PATH`.
+    pub(crate) fn executable_candidates(&self, root: &ArtifactRoot) -> Vec<PathBuf> {
+        let file_name = self.executable_file_name();
+        let bundled = self.bundled_executable_path(root);
+        if self.external_executable_env.is_none() {
+            return vec![bundled];
+        }
+
+        let mut candidates = Vec::new();
+        if let Some(variable) = self.external_executable_env {
+            if let Some(path) = std::env::var_os(variable).map(PathBuf::from) {
+                push_existing_candidate(&mut candidates, path);
+            }
+        }
+        push_existing_candidate(&mut candidates, bundled.clone());
+        if let Some(sibling) = sibling_repository_executable(root, &file_name) {
+            push_existing_candidate(&mut candidates, sibling);
+        }
+        if let Some(installed) = find_on_path(file_name.as_ref()) {
+            push_existing_candidate(&mut candidates, installed);
+        }
+        if candidates.is_empty() {
+            candidates.push(bundled);
+        }
+        candidates
+    }
+
+    fn executable_file_name(&self) -> String {
         let mut file_name = self.executable_stem.to_owned();
         if cfg!(windows) {
             file_name.push_str(".exe");
         }
+        file_name
+    }
 
-        if let Some(variable) = self.external_executable_env {
-            if let Some(path) = std::env::var_os(variable).map(PathBuf::from) {
-                if path.is_file() {
-                    return path;
-                }
-            }
-        }
+    fn bundled_executable_path(&self, root: &ArtifactRoot) -> PathBuf {
         let bundled = root
             .path()
             .join(self.publish_subdir)
             .join(root.configuration())
-            .join(&file_name);
-        if bundled.is_file() || self.external_executable_env.is_none() {
-            return bundled;
-        }
-
-        if self.external_executable_env.is_some() {
-            if let Some(installed) = find_on_path(file_name.as_ref()) {
-                return installed;
-            }
-        }
+            .join(self.executable_file_name());
         bundled
     }
+}
+
+fn push_existing_candidate(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if candidate.is_file() && !candidates.contains(&candidate) {
+        candidates.push(candidate);
+    }
+}
+
+fn sibling_repository_executable(root: &ArtifactRoot, file_name: &str) -> Option<PathBuf> {
+    let repo_root = root.path().parent()?.parent()?;
+    let repositories_root = repo_root.parent()?;
+    let profile = root.configuration().to_ascii_lowercase();
+    ["cathub", "CatHub"]
+        .into_iter()
+        .map(|directory| {
+            repositories_root
+                .join(directory)
+                .join("target")
+                .join(&profile)
+                .join(file_name)
+        })
+        .find(|candidate| candidate.is_file())
 }
 
 fn find_on_path(file_name: &std::ffi::OsStr) -> Option<PathBuf> {
@@ -253,5 +299,36 @@ mod tests {
         // The daemon carries a port for readiness probing, but must never be
         // offered as a gRPC engine endpoint a UI can bind to.
         assert!(engine_endpoint(DAEMON_CATHUB).is_none());
+    }
+
+    #[test]
+    fn cathub_discovers_sibling_repository_build() {
+        let directory = tempfile::tempdir().expect("temporary repositories root");
+        let qso_root = directory.path().join("qsoripper");
+        let artifact_root =
+            ArtifactRoot::from_repo_root(&qso_root, crate::discovery::Configuration::Release);
+        let file_name = if cfg!(windows) {
+            "cathub.exe"
+        } else {
+            "cathub"
+        };
+        let sibling_executable = directory
+            .path()
+            .join("cathub")
+            .join("target")
+            .join("release")
+            .join(file_name);
+        std::fs::create_dir_all(
+            sibling_executable
+                .parent()
+                .expect("sibling executable parent"),
+        )
+        .expect("create sibling target directory");
+        std::fs::write(&sibling_executable, b"test executable").expect("write sibling executable");
+
+        assert_eq!(
+            sibling_repository_executable(&artifact_root, file_name).as_deref(),
+            Some(sibling_executable.as_path())
+        );
     }
 }

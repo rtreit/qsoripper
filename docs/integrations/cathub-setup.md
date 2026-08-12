@@ -42,8 +42,11 @@ QsoRipper resolves the executable in this order:
 1. The path in `CATHUB_EXECUTABLE`.
 2. A binary bundled at `artifacts\publish\cathub\Release\cathub.exe` on Windows, or the
    equivalent platform path.
-3. `cathub` on `PATH`.
+3. A sibling `cathub` repository build at `target\release\cathub.exe`, or the equivalent
+   platform path.
+4. `cathub` on `PATH`.
 
+Sibling discovery applies when the QsoRipper and CatHub repositories have the same parent directory.
 QsoRipper does not download, install, or update CatHub during startup.
 The current supported executable range is `>=0.2.0 <0.3.0`. The launcher checks
 `cathub --version` and reports an incompatible version separately from a spawn failure.
@@ -102,7 +105,7 @@ Select **CatHub standalone service** in `launcher.ps1`. The launcher:
 
 1. Chooses the unified QsoRipper file when it contains `[cat_hub]`. Otherwise it uses the
    external CatHub path.
-2. Resolves the configured, bundled, or installed CatHub executable.
+2. Resolves the configured, bundled, sibling, or installed CatHub executable.
 3. Gives CatHub `127.0.0.1:0` for the typed WinKeyer API.
 4. Starts CatHub before either engine.
 5. Waits for CatHub to publish its effective endpoints.
