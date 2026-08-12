@@ -1,20 +1,30 @@
 #!/usr/bin/env pwsh
 
-$repoRoot = Split-Path -Parent $PSScriptRoot
-$helperPath = Join-Path $repoRoot 'scripts' 'CatHubBootstrap.ps1'
-$launcherPath = Join-Path $repoRoot 'launcher.ps1'
+$global:CatHubBootstrapRepoRoot = Split-Path -Parent $PSScriptRoot
+$global:CatHubBootstrapHelperPath = Join-Path $global:CatHubBootstrapRepoRoot 'scripts' 'CatHubBootstrap.ps1'
+$global:CatHubBootstrapLauncherPath = Join-Path $global:CatHubBootstrapRepoRoot 'launcher.ps1'
 
 Describe 'launcher CatHub bootstrap' {
     BeforeAll {
-        . $helperPath
+        . $global:CatHubBootstrapHelperPath
     }
 
     It 'accepts only the supported CatHub version range' {
-        Test-CompatibleCatHubVersion 'cathub 0.2.0' | Should Be $true
-        Test-CompatibleCatHubVersion 'cathub 0.2.19-beta.1' | Should Be $true
-        Test-CompatibleCatHubVersion 'cathub 0.1.2' | Should Be $false
-        Test-CompatibleCatHubVersion 'cathub 0.3.0' | Should Be $false
-        Test-CompatibleCatHubVersion 'unexpected output' | Should Be $false
+        if (-not (Test-CompatibleCatHubVersion 'cathub 0.2.0')) {
+            throw 'CatHub 0.2.0 must be compatible.'
+        }
+        if (-not (Test-CompatibleCatHubVersion 'cathub 0.2.19-beta.1')) {
+            throw 'CatHub 0.2 prerelease versions must be compatible.'
+        }
+        if (Test-CompatibleCatHubVersion 'cathub 0.1.2') {
+            throw 'CatHub 0.1.2 must be incompatible.'
+        }
+        if (Test-CompatibleCatHubVersion 'cathub 0.3.0') {
+            throw 'CatHub 0.3.0 must be incompatible.'
+        }
+        if (Test-CompatibleCatHubVersion 'unexpected output') {
+            throw 'Malformed version output must be incompatible.'
+        }
     }
 
     It 'maps a sibling repository to the selected Cargo profile' {
@@ -24,15 +34,25 @@ Describe 'launcher CatHub bootstrap' {
         $expectedName = if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'cathub.exe' } else { 'cathub' }
         $catHubRoot = Join-Path $repositoriesRoot 'cathub'
 
-        $info.ManifestPath | Should Be (Join-Path $catHubRoot 'Cargo.toml')
-        $info.ExecutablePath | Should Be (Join-Path (Join-Path (Join-Path $catHubRoot 'target') 'release') $expectedName)
+        $expectedManifest = Join-Path $catHubRoot 'Cargo.toml'
+        $expectedExecutable = Join-Path (Join-Path (Join-Path $catHubRoot 'target') 'release') $expectedName
+        if ($info.ManifestPath -ne $expectedManifest) {
+            throw "Expected manifest path $expectedManifest, but received $($info.ManifestPath)."
+        }
+        if ($info.ExecutablePath -ne $expectedExecutable) {
+            throw "Expected executable path $expectedExecutable, but received $($info.ExecutablePath)."
+        }
     }
 
     It 'wires the bootstrap into launcher startup' {
-        $launcher = Get-Content $launcherPath -Raw
+        $launcher = Get-Content $global:CatHubBootstrapLauncherPath -Raw
 
-        $launcher | Should Match 'CatHubBootstrap\.ps1'
-        $launcher | Should Match 'Initialize-CatHubExecutable'
+        if ($launcher -notmatch 'CatHubBootstrap\.ps1') {
+            throw 'launcher.ps1 must load the CatHub bootstrap helper.'
+        }
+        if ($launcher -notmatch 'Initialize-CatHubExecutable') {
+            throw 'launcher.ps1 must initialize the CatHub executable.'
+        }
     }
 
     It 'builds a missing sibling executable and selects it for this process' {
@@ -55,8 +75,12 @@ Describe 'launcher CatHub bootstrap' {
             $resolved = Initialize-CatHubExecutable -QsoRipperRoot $qsoRoot -Profile Release
             $expected = (Get-SiblingCatHubBuildInfo -QsoRipperRoot $qsoRoot -Profile Release).ExecutablePath
 
-            $resolved | Should Be $expected
-            $env:CATHUB_EXECUTABLE | Should Be $expected
+            if ($resolved -ne $expected) {
+                throw "Expected resolved path $expected, but received $resolved."
+            }
+            if ($env:CATHUB_EXECUTABLE -ne $expected) {
+                throw 'The process CatHub executable path was not set.'
+            }
             Assert-MockCalled Invoke-SiblingCatHubBuild -Times 1 -Exactly -Scope It
         }
         finally {
