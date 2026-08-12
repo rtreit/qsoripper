@@ -436,4 +436,16 @@ mod tests {
             )]
         );
     }
+
+    #[test]
+    fn dotnet_engine_plan_injects_discovered_cathub_endpoint() {
+        let plan = engine_plan(ENGINE_DOTNET, Some("http://127.0.0.1:54322")).expect("plan");
+        assert_eq!(
+            plan.env,
+            vec![(
+                "QSORIPPER_CW_CATHUB_ENDPOINT".to_string(),
+                "http://127.0.0.1:54322".to_string()
+            )]
+        );
+    }
 }
