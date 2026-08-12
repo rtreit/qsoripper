@@ -571,33 +571,37 @@ function Build-CatHubNativeProbe {
         return
     }
 
-    $catHubNativeProbeOutputDir = Join-Path $CatHubNativeProbeBuildDir $Configuration
-    Clear-LockedPublishArtifacts -DestinationDir $catHubNativeProbeOutputDir
+    $selection = [pscustomobject]@{
+        Generator = $null
+        BuildDir  = $null
+    }
 
     Measure-BuildStep "Configuring CatHub native frequency probe ($Configuration)" {
-        $configured = $false
-        $generators = @('Visual Studio 18 2026')
+        $generators = @('Visual Studio 18 2026', 'Visual Studio 17 2022')
         foreach ($generator in $generators) {
+            $generatorKey = ($generator.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+            $candidateBuildDir = Join-Path $CatHubNativeProbeBuildDir $generatorKey
             Write-Host "  Trying CMake generator: $generator"
-            cmake -S $CatHubNativeProbeSourceDir -B $CatHubNativeProbeBuildDir -G $generator -A x64
+            cmake -S $CatHubNativeProbeSourceDir -B $candidateBuildDir -G $generator -A x64
             if ($LASTEXITCODE -eq 0) {
-                $configured = $true
+                $selection.Generator = $generator
+                $selection.BuildDir = $candidateBuildDir
                 break
             }
-
-            Remove-Item (Join-Path $CatHubNativeProbeBuildDir 'CMakeCache.txt') -Force -ErrorAction SilentlyContinue
-            Remove-Item (Join-Path $CatHubNativeProbeBuildDir 'CMakeFiles') -Recurse -Force -ErrorAction SilentlyContinue
         }
 
-        if (-not $configured) {
+        if ($null -eq $selection.Generator) {
             Write-Host 'FAILED: no supported Visual Studio CMake generator found for native CatHub frequency probe.' -ForegroundColor Red
             exit 1
         }
     }
 
-    Invoke-Build "Building CatHub native frequency probe ($Configuration)" cmake @(
+    $catHubNativeProbeOutputDir = Join-Path $selection.BuildDir $Configuration
+    Clear-LockedPublishArtifacts -DestinationDir $catHubNativeProbeOutputDir
+
+    Invoke-Build "Building CatHub native frequency probe with $($selection.Generator) ($Configuration)" cmake @(
         '--build',
-        $CatHubNativeProbeBuildDir,
+        $selection.BuildDir,
         '--config',
         $Configuration
     )
