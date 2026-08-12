@@ -1,11 +1,13 @@
 using System.Collections;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Globalization;
 using System.Linq;
 using Avalonia.Collections;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Grpc.Core;
+using QsoRipper.Domain;
 using QsoRipper.Gui.Services;
 using QsoRipper.Gui.Utilities;
 
@@ -17,16 +19,21 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
     private const double MinGridFontSize = 10;
     private const double MaxGridFontSize = 18;
     private const double GridFontSizeStep = 1;
+    private const string WsjtxImportDiagnosticField = "APP_QSORIPPER_WSJTX_IMPORT";
+    private const string ImportedAtField = "imported_at_utc=";
 
     private readonly IEngineClient _engine;
+    private readonly TimeProvider _timeProvider;
     private readonly List<RecentQsoItemViewModel> _allItems = [];
+    private readonly Dictionary<string, string> _firstListRefreshDiagnostics = new(StringComparer.Ordinal);
     private ParsedSearchQuery _parsedSearchQuery = ParsedSearchQuery.Empty;
     private bool _suppressSortStateSync;
     private DataGridCollectionView _view;
 
-    public RecentQsoListViewModel(IEngineClient engine)
+    public RecentQsoListViewModel(IEngineClient engine, TimeProvider? timeProvider = null)
     {
         _engine = engine;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _view = CreateView(Array.Empty<RecentQsoItemViewModel>());
         ColumnOptions = new ObservableCollection<RecentQsoColumnOptionViewModel>(CreateColumnOptions());
         ApplyPersistedSort(RecentQsoSortColumn.Utc, ascending: false);
@@ -196,9 +203,17 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
             GuiPerformanceTrace.Write(nameof(RefreshAsync) + ".afterListQsos", $"count={qsos.Count}");
             var items = new RecentQsoItemViewModel[qsos.Count];
             var format = TimestampFormat;
+            var firstListRefreshAt = _timeProvider.GetUtcNow();
             for (var index = 0; index < qsos.Count; index++)
             {
-                items[index] = RecentQsoItemViewModel.FromQso(qsos[index], format);
+                var qso = qsos[index];
+                var item = RecentQsoItemViewModel.FromQso(qso, format);
+                if (TryGetFirstListRefreshDiagnostic(qso, firstListRefreshAt, out var diagnostic))
+                {
+                    item.SetUxRefreshDiagnostic(diagnostic);
+                }
+
+                items[index] = item;
             }
 
             GuiPerformanceTrace.Write(nameof(RefreshAsync) + ".afterMaterializeItems", $"count={items.Length}");
@@ -225,6 +240,63 @@ internal sealed partial class RecentQsoListViewModel : ObservableObject
             GuiPerformanceTrace.Write(nameof(RefreshAsync) + ".complete");
         }
     }
+
+    private bool TryGetFirstListRefreshDiagnostic(
+        QsoRecord qso,
+        DateTimeOffset firstListRefreshAt,
+        out string diagnostic)
+    {
+        diagnostic = string.Empty;
+        if (string.IsNullOrWhiteSpace(qso.LocalId)
+            || !qso.ExtraFields.TryGetValue(WsjtxImportDiagnosticField, out var importDiagnostic)
+            || !TryParseImportedAt(importDiagnostic, out var importedAt))
+        {
+            return false;
+        }
+
+        if (_firstListRefreshDiagnostics.TryGetValue(qso.LocalId, out var storedDiagnostic))
+        {
+            diagnostic = storedDiagnostic;
+            return true;
+        }
+
+        var listRefreshAtText = firstListRefreshAt.ToUniversalTime().ToString(
+            "yyyy-MM-dd'T'HH:mm:ss.fff'Z'",
+            CultureInfo.InvariantCulture);
+        var importDelta = DeltaMilliseconds(importedAt, firstListRefreshAt);
+        var endDelta = qso.UtcEndTimestamp is null
+            ? "unavailable"
+            : DeltaMilliseconds(qso.UtcEndTimestamp.ToDateTimeOffset(), firstListRefreshAt)
+                .ToString(CultureInfo.InvariantCulture);
+        diagnostic = $"QsoRipper GUI: first_list_refresh_at_utc={listRefreshAtText}, import_to_list_refresh_ms={importDelta}, qso_end_to_list_refresh_ms={endDelta}";
+        _firstListRefreshDiagnostics.Add(qso.LocalId, diagnostic);
+        return true;
+    }
+
+    private static bool TryParseImportedAt(string diagnostic, out DateTimeOffset importedAt)
+    {
+        importedAt = default;
+        var valueStart = diagnostic.IndexOf(ImportedAtField, StringComparison.Ordinal);
+        if (valueStart < 0)
+        {
+            return false;
+        }
+
+        valueStart += ImportedAtField.Length;
+        var valueEnd = diagnostic.IndexOf(',', valueStart);
+        var value = valueEnd < 0
+            ? diagnostic[valueStart..]
+            : diagnostic[valueStart..valueEnd];
+        return DateTimeOffset.TryParseExact(
+            value,
+            "yyyy-MM-dd'T'HH:mm:ss.fff'Z'",
+            CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+            out importedAt);
+    }
+
+    private static long DeltaMilliseconds(DateTimeOffset start, DateTimeOffset end) =>
+        checked((long)Math.Truncate((end.ToUniversalTime() - start.ToUniversalTime()).TotalMilliseconds));
 
     internal static bool MatchesSearch(RecentQsoItemViewModel item, string? searchText)
     {

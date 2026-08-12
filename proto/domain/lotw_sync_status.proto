@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package qsoripper.domain;
+
+option csharp_namespace = "QsoRipper.Domain";
+
+// Tracks LoTW upload and confirmation work independently from QRZ sync.
+enum LotwSyncStatus {
+  LOTW_SYNC_STATUS_LOCAL_ONLY = 0;  // Not uploaded to LoTW
+  LOTW_SYNC_STATUS_QUEUED = 1;  // Queued for a TQSL upload
+  LOTW_SYNC_STATUS_UPLOADED = 2;  // TQSL accepted and uploaded the QSO
+  LOTW_SYNC_STATUS_MODIFIED = 3;  // Local identity fields changed after upload
+  LOTW_SYNC_STATUS_CONFIRMED = 4;  // A matching LoTW confirmation was downloaded
+  LOTW_SYNC_STATUS_FAILED = 5;  // The latest upload attempt failed
+  LOTW_SYNC_STATUS_CONFLICT = 6;  // More than one local QSO matched a confirmation
+}

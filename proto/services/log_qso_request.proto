@@ -9,4 +9,5 @@ import "domain/qso_record.proto";
 message LogQsoRequest {
   qsoripper.domain.QsoRecord qso = 1;
   bool sync_to_qrz = 2;  // Also upload to QRZ immediately
+  bool sync_to_lotw = 3;  // Also sign and upload with TQSL immediately
 }

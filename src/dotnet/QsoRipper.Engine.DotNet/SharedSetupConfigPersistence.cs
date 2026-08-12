@@ -233,6 +233,7 @@ internal static class SharedSetupConfigPersistence
         var storage = GetTable(root, "storage");
         var qrzXml = GetTable(root, "qrz_xml");
         var qrzLogbook = GetTable(root, "qrz_logbook");
+        var lotw = GetTable(root, "lotw");
         var sync = GetTable(root, "sync");
         var rigControl = GetTable(root, "rig_control");
         var wsjtxIngest = GetTable(root, "wsjtx_ingest");
@@ -248,6 +249,7 @@ internal static class SharedSetupConfigPersistence
         config.QrzXmlUserAgent = GetString(qrzXml, "user_agent");
         config.QrzLogbookApiKey = GetString(qrzLogbook, "api_key");
         config.QrzLogbookBaseUrl = GetString(qrzLogbook, "base_url");
+        config.Lotw = ParseLotw(lotw);
         config.SyncConfig = ParseSyncConfig(sync);
         config.RigControl = ParseRigControl(rigControl);
         config.WsjtxIngest = ParseWsjtxIngest(wsjtxIngest);
@@ -328,6 +330,7 @@ internal static class SharedSetupConfigPersistence
         "station_profiles",
         "qrz_xml",
         "qrz_logbook",
+        "lotw",
         "sync",
         "rig_control",
     };
@@ -451,6 +454,9 @@ internal static class SharedSetupConfigPersistence
         AddIfValue(qrzLogbook, "base_url", NormalizeOptional(config.QrzLogbookBaseUrl));
         AddTableIfNotEmpty(root, "qrz_logbook", qrzLogbook);
 
+        var lotw = BuildLotwTable(config.Lotw);
+        AddTableIfNotEmpty(root, "lotw", lotw);
+
         var sync = BuildSyncTable(config.SyncConfig);
         AddTableIfNotEmpty(root, "sync", sync);
 
@@ -458,6 +464,45 @@ internal static class SharedSetupConfigPersistence
         AddTableIfNotEmpty(root, "rig_control", rigControl);
 
         return root;
+    }
+
+    private static ManagedLotwSettings? ParseLotw(TomlTable? table)
+    {
+        if (table is null)
+        {
+            return null;
+        }
+
+        return new ManagedLotwSettings
+        {
+            Username = GetString(table, "username"),
+            Password = GetString(table, "password"),
+            TqslPath = GetString(table, "tqsl_path"),
+            StationLocation = GetString(table, "station_location"),
+            CertificatePassword = GetString(table, "certificate_password"),
+            ReportUrl = GetString(table, "report_url"),
+            TimeoutSeconds = GetUInt32(table, "timeout_seconds"),
+        };
+    }
+
+    private static TomlTable BuildLotwTable(ManagedLotwSettings? settings)
+    {
+        var table = new TomlTable();
+        if (settings is null)
+        {
+            return table;
+        }
+
+        AddIfValue(table, "username", NormalizeOptional(settings.Username));
+        AddIfValue(table, "tqsl_path", NormalizeOptional(settings.TqslPath));
+        AddIfValue(table, "station_location", NormalizeOptional(settings.StationLocation));
+        AddIfValue(table, "report_url", NormalizeOptional(settings.ReportUrl));
+        if (settings.TimeoutSeconds is not null)
+        {
+            table["timeout_seconds"] = settings.TimeoutSeconds.Value;
+        }
+
+        return table;
     }
 
     private static SyncConfig ParseSyncConfig(TomlTable? table)
@@ -1060,6 +1105,8 @@ internal sealed class SharedPersistedSetupConfig
 
     public string? QrzLogbookBaseUrl { get; set; }
 
+    public ManagedLotwSettings? Lotw { get; set; }
+
     public SyncConfig SyncConfig { get; set; } = new();
 
     public RigControlSettings? RigControl { get; set; }
@@ -1101,6 +1148,23 @@ internal sealed class SharedPersistedSetupConfig
             ? null
             : new JsonParser(JsonParser.Settings.Default.WithIgnoreUnknownFields(true)).Parse<StationProfile>(profileJson);
     }
+}
+
+internal sealed class ManagedLotwSettings
+{
+    public string? Username { get; set; }
+
+    public string? Password { get; set; }
+
+    public string? TqslPath { get; set; }
+
+    public string? StationLocation { get; set; }
+
+    public string? CertificatePassword { get; set; }
+
+    public string? ReportUrl { get; set; }
+
+    public uint? TimeoutSeconds { get; set; }
 }
 
 internal sealed class ManagedCwPersistedSettings

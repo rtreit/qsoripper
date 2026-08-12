@@ -12,7 +12,7 @@ cathub-protocol = "=0.2.0"
 prost = { workspace = true }
 prost-types = { workspace = true }
 tonic = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["process", "time"] }
 uuid = { workspace = true }
 difa = "0.1"
 thiserror = "2"
@@ -23,12 +23,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serial2 = { workspace = true }
+tempfile = "3"
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-tempfile = "3"
 
 [build-dependencies]
 tonic-build = "0.12"

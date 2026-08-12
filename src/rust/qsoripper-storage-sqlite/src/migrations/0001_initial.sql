@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS sync_metadata (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     qrz_qso_count INTEGER NOT NULL DEFAULT 0,
     last_sync_ms INTEGER,
-    qrz_logbook_owner TEXT
+    qrz_logbook_owner TEXT,
+    lotw_last_sync_ms INTEGER,
+    lotw_last_qsl TEXT
 );
 
 INSERT OR IGNORE INTO sync_metadata (id, qrz_qso_count) VALUES (1, 0);

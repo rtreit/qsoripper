@@ -710,12 +710,12 @@
                                           SortMemberPath="Note">
                     <DataGridTemplateColumn.CellTemplate>
                       <DataTemplate x:DataType="vm:RecentQsoItemViewModel">
-                        <TextBlock Text="{Binding Note}"
+                        <TextBlock Text="{Binding DisplayNote}"
                                    Foreground="#C0C0C0"
                                    TextWrapping="NoWrap"
                                    TextTrimming="CharacterEllipsis"
                                    VerticalAlignment="Center"
-                                   ToolTip.Tip="{Binding Note}" />
+                                   ToolTip.Tip="{Binding DisplayNote}" />
                       </DataTemplate>
                     </DataGridTemplateColumn.CellTemplate>
                     <DataGridTemplateColumn.CellEditingTemplate>
@@ -901,7 +901,7 @@
                             <TextBlock Text="Comment" Grid.Row="21" Opacity="0.68" />
                             <TextBlock Grid.Row="21" Grid.Column="1" Text="{Binding InspectorQso.Comment}" TextWrapping="Wrap" />
                             <TextBlock Text="Note" Grid.Row="22" Opacity="0.68" />
-                            <TextBlock Grid.Row="22" Grid.Column="1" Text="{Binding InspectorQso.Note}" TextWrapping="Wrap" />
+                            <TextBlock Grid.Row="22" Grid.Column="1" Text="{Binding InspectorQso.DisplayNote}" TextWrapping="Wrap" />
                           </Grid>
                         </StackPanel>
 

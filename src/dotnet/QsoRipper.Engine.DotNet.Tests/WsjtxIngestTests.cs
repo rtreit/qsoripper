@@ -15,7 +15,7 @@ public sealed class WsjtxIngestTests : IDisposable
 {
     private const uint WsjtxMagic = 0xADBC_CBDA;
     private const string SampleAdif =
-        "<CALL:4>W1AW<STATION_CALLSIGN:5>K7RND<QSO_DATE:8>20250102<TIME_ON:4>0102<BAND:3>15M<MODE:2>CW<FREQ:8>21.02830<EOR>\n";
+        "<CALL:4>W1AW<STATION_CALLSIGN:5>K7RND<QSO_DATE:8>20250102<TIME_ON:4>0102<QSO_DATE_OFF:8>20250102<TIME_OFF:6>010300<BAND:3>15M<MODE:3>FT8<FREQ:8>21.02830<NOTES:13>Operator note<EOR>\n";
 
     private readonly string _tempDirectory;
 
@@ -178,6 +178,21 @@ public sealed class WsjtxIngestTests : IDisposable
     // ---- Supervisor end-to-end (driven imports, no real sockets) --------
 
     [Fact]
+    public void Import_diagnostic_includes_qso_end_delta_milliseconds()
+    {
+        var qso = new QsoRecord
+        {
+            UtcEndTimestamp = Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 8, 8, 2, 51, 30, 250, TimeSpan.Zero)),
+        };
+        var importedAt = new DateTimeOffset(2026, 8, 8, 2, 51, 34, 75, TimeSpan.Zero);
+
+        var note = WsjtxImportDiagnostic.Create(WsjtxImportDiagnostic.UdpSource, qso, importedAt);
+
+        Assert.Contains("qso_end_to_import_ms=3825", note, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Setup_status_wsjtx_ingest_status_is_null_before_supervisor_publishes()
     {
         var state = CreateStateWithProfile();
@@ -202,6 +217,9 @@ public sealed class WsjtxIngestTests : IDisposable
         Assert.Equal("W1AW", live.LastImportedCallsign);
         Assert.False(string.IsNullOrWhiteSpace(live.LastImportedLocalId));
         Assert.NotNull(live.LastEventAt);
+        var stored = state.GetQso(live.LastImportedLocalId);
+        Assert.NotNull(stored);
+        AssertWsjtxDiagnostic(stored!, WsjtxImportDiagnostic.UdpSource, "dotnet");
 
         var setupStatus = state.GetSetupStatus();
         Assert.NotNull(setupStatus.WsjtxIngestStatus);
@@ -253,6 +271,9 @@ public sealed class WsjtxIngestTests : IDisposable
         await supervisor.HandleTailImportAsync(path, syncToQrz: false, CancellationToken.None);
         var afterFirst = supervisor.SnapshotStatus();
         Assert.Equal(1u, afterFirst.RecordsImported);
+        var firstStored = state.GetQso(afterFirst.LastImportedLocalId);
+        Assert.NotNull(firstStored);
+        AssertWsjtxDiagnostic(firstStored!, WsjtxImportDiagnostic.AdifTailSource, "dotnet");
 
         // A second poll without new complete data must not re-import.
         await supervisor.HandleTailImportAsync(path, syncToQrz: false, CancellationToken.None);
@@ -265,6 +286,27 @@ public sealed class WsjtxIngestTests : IDisposable
 
         await supervisor.HandleTailImportAsync(path, syncToQrz: false, CancellationToken.None);
         Assert.Equal(2u, supervisor.SnapshotStatus().RecordsImported);
+    }
+
+    [Fact]
+    public async Task First_wsjtx_ingest_source_remains_authoritative()
+    {
+        var state = CreateStateWithProfile();
+        using var supervisor = new WsjtxIngestSupervisor(state);
+        var path = Path.Combine(_tempDirectory, "wsjtx_log.adi");
+        await File.WriteAllTextAsync(path, SampleAdif);
+
+        await supervisor.HandleTailImportAsync(path, syncToQrz: false, CancellationToken.None);
+        await supervisor.ProcessDatagramAsync(
+            BuildLoggedAdifDatagram("WSJT-X", SampleAdif),
+            syncToQrz: false,
+            CancellationToken.None);
+
+        var localId = supervisor.SnapshotStatus().LastImportedLocalId;
+        var stored = state.GetQso(localId);
+        Assert.NotNull(stored);
+        AssertWsjtxDiagnostic(stored!, WsjtxImportDiagnostic.AdifTailSource, "dotnet");
+        Assert.DoesNotContain(WsjtxImportDiagnostic.UdpSource, stored!.Notes, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -352,6 +394,19 @@ public sealed class WsjtxIngestTests : IDisposable
 
         state.SaveSetup(request);
         return state;
+    }
+
+    private static void AssertWsjtxDiagnostic(QsoRecord qso, string source, string engine)
+    {
+        Assert.True(qso.ExtraFields.TryGetValue(WsjtxImportDiagnostic.ExtraFieldKey, out var diagnostic));
+        Assert.StartsWith(WsjtxImportDiagnostic.NotePrefix, diagnostic, StringComparison.Ordinal);
+        Assert.Contains("imported_at_utc=", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("qso_end_to_import_ms=", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("qso_end_to_import_ms=unavailable", diagnostic, StringComparison.Ordinal);
+        Assert.Contains($"source={source}", diagnostic, StringComparison.Ordinal);
+        Assert.Contains($"engine={engine}", diagnostic, StringComparison.Ordinal);
+        Assert.Contains(diagnostic, qso.Notes, StringComparison.Ordinal);
+        Assert.Contains("Operator note", qso.Notes, StringComparison.Ordinal);
     }
 
     private sealed class SuccessfulQrzLogbookApi : IQrzLogbookApi

@@ -380,7 +380,8 @@ impl LogbookStore for SqliteStorage {
         let connection = self.connection()?;
         let mut statement = prepare_statement(
             &connection,
-            "SELECT qrz_qso_count, last_sync_ms, qrz_logbook_owner
+            "SELECT qrz_qso_count, last_sync_ms, qrz_logbook_owner,
+                    lotw_last_sync_ms, lotw_last_qsl
              FROM sync_metadata
              WHERE id = 1",
             &[],
@@ -401,6 +402,14 @@ impl LogbookStore for SqliteStorage {
                 qrz_logbook_owner: statement
                     .read::<Option<String>, _>(2)
                     .map_err(map_sqlite_error)?,
+                lotw_last_sync: millis_to_timestamp(
+                    statement
+                        .read::<Option<i64>, _>(3)
+                        .map_err(map_sqlite_error)?,
+                ),
+                lotw_last_qsl: statement
+                    .read::<Option<String>, _>(4)
+                    .map_err(map_sqlite_error)?,
             }),
             State::Done => Ok(SyncMetadata::default()),
         }
@@ -410,16 +419,23 @@ impl LogbookStore for SqliteStorage {
         let connection = self.connection()?;
         execute_statement(
             &connection,
-            "INSERT INTO sync_metadata (id, qrz_qso_count, last_sync_ms, qrz_logbook_owner)
-             VALUES (1, ?, ?, ?)
+            "INSERT INTO sync_metadata (
+                id, qrz_qso_count, last_sync_ms, qrz_logbook_owner,
+                lotw_last_sync_ms, lotw_last_qsl
+             )
+             VALUES (1, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                 qrz_qso_count = excluded.qrz_qso_count,
                 last_sync_ms = excluded.last_sync_ms,
-                qrz_logbook_owner = excluded.qrz_logbook_owner",
+                qrz_logbook_owner = excluded.qrz_logbook_owner,
+                lotw_last_sync_ms = excluded.lotw_last_sync_ms,
+                lotw_last_qsl = excluded.lotw_last_qsl",
             &[
                 Value::Integer(i64::from(metadata.qrz_qso_count)),
                 Value::from(timestamp_to_millis(metadata.last_sync.as_ref())),
                 Value::from(metadata.qrz_logbook_owner.as_deref()),
+                Value::from(timestamp_to_millis(metadata.lotw_last_sync.as_ref())),
+                Value::from(metadata.lotw_last_qsl.as_deref()),
             ],
         )
         .map_err(map_sqlite_error)?;

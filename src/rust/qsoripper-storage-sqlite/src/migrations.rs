@@ -12,3 +12,7 @@ pub(crate) const SOFT_DELETE_MIGRATION: &str = include_str!("migrations/0002_sof
 /// lookup query (`UPPER(worked_callsign) = ?`) can use an index instead of
 /// scanning the table.
 pub(crate) const HISTORY_INDEX_MIGRATION: &str = include_str!("migrations/0003_history_index.sql");
+
+/// Adds the `LoTW` confirmation high-water fields to shared sync metadata.
+pub(crate) const LOTW_SYNC_METADATA_MIGRATION: &str =
+    include_str!("migrations/0004_lotw_sync_metadata.sql");

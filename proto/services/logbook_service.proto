@@ -24,6 +24,8 @@ import "services/restore_qso_request.proto";
 import "services/restore_qso_response.proto";
 import "services/sync_with_qrz_request.proto";
 import "services/sync_with_qrz_response.proto";
+import "services/sync_with_lotw_request.proto";
+import "services/sync_with_lotw_response.proto";
 import "services/update_qso_request.proto";
 import "services/update_qso_response.proto";
 
@@ -98,6 +100,9 @@ service LogbookService {
 
   // Trigger a full or incremental sync with the QRZ logbook.
   rpc SyncWithQrz(SyncWithQrzRequest) returns (stream SyncWithQrzResponse);
+
+  // Sign and upload pending QSOs, then download LoTW confirmations.
+  rpc SyncWithLotw(SyncWithLotwRequest) returns (stream SyncWithLotwResponse);
 
   // Get current sync/logbook statistics (counts, last sync time, logbook owner).
   rpc GetSyncStatus(GetSyncStatusRequest) returns (GetSyncStatusResponse);

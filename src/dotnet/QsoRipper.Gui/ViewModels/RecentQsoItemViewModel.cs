@@ -50,6 +50,7 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     private string _contest = "-";
     private string _station = "-";
     private string _note = "-";
+    private string? _uxRefreshDiagnostic;
     private string _comment = "-";
     private string _utcEndDisplay = "-";
     private string _cqZone = "-";
@@ -184,8 +185,20 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
     public string Note
     {
         get => _note;
-        set => SetProperty(ref _note, value);
+        set
+        {
+            if (SetProperty(ref _note, value))
+            {
+                OnPropertyChanged(nameof(DisplayNote));
+            }
+        }
     }
+
+    public string DisplayNote => string.IsNullOrEmpty(_uxRefreshDiagnostic)
+        ? Note
+        : string.IsNullOrWhiteSpace(Note)
+            ? _uxRefreshDiagnostic
+            : $"{Note} | {_uxRefreshDiagnostic}";
 
     public string Comment
     {
@@ -415,6 +428,17 @@ internal sealed class RecentQsoItemViewModel : ObservableObject, IEditableObject
         OnPropertyChanged(nameof(RxWpmSortKey));
         OnPropertyChanged(nameof(DurationDisplay));
         RecomputeDirty();
+    }
+
+    internal void SetUxRefreshDiagnostic(string? diagnostic)
+    {
+        if (StringComparer.Ordinal.Equals(_uxRefreshDiagnostic, diagnostic))
+        {
+            return;
+        }
+
+        _uxRefreshDiagnostic = diagnostic;
+        OnPropertyChanged(nameof(DisplayNote));
     }
 
     internal bool MatchesFieldToken(string key, string value)
