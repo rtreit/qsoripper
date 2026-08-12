@@ -61,13 +61,14 @@ Describe 'launcher CatHub bootstrap' {
         $catHubRoot = Join-Path $repositoriesRoot 'cathub'
         $manifestPath = Join-Path $catHubRoot 'Cargo.toml'
         $previousExecutable = $env:CATHUB_EXECUTABLE
+        $global:CatHubBootstrapBuildCalls = 0
 
         $null = New-Item -ItemType Directory -Path $qsoRoot -Force
         $null = New-Item -ItemType Directory -Path $catHubRoot -Force
         $null = New-Item -ItemType File -Path $manifestPath -Force
 
         Mock Test-CompatibleCatHubExecutable { $false }
-        Mock Invoke-SiblingCatHubBuild {}
+        Mock Invoke-SiblingCatHubBuild { $global:CatHubBootstrapBuildCalls++ }
         Mock Get-CatHubVersionOutput { 'cathub 0.2.0' }
 
         try {
@@ -81,9 +82,12 @@ Describe 'launcher CatHub bootstrap' {
             if ($env:CATHUB_EXECUTABLE -ne $expected) {
                 throw 'The process CatHub executable path was not set.'
             }
-            Assert-MockCalled Invoke-SiblingCatHubBuild -Times 1 -Exactly -Scope It
+            if ($global:CatHubBootstrapBuildCalls -ne 1) {
+                throw "Expected one CatHub build, but received $global:CatHubBootstrapBuildCalls."
+            }
         }
         finally {
+            Remove-Variable CatHubBootstrapBuildCalls -Scope Global -ErrorAction SilentlyContinue
             if ($null -eq $previousExecutable) {
                 Remove-Item Env:CATHUB_EXECUTABLE -ErrorAction SilentlyContinue
             }
