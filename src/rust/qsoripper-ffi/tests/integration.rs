@@ -220,8 +220,8 @@ fn log_list_get_delete_round_trip() {
     assert_eq!(buf_as_str(&detail.worked_operator_callsign), "W1AW/OP");
     assert_eq!(buf_as_str(&detail.qsl_sent_status), "Y");
     assert_eq!(buf_as_str(&detail.qsl_sent_date), "2025-01-16");
-    assert_eq!(buf_as_str(&detail.lotw_sent), "N");
-    // The server owns QRZ linkage and station context on the public LogQso path.
+    // The server owns LoTW state, QRZ linkage, and station context on the public LogQso path.
+    assert!(buf_as_str(&detail.lotw_sent).is_empty());
     assert!(buf_as_str(&detail.qrz_log_id).is_empty());
     assert!(!buf_as_str(&detail.station_callsign).is_empty());
     assert_eq!(
