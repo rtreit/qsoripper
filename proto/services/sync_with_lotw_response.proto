@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+message SyncWithLotwResponse {
+  uint32 total_records = 1;
+  uint32 processed_records = 2;
+  uint32 uploaded_records = 3;
+  uint32 confirmed_records = 4;
+  uint32 unmatched_records = 5;
+  uint32 conflict_records = 6;
+  uint32 error_records = 7;
+  optional string current_action = 8;
+  bool complete = 9;
+  optional string error = 10;
+  optional string confirmation_high_water = 11;
+}

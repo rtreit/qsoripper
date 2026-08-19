@@ -13,7 +13,7 @@ use crate::domain::qso::{
 };
 use crate::domain::station::{effective_station_snapshot, station_snapshot_has_values};
 use crate::proto::qsoripper::domain::{
-    Band, Mode, QsoCompletion, QsoRecord, StationSnapshot, SyncStatus,
+    Band, LotwSyncStatus, Mode, QslStatus, QsoCompletion, QsoRecord, StationSnapshot, SyncStatus,
 };
 use difa::Record;
 
@@ -317,18 +317,30 @@ impl AdifMapper {
                         qso.extra_fields.insert(key_upper, value_str.to_owned());
                     }
                 }
-                "LOTW_QSL_SENT" => map_confirmation_field(
-                    &mut qso.lotw_sent,
-                    &mut qso.extra_fields,
-                    key_upper.as_str(),
-                    value_str,
-                ),
-                "LOTW_QSL_RCVD" => map_confirmation_field(
-                    &mut qso.lotw_received,
-                    &mut qso.extra_fields,
-                    key_upper.as_str(),
-                    value_str,
-                ),
+                "LOTW_QSL_SENT" => {
+                    let status = qsl_status_from_adif(value_str);
+                    qso.lotw_sent_status = status.into();
+                    qso.lotw_sent = qsl_status_as_confirmation(status);
+                }
+                "LOTW_QSL_RCVD" => {
+                    let status = qsl_status_from_adif(value_str);
+                    qso.lotw_received_status = status.into();
+                    qso.lotw_received = qsl_status_as_confirmation(status);
+                }
+                "LOTW_QSLSDATE" => {
+                    if let Some(ts) = parse_adif_datetime(value_str, None) {
+                        qso.lotw_sent_date = Some(ts);
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
+                "LOTW_QSLRDATE" => {
+                    if let Some(ts) = parse_adif_datetime(value_str, None) {
+                        qso.lotw_received_date = Some(ts);
+                    } else {
+                        qso.extra_fields.insert(key_upper, value_str.to_owned());
+                    }
+                }
                 "EQSL_QSL_SENT" => map_confirmation_field(
                     &mut qso.eqsl_sent,
                     &mut qso.extra_fields,
@@ -427,6 +439,8 @@ impl AdifMapper {
         if let Some(snapshot) = station_snapshot.filter(station_snapshot_has_values) {
             qso.station_snapshot = Some(snapshot);
         }
+
+        qso.lotw_sync_status = derive_lotw_sync_status(&qso).into();
 
         qso
     }
@@ -685,8 +699,24 @@ impl AdifMapper {
             push_field(&mut fields, "QSLRDATE", ts);
         }
 
-        push_confirmation_field(&mut fields, "LOTW_QSL_SENT", qso.lotw_sent);
-        push_confirmation_field(&mut fields, "LOTW_QSL_RCVD", qso.lotw_received);
+        push_lotw_status_field(
+            &mut fields,
+            "LOTW_QSL_SENT",
+            qso.lotw_sent_status,
+            qso.lotw_sent,
+        );
+        push_lotw_status_field(
+            &mut fields,
+            "LOTW_QSL_RCVD",
+            qso.lotw_received_status,
+            qso.lotw_received,
+        );
+        if let Some(ts) = qso.lotw_sent_date.as_ref().and_then(format_adif_date) {
+            push_field(&mut fields, "LOTW_QSLSDATE", ts);
+        }
+        if let Some(ts) = qso.lotw_received_date.as_ref().and_then(format_adif_date) {
+            push_field(&mut fields, "LOTW_QSLRDATE", ts);
+        }
         push_confirmation_field(&mut fields, "EQSL_QSL_SENT", qso.eqsl_sent);
         push_confirmation_field(&mut fields, "EQSL_QSL_RCVD", qso.eqsl_received);
 
@@ -1055,6 +1085,43 @@ fn push_confirmation_field(
     }
 }
 
+fn push_lotw_status_field(
+    fields: &mut Vec<AdifField<'_>>,
+    key: &'static str,
+    status: i32,
+    compatibility_value: Option<bool>,
+) {
+    let status = QslStatus::try_from(status).unwrap_or(QslStatus::Unspecified);
+    if let Some(value) = crate::domain::qso::qsl_status_to_adif(status) {
+        push_field(fields, key, value);
+    } else {
+        push_confirmation_field(fields, key, compatibility_value);
+    }
+}
+
+fn qsl_status_as_confirmation(status: QslStatus) -> Option<bool> {
+    match status {
+        QslStatus::Yes => Some(true),
+        QslStatus::No => Some(false),
+        _ => None,
+    }
+}
+
+fn derive_lotw_sync_status(qso: &QsoRecord) -> LotwSyncStatus {
+    let received = QslStatus::try_from(qso.lotw_received_status).unwrap_or(QslStatus::Unspecified);
+    if received == QslStatus::Yes || qso.lotw_received == Some(true) {
+        return LotwSyncStatus::Confirmed;
+    }
+
+    let sent = QslStatus::try_from(qso.lotw_sent_status).unwrap_or(QslStatus::Unspecified);
+    match sent {
+        QslStatus::Yes => LotwSyncStatus::Uploaded,
+        QslStatus::Queued => LotwSyncStatus::Queued,
+        _ if qso.lotw_sent == Some(true) => LotwSyncStatus::Uploaded,
+        _ => LotwSyncStatus::LocalOnly,
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn field_is_overridden(
     qso: &QsoRecord,
@@ -1062,9 +1129,13 @@ fn field_is_overridden(
     key: &str,
 ) -> bool {
     if key.eq_ignore_ascii_case("LOTW_QSL_SENT") {
-        qso.lotw_sent.is_some()
+        qso.lotw_sent_status != QslStatus::Unspecified as i32 || qso.lotw_sent.is_some()
     } else if key.eq_ignore_ascii_case("LOTW_QSL_RCVD") {
-        qso.lotw_received.is_some()
+        qso.lotw_received_status != QslStatus::Unspecified as i32 || qso.lotw_received.is_some()
+    } else if key.eq_ignore_ascii_case("LOTW_QSLSDATE") {
+        qso.lotw_sent_date.is_some()
+    } else if key.eq_ignore_ascii_case("LOTW_QSLRDATE") {
+        qso.lotw_received_date.is_some()
     } else if key.eq_ignore_ascii_case("EQSL_QSL_SENT") {
         qso.eqsl_sent.is_some()
     } else if key.eq_ignore_ascii_case("EQSL_QSL_RCVD") {
@@ -1339,11 +1410,12 @@ mod tests {
 
         let qso = AdifMapper::record_to_qso(&rec);
         assert_eq!(qso.lotw_sent, None);
-        assert_eq!(qso.eqsl_received, None);
         assert_eq!(
-            qso.extra_fields.get("LOTW_QSL_SENT").map(String::as_str),
-            Some("R")
+            QslStatus::try_from(qso.lotw_sent_status),
+            Ok(QslStatus::Requested)
         );
+        assert_eq!(qso.eqsl_received, None);
+        assert!(!qso.extra_fields.contains_key("LOTW_QSL_SENT"));
         assert_eq!(
             qso.extra_fields.get("EQSL_QSL_RCVD").map(String::as_str),
             Some("I")

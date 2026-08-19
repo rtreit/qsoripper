@@ -16,13 +16,14 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use qsoripper_core::adif::{parse_adi_qsos, serialize_adi_qsos};
 use qsoripper_core::application::logbook::LogbookError;
 use qsoripper_core::cw::{CwController, CwError, CwKeyerConfig};
 use qsoripper_core::lookup::QRZ_USER_AGENT_ENV_VAR;
+use qsoripper_core::lotw::{self, LotwConfig};
 use qsoripper_core::storage::{
     DeletedRecordsFilter, EngineStorage, QsoListQuery, QsoSortOrder, StorageError,
 };
@@ -67,8 +68,8 @@ use qsoripper_core::proto::qsoripper::services::{
     ResetRuntimeConfigRequest, ResetRuntimeConfigResponse, RestoreQsoRequest, RestoreQsoResponse,
     SendCwMacroRequest, SendCwMacroResponse, SendCwTextRequest, SendCwTextResponse,
     SetCwSpeedRequest, SetCwSpeedResponse, StreamLookupRequest, StreamLookupResponse,
-    SyncWithQrzRequest, SyncWithQrzResponse, TestRigConnectionRequest, TestRigConnectionResponse,
-    UpdateQsoRequest, UpdateQsoResponse,
+    SyncWithLotwRequest, SyncWithLotwResponse, SyncWithQrzRequest, SyncWithQrzResponse,
+    TestRigConnectionRequest, TestRigConnectionResponse, UpdateQsoRequest, UpdateQsoResponse,
 };
 use qsoripper_core::rig_control::{
     RigControlProvider, RigctldConfig, RigctldProvider, DEFAULT_RIGCTLD_HOST, DEFAULT_RIGCTLD_PORT,
@@ -111,6 +112,7 @@ where
         runtime_config.clone(),
         background_services.sync_scheduler.clone(),
         background_services.qrz_upload_lock.clone(),
+        background_services.lotw_upload_lock.clone(),
     );
     let lookup_service = DeveloperLookupService::new(runtime_config.clone());
     let engine_service = EngineControlSurface;
@@ -216,6 +218,7 @@ struct BackgroundServices {
     sync_scheduler: Arc<sync_scheduler::SyncScheduler>,
     wsjtx_ingest: Arc<wsjtx_ingest::WsjtxIngestSupervisor>,
     qrz_upload_lock: Arc<Mutex<()>>,
+    lotw_upload_lock: Arc<Mutex<()>>,
 }
 
 impl BackgroundServices {
@@ -227,6 +230,7 @@ impl BackgroundServices {
 
 fn start_background_services(runtime_config: Arc<RuntimeConfigManager>) -> BackgroundServices {
     let qrz_upload_lock = Arc::new(Mutex::new(()));
+    let lotw_upload_lock = Arc::new(Mutex::new(()));
     let sync_scheduler = Arc::new(sync_scheduler::SyncScheduler::new(qrz_upload_lock.clone()));
     sync_scheduler.start(runtime_config.clone());
     let wsjtx_ingest = Arc::new(wsjtx_ingest::WsjtxIngestSupervisor::with_qrz_sync_lock(
@@ -237,6 +241,7 @@ fn start_background_services(runtime_config: Arc<RuntimeConfigManager>) -> Backg
         sync_scheduler,
         wsjtx_ingest,
         qrz_upload_lock,
+        lotw_upload_lock,
     }
 }
 
@@ -363,6 +368,7 @@ struct DeveloperLogbookService {
     runtime_config: Arc<RuntimeConfigManager>,
     sync_scheduler: Arc<sync_scheduler::SyncScheduler>,
     qrz_upload_lock: Arc<Mutex<()>>,
+    lotw_upload_lock: Arc<Mutex<()>>,
 }
 
 impl DeveloperLogbookService {
@@ -370,11 +376,13 @@ impl DeveloperLogbookService {
         runtime_config: Arc<RuntimeConfigManager>,
         sync_scheduler: Arc<sync_scheduler::SyncScheduler>,
         qrz_upload_lock: Arc<Mutex<()>>,
+        lotw_upload_lock: Arc<Mutex<()>>,
     ) -> Self {
         Self {
             runtime_config,
             sync_scheduler,
             qrz_upload_lock,
+            lotw_upload_lock,
         }
     }
 
@@ -407,6 +415,41 @@ impl DeveloperLogbookService {
 
         qsoripper_core::qrz_logbook::QrzLogbookClient::new(config)
             .map_err(|err| format!("Failed to create QRZ logbook client: {err}"))
+    }
+
+    async fn build_lotw_client(&self) -> Result<lotw::LotwClient, String> {
+        let effective = self.runtime_config.effective_values().await;
+        let value = |key: &str| effective.get(key).cloned().unwrap_or_default();
+
+        let timeout_seconds = effective
+            .get(runtime_config::LOTW_TIMEOUT_SECONDS_ENV_VAR)
+            .map_or(Ok(60), |value| value.parse::<u64>())
+            .map_err(|_| "LoTW timeout must be an integer.".to_string())?;
+        let config = LotwConfig::new(
+            value(runtime_config::LOTW_USERNAME_ENV_VAR),
+            value(runtime_config::LOTW_PASSWORD_ENV_VAR),
+            effective
+                .get(runtime_config::LOTW_TQSL_PATH_ENV_VAR)
+                .cloned()
+                .unwrap_or_else(|| runtime_config::DEFAULT_LOTW_TQSL_PATH.to_string()),
+            value(runtime_config::LOTW_STATION_LOCATION_ENV_VAR),
+        )
+        .and_then(|config| {
+            config.with_report_url(
+                effective
+                    .get(runtime_config::LOTW_REPORT_URL_ENV_VAR)
+                    .map_or(runtime_config::DEFAULT_LOTW_REPORT_URL, String::as_str),
+            )
+        })
+        .map_err(|error| error.to_string())?
+        .with_certificate_password(
+            effective
+                .get(runtime_config::LOTW_CERTIFICATE_PASSWORD_ENV_VAR)
+                .cloned(),
+        )
+        .with_timeout(Duration::from_secs(timeout_seconds.max(1)));
+
+        lotw::LotwClient::new(config).map_err(|error| error.to_string())
     }
 
     /// Push a single QSO to QRZ for the per-RPC `sync_to_qrz=true` paths on
@@ -450,12 +493,32 @@ impl DeveloperLogbookService {
             Err(err) => (false, Some(err)),
         }
     }
+
+    async fn run_per_op_lotw_sync(
+        &self,
+        engine: &qsoripper_core::application::logbook::LogbookEngine,
+        stored: &mut qsoripper_core::proto::qsoripper::domain::QsoRecord,
+    ) -> (bool, Option<String>) {
+        let client = match self.build_lotw_client().await {
+            Ok(client) => client,
+            Err(error) => return (false, Some(error)),
+        };
+        let _upload_guard = self.lotw_upload_lock.lock().await;
+        match lotw::upload_single_qso(&client, engine.logbook_store(), stored).await {
+            Ok(updated) => {
+                *stored = updated;
+                (true, None)
+            }
+            Err(error) => (false, Some(error.to_string())),
+        }
+    }
 }
 
 #[tonic::async_trait]
 impl LogbookService for DeveloperLogbookService {
     type ListQsosStream = ReceiverStream<Result<ListQsosResponse, Status>>;
     type SyncWithQrzStream = ReceiverStream<Result<SyncWithQrzResponse, Status>>;
+    type SyncWithLotwStream = ReceiverStream<Result<SyncWithLotwResponse, Status>>;
     type ExportAdifStream = ReceiverStream<Result<ExportAdifResponse, Status>>;
 
     async fn log_qso(
@@ -476,12 +539,19 @@ impl LogbookService for DeveloperLogbookService {
         } else {
             (false, None)
         };
+        let (lotw_sync_success, lotw_sync_error) = if request.sync_to_lotw {
+            self.run_per_op_lotw_sync(&engine, &mut stored).await
+        } else {
+            (false, None)
+        };
 
         Ok(Response::new(LogQsoResponse {
             local_id: stored.local_id,
             qrz_logid: stored.qrz_logid,
             sync_success,
             sync_error,
+            lotw_sync_success,
+            lotw_sync_error,
         }))
     }
 
@@ -500,12 +570,19 @@ impl LogbookService for DeveloperLogbookService {
         } else {
             (false, None)
         };
+        let (lotw_sync_success, lotw_sync_error) = if request.sync_to_lotw {
+            self.run_per_op_lotw_sync(&engine, &mut stored).await
+        } else {
+            (false, None)
+        };
 
         Ok(Response::new(UpdateQsoResponse {
             success: true,
             error: None,
             sync_success,
             sync_error,
+            lotw_sync_success,
+            lotw_sync_error,
         }))
     }
 
@@ -691,6 +768,71 @@ impl LogbookService for DeveloperLogbookService {
             let _upload_guard = qrz_upload_lock.lock().await;
             let store = engine.logbook_store();
             sync::execute_sync(&client, store, request.full_sync, conflict_policy, &tx).await;
+        });
+
+        Ok(Response::new(ReceiverStream::new(rx)))
+    }
+
+    async fn sync_with_lotw(
+        &self,
+        request: Request<SyncWithLotwRequest>,
+    ) -> Result<Response<Self::SyncWithLotwStream>, Status> {
+        let request = request.into_inner();
+        let upload = request.upload.unwrap_or(true);
+        let download = request.download.unwrap_or(true);
+        if !upload && !download {
+            return Err(Status::invalid_argument(
+                "SyncWithLotw requires upload, download, or both.",
+            ));
+        }
+
+        let client = self
+            .build_lotw_client()
+            .await
+            .map_err(Status::failed_precondition)?;
+        let engine = self.runtime_config.logbook_engine().await;
+        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let lotw_upload_lock = self.lotw_upload_lock.clone();
+
+        tokio::spawn(async move {
+            let _upload_guard = lotw_upload_lock.lock().await;
+            let _ = tx
+                .send(Ok(SyncWithLotwResponse {
+                    current_action: Some("Starting LoTW sync".to_string()),
+                    ..SyncWithLotwResponse::default()
+                }))
+                .await;
+            let response = match lotw::execute_sync(
+                &client,
+                engine.logbook_store(),
+                request.full_sync,
+                upload,
+                download,
+            )
+            .await
+            {
+                Ok(result) => SyncWithLotwResponse {
+                    total_records: result.total_records,
+                    processed_records: result.processed_records,
+                    uploaded_records: result.uploaded_records,
+                    confirmed_records: result.confirmed_records,
+                    unmatched_records: result.unmatched_records,
+                    conflict_records: result.conflict_records,
+                    error_records: result.error_records,
+                    current_action: Some("LoTW sync complete".to_string()),
+                    complete: true,
+                    error: result.error_summary,
+                    confirmation_high_water: result.confirmation_high_water,
+                },
+                Err(error) => SyncWithLotwResponse {
+                    current_action: Some("LoTW sync failed".to_string()),
+                    complete: true,
+                    error_records: 1,
+                    error: Some(error.to_string()),
+                    ..SyncWithLotwResponse::default()
+                },
+            };
+            let _ = tx.send(Ok(response)).await;
         });
 
         Ok(Response::new(ReceiverStream::new(rx)))
@@ -1751,8 +1893,9 @@ mod tests {
         SpaceWeatherControlSurface, StorageBackendKind, StorageOptions,
     };
     use crate::runtime_config::{
-        RuntimeConfigManager, SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR, STATION_GRID_ENV_VAR,
-        STATION_OPERATOR_CALLSIGN_ENV_VAR, STATION_PROFILE_NAME_ENV_VAR, STORAGE_BACKEND_ENV_VAR,
+        self, RuntimeConfigManager, SQLITE_PATH_ENV_VAR, STATION_CALLSIGN_ENV_VAR,
+        STATION_GRID_ENV_VAR, STATION_OPERATOR_CALLSIGN_ENV_VAR, STATION_PROFILE_NAME_ENV_VAR,
+        STORAGE_BACKEND_ENV_VAR,
     };
     use prost_types::Timestamp;
     use qsoripper_core::lookup::{
@@ -1773,7 +1916,8 @@ mod tests {
         ExportAdifRequest, GetCachedCallsignRequest, GetCurrentSpaceWeatherRequest,
         GetDxccEntityRequest, GetQsoRequest, GetSyncStatusRequest, ImportAdifRequest,
         ImportAdifResponse, ListQsosRequest, LogQsoRequest, LookupRequest, QsoSortOrder,
-        RefreshSpaceWeatherRequest, RestoreQsoRequest, StreamLookupRequest, UpdateQsoRequest,
+        RefreshSpaceWeatherRequest, RestoreQsoRequest, StreamLookupRequest, SyncWithLotwRequest,
+        UpdateQsoRequest,
     };
     use tokio_stream::StreamExt;
     use tonic::transport::Channel;
@@ -1853,6 +1997,7 @@ mod tests {
             config,
             test_sync_scheduler(),
             Arc::new(tokio::sync::Mutex::new(())),
+            Arc::new(tokio::sync::Mutex::new(())),
         )
     }
 
@@ -1904,6 +2049,35 @@ mod tests {
         Arc::new(RuntimeConfigManager::new(startup_values).expect("runtime config"))
     }
 
+    fn test_runtime_config_with_lotw(report_url: &str) -> Arc<RuntimeConfigManager> {
+        let mut startup_values = BTreeMap::new();
+        startup_values.insert(
+            runtime_config::STORAGE_BACKEND_ENV_VAR.to_string(),
+            "memory".to_string(),
+        );
+        startup_values.insert(
+            runtime_config::LOTW_USERNAME_ENV_VAR.to_string(),
+            "KC7AVA".to_string(),
+        );
+        startup_values.insert(
+            runtime_config::LOTW_PASSWORD_ENV_VAR.to_string(),
+            "test-password".to_string(),
+        );
+        startup_values.insert(
+            runtime_config::LOTW_STATION_LOCATION_ENV_VAR.to_string(),
+            "Home".to_string(),
+        );
+        startup_values.insert(
+            runtime_config::LOTW_REPORT_URL_ENV_VAR.to_string(),
+            report_url.to_string(),
+        );
+        startup_values.insert(
+            runtime_config::LOTW_TIMEOUT_SECONDS_ENV_VAR.to_string(),
+            "1".to_string(),
+        );
+        Arc::new(RuntimeConfigManager::new(startup_values).expect("runtime config"))
+    }
+
     #[tokio::test]
     async fn get_current_space_weather_returns_disabled_snapshot_when_provider_is_disabled() {
         let service =
@@ -1944,6 +2118,157 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn lotw_client_reports_missing_and_invalid_configuration() {
+        let service = test_logbook_service(test_runtime_config());
+        let error = service
+            .build_lotw_client()
+            .await
+            .err()
+            .expect("missing LoTW configuration");
+        assert!(error.contains("username"));
+
+        let mut startup_values = BTreeMap::new();
+        startup_values.insert(
+            runtime_config::LOTW_TIMEOUT_SECONDS_ENV_VAR.to_string(),
+            "not-an-integer".to_string(),
+        );
+        let config = Arc::new(RuntimeConfigManager::new(startup_values).expect("runtime config"));
+        let service = test_logbook_service(config);
+        let error = service
+            .build_lotw_client()
+            .await
+            .err()
+            .expect("invalid LoTW timeout");
+        assert!(error.contains("integer"));
+    }
+
+    #[tokio::test]
+    async fn lotw_sync_rejects_request_with_no_enabled_phase() {
+        let service = test_logbook_service(test_runtime_config());
+
+        let error = LogbookService::sync_with_lotw(
+            &service,
+            Request::new(SyncWithLotwRequest {
+                upload: Some(false),
+                download: Some(false),
+                ..SyncWithLotwRequest::default()
+            }),
+        )
+        .await
+        .expect_err("invalid LoTW request");
+
+        assert_eq!(error.code(), Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn lotw_upload_only_sync_completes_when_logbook_is_empty() {
+        let service =
+            test_logbook_service(test_runtime_config_with_lotw("http://127.0.0.1:1/report"));
+
+        let mut stream = LogbookService::sync_with_lotw(
+            &service,
+            Request::new(SyncWithLotwRequest {
+                upload: Some(true),
+                download: Some(false),
+                ..SyncWithLotwRequest::default()
+            }),
+        )
+        .await
+        .expect("LoTW sync stream")
+        .into_inner();
+
+        let starting = stream
+            .next()
+            .await
+            .expect("starting result")
+            .expect("starting response");
+        assert_eq!(
+            starting.current_action.as_deref(),
+            Some("Starting LoTW sync")
+        );
+        let completed = stream
+            .next()
+            .await
+            .expect("completion result")
+            .expect("completion response");
+        assert!(completed.complete);
+        assert_eq!(completed.error_records, 0);
+        assert_eq!(
+            completed.current_action.as_deref(),
+            Some("LoTW sync complete")
+        );
+    }
+
+    #[tokio::test]
+    async fn lotw_download_failure_is_returned_in_completion_response() {
+        let service =
+            test_logbook_service(test_runtime_config_with_lotw("http://127.0.0.1:1/report"));
+
+        let mut stream = LogbookService::sync_with_lotw(
+            &service,
+            Request::new(SyncWithLotwRequest {
+                upload: Some(false),
+                download: Some(true),
+                ..SyncWithLotwRequest::default()
+            }),
+        )
+        .await
+        .expect("LoTW sync stream")
+        .into_inner();
+
+        let _starting = stream.next().await.expect("starting result");
+        let completed = stream
+            .next()
+            .await
+            .expect("completion result")
+            .expect("completion response");
+        assert!(completed.complete);
+        assert_eq!(completed.error_records, 1);
+        assert!(completed
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("network request failed")));
+    }
+
+    #[tokio::test]
+    async fn per_operation_lotw_sync_returns_configuration_error_without_losing_qso() {
+        let service = test_logbook_service(test_runtime_config_with_logbook(
+            StorageBackendKind::Memory,
+            None,
+            true,
+        ));
+
+        let logged = LogbookService::log_qso(
+            &service,
+            Request::new(LogQsoRequest {
+                qso: Some(sample_qso_without_station_callsign("W1AW")),
+                sync_to_qrz: false,
+                sync_to_lotw: true,
+            }),
+        )
+        .await
+        .expect("log response")
+        .into_inner();
+
+        assert!(!logged.lotw_sync_success);
+        assert!(logged
+            .lotw_sync_error
+            .as_deref()
+            .is_some_and(|error| error.contains("username")));
+        let stored = LogbookService::get_qso(
+            &service,
+            Request::new(GetQsoRequest {
+                local_id: logged.local_id,
+            }),
+        )
+        .await
+        .expect("get response")
+        .into_inner()
+        .qso;
+        assert!(stored.is_some());
+    }
+
     fn unique_sqlite_test_path(label: &str) -> PathBuf {
         let unique_suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1979,6 +2304,7 @@ mod tests {
             Request::new(LogQsoRequest {
                 qso: Some(sample_qso_without_station_callsign("W1AW")),
                 sync_to_qrz: false,
+                sync_to_lotw: false,
             }),
         )
         .await
@@ -2040,6 +2366,7 @@ mod tests {
             Request::new(UpdateQsoRequest {
                 qso: Some(updated),
                 sync_to_qrz: false,
+                sync_to_lotw: false,
             }),
         )
         .await
@@ -2696,6 +3023,7 @@ mod tests {
                     ..QsoRecord::default()
                 }),
                 sync_to_qrz: false,
+                sync_to_lotw: false,
             }),
         )
         .await
@@ -2771,6 +3099,7 @@ mod tests {
                     ..QsoRecord::default()
                 }),
                 sync_to_qrz: false,
+                sync_to_lotw: false,
             }),
         )
         .await
@@ -2795,6 +3124,7 @@ mod tests {
             Request::new(LogQsoRequest {
                 qso: Some(second_qso),
                 sync_to_qrz: false,
+                sync_to_lotw: false,
             }),
         )
         .await
@@ -2916,6 +3246,7 @@ mod tests {
             .log_qso(Request::new(LogQsoRequest {
                 qso: Some(existing),
                 sync_to_qrz: false,
+                sync_to_lotw: false,
             }))
             .await
             .expect("log response");
@@ -3209,6 +3540,7 @@ mod tests {
             .log_qso(Request::new(LogQsoRequest {
                 qso: Some(first),
                 sync_to_qrz: false,
+                sync_to_lotw: false,
             }))
             .await
             .expect("log first qso");
@@ -3216,6 +3548,7 @@ mod tests {
             .log_qso(Request::new(LogQsoRequest {
                 qso: Some(second),
                 sync_to_qrz: false,
+                sync_to_lotw: false,
             }))
             .await
             .expect("log second qso");
@@ -3257,6 +3590,7 @@ mod tests {
             Request::new(LogQsoRequest {
                 qso: Some(sample_qso_without_station_callsign("W1AW")),
                 sync_to_qrz: false,
+                sync_to_lotw: false,
             }),
         )
         .await
@@ -3285,6 +3619,7 @@ mod tests {
                     ..QsoRecord::default()
                 }),
                 sync_to_qrz: false,
+                sync_to_lotw: false,
             }),
         )
         .await
@@ -3305,6 +3640,7 @@ mod tests {
                     ..QsoRecord::default()
                 }),
                 sync_to_qrz: false,
+                sync_to_lotw: false,
             }),
         )
         .await
@@ -3326,6 +3662,7 @@ mod tests {
                     ..QsoRecord::default()
                 }),
                 sync_to_qrz: false,
+                sync_to_lotw: false,
             }),
         )
         .await

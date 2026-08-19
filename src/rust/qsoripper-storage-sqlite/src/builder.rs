@@ -1,6 +1,8 @@
 //! Builder for configuring the `SQLite` storage adapter.
 
-use crate::migrations::{HISTORY_INDEX_MIGRATION, INITIAL_SCHEMA, SOFT_DELETE_MIGRATION};
+use crate::migrations::{
+    HISTORY_INDEX_MIGRATION, INITIAL_SCHEMA, LOTW_SYNC_METADATA_MIGRATION, SOFT_DELETE_MIGRATION,
+};
 use crate::SqliteStorage;
 use qsoripper_core::storage::StorageError;
 use sqlite::{Connection, ConnectionThreadSafe, State, Value};
@@ -84,6 +86,7 @@ impl SqliteStorageBuilder {
             .execute(INITIAL_SCHEMA)
             .map_err(map_sqlite_error)?;
         apply_soft_delete_migration(&connection)?;
+        apply_lotw_sync_metadata_migration(&connection)?;
         connection
             .execute(HISTORY_INDEX_MIGRATION)
             .map_err(map_sqlite_error)?;
@@ -92,6 +95,25 @@ impl SqliteStorageBuilder {
             connection: Mutex::new(connection),
         })
     }
+}
+
+fn apply_lotw_sync_metadata_migration(
+    connection: &ConnectionThreadSafe,
+) -> Result<(), StorageError> {
+    let has_last_sync = has_column(connection, "sync_metadata", "lotw_last_sync_ms")?;
+    let has_last_qsl = has_column(connection, "sync_metadata", "lotw_last_qsl")?;
+    match (has_last_sync, has_last_qsl) {
+        (true, true) => return Ok(()),
+        (false, false) => connection.execute(LOTW_SYNC_METADATA_MIGRATION),
+        (false, true) => {
+            connection.execute("ALTER TABLE sync_metadata ADD COLUMN lotw_last_sync_ms INTEGER;")
+        }
+        (true, false) => {
+            connection.execute("ALTER TABLE sync_metadata ADD COLUMN lotw_last_qsl TEXT;")
+        }
+    }
+    .map_err(map_sqlite_error)?;
+    Ok(())
 }
 
 /// Apply the soft-delete migration only when the columns are missing.

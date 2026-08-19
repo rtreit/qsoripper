@@ -377,10 +377,6 @@ pub(crate) fn stop_pid(pid: u32) -> bool {
 /// before the binary on disk was last built (`built_secs`, seconds since the
 /// Unix epoch). A process running a different executable, or one started after
 /// the current build, is never considered stale.
-#[expect(
-    clippy::case_sensitive_file_extension_comparisons,
-    reason = "comparing a known side-lined suffix, not a real file extension; casing is normalized on Windows and intentionally exact on Unix"
-)]
 fn is_stale_published_copy(
     proc_exe: &Path,
     proc_start_secs: u64,
@@ -390,6 +386,16 @@ fn is_stale_published_copy(
     if proc_start_secs >= built_secs {
         return false;
     }
+    is_managed_published_copy(proc_exe, target_exe)
+}
+
+/// Decide whether a running process uses the published executable managed by
+/// this launcher. A side-lined locked copy also belongs to the launcher.
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "comparing a known side-lined suffix, not a real file extension; casing is normalized on Windows and intentionally exact on Unix"
+)]
+fn is_managed_published_copy(proc_exe: &Path, target_exe: &Path) -> bool {
     let (Some(proc_parent), Some(target_parent)) = (proc_exe.parent(), target_exe.parent()) else {
         return false;
     };
@@ -455,6 +461,37 @@ pub(crate) fn reap_stale_published_copies(exe: &Path) -> usize {
             continue;
         };
         if !is_stale_published_copy(proc_exe, proc_handle.start_time(), exe, built_secs) {
+            continue;
+        }
+        let killed = proc_handle
+            .kill_with(Signal::Term)
+            .unwrap_or_else(|| proc_handle.kill());
+        if killed {
+            stopped += 1;
+        }
+    }
+    stopped
+}
+
+/// Stop processes that use the launcher's published engine executable.
+///
+/// A new launcher session cannot recover its previous in-memory registry. It
+/// uses this executable match to reclaim engines that it started earlier. A
+/// process from a different executable remains external and is not stopped.
+pub(crate) fn reap_managed_published_copies(exe: &Path) -> usize {
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
+    );
+
+    let mut stopped = 0usize;
+    for proc_handle in sys.processes().values() {
+        let Some(proc_exe) = proc_handle.exe() else {
+            continue;
+        };
+        if !is_managed_published_copy(proc_exe, exe) {
             continue;
         }
         let killed = proc_handle
@@ -569,6 +606,19 @@ mod tests {
         let target = PathBuf::from("/publish/Release/qsoripper-server.exe");
         // Started at t=100, binary built at t=200 -> stale.
         assert!(is_stale_published_copy(&target, 100, &target, 200));
+    }
+
+    #[test]
+    fn managed_copy_matches_same_exe_without_build_time_check() {
+        let target = PathBuf::from("/publish/Release/qsoripper-server.exe");
+        assert!(is_managed_published_copy(&target, &target));
+    }
+
+    #[test]
+    fn managed_copy_rejects_same_name_from_another_directory() {
+        let target = PathBuf::from("/publish/Release/qsoripper-server.exe");
+        let external = PathBuf::from("/debug/qsoripper-server.exe");
+        assert!(!is_managed_published_copy(&external, &target));
     }
 
     #[test]

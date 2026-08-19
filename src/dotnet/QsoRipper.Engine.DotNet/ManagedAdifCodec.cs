@@ -609,10 +609,34 @@ internal static class ManagedAdifCodec
 
                     break;
                 case "LOTW_QSL_SENT":
-                    MapConfirmationField(qso, key, value, (recordValue, parsed) => recordValue.LotwSent = parsed);
+                    qso.LotwSentStatus = ParseQslStatus(value);
+                    SetLotwCompatibilityValue(qso.LotwSentStatus, value => qso.LotwSent = value, qso.ClearLotwSent);
                     break;
                 case "LOTW_QSL_RCVD":
-                    MapConfirmationField(qso, key, value, (recordValue, parsed) => recordValue.LotwReceived = parsed);
+                    qso.LotwReceivedStatus = ParseQslStatus(value);
+                    SetLotwCompatibilityValue(qso.LotwReceivedStatus, value => qso.LotwReceived = value, qso.ClearLotwReceived);
+                    break;
+                case "LOTW_QSLSDATE":
+                    if (TryParseAdifDateTime(value, null, out var lotwSentDate))
+                    {
+                        qso.LotwSentDate = lotwSentDate;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
+                    break;
+                case "LOTW_QSLRDATE":
+                    if (TryParseAdifDateTime(value, null, out var lotwReceivedDate))
+                    {
+                        qso.LotwReceivedDate = lotwReceivedDate;
+                    }
+                    else
+                    {
+                        qso.ExtraFields[key] = value;
+                    }
+
                     break;
                 case "EQSL_QSL_SENT":
                     MapConfirmationField(qso, key, value, (recordValue, parsed) => recordValue.EqslSent = parsed);
@@ -710,6 +734,8 @@ internal static class ManagedAdifCodec
         {
             qso.StationSnapshot = stationSnapshot;
         }
+
+        qso.LotwSyncStatus = DeriveLotwSyncStatus(qso);
 
         return qso;
     }
@@ -908,8 +934,18 @@ internal static class ManagedAdifCodec
             fields.Add(new KeyValuePair<string, string>("QSLRDATE", qslReceivedDate));
         }
 
-        PushConfirmationField(fields, "LOTW_QSL_SENT", qso.HasLotwSent, qso.LotwSent);
-        PushConfirmationField(fields, "LOTW_QSL_RCVD", qso.HasLotwReceived, qso.LotwReceived);
+        PushLotwStatusField(fields, "LOTW_QSL_SENT", qso.LotwSentStatus, qso.HasLotwSent, qso.LotwSent);
+        PushLotwStatusField(fields, "LOTW_QSL_RCVD", qso.LotwReceivedStatus, qso.HasLotwReceived, qso.LotwReceived);
+        if (qso.LotwSentDate is not null && TryFormatAdifDate(qso.LotwSentDate, out var lotwSentDate))
+        {
+            fields.Add(new KeyValuePair<string, string>("LOTW_QSLSDATE", lotwSentDate));
+        }
+
+        if (qso.LotwReceivedDate is not null && TryFormatAdifDate(qso.LotwReceivedDate, out var lotwReceivedDate))
+        {
+            fields.Add(new KeyValuePair<string, string>("LOTW_QSLRDATE", lotwReceivedDate));
+        }
+
         PushConfirmationField(fields, "EQSL_QSL_SENT", qso.HasEqslSent, qso.EqslSent);
         PushConfirmationField(fields, "EQSL_QSL_RCVD", qso.HasEqslReceived, qso.EqslReceived);
 
@@ -1030,6 +1066,58 @@ internal static class ManagedAdifCodec
         };
 
         return value.Length > 0;
+    }
+
+    private static void SetLotwCompatibilityValue(QslStatus status, Action<bool> setter, Action clear)
+    {
+        switch (status)
+        {
+            case QslStatus.Yes:
+                setter(true);
+                break;
+            case QslStatus.No:
+                setter(false);
+                break;
+            default:
+                clear();
+                break;
+        }
+    }
+
+    private static void PushLotwStatusField(
+        List<KeyValuePair<string, string>> fields,
+        string key,
+        QslStatus status,
+        bool hasCompatibilityValue,
+        bool compatibilityValue)
+    {
+        if (TryFormatQslStatus(status, out var value))
+        {
+            fields.Add(new KeyValuePair<string, string>(key, value));
+            return;
+        }
+
+        PushConfirmationField(fields, key, hasCompatibilityValue, compatibilityValue);
+    }
+
+    private static LotwSyncStatus DeriveLotwSyncStatus(QsoRecord qso)
+    {
+        if (qso.LotwReceivedStatus == QslStatus.Yes || (qso.HasLotwReceived && qso.LotwReceived))
+        {
+            return LotwSyncStatus.Confirmed;
+        }
+
+        if (qso.LotwSentStatus == QslStatus.Queued)
+        {
+            return LotwSyncStatus.Queued;
+        }
+
+        if (qso.LotwSentStatus == QslStatus.Yes || (qso.HasLotwSent && qso.LotwSent))
+        {
+            return LotwSyncStatus.Uploaded;
+        }
+
+        return LotwSyncStatus.LocalOnly;
     }
 
     private static QsoCompletion ParseQsoCompletion(string value)
@@ -1450,8 +1538,10 @@ internal static class ManagedAdifCodec
 
     private static bool FieldIsOverridden(QsoRecord qso, StationSnapshot? stationSnapshot, string key)
     {
-        return key.Equals("LOTW_QSL_SENT", StringComparison.OrdinalIgnoreCase) ? qso.HasLotwSent
-            : key.Equals("LOTW_QSL_RCVD", StringComparison.OrdinalIgnoreCase) ? qso.HasLotwReceived
+        return key.Equals("LOTW_QSL_SENT", StringComparison.OrdinalIgnoreCase) ? qso.LotwSentStatus != QslStatus.Unspecified || qso.HasLotwSent
+            : key.Equals("LOTW_QSL_RCVD", StringComparison.OrdinalIgnoreCase) ? qso.LotwReceivedStatus != QslStatus.Unspecified || qso.HasLotwReceived
+            : key.Equals("LOTW_QSLSDATE", StringComparison.OrdinalIgnoreCase) ? qso.LotwSentDate is not null
+            : key.Equals("LOTW_QSLRDATE", StringComparison.OrdinalIgnoreCase) ? qso.LotwReceivedDate is not null
             : key.Equals("EQSL_QSL_SENT", StringComparison.OrdinalIgnoreCase) ? qso.HasEqslSent
             : key.Equals("EQSL_QSL_RCVD", StringComparison.OrdinalIgnoreCase) ? qso.HasEqslReceived
             : key.Equals("STATION_CALLSIGN", StringComparison.OrdinalIgnoreCase) ? !string.IsNullOrEmpty(stationSnapshot?.StationCallsign ?? qso.StationCallsign)

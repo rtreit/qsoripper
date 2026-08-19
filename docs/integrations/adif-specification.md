@@ -569,6 +569,10 @@ Format: `APP_PROGRAMID_FIELDNAME`
 <APP_QSORIPPER_SYNC_STATUS:6>synced
 ```
 
+QsoRipper stores the first WSJT-X ingest diagnostic in `APP_QSORIPPER_WSJTX_IMPORT`.
+The same diagnostic appears in `NOTES` for operator access.
+The diagnostic includes the QSO-end-to-import delta in milliseconds when `TIME_OFF` is available.
+
 ### User-Defined Fields
 
 Defined in the header with USERDEFn, referenced in records by field name:

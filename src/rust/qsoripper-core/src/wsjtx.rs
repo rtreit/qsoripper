@@ -1,8 +1,11 @@
 //! WSJT-X ingestion helpers that feed the existing ADIF import pipeline.
 
 use crate::adif::parse_adi_qsos_without_header_detection;
-use crate::application::logbook::{AdifImportSummary, LogbookEngine, LogbookError};
-use crate::proto::qsoripper::domain::StationProfile;
+use crate::application::logbook::{
+    AdifImportDiagnostic, AdifImportSummary, LogbookEngine, LogbookError,
+};
+use crate::proto::qsoripper::domain::{QsoRecord, StationProfile};
+use chrono::{DateTime, SecondsFormat, Utc};
 #[cfg(test)]
 use serde_json::Value;
 use std::fs;
@@ -11,6 +14,10 @@ use std::path::Path;
 const WSJTX_MAGIC: u32 = 0xadbc_cbda;
 const WSJTX_LOGGED_ADIF_MESSAGE_TYPE: u32 = 12;
 const WSJTX_NULL_STRING_LENGTH: u32 = u32::MAX;
+const WSJTX_IMPORT_DIAGNOSTIC_FIELD: &str = "APP_QSORIPPER_WSJTX_IMPORT";
+const WSJTX_IMPORT_DIAGNOSTIC_PREFIX: &str = "QsoRipper WSJT-X import:";
+const WSJTX_UDP_SOURCE: &str = "udp_logged_adif";
+const WSJTX_ADIF_TAIL_SOURCE: &str = "adif_tail";
 
 /// Test/simulation helper that accepts permissive WSJT-X-like UDP payloads.
 ///
@@ -36,6 +43,7 @@ pub async fn ingest_wsjtx_udp_datagram(
         &adif_payload,
         active_station_profile,
         refresh,
+        WSJTX_UDP_SOURCE,
     ))
     .await
 }
@@ -66,6 +74,7 @@ pub async fn ingest_wsjtx_logged_adif_datagram(
         &adif_payload,
         active_station_profile,
         refresh,
+        WSJTX_UDP_SOURCE,
     ))
     .await
 }
@@ -111,6 +120,7 @@ pub async fn ingest_wsjtx_adif_tail(
         complete_payload,
         active_station_profile,
         refresh,
+        WSJTX_ADIF_TAIL_SOURCE,
     ))
     .await?;
     *cursor = start.saturating_add(complete_len);
@@ -222,8 +232,9 @@ async fn ingest_adif_payload(
     adif_payload: &[u8],
     active_station_profile: Option<&StationProfile>,
     refresh: bool,
+    source: &str,
 ) -> Result<AdifImportSummary, String> {
-    let qsos = parse_adi_qsos_without_header_detection(adif_payload)
+    let mut qsos = parse_adi_qsos_without_header_detection(adif_payload)
         .await
         .map_err(|error| format!("failed to parse ADIF payload: {error}"))?;
 
@@ -231,9 +242,48 @@ async fn ingest_adif_payload(
         return Ok(AdifImportSummary::default());
     }
 
-    Box::pin(logbook_engine.import_adif_qsos(qsos, active_station_profile, refresh))
-        .await
-        .map_err(format_wsjtx_error)
+    let imported_at = Utc::now();
+    for qso in &mut qsos {
+        qso.extra_fields.insert(
+            WSJTX_IMPORT_DIAGNOSTIC_FIELD.to_string(),
+            wsjtx_import_note(source, qso, imported_at),
+        );
+    }
+    let diagnostic = AdifImportDiagnostic {
+        extra_field_key: WSJTX_IMPORT_DIAGNOSTIC_FIELD.to_string(),
+        note_prefix: WSJTX_IMPORT_DIAGNOSTIC_PREFIX.to_string(),
+    };
+    Box::pin(logbook_engine.import_adif_qsos_with_diagnostic(
+        qsos,
+        active_station_profile,
+        refresh,
+        &diagnostic,
+    ))
+    .await
+    .map_err(format_wsjtx_error)
+}
+
+fn wsjtx_import_note(source: &str, qso: &QsoRecord, imported_at: DateTime<Utc>) -> String {
+    let imported_at_text = imported_at.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let end_delta = qso
+        .utc_end_timestamp
+        .as_ref()
+        .and_then(|timestamp| {
+            let nanos = u32::try_from(timestamp.nanos).ok()?;
+            DateTime::from_timestamp(timestamp.seconds, nanos)
+        })
+        .map_or_else(
+            || "unavailable".to_string(),
+            |qso_end| {
+                imported_at
+                    .signed_duration_since(qso_end)
+                    .num_milliseconds()
+                    .to_string()
+            },
+        );
+    format!(
+        "{WSJTX_IMPORT_DIAGNOSTIC_PREFIX} imported_at_utc={imported_at_text}, qso_end_to_import_ms={end_delta}, source={source}, engine=rust"
+    )
 }
 
 fn format_wsjtx_error(error: LogbookError) -> String {
@@ -329,7 +379,9 @@ fn adif_field_len(tag_body: &[u8]) -> Option<usize> {
 mod tests {
     use super::{
         complete_adif_prefix_len, extract_adif_payload, ingest_wsjtx_adif_tail,
-        ingest_wsjtx_udp_datagram, WSJTX_LOGGED_ADIF_MESSAGE_TYPE, WSJTX_MAGIC,
+        ingest_wsjtx_udp_datagram, wsjtx_import_note, WSJTX_ADIF_TAIL_SOURCE,
+        WSJTX_IMPORT_DIAGNOSTIC_FIELD, WSJTX_IMPORT_DIAGNOSTIC_PREFIX,
+        WSJTX_LOGGED_ADIF_MESSAGE_TYPE, WSJTX_MAGIC, WSJTX_UDP_SOURCE,
     };
     use crate::application::logbook::{AdifImportSummary, LogbookEngine};
     use crate::proto::qsoripper::domain::{QsoRecord, SyncStatus};
@@ -516,7 +568,7 @@ mod tests {
     }
 
     fn sample_adif() -> &'static [u8] {
-        b"<STATION_CALLSIGN:4>W1AW <CALL:5>K7ABC <QSO_DATE:8>20250101 <TIME_ON:4>1200 <BAND:3>20M <MODE:3>FT8 <RST_SENT:3>-10 <RST_RCVD:3>-12 <EOR>"
+        b"<STATION_CALLSIGN:4>W1AW <CALL:5>K7ABC <QSO_DATE:8>20250101 <TIME_ON:4>1200 <QSO_DATE_OFF:8>20250101 <TIME_OFF:6>120100 <BAND:3>20M <MODE:3>FT8 <RST_SENT:3>-10 <RST_RCVD:3>-12 <NOTES:13>Operator note <EOR>"
     }
 
     fn sample_adif_with_rst_sent(rst_sent: &str) -> Vec<u8> {
@@ -545,6 +597,46 @@ mod tests {
         let len = u32::try_from(value.len()).expect("test string length");
         append_be_u32(target, len);
         target.extend_from_slice(value.as_bytes());
+    }
+
+    fn assert_wsjtx_diagnostic(qso: &QsoRecord, source: &str, engine: &str) {
+        let diagnostic = qso
+            .extra_fields
+            .get(WSJTX_IMPORT_DIAGNOSTIC_FIELD)
+            .expect("WSJT-X import diagnostic field");
+        assert!(diagnostic.starts_with(WSJTX_IMPORT_DIAGNOSTIC_PREFIX));
+        assert!(diagnostic.contains("imported_at_utc="));
+        assert!(diagnostic.contains("qso_end_to_import_ms="));
+        assert!(!diagnostic.contains("qso_end_to_import_ms=unavailable"));
+        assert!(diagnostic.contains(&format!("source={source}")));
+        assert!(diagnostic.contains(&format!("engine={engine}")));
+        assert!(qso
+            .notes
+            .as_deref()
+            .unwrap_or_default()
+            .contains(diagnostic));
+        assert!(qso
+            .notes
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Operator note"));
+    }
+
+    #[test]
+    fn wsjtx_import_note_includes_qso_end_delta_milliseconds() {
+        let qso = QsoRecord {
+            utc_end_timestamp: Some(prost_types::Timestamp {
+                seconds: 99,
+                nanos: 250_000_000,
+            }),
+            ..QsoRecord::default()
+        };
+        let imported_at =
+            chrono::DateTime::from_timestamp(100, 500_000_000).expect("import timestamp");
+
+        let note = wsjtx_import_note(WSJTX_UDP_SOURCE, &qso, imported_at);
+
+        assert!(note.contains("qso_end_to_import_ms=1250"));
     }
 
     #[test]
@@ -612,6 +704,14 @@ mod tests {
 
         assert_eq!(summary.records_imported, 1);
         assert_eq!(summary.records_skipped, 0);
+        let qso = engine
+            .list_qsos(&QsoListQuery::default())
+            .await
+            .expect("qsos")
+            .into_iter()
+            .next()
+            .expect("imported qso");
+        assert_wsjtx_diagnostic(&qso, WSJTX_UDP_SOURCE, "rust");
     }
 
     #[tokio::test]
@@ -702,6 +802,48 @@ mod tests {
         let metadata_len =
             usize::try_from(fs::metadata(&path).unwrap().len()).expect("metadata len");
         assert_eq!(cursor, metadata_len);
+        let qso = engine
+            .list_qsos(&QsoListQuery::default())
+            .await
+            .expect("qsos")
+            .into_iter()
+            .next()
+            .expect("imported qso");
+        assert_wsjtx_diagnostic(&qso, WSJTX_ADIF_TAIL_SOURCE, "rust");
+    }
+
+    #[tokio::test]
+    async fn first_wsjtx_ingest_source_remains_authoritative() {
+        let engine = LogbookEngine::new(Arc::new(TestStorage::new()));
+        let file = NamedTempFile::new().expect("temp file");
+        let path = file.path().to_path_buf();
+        fs::write(&path, sample_adif()).expect("write initial record");
+        let mut cursor = 0;
+
+        ingest_wsjtx_adif_tail(&engine, &path, None, false, &mut cursor)
+            .await
+            .expect("tail import");
+        let payload = wsjtx_frame(
+            WSJTX_LOGGED_ADIF_MESSAGE_TYPE,
+            std::str::from_utf8(sample_adif()).expect("sample adif"),
+        );
+        ingest_wsjtx_udp_datagram(&engine, &payload, None, true)
+            .await
+            .expect("udp refresh");
+
+        let qso = engine
+            .list_qsos(&QsoListQuery::default())
+            .await
+            .expect("qsos")
+            .into_iter()
+            .next()
+            .expect("imported qso");
+        assert_wsjtx_diagnostic(&qso, WSJTX_ADIF_TAIL_SOURCE, "rust");
+        assert!(!qso
+            .notes
+            .as_deref()
+            .unwrap_or_default()
+            .contains(WSJTX_UDP_SOURCE));
     }
 
     #[tokio::test]

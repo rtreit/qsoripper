@@ -42,6 +42,11 @@ $rustRoot = Join-Path $PSScriptRoot 'src\rust'
 if (-not (Test-Path -LiteralPath $rustRoot)) {
     throw "Rust workspace not found at $rustRoot"
 }
+$catHubBootstrapPath = Join-Path $PSScriptRoot 'scripts\CatHubBootstrap.ps1'
+if (-not (Test-Path -LiteralPath $catHubBootstrapPath -PathType Leaf)) {
+    throw "CatHub bootstrap helper not found at $catHubBootstrapPath"
+}
+. $catHubBootstrapPath
 
 function Stop-StalePublishedProcesses {
     <#
@@ -113,6 +118,9 @@ elseif (-not (Test-Path -LiteralPath $exePath)) {
 if (-not (Test-Path -LiteralPath $exePath)) {
     throw "Launcher binary not found at $exePath after build"
 }
+
+$catHubProfile = if ($Dev) { 'Debug' } else { 'Release' }
+$null = Initialize-CatHubExecutable -QsoRipperRoot $PSScriptRoot -Profile $catHubProfile
 
 if ($Forward) {
     & $exePath @Forward

@@ -84,6 +84,10 @@ pub struct SyncMetadata {
     pub last_sync: Option<Timestamp>,
     /// Remote logbook owner reported by QRZ.
     pub qrz_logbook_owner: Option<String>,
+    /// Timestamp of the latest completed `LoTW` sync attempt.
+    pub lotw_last_sync: Option<Timestamp>,
+    /// `APP_LoTW_LASTQSL` high-water value from the latest confirmation report.
+    pub lotw_last_qsl: Option<String>,
 }
 
 /// A page of prior QSOs for a worked callsign, plus the unbounded total

@@ -4,6 +4,7 @@ mod catalog;
 mod cathub_runtime;
 mod config;
 mod discovery;
+mod engine_runtime;
 mod model;
 mod plan;
 mod ports;

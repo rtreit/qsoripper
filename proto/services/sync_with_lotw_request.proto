@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package qsoripper.services;
+
+option csharp_namespace = "QsoRipper.Services";
+
+message SyncWithLotwRequest {
+  bool full_sync = 1;  // Ignore the saved confirmation high-water mark
+  optional bool upload = 2;  // Defaults to true when absent
+  optional bool download = 3;  // Defaults to true when absent
+}

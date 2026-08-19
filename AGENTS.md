@@ -90,8 +90,10 @@ Primary goals:
 - Restore root Node tooling for UX automation:
   `npm install`
 
-Local Win32 CMake validation uses Visual Studio Build Tools 2026
-(`Visual Studio 18 2026`). Do not assume Visual Studio 17 2022 is available.
+Local Win32 CMake validation prefers Visual Studio Build Tools 2026
+(`Visual Studio 18 2026`). It uses Visual Studio 2022 (`Visual Studio 17 2022`)
+when Build Tools 2026 are not available. Do not assume that either generator
+is available. Detect an installed generator or use an explicit selection.
 
 ## Repository Structure
 

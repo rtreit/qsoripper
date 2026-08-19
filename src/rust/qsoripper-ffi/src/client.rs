@@ -144,6 +144,7 @@ impl QsrClient {
         match self.runtime.block_on(self.logbook.log_qso(LogQsoRequest {
             qso: Some(qso),
             sync_to_qrz: false,
+            sync_to_lotw: false,
         })) {
             Ok(resp) => {
                 str_to_buf(&resp.into_inner().local_id, &mut out.local_id);
@@ -189,6 +190,7 @@ impl QsrClient {
             .block_on(self.logbook.update_qso(UpdateQsoRequest {
                 qso: Some(qso),
                 sync_to_qrz: false,
+                sync_to_lotw: false,
             })) {
             Ok(_) => 0,
             Err(e) => {

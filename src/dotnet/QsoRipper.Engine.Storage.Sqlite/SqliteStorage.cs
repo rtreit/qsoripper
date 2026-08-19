@@ -46,7 +46,9 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
             id INTEGER PRIMARY KEY CHECK (id = 1),
             qrz_qso_count INTEGER NOT NULL DEFAULT 0,
             last_sync_ms INTEGER,
-            qrz_logbook_owner TEXT
+            qrz_logbook_owner TEXT,
+            lotw_last_sync_ms INTEGER,
+            lotw_last_qsl TEXT
         );
 
         INSERT OR IGNORE INTO sync_metadata (id, qrz_qso_count) VALUES (1, 0);
@@ -480,19 +482,23 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
         {
             ThrowIfDisposed();
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT qrz_qso_count, last_sync_ms, qrz_logbook_owner FROM sync_metadata WHERE id = 1";
+            cmd.CommandText = "SELECT qrz_qso_count, last_sync_ms, qrz_logbook_owner, lotw_last_sync_ms, lotw_last_qsl FROM sync_metadata WHERE id = 1";
             using var reader = cmd.ExecuteReader();
             if (reader.Read())
             {
                 var qrzQsoCount = reader.GetInt32(0);
                 var lastSyncMs = reader.IsDBNull(1) ? (long?)null : reader.GetInt64(1);
                 var owner = reader.IsDBNull(2) ? null : reader.GetString(2);
+                var lotwLastSyncMs = reader.IsDBNull(3) ? (long?)null : reader.GetInt64(3);
+                var lotwLastQsl = reader.IsDBNull(4) ? null : reader.GetString(4);
 
                 return new ValueTask<SyncMetadata>(new SyncMetadata
                 {
                     QrzQsoCount = qrzQsoCount,
                     LastSync = lastSyncMs is { } ms ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : null,
                     QrzLogbookOwner = owner,
+                    LotwLastSync = lotwLastSyncMs is { } lotwMs ? DateTimeOffset.FromUnixTimeMilliseconds(lotwMs) : null,
+                    LotwLastQsl = lotwLastQsl,
                 });
             }
 
@@ -511,18 +517,28 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
             using var cmd = _connection.CreateCommand();
             cmd.CommandText =
                 """
-                INSERT INTO sync_metadata (id, qrz_qso_count, last_sync_ms, qrz_logbook_owner)
-                VALUES (1, $qrz_qso_count, $last_sync_ms, $qrz_logbook_owner)
+                INSERT INTO sync_metadata (
+                    id, qrz_qso_count, last_sync_ms, qrz_logbook_owner,
+                    lotw_last_sync_ms, lotw_last_qsl)
+                VALUES (
+                    1, $qrz_qso_count, $last_sync_ms, $qrz_logbook_owner,
+                    $lotw_last_sync_ms, $lotw_last_qsl)
                 ON CONFLICT(id) DO UPDATE SET
                     qrz_qso_count = excluded.qrz_qso_count,
                     last_sync_ms = excluded.last_sync_ms,
-                    qrz_logbook_owner = excluded.qrz_logbook_owner
+                    qrz_logbook_owner = excluded.qrz_logbook_owner,
+                    lotw_last_sync_ms = excluded.lotw_last_sync_ms,
+                    lotw_last_qsl = excluded.lotw_last_qsl
                 """;
             cmd.Parameters.AddWithValue("$qrz_qso_count", metadata.QrzQsoCount);
             cmd.Parameters.AddWithValue("$last_sync_ms",
                 metadata.LastSync is { } lastSync ? (object)lastSync.ToUnixTimeMilliseconds() : DBNull.Value);
             cmd.Parameters.AddWithValue("$qrz_logbook_owner",
                 metadata.QrzLogbookOwner is { } owner ? (object)owner : DBNull.Value);
+            cmd.Parameters.AddWithValue("$lotw_last_sync_ms",
+                metadata.LotwLastSync is { } lotwLastSync ? (object)lotwLastSync.ToUnixTimeMilliseconds() : DBNull.Value);
+            cmd.Parameters.AddWithValue("$lotw_last_qsl",
+                metadata.LotwLastQsl is { } lotwLastQsl ? (object)lotwLastQsl : DBNull.Value);
             cmd.ExecuteNonQuery();
         }
 
@@ -631,6 +647,24 @@ public sealed class SqliteStorage : IEngineStorage, ILogbookStore, ILookupSnapsh
             cmd.ExecuteNonQuery();
 
             ApplySoftDeleteMigration();
+            ApplyLotwSyncMetadataMigration();
+        }
+    }
+
+    private void ApplyLotwSyncMetadataMigration()
+    {
+        if (!HasColumn("sync_metadata", "lotw_last_sync_ms"))
+        {
+            using var alter = _connection.CreateCommand();
+            alter.CommandText = "ALTER TABLE sync_metadata ADD COLUMN lotw_last_sync_ms INTEGER";
+            alter.ExecuteNonQuery();
+        }
+
+        if (!HasColumn("sync_metadata", "lotw_last_qsl"))
+        {
+            using var alter = _connection.CreateCommand();
+            alter.CommandText = "ALTER TABLE sync_metadata ADD COLUMN lotw_last_qsl TEXT";
+            alter.ExecuteNonQuery();
         }
     }
 

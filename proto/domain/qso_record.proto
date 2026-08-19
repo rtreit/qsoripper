@@ -5,6 +5,7 @@ package qsoripper.domain;
 option csharp_namespace = "QsoRipper.Domain";
 
 import "domain/band.proto";
+import "domain/lotw_sync_status.proto";
 import "domain/mode.proto";
 import "domain/qsl_status.proto";
 import "domain/qso_completion.proto";
@@ -46,6 +47,13 @@ message QsoRecord {
   optional bool eqsl_received = 35;
   optional google.protobuf.Timestamp qsl_sent_date = 36;  // Paper QSL sent date when known
   optional google.protobuf.Timestamp qsl_received_date = 37;  // Paper QSL received date when known
+  // Full ADIF LoTW status values. These fields preserve R, Q, and I states
+  // that the compatibility boolean fields cannot represent.
+  QslStatus lotw_sent_status = 118;
+  QslStatus lotw_received_status = 119;
+  optional google.protobuf.Timestamp lotw_sent_date = 120;
+  optional google.protobuf.Timestamp lotw_received_date = 121;
+  LotwSyncStatus lotw_sync_status = 122;
 
   // --- Enrichment from callsign lookup ---
   optional string worked_operator_callsign = 38;

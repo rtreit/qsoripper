@@ -220,12 +220,14 @@ fn log_list_get_delete_round_trip() {
     assert_eq!(buf_as_str(&detail.worked_operator_callsign), "W1AW/OP");
     assert_eq!(buf_as_str(&detail.qsl_sent_status), "Y");
     assert_eq!(buf_as_str(&detail.qsl_sent_date), "2025-01-16");
-    assert_eq!(buf_as_str(&detail.lotw_sent), "N");
-    assert_eq!(buf_as_str(&detail.qrz_log_id), "qrz-123");
-    assert_eq!(buf_as_str(&detail.snapshot_profile), "Home");
-    assert_eq!(buf_as_str(&detail.snapshot_station_callsign), "K7TST");
-    assert_eq!(buf_as_str(&detail.snapshot_grid), "CN87");
-    assert_eq!(buf_as_str(&detail.snapshot_dxcc), "291");
+    // The server owns LoTW state, QRZ linkage, and station context on the public LogQso path.
+    assert!(buf_as_str(&detail.lotw_sent).is_empty());
+    assert!(buf_as_str(&detail.qrz_log_id).is_empty());
+    assert!(!buf_as_str(&detail.station_callsign).is_empty());
+    assert_eq!(
+        buf_as_str(&detail.snapshot_station_callsign),
+        buf_as_str(&detail.station_callsign)
+    );
     assert_eq!(buf_as_str(&detail.cw_rx_wpm), "34");
     assert_eq!(buf_as_str(&detail.cw_transcript), "CQ TEST");
     assert!(buf_as_str(&detail.extra_fields).contains("APP_TEST=value"));
