@@ -303,6 +303,7 @@ typedef struct {
     /* QSO timer */
     int qso_timer_active;
     ULONGLONG qso_started_at;
+    int timestamp_automatic;
 
     /* Form field buffers */
     char callsign[32];
@@ -539,6 +540,7 @@ static int   FieldMaxLen(enum Field f);
 static void  DrawField(HDC, int, int, int, const char *, int, int, int, int);
 static void  DrawCycleField(HDC, int, int, int, const char *, int, int, int);
 static void  ApplyModeDefaults(void);
+static void  InsertChar(enum Field f, char c);
 static int   UiTextToWide(const char *text, int len, wchar_t *wbuf, int wbuf_len);
 static void  ApplyRigPollResult(const RigPollResult *res);
 static void  ApplyLoadedQsoDetail(const char *local_id, const QsrQsoDetail *detail);
@@ -843,6 +845,35 @@ void qsr_test_set_form_basics(const char *callsign, const char *date, const char
     if (callsign) safe_strcpy(g_state.callsign, sizeof(g_state.callsign), callsign);
     if (date) safe_strcpy(g_state.date, sizeof(g_state.date), date);
     if (time_str) safe_strcpy(g_state.time_str, sizeof(g_state.time_str), time_str);
+    if (date || time_str) g_state.timestamp_automatic = 0;
+}
+
+void qsr_test_set_automatic_timestamp(const char *date, const char *time_str)
+{
+    if (date) safe_strcpy(g_state.date, sizeof(g_state.date), date);
+    if (time_str) safe_strcpy(g_state.time_str, sizeof(g_state.time_str), time_str);
+    g_state.timestamp_automatic = 1;
+}
+
+const char *qsr_test_get_date_field(void)
+{
+    return g_state.date;
+}
+
+const char *qsr_test_get_time_field(void)
+{
+    return g_state.time_str;
+}
+
+void qsr_test_insert_char(enum Field field, char ch)
+{
+    InsertChar(field, ch);
+}
+
+void qsr_test_select_all_field(enum Field field)
+{
+    g_state.focused_field = field;
+    g_state.field_all_selected = 1;
 }
 
 void qsr_test_set_band_mode_indices(int band_idx, int mode_idx)
@@ -1343,6 +1374,7 @@ static void InitState(void)
     { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.6f", BAND_DEFAULT_FREQS[DEFAULT_BAND_IDX]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
 
     SetCurrentDateTime();
+    g_state.timestamp_automatic = 1;
 }
 
 static void ClearForm(void)
@@ -1352,6 +1384,7 @@ static void ClearForm(void)
     g_state.notes[0] = 0;
     { char _tmp[32]; snprintf(_tmp, sizeof(_tmp), "%.6f", BAND_DEFAULT_FREQS[g_state.band_idx]); freq_to_radio_style(_tmp, g_state.freq_mhz, sizeof(g_state.freq_mhz)); }
     SetCurrentDateTime();
+    g_state.timestamp_automatic = 1;
 
     g_state.has_lookup = 0;
     g_state.editing_local_id[0] = 0;
@@ -2167,6 +2200,7 @@ static void ApplyLoadedQsoDetail(const char *local_id, const QsrQsoDetail *detai
 
     safe_strcpy(g_state.date,     sizeof(g_state.date),     (const char *)detail->date);
     safe_strcpy(g_state.time_str, sizeof(g_state.time_str), (const char *)detail->time);
+    g_state.timestamp_automatic = 0;
 
     if (detail->freq_mhz[0])
         freq_to_radio_style((const char *)detail->freq_mhz, g_state.freq_mhz, sizeof(g_state.freq_mhz));
@@ -3493,6 +3527,19 @@ static void PaintAll(HWND hwnd, HDC hdc_screen, RECT *rc)
 
 static void InsertChar(enum Field f, char c)
 {
+    int starting_callsign =
+        f == FIELD_CALLSIGN &&
+        (g_state.callsign[0] == '\0' || g_state.field_all_selected);
+    if (f == FIELD_DATE || f == FIELD_TIME) {
+        g_state.timestamp_automatic = 0;
+    }
+    if (starting_callsign &&
+        g_state.timestamp_automatic &&
+        !g_state.qso_timer_active &&
+        g_state.editing_local_id[0] == '\0') {
+        SetCurrentDateTime();
+    }
+
     if (g_state.field_all_selected) {
         char *clrbuf = FieldBuffer(f);
         if (clrbuf) clrbuf[0] = '\0';
@@ -3524,6 +3571,9 @@ static void InsertChar(enum Field f, char c)
 static void DeleteChar(enum Field f)
 {
     if (g_state.field_all_selected) {
+        if (f == FIELD_DATE || f == FIELD_TIME) {
+            g_state.timestamp_automatic = 0;
+        }
         char *clrbuf = FieldBuffer(f);
         if (clrbuf) clrbuf[0] = '\0';
         g_state.cursor_pos[f] = 0;
@@ -3535,6 +3585,9 @@ static void DeleteChar(enum Field f)
     if (!buf) return;
     int pos = g_state.cursor_pos[f];
     if (pos <= 0) return;
+    if (f == FIELD_DATE || f == FIELD_TIME) {
+        g_state.timestamp_automatic = 0;
+    }
     int len = (int)strlen(buf);
     memmove(buf + pos - 1, buf + pos, (size_t)(len - pos + 1));
     g_state.cursor_pos[f] = pos - 1;
@@ -3668,6 +3721,7 @@ static void OnKeyDown(HWND hwnd, WPARAM vk, LPARAM lp)
         g_state.qso_timer_active = 1;
         g_state.qso_started_at = GetTickCount64();
         SetCurrentDateTime();
+        g_state.timestamp_automatic = 0;
         InvalidateRect(hwnd, NULL, FALSE);
         return;
     }

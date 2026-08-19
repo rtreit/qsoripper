@@ -1,6 +1,6 @@
 //! QSO entry form state and field navigation.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 /// Band names in display order, used as ADIF band strings.
 pub(crate) const BANDS: &[&str] = &[
@@ -377,6 +377,8 @@ pub(crate) struct LogForm {
     pub(crate) date: String,
     /// Time on (start) in `HH:MM` format.
     pub(crate) time: String,
+    /// Whether the date and time can follow the start of a new callsign entry.
+    pub(crate) timestamp_automatic: bool,
     /// Time off (end) in `HH:MM` format; empty means same as time on.
     pub(crate) time_off: String,
     /// Worked station QTH (city/location).
@@ -527,6 +529,7 @@ impl LogForm {
             rig_band_rx: None,
             date: now.format("%Y-%m-%d").to_string(),
             time: now.format("%H:%M").to_string(),
+            timestamp_automatic: true,
             time_off: String::new(),
             qth: String::new(),
             station_callsign: String::new(),
@@ -591,6 +594,25 @@ impl LogForm {
         };
         form.on_band_change();
         form
+    }
+
+    /// Refresh the automatic timestamp when the operator starts a new callsign.
+    pub(crate) fn refresh_automatic_timestamp(&mut self) {
+        self.refresh_automatic_timestamp_at(Utc::now());
+    }
+
+    fn refresh_automatic_timestamp_at(&mut self, now: DateTime<Utc>) {
+        if self.timestamp_automatic {
+            self.date = now.format("%Y-%m-%d").to_string();
+            self.time = now.format("%H:%M").to_string();
+        }
+    }
+
+    /// Set an explicit QSO start timestamp that callsign entry must not replace.
+    pub(crate) fn set_explicit_timestamp(&mut self, now: DateTime<Utc>) {
+        self.date = now.format("%Y-%m-%d").to_string();
+        self.time = now.format("%H:%M").to_string();
+        self.timestamp_automatic = false;
     }
 
     /// Move focus to the next basic field, wrapping around, and select its text.
@@ -912,6 +934,9 @@ impl LogForm {
 
     /// Insert `ch` into the focused text field at the cursor position.
     pub(crate) fn insert_char_at_cursor(&mut self, ch: char) {
+        if matches!(self.focused, Field::Date | Field::Time) {
+            self.timestamp_automatic = false;
+        }
         if self.field_selected {
             if let Some(text) = self.current_field_text_mut() {
                 text.clear();
@@ -930,6 +955,9 @@ impl LogForm {
     /// Remove the character before the cursor in the focused text field.
     pub(crate) fn backspace_at_cursor(&mut self) {
         if self.field_selected {
+            if matches!(self.focused, Field::Date | Field::Time) {
+                self.timestamp_automatic = false;
+            }
             if let Some(text) = self.current_field_text_mut() {
                 text.clear();
             }
@@ -939,6 +967,9 @@ impl LogForm {
         }
         if self.field_cursor == 0 {
             return;
+        }
+        if matches!(self.focused, Field::Date | Field::Time) {
+            self.timestamp_automatic = false;
         }
         let cursor = self.field_cursor;
         if let Some(text) = self.current_field_text_mut() {
@@ -952,6 +983,9 @@ impl LogForm {
     /// Remove the character at the cursor in the focused text field.
     pub(crate) fn delete_at_cursor(&mut self) {
         if self.field_selected {
+            if matches!(self.focused, Field::Date | Field::Time) {
+                self.timestamp_automatic = false;
+            }
             if let Some(text) = self.current_field_text_mut() {
                 text.clear();
             }
@@ -960,6 +994,9 @@ impl LogForm {
             return;
         }
         let cursor = self.field_cursor;
+        if matches!(self.focused, Field::Date | Field::Time) && cursor < self.focused_text_len() {
+            self.timestamp_automatic = false;
+        }
         if let Some(text) = self.current_field_text_mut() {
             if cursor >= text.chars().count() {
                 return;
@@ -972,6 +1009,9 @@ impl LogForm {
 
     /// Clear the focused text field and place the cursor at the beginning.
     pub(crate) fn clear_focused_text_field(&mut self) {
+        if matches!(self.focused, Field::Date | Field::Time) {
+            self.timestamp_automatic = false;
+        }
         if let Some(text) = self.current_field_text_mut() {
             text.clear();
         }
@@ -1582,5 +1622,39 @@ mod tests {
     fn skcc_initialises_empty() {
         let form = LogForm::new();
         assert!(form.skcc.is_empty());
+    }
+
+    #[test]
+    fn automatic_timestamp_refreshes_when_callsign_entry_starts() {
+        let mut form = LogForm::new();
+        form.date = "2020-01-02".to_string();
+        form.time = "03:04".to_string();
+        let now = DateTime::parse_from_rfc3339("2026-08-19T02:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        form.refresh_automatic_timestamp_at(now);
+
+        assert_eq!(form.date, "2026-08-19");
+        assert_eq!(form.time, "02:30");
+    }
+
+    #[test]
+    fn manual_timestamp_is_not_refreshed() {
+        let mut form = LogForm::new();
+        form.date = "2020-01-02".to_string();
+        form.time = "03:04".to_string();
+        form.focused = Field::Time;
+        form.field_selected = true;
+        form.insert_char_at_cursor('5');
+        let edited_time = form.time.clone();
+        let now = DateTime::parse_from_rfc3339("2026-08-19T02:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        form.refresh_automatic_timestamp_at(now);
+
+        assert_eq!(form.date, "2020-01-02");
+        assert_eq!(form.time, edited_time);
     }
 }

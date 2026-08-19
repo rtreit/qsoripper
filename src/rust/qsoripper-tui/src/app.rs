@@ -286,8 +286,7 @@ impl App {
         let now = chrono::Utc::now();
         self.qso_started_at = Instant::now();
         self.qso_timer_active = true;
-        self.form.date = now.format("%Y-%m-%d").to_string();
-        self.form.time = now.format("%H:%M").to_string();
+        self.form.set_explicit_timestamp(now);
     }
 
     /// Reset all timer state — called after logging, updating, or clearing the form.
