@@ -52,6 +52,11 @@ void qsr_test_reset_state(void);
 void qsr_test_set_backend_ffi(struct QsrClient *client, fn_qsr_log_qso log_qso_fn, fn_qsr_update_qso update_qso_fn);
 void qsr_test_set_backend_ffi_get_delete_weather(struct QsrClient *client, fn_qsr_get_qso get_qso_fn, fn_qsr_delete_qso delete_qso_fn, fn_qsr_get_space_weather get_space_weather_fn);
 void qsr_test_set_form_basics(const char *callsign, const char *date, const char *time_str);
+void qsr_test_set_automatic_timestamp(const char *date, const char *time_str);
+const char *qsr_test_get_date_field(void);
+const char *qsr_test_get_time_field(void);
+void qsr_test_insert_char(enum Field field, char ch);
+void qsr_test_select_all_field(enum Field field);
 void qsr_test_set_band_mode_indices(int band_idx, int mode_idx);
 void qsr_test_set_freq_field(const char *freq);
 void qsr_test_set_selected_recent_qso(const char *local_id, const char *callsign);
@@ -409,6 +414,70 @@ static int test_issue_330_lookup_re_fires_after_esc_clear(void)
     return 0;
 }
 
+static int test_new_callsign_refreshes_automatic_timestamp(void)
+{
+    SYSTEMTIME before;
+    SYSTEMTIME after;
+    char before_date[16];
+    char before_time[16];
+    char after_date[16];
+    char after_time[16];
+
+    qsr_test_reset_state();
+    qsr_test_set_automatic_timestamp("2020-01-02", "03:04");
+    GetSystemTime(&before);
+    qsr_test_insert_char(FIELD_CALLSIGN, 'K');
+    GetSystemTime(&after);
+
+    snprintf(before_date, sizeof(before_date), "%04d-%02d-%02d",
+             (int)before.wYear, (int)before.wMonth, (int)before.wDay);
+    snprintf(before_time, sizeof(before_time), "%02d:%02d",
+             (int)before.wHour, (int)before.wMinute);
+    snprintf(after_date, sizeof(after_date), "%04d-%02d-%02d",
+             (int)after.wYear, (int)after.wMonth, (int)after.wDay);
+    snprintf(after_time, sizeof(after_time), "%02d:%02d",
+             (int)after.wHour, (int)after.wMinute);
+
+    int matches_before =
+        strcmp(qsr_test_get_date_field(), before_date) == 0 &&
+        strcmp(qsr_test_get_time_field(), before_time) == 0;
+    int matches_after =
+        strcmp(qsr_test_get_date_field(), after_date) == 0 &&
+        strcmp(qsr_test_get_time_field(), after_time) == 0;
+    if (!matches_before && !matches_after) {
+        return fail("new callsign did not refresh the automatic timestamp");
+    }
+    return 0;
+}
+
+static int test_replacing_selected_callsign_refreshes_automatic_timestamp(void)
+{
+    qsr_test_reset_state();
+    qsr_test_set_form_basics("OLD", NULL, NULL);
+    qsr_test_set_automatic_timestamp("2020-01-02", "03:04");
+    qsr_test_select_all_field(FIELD_CALLSIGN);
+    qsr_test_insert_char(FIELD_CALLSIGN, 'K');
+
+    if (strcmp(qsr_test_get_date_field(), "2020-01-02") == 0 &&
+        strcmp(qsr_test_get_time_field(), "03:04") == 0) {
+        return fail("selected callsign replacement kept the stale timestamp");
+    }
+    return 0;
+}
+
+static int test_new_callsign_preserves_manual_timestamp(void)
+{
+    qsr_test_reset_state();
+    qsr_test_set_form_basics(NULL, "2020-01-02", "03:04");
+    qsr_test_insert_char(FIELD_CALLSIGN, 'K');
+
+    if (strcmp(qsr_test_get_date_field(), "2020-01-02") != 0 ||
+        strcmp(qsr_test_get_time_field(), "03:04") != 0) {
+        return fail("new callsign replaced a manual timestamp");
+    }
+    return 0;
+}
+
 static int test_issue_329_qso_duration_uses_time_off(void)
 {
     /* Normal case: 03:04 -> 03:19 = 15 minutes */
@@ -605,6 +674,9 @@ int main(void)
     if (test_issue_263_delete_selected_qso_is_non_blocking() != 0) failures++;
     if (test_issue_263_fetch_space_weather_is_non_blocking() != 0) failures++;
     if (test_issue_330_lookup_re_fires_after_esc_clear() != 0) failures++;
+    if (test_new_callsign_refreshes_automatic_timestamp() != 0) failures++;
+    if (test_replacing_selected_callsign_refreshes_automatic_timestamp() != 0) failures++;
+    if (test_new_callsign_preserves_manual_timestamp() != 0) failures++;
     if (test_issue_329_qso_duration_uses_time_off() != 0) failures++;
     if (test_win32_advanced_editor_uses_card_pages() != 0) failures++;
     if (test_win32_advanced_editor_cycles_card_pages() != 0) failures++;

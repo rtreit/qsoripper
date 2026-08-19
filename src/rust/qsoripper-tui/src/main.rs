@@ -773,6 +773,13 @@ fn spawn_purge_deleted_qsos(
 /// Handle a plain character key press — type-selects Band/Mode, or appends to text fields.
 fn handle_char_key(app: &mut App, c: char, lookup_tx: &watch::Sender<String>) {
     let focused = app.form.focused;
+    if focused == Field::Callsign
+        && (app.form.callsign.is_empty() || app.form.field_selected)
+        && app.editing_local_id.is_none()
+        && !app.qso_timer_active
+    {
+        app.form.refresh_automatic_timestamp();
+    }
     match focused {
         Field::Band => app.form.type_select_band(c),
         Field::Mode => app.form.type_select_mode(c),
@@ -1041,6 +1048,7 @@ fn load_qso_into_form(app: &mut App, local_id: &str, lookup_tx: &watch::Sender<S
             app.form.date = dt.format("%Y-%m-%d").to_string();
         }
     }
+    app.form.timestamp_automatic = false;
     if let Some(ref ts) = src.utc_end_timestamp {
         if let Some(dt) = chrono::DateTime::from_timestamp(ts.seconds, 0) {
             app.form.time_off = dt.format("%H:%M").to_string();
@@ -2679,6 +2687,54 @@ mod tests {
             "",
         );
         assert!(app.form.callsign.is_empty());
+    }
+
+    #[tokio::test]
+    async fn first_callsign_input_refreshes_automatic_timestamp() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.form.date = "2020-01-02".to_string();
+        app.form.time = "03:04".to_string();
+
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Char('K')),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+
+        assert_eq!(app.form.callsign, "K");
+        assert_ne!(app.form.date, "2020-01-02");
+        assert_ne!(app.form.time, "03:04");
+    }
+
+    #[tokio::test]
+    async fn replacing_selected_callsign_refreshes_automatic_timestamp() {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        let (lookup_tx, _lookup_rx) = make_watch();
+        let (rig_tx, _rig_rx) = make_rig_watch();
+        let mut app = make_app();
+        app.form.callsign = "OLD".to_string();
+        app.form.date = "2020-01-02".to_string();
+        app.form.time = "03:04".to_string();
+        app.form.field_selected = true;
+
+        handle_key(
+            &mut app,
+            make_key(KeyCode::Char('K')),
+            &tx,
+            &lookup_tx,
+            &rig_tx,
+            "",
+        );
+
+        assert_eq!(app.form.callsign, "K");
+        assert_ne!(app.form.date, "2020-01-02");
+        assert_ne!(app.form.time, "03:04");
     }
 
     #[tokio::test]
