@@ -63,6 +63,7 @@ qsoripper.db*
 # Rust
 target/
 Cargo.lock
+!src/rust/Cargo.lock
 
 # C / CMake
 build/
