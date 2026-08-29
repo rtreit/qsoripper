@@ -15,25 +15,25 @@ use crate::{
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EnrichmentBackfillProgress {
     /// Active QSO rows read from storage.
-    pub scanned: u64,
+    pub scanned: u32,
     /// Rows that have at least one missing enrichment field.
-    pub candidates: u64,
+    pub candidates: u32,
     /// Distinct normalized callsigns selected for lookup.
-    pub unique_callsigns: u64,
+    pub unique_callsigns: u32,
     /// Callsigns that returned a record.
-    pub found: u64,
+    pub found: u32,
     /// Callsigns that the provider did not find.
-    pub not_found: u64,
+    pub not_found: u32,
     /// Callsigns that failed lookup.
-    pub errors: u64,
+    pub errors: u32,
     /// Rows that would change or changed successfully.
-    pub changed: u64,
+    pub changed: u32,
     /// Candidate rows that received no values.
-    pub unchanged: u64,
+    pub unchanged: u32,
     /// Rows skipped because their persisted snapshot changed.
-    pub concurrent_edits: u64,
+    pub concurrent_edits: u32,
     /// Storage operations that failed.
-    pub storage_errors: u64,
+    pub storage_errors: u32,
     /// Whether this is the terminal progress update.
     pub complete: bool,
     /// Callsign processed by the latest progress update.
@@ -59,7 +59,7 @@ pub async fn run_enrichment_backfill(
         return;
     };
 
-    progress.scanned = records.len() as u64;
+    progress.scanned = u32::try_from(records.len()).unwrap_or(u32::MAX);
     let mut grouped = BTreeMap::<String, Vec<QsoRecord>>::new();
     for record in records {
         if !needs_enrichment(&record) {
@@ -77,7 +77,7 @@ pub async fn run_enrichment_backfill(
             .or_default()
             .push(record);
     }
-    progress.unique_callsigns = grouped.len() as u64;
+    progress.unique_callsigns = u32::try_from(grouped.len()).unwrap_or(u32::MAX);
 
     if progress_sender.send(progress.clone()).await.is_err() {
         return;
@@ -118,16 +118,22 @@ pub async fn run_enrichment_backfill(
                     }
                 } else {
                     progress.errors += 1;
-                    progress.unchanged += records.len() as u64;
+                    progress.unchanged = progress
+                        .unchanged
+                        .saturating_add(u32::try_from(records.len()).unwrap_or(u32::MAX));
                 }
             }
             LookupState::NotFound => {
                 progress.not_found += 1;
-                progress.unchanged += records.len() as u64;
+                progress.unchanged = progress
+                    .unchanged
+                    .saturating_add(u32::try_from(records.len()).unwrap_or(u32::MAX));
             }
             _ => {
                 progress.errors += 1;
-                progress.unchanged += records.len() as u64;
+                progress.unchanged = progress
+                    .unchanged
+                    .saturating_add(u32::try_from(records.len()).unwrap_or(u32::MAX));
             }
         }
 

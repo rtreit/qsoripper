@@ -53,9 +53,9 @@ public sealed class EnrichCommandTests
     }
 
     [Theory]
-    [InlineData(1ul, 0ul)]
-    [InlineData(0ul, 1ul)]
-    public async Task Consume_returns_failure_for_reported_errors(ulong lookupErrors, ulong storageErrors)
+    [InlineData(1u, 0u)]
+    [InlineData(0u, 1u)]
+    public async Task Consume_returns_failure_for_reported_errors(uint lookupErrors, uint storageErrors)
     {
         var responses = new TestStreamReader(
             new BackfillQsoEnrichmentResponse

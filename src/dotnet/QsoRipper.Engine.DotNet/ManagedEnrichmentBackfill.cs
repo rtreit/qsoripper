@@ -57,7 +57,7 @@ internal sealed partial class ManagedEngineState
             yield break;
         }
 
-        progress.Scanned = (ulong)records.Count;
+        progress.Scanned = (uint)records.Count;
         var grouped = new SortedDictionary<string, List<QsoRecord>>(StringComparer.Ordinal);
         foreach (var record in records)
         {
@@ -80,7 +80,7 @@ internal sealed partial class ManagedEngineState
             }
             group.Add(record);
         }
-        progress.UniqueCallsigns = (ulong)grouped.Count;
+        progress.UniqueCallsigns = (uint)grouped.Count;
         yield return progress.Clone();
 
         var apply = request.Mode == BackfillQsoEnrichmentMode.Apply;
@@ -140,12 +140,12 @@ internal sealed partial class ManagedEngineState
             else if (lookup.State == LookupState.NotFound)
             {
                 progress.NotFound++;
-                progress.Unchanged += (ulong)pair.Value.Count;
+                progress.Unchanged += (uint)pair.Value.Count;
             }
             else
             {
                 progress.Errors++;
-                progress.Unchanged += (ulong)pair.Value.Count;
+                progress.Unchanged += (uint)pair.Value.Count;
             }
 
             progress.CurrentCallsign = pair.Key;
